@@ -84,7 +84,7 @@ archive/
 
 - [x] **M1 코어 저장소**: `config.py`, `db.py`, `storage.py` 완성 + 테스트.
       URL 정규화(쿼리 정렬, fragment 제거, 트래킹 파라미터 utm_* 제거 등) 포함.
-- [ ] **M2 캡처**: `capture.py` — Playwright로 렌더링 → raw.html, 전체 스크린샷,
+- [x] **M2 캡처**: `capture.py` — Playwright로 렌더링 → raw.html, 전체 스크린샷,
       자원 인라인 page.html(이미지/CSS를 base64 인라인. 1차 버전은 스타일시트와
       이미지까지만, 폰트는 M5). `extract.py` — 본문 텍스트 추출(trafilatura) +
       정규화. `cli.py`의 `add` 연결. 실제 URL 1개로 수동 검증.
@@ -93,6 +93,6 @@ archive/
 - [ ] **M4 대시보드**: `web/app.py` + 템플릿 4종. 재아카이빙 버튼은
       BackgroundTasks로 코어 호출.
 - [ ] **M5 고도화**: 스크린샷 픽셀 diff(Pillow), 폰트 인라인, 도메인별 정규화
-      룰(셀렉터 제거 목록) 설정 파일, robots.txt 존중 옵션.
+      룰(셀렉터 제거 목록) 설정 파일, robots.txt 무시.
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.

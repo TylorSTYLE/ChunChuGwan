@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,3 +98,29 @@ def read_meta(snapshot_dir: Path) -> SnapshotMeta:
 
 def content_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+CAPTURE_ARTIFACTS = ("raw.html", "page.html", "screenshot.png")
+
+
+def finalize_snapshot(
+    tmp_dir: Path,
+    domain: str,
+    slug: str,
+    meta: SnapshotMeta,
+    normalized_text: str,
+    taken_at: datetime,
+) -> Path:
+    """임시 캡처 산출물을 새 스냅샷 디렉토리로 확정.
+
+    캡처 산출물 이동 + content.md / meta.json 기록. 확정된 디렉토리는
+    이후 수정하지 않는다(불변).
+    """
+    snap_dir = new_snapshot_dir(domain, slug, taken_at)
+    for name in CAPTURE_ARTIFACTS:
+        src = tmp_dir / name
+        if src.exists():
+            shutil.move(str(src), snap_dir / name)
+    (snap_dir / "content.md").write_text(normalized_text, encoding="utf-8")
+    write_meta(snap_dir, meta)
+    return snap_dir

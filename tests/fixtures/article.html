@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>테스트 기사 — 아카이버 검증용</title>
+</head>
+<body>
+  <header><nav>홈 | 뉴스 | 오피니언</nav></header>
+  <article>
+    <h1>웹 아카이빙 시스템의 설계 원칙</h1>
+    <p class="byline">기자 홍길동 · <time datetime="2026-06-10T09:30:00+09:00">2026-06-10T09:30:00+09:00</time> · 3분 전 수정</p>
+    <p>스냅샷은 불변이어야 하며, 한번 저장된 디렉토리는 수정하지 않는다.
+    변경이 생기면 새 스냅샷을 만들어 히스토리를 쌓는 방식이 안전하다.</p>
+    <p>콘텐츠 해시 기반 중복 제거는 정규화된 텍스트의 SHA-256을 비교해
+    불필요한 저장을 막는다. 타임스탬프 같은 노이즈는 비교 전에 제거한다.</p>
+    <p>두 번째 문단에서는 정규화 단계의 중요성을 다룬다. diff 품질은
+    추출과 정규화의 품질에 직접적으로 좌우되기 때문이다.</p>
+  </article>
+  <aside>
+    <div>광고</div>
+    <div>Sponsored</div>
+  </aside>
+  <footer>© 2026 example.com</footer>
+  <script>console.log("이 스크립트는 추출되면 안 된다");</script>
+</body>
+</html>
