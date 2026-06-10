@@ -30,15 +30,23 @@ class SnapshotMeta:
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
+_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+
 
 def normalize_url(raw: str) -> str:
     """비교/저장 기준이 되는 정규화 URL.
 
+    - 스킴 생략 시 https:// 자동 보완 (example.com → https://example.com/)
     - 스킴/호스트 소문자화, fragment 제거
     - 쿼리 파라미터 정렬, 트래킹 파라미터 제거 (config.TRACKING_PARAM_PREFIXES)
     - 기본 포트(:80, :443) 제거
     """
-    parts = urlsplit(raw.strip())
+    raw = raw.strip()
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    elif raw and not _SCHEME_RE.match(raw):
+        raw = "https://" + raw
+    parts = urlsplit(raw)
     scheme = parts.scheme.lower()
     if scheme not in ("http", "https"):
         raise ValueError(f"지원하지 않는 스킴: {raw!r}")

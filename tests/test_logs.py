@@ -129,12 +129,12 @@ def test_pipeline_writes_error_log(archive_env, monkeypatch):
 
 def test_pipeline_logs_invalid_url(archive_env):
     with pytest.raises(ValueError):
-        pipeline.archive_url("not-a-url")
+        pipeline.archive_url("ftp://not-a-url")
     with db.connect() as conn:
         logs = db.list_archive_logs(conn)
     assert len(logs) == 1
     assert logs[0]["status"] == "error"
-    assert logs[0]["url"] == "not-a-url"  # 정규화 실패 시 입력 원본
+    assert logs[0]["url"] == "ftp://not-a-url"  # 정규화 실패 시 입력 원본
 
 
 # ---- /logs 대시보드 ----
