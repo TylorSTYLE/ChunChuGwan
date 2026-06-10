@@ -37,7 +37,7 @@ td.num { text-align: right; color: var(--muted); }
 .badge.changed { color: var(--amber); background: var(--amber-bg); }
 .badge.same    { color: var(--gray);  background: var(--gray-bg); }
 .badge.new     { color: var(--green); background: var(--green-bg); }
-button, input[type=number], input[type=text],
+button, input[type=number], input[type=text], input[type=url],
 input[type=email], input[type=password] {
   font: inherit; font-size: 13px; padding: 3px 10px;
   border: 1px solid var(--border); border-radius: 4px; background: #fff;
@@ -70,7 +70,8 @@ header .spacer { flex: 1; }
   <span class="muted" style="font-size:12px">개인 웹 아카이브</span>
   <span class="spacer"></span>
   {% if user %}
-  <span class="mono muted">{{ user['email'] }}</span>
+  <span class="mono muted">{{ user['display_name'] or user['email'] }}</span>
+  <a href="/settings/account" style="font-size:12px">계정</a>
   <a href="/settings/totp" style="font-size:12px">2FA</a>
   <a href="/settings/passkey" style="font-size:12px">패스키</a>
   <form class="inline" method="post" action="/logout"><button>로그아웃</button></form>

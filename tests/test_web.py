@@ -110,3 +110,32 @@ def test_rearchive_triggers_pipeline(client, monkeypatch):
 
 def test_rearchive_unknown_page(client):
     assert client.post("/page/999/rearchive").status_code == 404
+
+
+def test_archive_new_url_triggers_pipeline(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(web_app.pipeline, "archive_url", lambda url, force=False: calls.append(url))
+    res = client.post(
+        "/archive",
+        data={"url": "https://example.com/new?utm_source=x"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith("/?queued=")
+    # 정규화된 URL(트래킹 파라미터 제거)로 파이프라인 호출
+    assert calls == ["https://example.com/new"]
+
+
+def test_archive_invalid_url_rejected(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(web_app.pipeline, "archive_url", lambda url, force=False: calls.append(url))
+    res = client.post("/archive", data={"url": "ftp://example.com/x"}, follow_redirects=False)
+    assert res.status_code == 303
+    assert res.headers["location"].startswith("/?error=")
+    assert calls == []
+
+
+def test_index_shows_queued_banner(client):
+    res = client.get("/?queued=https%3A%2F%2Fexample.com%2Fnew")
+    assert res.status_code == 200
+    assert "백그라운드에서 시작" in res.text
