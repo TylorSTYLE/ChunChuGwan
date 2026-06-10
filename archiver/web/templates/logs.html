@@ -16,6 +16,13 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
                       'forced_same': 'same', 'error': 'error'} %}
 {% set status_label = {'new': '신규', 'changed': '변경', 'unchanged': '동일',
                        'forced_same': '동일(강제)', 'error': '실패'} %}
+{% set file_desc = {'page.html': '자원 인라인 단일 HTML',
+                    'raw.html': '렌더링 후 DOM 소스',
+                    'content.md': '추출·정규화 텍스트',
+                    'screenshot.png': '전체 페이지 스크린샷',
+                    'meta.json': '캡처 메타 정보'} %}
+{# /snapshot/{id}/file/ 로 서빙이 허용된 파일 (app._ALLOWED_FILES 와 일치) #}
+{% set file_viewable = ['page.html', 'screenshot.png', 'content.md'] %}
 
 <div class="toolbar">
   <h2 style="margin:0">아카이브 로그</h2>
@@ -53,7 +60,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
   <thead>
     <tr>
       <th>시각</th><th>상태</th><th>URL</th><th>소요</th><th>HTTP</th>
-      <th>해시</th><th>출처</th><th>스냅샷</th><th></th>
+      <th>해시</th><th>용량</th><th>출처</th><th>스냅샷</th><th></th>
     </tr>
   </thead>
   <tbody>
@@ -72,6 +79,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
       <td class="num mono">{{ log['duration_ms'] }}ms</td>
       <td class="num">{{ log['http_status'] or '-' }}</td>
       <td class="mono">{{ log['content_hash'][:12] if log['content_hash'] else '-' }}</td>
+      <td class="num mono">{{ it.total_bytes|filesize if it.files else '-' }}</td>
       <td class="mono muted">{{ log['source'] }}</td>
       <td>
         {% if log['snapshot_id'] %}
@@ -79,16 +87,41 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
         {% endif %}
       </td>
       <td>
-        {% if it.steps or log['error'] %}
+        {% if it.steps or it.files or log['error'] %}
         <button type="button" class="toggle" data-target="steps-{{ log['id'] }}">상세</button>
         {% endif %}
       </td>
     </tr>
     <tr class="steps-row" id="steps-{{ log['id'] }}">
-      <td colspan="9">
+      <td colspan="10">
         {% if log['error'] %}<div class="error mono">{{ log['error'] }}</div>{% endif %}
-        {% if it.steps %}
+        {% if it.files %}
         <table class="steps-table">
+          <thead><tr><th>파일</th><th>용량</th><th>설명</th></tr></thead>
+          <tbody>
+          {% for f in it.files %}
+            <tr>
+              <td class="mono">
+                {% if f['name'] in file_viewable %}
+                <a href="/snapshot/{{ log['snapshot_id'] }}/file/{{ f['name'] }}">{{ f['name'] }}</a>
+                {% else %}
+                {{ f['name'] }}
+                {% endif %}
+              </td>
+              <td class="num mono">{{ f['bytes']|filesize }}</td>
+              <td class="muted">{{ file_desc.get(f['name'], '') }}</td>
+            </tr>
+          {% endfor %}
+            <tr>
+              <td class="mono">합계 ({{ it.files|length }}개)</td>
+              <td class="num mono">{{ it.total_bytes|filesize }}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+        {% endif %}
+        {% if it.steps %}
+        <table class="steps-table" {% if it.files %}style="margin-top:10px"{% endif %}>
           <thead><tr><th>단계</th><th>소요</th><th>내용</th></tr></thead>
           <tbody>
           {% for s in it.steps %}

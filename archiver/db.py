@@ -251,22 +251,32 @@ def list_archive_logs(
     status: str | None = None,
     limit: int = 100,
 ) -> list[sqlite3.Row]:
-    """아카이브 실행 로그 (최신 순). 도메인/페이지/스냅샷/상태로 필터."""
+    """아카이브 실행 로그 (최신 순). 도메인/페이지/스냅샷/상태로 필터.
+
+    스냅샷이 생긴 로그에는 디렉토리 위치(snap_domain, snap_slug, snap_dir_name)를
+    함께 반환한다 — 대시보드가 저장된 파일 목록/용량을 조회하는 데 쓴다.
+    """
     where: list[str] = []
     params: list[object] = []
     for cond, value in (
-        ("domain = ?", domain),
-        ("page_id = ?", page_id),
-        ("snapshot_id = ?", snapshot_id),
-        ("status = ?", status),
+        ("al.domain = ?", domain),
+        ("al.page_id = ?", page_id),
+        ("al.snapshot_id = ?", snapshot_id),
+        ("al.status = ?", status),
     ):
         if value is not None:
             where.append(cond)
             params.append(value)
-    sql = "SELECT * FROM archive_logs"
+    sql = """
+        SELECT al.*, s.dir_name AS snap_dir_name,
+               sp.domain AS snap_domain, sp.slug AS snap_slug
+        FROM archive_logs al
+        LEFT JOIN snapshots s ON s.id = al.snapshot_id
+        LEFT JOIN pages sp ON sp.id = s.page_id
+    """
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY started_at DESC, id DESC LIMIT ?"
+    sql += " ORDER BY al.started_at DESC, al.id DESC LIMIT ?"
     params.append(limit)
     return conn.execute(sql, params).fetchall()
 

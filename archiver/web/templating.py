@@ -13,7 +13,22 @@ def _auth_context(request: Request) -> dict:
     return {"user": getattr(request.state, "user", None)}
 
 
+def filesize(num: int | float | None) -> str:
+    """바이트 수를 사람이 읽는 단위로 (예: 532 B, 1.4 KB, 2.0 MB)."""
+    if num is None:
+        return "-"
+    size = float(num)
+    if size < 1024:
+        return f"{int(size)} B"
+    for unit in ("KB", "MB", "GB"):
+        size /= 1024
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}"
+    return f"{size:.1f} GB"
+
+
 templates = Jinja2Templates(
     directory=Path(__file__).parent / "templates",
     context_processors=[_auth_context],
 )
+templates.env.filters["filesize"] = filesize

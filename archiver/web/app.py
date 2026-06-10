@@ -341,7 +341,18 @@ def logs_view(
             steps = json.loads(row["steps"]) if row["steps"] else []
         except ValueError:
             steps = []
-        items.append({"log": row, "steps": steps})
+        # 스냅샷이 생긴 로그는 (불변) 스냅샷 디렉토리에서 파일 목록/용량 조회
+        files: list[dict] = []
+        if row["snap_dir_name"]:
+            snap_dir = (
+                storage.page_dir(row["snap_domain"], row["snap_slug"])
+                / row["snap_dir_name"]
+            )
+            files = storage.snapshot_files(snap_dir)
+        items.append({
+            "log": row, "steps": steps, "files": files,
+            "total_bytes": sum(f["bytes"] for f in files) if files else None,
+        })
     return templates.TemplateResponse(
         request, "logs.html",
         {
