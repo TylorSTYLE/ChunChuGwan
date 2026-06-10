@@ -180,3 +180,79 @@ def test_logs_ignores_invalid_status(client):
     res = client.get("/logs?status=evil")
     assert res.status_code == 200
     assert "https://a.com/x" in res.text and "https://b.com/y" in res.text
+
+
+# ---- 저장 파일 목록/용량 표시 ----
+
+
+def _fake_capture_with_files(html: str):
+    """캡처 산출물(raw/page/screenshot)을 실제로 기록하는 fake."""
+    def fake(url, out_dir, remove_selectors=()):
+        (out_dir / "raw.html").write_text(html, encoding="utf-8")
+        (out_dir / "page.html").write_text(html * 2, encoding="utf-8")
+        (out_dir / "screenshot.png").write_bytes(b"\x89PNG" + b"0" * 2048)
+        return capture.CaptureResult(
+            final_url=url, http_status=200, title="제목",
+            raw_html=html, content_html=html,
+        )
+    return fake
+
+
+def test_list_logs_includes_snapshot_dir_info(archive_env, monkeypatch):
+    monkeypatch.setattr(
+        pipeline.capture, "capture",
+        _fake_capture_with_files("<html><body><p>본문 텍스트</p></body></html>"),
+    )
+    pipeline.archive_url("https://example.com/post")
+    pipeline.archive_url("https://example.com/post")  # unchanged — 스냅샷 없음
+
+    with db.connect() as conn:
+        logs = db.list_archive_logs(conn)
+    assert logs[0]["status"] == "unchanged"
+    assert logs[0]["snap_dir_name"] is None
+    new_log = logs[1]
+    assert new_log["status"] == "new"
+    assert new_log["snap_domain"] == "example.com"
+    assert new_log["snap_dir_name"]
+    snap_dir = (
+        storage.page_dir(new_log["snap_domain"], new_log["snap_slug"])
+        / new_log["snap_dir_name"]
+    )
+    files = storage.snapshot_files(snap_dir)
+    assert [f["name"] for f in files] == [
+        "page.html", "raw.html", "content.md", "screenshot.png", "meta.json"
+    ]
+    assert all(f["bytes"] > 0 for f in files)
+
+
+def test_snapshot_files_missing_dir(tmp_path):
+    assert storage.snapshot_files(tmp_path / "없는-디렉토리") == []
+
+
+def test_logs_page_shows_files_and_sizes(archive_env, monkeypatch):
+    monkeypatch.setattr(
+        pipeline.capture, "capture",
+        _fake_capture_with_files("<html><body><p>본문 텍스트</p></body></html>"),
+    )
+    pipeline.archive_url("https://example.com/post")
+    res = TestClient(web_app.app).get("/logs")
+    assert res.status_code == 200
+    for name in ("page.html", "raw.html", "content.md", "screenshot.png", "meta.json"):
+        assert name in res.text
+    assert "2.0 KB" in res.text  # screenshot.png (2052 B)
+    assert "합계 (5개)" in res.text
+    with db.connect() as conn:
+        snap_id = db.list_archive_logs(conn)[0]["snapshot_id"]
+    assert f"/snapshot/{snap_id}/file/page.html" in res.text  # 보기 링크
+    assert f"/snapshot/{snap_id}/file/raw.html" not in res.text  # 서빙 비허용 파일
+
+
+def test_filesize_filter():
+    from archiver.web.templating import filesize
+
+    assert filesize(None) == "-"
+    assert filesize(0) == "0 B"
+    assert filesize(532) == "532 B"
+    assert filesize(1024) == "1.0 KB"
+    assert filesize(1024 * 1024 * 2) == "2.0 MB"
+    assert filesize(1024 ** 3 * 5) == "5.0 GB"

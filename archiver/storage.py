@@ -110,6 +110,23 @@ def content_sha256(text: str) -> str:
 
 CAPTURE_ARTIFACTS = ("raw.html", "page.html", "screenshot.png")
 
+# 스냅샷 디렉토리를 구성하는 파일 전체 (표시 순서 고정)
+SNAPSHOT_FILES = ("page.html", "raw.html", "content.md", "screenshot.png", "meta.json")
+
+
+def snapshot_files(snapshot_dir: Path) -> list[dict[str, object]]:
+    """스냅샷 디렉토리의 파일 목록과 크기.
+
+    SNAPSHOT_FILES 순서로 존재하는 파일만 [{name, bytes}] 로 반환한다.
+    디렉토리가 없으면 빈 목록 (로그는 남아 있는데 파일이 지워진 경우 대비).
+    """
+    out: list[dict[str, object]] = []
+    for name in SNAPSHOT_FILES:
+        path = snapshot_dir / name
+        if path.is_file():
+            out.append({"name": name, "bytes": path.stat().st_size})
+    return out
+
 
 def finalize_snapshot(
     tmp_dir: Path,
