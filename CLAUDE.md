@@ -27,6 +27,8 @@ uv run archiver diff <url> --from 1 --to 3
 uv run archiver serve                    # 대시보드 (127.0.0.1:8765)
 uv run archiver serve --host 0.0.0.0     # 외부 노출 (인증 켜진 상태에서만 허용)
 uv run pytest                            # 테스트
+docker compose up -d dashboard           # 대시보드 컨테이너 (127.0.0.1:8765)
+docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 ```
 
 ## 아키텍처 원칙 (중요 — 반드시 지킬 것)
@@ -41,7 +43,10 @@ uv run pytest                            # 테스트
 4. **비교는 정규화된 텍스트 기준.** 타임스탬프, CSRF 토큰, 광고 등 노이즈는
    `extract.py`의 정규화 단계에서 제거한 후 해시/diff 한다.
 5. **대시보드는 기본 loopback, 외부 노출 시 인증 필수.** 기본 바인딩 127.0.0.1.
-   `ARCHIVER_AUTH=off` 는 loopback 바인딩일 때만 허용 (`cli.serve` 가 강제).
+   컨테이너 등 포트포워딩이 필요한 환경에서만 `ARCHIVER_HOST` 로 바인딩을
+   오버라이드하며(compose 가 0.0.0.0 주입), 호스트 노출은 항상 127.0.0.1
+   포트 매핑으로 제한한다. `ARCHIVER_AUTH=off` 는 loopback 바인딩일 때만 허용
+   (`cli.serve` 가 강제 — 컨테이너의 0.0.0.0 바인딩에서는 인증이 항상 켜진다).
    아카이빙된 HTML을 렌더링할 때는 반드시 `<iframe sandbox>` (스크립트 실행 금지)
    안에서만 보여준다. 아카이빙된 페이지의 JS를 대시보드 컨텍스트에서 실행하는
    일은 절대 없어야 한다.

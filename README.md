@@ -30,6 +30,29 @@ uv run archiver serve                    # 대시보드 (http://127.0.0.1:8765)
 uv run archiver serve --host 0.0.0.0     # 외부 노출 (인증 켜진 상태에서만 허용)
 ```
 
+## 도커로 실행
+
+로컬에 Python/uv 를 설치하지 않고 Docker Compose 로 실행할 수 있다.
+
+```bash
+docker compose up -d dashboard                  # 대시보드 (http://127.0.0.1:8765)
+docker compose run --rm cli add <url>           # 스냅샷 생성
+docker compose run --rm cli list                # 아카이브 현황
+docker compose run --rm cli history <url>       # 스냅샷 목록
+docker compose run --rm cli diff <url>          # 스냅샷 비교
+docker compose down                             # 대시보드 중지
+```
+
+- 아카이브 데이터는 호스트의 `./archive` 디렉토리에 바인드 마운트로 저장된다
+  (컨테이너를 지워도 유지되며, 로컬 `uv run archiver` 와 같은 데이터를 공유).
+- 포트는 호스트의 **127.0.0.1 에만** 바인딩되어 localhost 전용 원칙이 유지된다.
+- 컨테이너 대시보드는 내부적으로 0.0.0.0 바인딩이라 **인증이 항상 켜진다**
+  (`ARCHIVER_AUTH=off` 는 loopback 바인딩 전용). 첫 접속 시 `/signup` 에서 가입.
+- 컨테이너는 비루트(uid 1000)로 실행되어 chromium 샌드박스가 활성 상태로 동작한다.
+  Linux 호스트에서 `./archive` 권한 오류가 나면 디렉토리 소유자를 uid 1000 에 맞출 것
+  (macOS Docker Desktop 은 해당 없음).
+- 최초 빌드는 chromium 다운로드를 포함해 수 분 걸린다 (이미지 약 1.5GB).
+
 ## 저장 구조
 
 ```
