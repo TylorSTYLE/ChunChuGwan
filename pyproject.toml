@@ -17,6 +17,7 @@ dependencies = [
     "httpx>=0.28",
     "pyjwt[crypto]>=2.9",
     "python-multipart>=0.0.9",
+    "webauthn>=2.7.1",
 ]
 
 [project.scripts]

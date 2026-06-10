@@ -1,14 +1,26 @@
 {% extends "base.html" %}
 {% block title %}목록 — Web Archiver{% endblock %}
 {% block content %}
+{% if queued %}
+<div class="notice">아카이빙이 백그라운드에서 시작되었습니다: <span class="mono">{{ queued }}</span> — 잠시 후 새로고침하세요.</div>
+{% endif %}
+{% if error %}
+<div class="error">아카이빙 실패: {{ error }}</div>
+{% endif %}
+
 <div class="toolbar">
   <h2 style="margin:0">아카이브 목록</h2>
+  <form method="post" action="/archive" style="display:flex; gap:6px; flex:1; max-width:520px">
+    <input type="url" name="url" placeholder="https://… 새 URL 아카이빙" required
+           autocomplete="off" style="flex:1">
+    <button type="submit">아카이빙</button>
+  </form>
   <span class="spacer"></span>
   <input type="text" id="q" placeholder="URL 필터…" autocomplete="off">
 </div>
 
 {% if not pages %}
-<p class="muted">아카이브된 페이지가 없습니다. <span class="mono">archiver add &lt;url&gt;</span> 로 시작하세요.</p>
+<p class="muted">아카이브된 페이지가 없습니다. 위 입력란이나 <span class="mono">archiver add &lt;url&gt;</span> 로 시작하세요.</p>
 {% else %}
 <table id="pages">
   <thead>

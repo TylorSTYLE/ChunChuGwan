@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -35,7 +35,12 @@ app = FastAPI(title="Web Archiver")
 app.include_router(auth_routes.router)
 
 # 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)
-_PUBLIC_PATHS = {"/healthz", "/login", "/login/totp", "/signup"}
+# /login/passkey* 는 패스워드 통과 후 pending 세션 단계라 user 가 아직 없다 —
+# 라우트 핸들러가 pending_totp 세션을 직접 요구한다.
+_PUBLIC_PATHS = {
+    "/healthz", "/login", "/login/totp", "/signup",
+    "/login/passkey/options", "/login/passkey",
+}
 
 
 @app.middleware("http")
@@ -115,10 +120,12 @@ def healthz() -> dict:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request):
+def index(request: Request, queued: str = "", error: str = ""):
     with db.connect() as conn:
         pages = db.list_pages(conn)
-    return templates.TemplateResponse(request, "index.html", {"pages": pages})
+    return templates.TemplateResponse(
+        request, "index.html", {"pages": pages, "queued": queued, "error": error}
+    )
 
 
 @app.get("/page/{page_id}", response_class=HTMLResponse)
@@ -346,13 +353,26 @@ def logs_view(
     )
 
 
-def _rearchive(url: str) -> None:
-    """백그라운드 재아카이빙. 결과는 archive_logs 에 기록된다."""
+def _run_archive(url: str) -> None:
+    """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다."""
     try:
         outcome = pipeline.archive_url(url, source="web")
-        logger.info("재아카이빙 완료: %s [%s]", url, outcome.status)
+        logger.info("아카이빙 완료: %s [%s]", url, outcome.status)
     except Exception:
-        logger.exception("재아카이빙 실패: %s", url)
+        logger.exception("아카이빙 실패: %s", url)
+
+
+@app.post("/archive")
+def archive_new(background: BackgroundTasks, url: str = Form(...)):
+    """대시보드에서 새 URL 아카이빙. URL 검증은 동기로, 캡처는 백그라운드로."""
+    try:
+        norm = storage.normalize_url(url)
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/?error={quote(str(exc), safe='')}", status_code=303
+        )
+    background.add_task(_run_archive, norm)
+    return RedirectResponse(f"/?queued={quote(norm, safe='')}", status_code=303)
 
 
 @app.post("/page/{page_id}/rearchive")
@@ -361,5 +381,5 @@ def rearchive(page_id: int, background: BackgroundTasks):
         page = db.get_page_by_id(conn, page_id)
     if page is None:
         raise HTTPException(404, "페이지 없음")
-    background.add_task(_rearchive, page["url"])
+    background.add_task(_run_archive, page["url"])
     return RedirectResponse(url=f"/page/{page_id}?queued=1", status_code=303)

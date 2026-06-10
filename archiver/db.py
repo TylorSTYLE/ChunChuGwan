@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS users (
     totp_pending_secret TEXT,               -- 등록 확인 전 임시 시크릿
     totp_last_used_at   TEXT,               -- 마지막으로 사용된 코드의 시간창 (재사용 방지)
     is_admin            INTEGER NOT NULL DEFAULT 0,  -- 최초 구동 시 등록된 관리자
+    display_name        TEXT,               -- 표시용 이름 (NULL = 이메일로 표시)
     created_at          TEXT NOT NULL
 );
 
@@ -78,12 +79,25 @@ CREATE TABLE IF NOT EXISTS identities (
     UNIQUE (provider, subject)
 );
 
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id            INTEGER PRIMARY KEY,
+    user_id       INTEGER NOT NULL REFERENCES users(id),
+    credential_id TEXT NOT NULL UNIQUE,     -- base64url
+    public_key    TEXT NOT NULL,            -- COSE 공개키 (base64url)
+    sign_count    INTEGER NOT NULL DEFAULT 0,
+    name          TEXT NOT NULL,            -- 사용자가 붙인 이름 (예: '맥북 Touch ID')
+    created_at    TEXT NOT NULL,
+    last_used_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id);
+
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash  TEXT PRIMARY KEY,           -- 세션 토큰의 SHA-256 (원문은 쿠키에만 존재)
     user_id     INTEGER NOT NULL REFERENCES users(id),
-    state       TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'pending_totp'
+    state       TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'pending_totp'(2단계 대기)
     created_at  TEXT NOT NULL,
-    expires_at  TEXT NOT NULL
+    expires_at  TEXT NOT NULL,
+    webauthn_challenge TEXT                 -- 진행 중인 패스키 챌린지 (1회용, base64url)
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
@@ -101,6 +115,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
     if cols and "is_admin" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+    if cols and "display_name" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if cols and "webauthn_challenge" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN webauthn_challenge TEXT")
 
 
 @contextmanager
@@ -339,6 +358,18 @@ def create_first_admin(
     return cur.lastrowid if cur.rowcount == 1 else None
 
 
+def set_display_name(conn: sqlite3.Connection, user_id: int, name: str | None) -> None:
+    """표시용 사용자 이름 변경 (None 이면 제거 — 이메일로 표시)."""
+    conn.execute("UPDATE users SET display_name = ? WHERE id = ?", (name, user_id))
+
+
+def set_password_hash(conn: sqlite3.Connection, user_id: int, password_hash: str) -> None:
+    """패스워드 해시 교체 (패스워드 변경)."""
+    conn.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id)
+    )
+
+
 def set_totp_pending(conn: sqlite3.Connection, user_id: int, secret: str) -> None:
     """TOTP 등록 확인 대기 시크릿 저장 (재발급 시 덮어씀)."""
     conn.execute(
@@ -374,6 +405,95 @@ def set_totp_last_used(conn: sqlite3.Connection, user_id: int, window: str) -> N
     conn.execute(
         "UPDATE users SET totp_last_used_at = ? WHERE id = ?", (window, user_id)
     )
+
+
+# ---- 패스키 (WebAuthn) ----
+
+
+def list_passkeys(conn: sqlite3.Connection, user_id: int) -> list[sqlite3.Row]:
+    """사용자의 패스키 목록 (등록 순)."""
+    return conn.execute(
+        "SELECT * FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at, id",
+        (user_id,),
+    ).fetchall()
+
+
+def count_passkeys(conn: sqlite3.Connection, user_id: int) -> int:
+    """사용자의 패스키 개수 (0 초과면 2단계 인증 대상)."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM webauthn_credentials WHERE user_id = ?", (user_id,)
+    ).fetchone()["c"]
+
+
+def get_passkey(
+    conn: sqlite3.Connection, user_id: int, credential_id: str
+) -> sqlite3.Row | None:
+    """credential_id 로 해당 사용자의 패스키 조회 (없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM webauthn_credentials WHERE user_id = ? AND credential_id = ?",
+        (user_id, credential_id),
+    ).fetchone()
+
+
+def create_passkey(
+    conn: sqlite3.Connection,
+    user_id: int,
+    credential_id: str,
+    public_key: str,
+    sign_count: int,
+    name: str,
+) -> int:
+    """패스키 등록 후 id 반환. credential_id 중복이면 IntegrityError."""
+    cur = conn.execute(
+        """
+        INSERT INTO webauthn_credentials
+            (user_id, credential_id, public_key, sign_count, name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, credential_id, public_key, sign_count, name, _utcnow()),
+    )
+    return cur.lastrowid
+
+
+def touch_passkey(conn: sqlite3.Connection, passkey_id: int, sign_count: int) -> None:
+    """인증 성공 시 sign_count 와 마지막 사용 시각 갱신."""
+    conn.execute(
+        "UPDATE webauthn_credentials SET sign_count = ?, last_used_at = ? WHERE id = ?",
+        (sign_count, _utcnow(), passkey_id),
+    )
+
+
+def delete_passkey(conn: sqlite3.Connection, user_id: int, passkey_id: int) -> bool:
+    """사용자 소유 패스키 삭제. 소유가 아니거나 없으면 False."""
+    cur = conn.execute(
+        "DELETE FROM webauthn_credentials WHERE id = ? AND user_id = ?",
+        (passkey_id, user_id),
+    )
+    return cur.rowcount == 1
+
+
+def set_session_challenge(
+    conn: sqlite3.Connection, token_hash: str, challenge: str
+) -> None:
+    """세션에 진행 중인 WebAuthn 챌린지 저장 (재요청 시 덮어씀)."""
+    conn.execute(
+        "UPDATE sessions SET webauthn_challenge = ? WHERE token_hash = ?",
+        (challenge, token_hash),
+    )
+
+
+def consume_session_challenge(conn: sqlite3.Connection, token_hash: str) -> str | None:
+    """세션의 챌린지를 꺼내고 즉시 비운다 (1회용)."""
+    row = conn.execute(
+        "SELECT webauthn_challenge FROM sessions WHERE token_hash = ?", (token_hash,)
+    ).fetchone()
+    if row is None or row["webauthn_challenge"] is None:
+        return None
+    conn.execute(
+        "UPDATE sessions SET webauthn_challenge = NULL WHERE token_hash = ?",
+        (token_hash,),
+    )
+    return row["webauthn_challenge"]
 
 
 # ---- 세션 ----
@@ -420,6 +540,16 @@ def activate_session(
 def delete_session(conn: sqlite3.Connection, token_hash: str) -> None:
     """세션 삭제 (로그아웃)."""
     conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
+
+def delete_other_sessions(
+    conn: sqlite3.Connection, user_id: int, keep_token_hash: str
+) -> None:
+    """해당 사용자의 다른 세션 일괄 삭제 (패스워드 변경 시 강제 로그아웃)."""
+    conn.execute(
+        "DELETE FROM sessions WHERE user_id = ? AND token_hash != ?",
+        (user_id, keep_token_hash),
+    )
 
 
 def delete_expired_sessions(conn: sqlite3.Connection) -> None:

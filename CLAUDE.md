@@ -10,7 +10,8 @@
 - DB: SQLite (`archive/index.db`) — ORM 없이 표준 `sqlite3` 사용
 - CLI: click
 - 대시보드: FastAPI + Jinja2 템플릿 (읽기 전용 + 재아카이빙 트리거)
-- 인증: argon2-cffi(패스워드), pyotp+qrcode(TOTP), httpx+PyJWT(OIDC — Authentik)
+- 인증: argon2-cffi(패스워드), pyotp+qrcode(TOTP), webauthn(패스키),
+  httpx+PyJWT(OIDC — Authentik)
 - 테스트: pytest
 
 ## 명령어
@@ -51,8 +52,10 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
    안에서만 보여준다. 아카이빙된 페이지의 JS를 대시보드 컨텍스트에서 실행하는
    일은 절대 없어야 한다.
 6. **인증 데이터 규칙.** 패스워드는 Argon2id 해시만, 세션은 서버사이드로 토큰의
-   SHA-256 만 저장. TOTP 는 패스워드 로그인에만 적용하고 SSO(OIDC)는 IdP 의
-   2FA 를 신뢰한다. 환경변수 목록은 README "인증" 절 참조.
+   SHA-256 만 저장. 2FA(TOTP·패스키)는 패스워드 로그인에만 적용하고 SSO(OIDC)는
+   IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origin 은
+   `ARCHIVER_PUBLIC_URL` 에서 파생(미설정 시 localhost). 환경변수 목록은
+   README "인증" 절 참조.
 
 ## 저장 구조
 
@@ -79,6 +82,7 @@ archive/
 - `archive_logs` — 아카이브 실행 로그 (성공/실패, 단계별 소요시간 JSON, 출처 cli/web)
 - `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
   서버사이드 세션, OIDC state 1회용 기록)
+- `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
 
 ## 코딩 컨벤션
 
@@ -117,5 +121,7 @@ archive/
 - [x] **A5 외부 노출 준비**: `serve --host`, auth-off×외부 바인딩 거부, 보안 헤더.
 - [x] **A7 최초 구동 부트스트랩**: 사용자 0명이면 `ARCHIVER_ADMIN_*` 환경변수로
       관리자 자동 등록, 없으면 `/setup` 등록 페이지 (등록 후 페이지·API 차단).
+- [x] **A8 패스키 2FA**: WebAuthn 자격증명 등록/삭제(`/settings/passkey`),
+      2단계 로그인에서 TOTP 와 병행 (둘 중 하나만 있어도 2단계 발동).
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.
