@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Form, Request
+import logging
+import secrets
+import sqlite3
+
+import httpx
+import jwt
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from .. import auth, config, db
+from .. import auth, config, db, oidc
 from .templating import templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -187,6 +195,82 @@ def totp_disable(request: Request, password: str = Form(...)):
             )
         db.disable_totp(conn, user["id"])
     return RedirectResponse(url="/settings/totp", status_code=303)
+
+
+# ---- OIDC (Authentik) SSO ----
+
+
+def _require_oidc() -> None:
+    if not config.oidc_enabled():
+        raise HTTPException(404, "OIDC 가 설정되지 않았습니다")
+
+
+@router.get("/auth/oidc/login")
+def oidc_login(next: str | None = None):
+    _require_oidc()
+    state = secrets.token_urlsafe(16)
+    nonce = secrets.token_urlsafe(16)
+    with db.connect() as conn:
+        db.create_oidc_state(conn, state, nonce, safe_next(next))
+    return RedirectResponse(url=oidc.build_authorize_url(state, nonce), status_code=302)
+
+
+def _link_oidc_user(conn: sqlite3.Connection, claims: dict) -> int:
+    """OIDC 클레임을 로컬 계정에 연결하고 user_id 반환.
+
+    ① (provider, sub) 기존 연결 → 그 계정.
+    ② 검증된 이메일이 기존 계정과 일치 → identity 연결.
+    ③ 둘 다 없으면 SSO 전용 계정 자동 프로비저닝 (password_hash NULL).
+    """
+    sub = str(claims["sub"])
+    ident = db.get_identity(conn, config.OIDC_PROVIDER, sub)
+    if ident is not None:
+        return ident["user_id"]
+
+    email = (claims.get("email") or "").strip()
+    if not email:
+        raise HTTPException(400, "OIDC 응답에 이메일 클레임이 없습니다")
+
+    existing = db.get_user_by_email(conn, email)
+    if existing is not None:
+        if not claims.get("email_verified"):
+            # 미검증 이메일로 기존 계정을 탈취하는 것을 차단
+            raise HTTPException(403, "IdP 가 검증하지 않은 이메일이라 기존 계정에 연결할 수 없습니다")
+        db.create_identity(conn, existing["id"], config.OIDC_PROVIDER, sub)
+        return existing["id"]
+
+    user_id = db.create_user(conn, email)  # SSO 전용 계정
+    db.create_identity(conn, user_id, config.OIDC_PROVIDER, sub)
+    return user_id
+
+
+@router.get("/auth/oidc/callback")
+def oidc_callback(
+    code: str | None = None, state: str | None = None, error: str | None = None
+):
+    _require_oidc()
+    if error:
+        raise HTTPException(400, f"IdP 오류: {error}")
+    if not code or not state:
+        raise HTTPException(400, "code/state 누락")
+
+    with db.connect() as conn:
+        st = db.consume_oidc_state(conn, state, config.OIDC_STATE_TTL_SECONDS)
+    if st is None:
+        raise HTTPException(400, "state 불일치 또는 만료 — 로그인을 다시 시도하세요")
+
+    try:
+        tokens = oidc.exchange_code(code)
+        claims = oidc.validate_id_token(tokens["id_token"], st["nonce"])
+    except (httpx.HTTPError, jwt.PyJWTError, ValueError, KeyError) as e:
+        logger.warning("OIDC 콜백 검증 실패: %s", e)
+        raise HTTPException(400, "OIDC 토큰 검증 실패")
+
+    with db.connect() as conn:
+        user_id = _link_oidc_user(conn, claims)
+        # SSO 는 IdP 의 2FA 를 신뢰 — 바로 active 세션
+        token = auth.issue_session(conn, user_id)
+    return _login_redirect(token, st["redirect_to"])
 
 
 @router.get("/signup", response_class=HTMLResponse)
