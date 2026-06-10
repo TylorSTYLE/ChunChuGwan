@@ -7,9 +7,20 @@ from archiver import storage
     ("HTTPS://Example.COM:443/a?b=2&a=1#frag", "https://example.com/a?a=1&b=2"),
     ("http://example.com/a?utm_source=x&q=1", "http://example.com/a?q=1"),
     ("https://example.com/", "https://example.com/"),
+    # 스킴 생략 시 https:// 자동 보완
+    ("example.com", "https://example.com/"),
+    ("Example.COM/a?b=2&a=1#frag", "https://example.com/a?a=1&b=2"),
+    ("localhost:8080/x", "https://localhost:8080/x"),
+    ("//example.com/a", "https://example.com/a"),
 ])
 def test_normalize_url(raw, expected):
     assert storage.normalize_url(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["ftp://example.com/a", "", "https://"])
+def test_normalize_url_rejects(raw):
+    with pytest.raises(ValueError):
+        storage.normalize_url(raw)
 
 
 def test_normalize_idempotent():
