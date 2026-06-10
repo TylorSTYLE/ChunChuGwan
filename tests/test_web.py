@@ -39,7 +39,9 @@ def client(tmp_path, monkeypatch):
             )
         db.insert_check(conn, page_id, storage.content_sha256(contents[1]))
 
-    return TestClient(web_app.app)
+    web_app._active_jobs.clear()  # 다른 테스트의 진행 목록 잔재 제거
+    yield TestClient(web_app.app)
+    web_app._active_jobs.clear()
 
 
 def test_index(client):
@@ -148,3 +150,74 @@ def test_index_shows_queued_banner(client):
     res = client.get("/?queued=https%3A%2F%2Fexample.com%2Fnew")
     assert res.status_code == 200
     assert "백그라운드에서 시작" in res.text
+
+
+def test_archive_registers_active_job_and_clears_on_finish(client, monkeypatch):
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": seen.append(
+            sorted(web_app._active_snapshot())
+        ),
+    )
+    res = client.post(
+        "/archive", data={"url": "https://example.com/new"}, follow_redirects=False
+    )
+    assert res.status_code == 303
+    # 파이프라인 실행 중에는 진행 목록에 있고, 끝나면 비워진다
+    assert seen == [["https://example.com/new"]]
+    assert client.get("/archive/active").json() == {"active": []}
+
+
+def test_active_job_cleared_even_on_failure(client, monkeypatch):
+    def boom(url, force=False, source="cli"):
+        raise RuntimeError("캡처 실패")
+
+    monkeypatch.setattr(web_app.pipeline, "archive_url", boom)
+    client.post("/archive", data={"url": "https://example.com/new"}, follow_redirects=False)
+    assert client.get("/archive/active").json() == {"active": []}
+
+
+def test_index_shows_active_jobs(client):
+    web_app._register_job("https://example.com/post")       # 기존 페이지 재아카이빙
+    web_app._register_job("https://example.com/brand-new")  # 아직 pages 행 없는 신규 URL
+    res = client.get("/")
+    assert res.status_code == 200
+    assert res.text.count("아카이빙 중") == 2
+    assert "https://example.com/brand-new" in res.text
+    # 진행 중인 페이지에는 재아카이빙 버튼을 숨긴다
+    assert "재아카이빙" not in res.text
+
+
+def test_archive_active_endpoint_sorted(client):
+    web_app._register_job("https://b.example.com/x")
+    web_app._register_job("https://a.example.com/x")
+    assert client.get("/archive/active").json() == {
+        "active": ["https://a.example.com/x", "https://b.example.com/x"]
+    }
+
+
+def test_archive_duplicate_url_not_requeued(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": calls.append(url),
+    )
+    web_app._register_job("https://example.com/new")  # 이미 진행 중인 상태
+    res = client.post(
+        "/archive", data={"url": "https://example.com/new"}, follow_redirects=False
+    )
+    assert res.status_code == 303
+    assert calls == []
+
+
+def test_rearchive_duplicate_not_requeued(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": calls.append(url),
+    )
+    web_app._register_job("https://example.com/post")
+    res = client.post("/page/1/rearchive", follow_redirects=False)
+    assert res.status_code == 303
+    assert calls == []
