@@ -108,9 +108,15 @@ archive/
 ### 가입 / 2FA
 
 이후 사용자는 `/signup` 에서 가입한다 (이메일 + 패스워드 8자 이상).
-로그인 후 헤더의 **2FA** 링크에서 TOTP(Google Authenticator 등)를 등록할 수
-있고, 등록하면 패스워드 로그인 시 OTP 코드가 추가로 요구된다.
-SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 OTP 단계를 건너뛴다.
+로그인 후 헤더의 **2FA** 링크에서 TOTP(Google Authenticator 등)를,
+**패스키** 링크에서 패스키(WebAuthn — Touch ID, 보안 키, 휴대폰 등)를
+등록할 수 있다. 둘 중 하나라도 등록되어 있으면 패스워드 로그인 시
+2단계 인증(패스키 또는 OTP 코드)이 추가로 요구된다.
+SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 2단계를 건너뛴다.
+
+패스키의 RP ID/origin 은 `ARCHIVER_PUBLIC_URL` 에서 파생된다. 미설정 시
+`localhost` 로 동작하므로 로컬에서는 `http://localhost:8765` 로 접속해야
+패스키를 쓸 수 있다 (`127.0.0.1` 은 WebAuthn RP ID 로 쓸 수 없음).
 
 세션은 서버사이드(SQLite)이며 쿠키는 HttpOnly + SameSite=Lax,
 `ARCHIVER_PUBLIC_URL` 이 https 면 Secure 가 붙는다.
@@ -123,7 +129,7 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 OTP 단계를 건너뛴다
 | `ARCHIVER_ADMIN_EMAIL` | (없음) | 최초 구동 시 자동 등록할 관리자 이메일 |
 | `ARCHIVER_ADMIN_PASSWORD` | (없음) | 최초 구동 시 자동 등록할 관리자 패스워드 (8자 이상) |
 | `ARCHIVER_SESSION_TTL_DAYS` | `14` | 세션 수명 (일) |
-| `ARCHIVER_PUBLIC_URL` | (없음) | 외부 노출 시 공개 URL (예: `https://archive.example.com`) — OIDC redirect_uri 조립과 Secure 쿠키 판정에 사용 |
+| `ARCHIVER_PUBLIC_URL` | (없음) | 외부 노출 시 공개 URL (예: `https://archive.example.com`) — OIDC redirect_uri 조립, Secure 쿠키 판정, 패스키 RP ID/origin 에 사용 |
 | `ARCHIVER_OIDC_ISSUER` | (없음) | Authentik issuer URL (예: `https://auth.example.com/application/o/archiver`) |
 | `ARCHIVER_OIDC_CLIENT_ID` | (없음) | OIDC 클라이언트 ID |
 | `ARCHIVER_OIDC_CLIENT_SECRET` | (없음) | OIDC 클라이언트 시크릿 |

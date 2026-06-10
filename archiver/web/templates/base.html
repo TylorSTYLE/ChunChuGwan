@@ -73,6 +73,7 @@ header .spacer { flex: 1; }
   <span class="mono muted">{{ user['display_name'] or user['email'] }}</span>
   <a href="/settings/account" style="font-size:12px">계정</a>
   <a href="/settings/totp" style="font-size:12px">2FA</a>
+  <a href="/settings/passkey" style="font-size:12px">패스키</a>
   <form class="inline" method="post" action="/logout"><button>로그아웃</button></form>
   {% endif %}
 </header>
