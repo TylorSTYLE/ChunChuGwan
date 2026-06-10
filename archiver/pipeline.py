@@ -123,10 +123,24 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
     # 해시가 같으면 스냅샷 디렉토리를 만들지 않도록 임시 디렉토리에 먼저 캡처
     tmp_dir = Path(tempfile.mkdtemp(prefix="archiver-"))
     try:
-        result = capture.capture(
-            norm, tmp_dir,
-            remove_selectors=tuple(rules.get("remove_selectors") or ()),
-        )
+        try:
+            result = capture.capture(
+                norm, tmp_dir,
+                remove_selectors=tuple(rules.get("remove_selectors") or ()),
+            )
+        except capture.CaptureError as e:
+            # 스킴 생략 입력에 https 를 추정 보완한 경우, HTTP 전용 사이트
+            # (443 닫힘 등)일 수 있으므로 http 로 한 번 더 시도한다.
+            if not (storage.scheme_inferred(url) and norm.startswith("https://")):
+                raise
+            run.step("capture", f"https 캡처 실패 — http 로 재시도: {str(e).splitlines()[0]}")
+            norm = "http://" + norm.removeprefix("https://")
+            slug = storage.url_to_slug(norm)
+            run.url = norm
+            result = capture.capture(
+                norm, tmp_dir,
+                remove_selectors=tuple(rules.get("remove_selectors") or ()),
+            )
         run.step(
             "capture",
             f"http {result.http_status or '-'} · 최종 URL {result.final_url} · "

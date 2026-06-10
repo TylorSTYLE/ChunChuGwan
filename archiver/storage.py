@@ -68,6 +68,15 @@ def normalize_url(raw: str) -> str:
     return urlunsplit((scheme, netloc, path, query, ""))
 
 
+def scheme_inferred(raw: str) -> bool:
+    """입력에 스킴이 없어 normalize_url 이 https:// 를 추정 보완하는지.
+
+    HTTP 전용 사이트에서 https 추정이 빗나갈 수 있으므로, 캡처 실패 시
+    http 폴백 여부를 판단하는 데 쓴다 (pipeline 참조).
+    """
+    return not _SCHEME_RE.match(raw.strip())
+
+
 def url_to_slug(normalized_url: str) -> str:
     """디렉토리명용 slug: '{경로요약}-{sha256(url)[:8]}'.
 

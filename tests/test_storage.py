@@ -23,6 +23,18 @@ def test_normalize_url_rejects(raw):
         storage.normalize_url(raw)
 
 
+@pytest.mark.parametrize("raw,expected", [
+    ("example.com/a", True),
+    ("  Example.COM ", True),
+    ("//example.com/a", True),
+    ("https://example.com/a", False),
+    ("http://example.com/a", False),
+    ("HTTPS://example.com", False),
+])
+def test_scheme_inferred(raw, expected):
+    assert storage.scheme_inferred(raw) is expected
+
+
 def test_normalize_idempotent():
     u = storage.normalize_url("https://example.com/path?b=2&a=1")
     assert storage.normalize_url(u) == u
