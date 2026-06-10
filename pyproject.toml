@@ -11,6 +11,12 @@ dependencies = [
     "uvicorn>=0.30",
     "jinja2>=3.1",
     "pillow>=10.3",
+    "argon2-cffi>=23.1",
+    "pyotp>=2.9",
+    "qrcode>=7.4",
+    "httpx>=0.28",
+    "pyjwt[crypto]>=2.9",
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
@@ -18,7 +24,6 @@ archiver = "archiver.cli:main"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "pytest>=8.2",
 ]
 
