@@ -121,7 +121,7 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
              + (" (도메인 룰 적용)" if rules else ""))
 
     # 해시가 같으면 스냅샷 디렉토리를 만들지 않도록 임시 디렉토리에 먼저 캡처
-    tmp_dir = Path(tempfile.mkdtemp(prefix="archiver-"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="wccg-"))
     try:
         try:
             result = capture.capture(

@@ -1,4 +1,4 @@
-# Web Archiver
+# 춘추관 (ChunChuGwan)
 
 개인 웹 아카이빙 시스템. URL을 받아 전체 페이지를 스냅샷으로 저장하고,
 같은 URL을 다시 아카이빙하면 히스토리가 쌓이며 스냅샷 간 비교(diff)가 가능하다.
@@ -19,14 +19,14 @@
 ```bash
 uv sync                                  # 의존성 설치
 uv run playwright install chromium       # 최초 1회
-uv run archiver add <url>                # 스냅샷 생성
-uv run archiver add <url> --force        # 콘텐츠 동일해도 강제 저장
-uv run archiver list                     # 전체 아카이브 현황
-uv run archiver history <url>            # 해당 URL 스냅샷 목록
-uv run archiver diff <url>               # 최신 2개 스냅샷 비교
-uv run archiver diff <url> --from 1 --to 3
-uv run archiver serve                    # 대시보드 (127.0.0.1:8765)
-uv run archiver serve --host 0.0.0.0     # 외부 노출 (인증 켜진 상태에서만 허용)
+uv run wccg add <url>                    # 스냅샷 생성
+uv run wccg add <url> --force            # 콘텐츠 동일해도 강제 저장
+uv run wccg list                         # 전체 아카이브 현황
+uv run wccg history <url>                # 해당 URL 스냅샷 목록
+uv run wccg diff <url>                   # 최신 2개 스냅샷 비교
+uv run wccg diff <url> --from 1 --to 3
+uv run wccg serve                        # 대시보드 (127.0.0.1:8765)
+uv run wccg serve --host 0.0.0.0         # 외부 노출 (인증 켜진 상태에서만 허용)
 uv run pytest                            # 테스트
 docker compose up -d dashboard           # 대시보드 컨테이너 (127.0.0.1:8765)
 docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
@@ -44,9 +44,9 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 4. **비교는 정규화된 텍스트 기준.** 타임스탬프, CSRF 토큰, 광고 등 노이즈는
    `extract.py`의 정규화 단계에서 제거한 후 해시/diff 한다.
 5. **대시보드는 기본 loopback, 외부 노출 시 인증 필수.** 기본 바인딩 127.0.0.1.
-   컨테이너 등 포트포워딩이 필요한 환경에서만 `ARCHIVER_HOST` 로 바인딩을
+   컨테이너 등 포트포워딩이 필요한 환경에서만 `WCCG_HOST` 로 바인딩을
    오버라이드하며(compose 가 0.0.0.0 주입), 호스트 노출은 항상 127.0.0.1
-   포트 매핑으로 제한한다. `ARCHIVER_AUTH=off` 는 loopback 바인딩일 때만 허용
+   포트 매핑으로 제한한다. `WCCG_AUTH=off` 는 loopback 바인딩일 때만 허용
    (`cli.serve` 가 강제 — 컨테이너의 0.0.0.0 바인딩에서는 인증이 항상 켜진다).
    아카이빙된 HTML을 렌더링할 때는 반드시 `<iframe sandbox>` (스크립트 실행 금지)
    안에서만 보여준다. 아카이빙된 페이지의 JS를 대시보드 컨텍스트에서 실행하는
@@ -54,7 +54,7 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 6. **인증 데이터 규칙.** 패스워드는 Argon2id 해시만, 세션은 서버사이드로 토큰의
    SHA-256 만 저장. 2FA(TOTP·패스키)는 패스워드 로그인에만 적용하고 SSO(OIDC)는
    IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origin 은
-   `ARCHIVER_PUBLIC_URL` 에서 파생(미설정 시 localhost). 환경변수 목록은
+   `WCCG_PUBLIC_URL` 에서 파생(미설정 시 localhost). 환경변수 목록은
    README "인증" 절 참조.
 
 ## 저장 구조
@@ -75,7 +75,7 @@ archive/
 
 ## DB 스키마
 
-`archiver/db.py`의 `SCHEMA` 참조. 핵심 테이블:
+`chunchugwan/db.py`의 `SCHEMA` 참조. 핵심 테이블:
 - `pages` — 정규화된 URL 단위 (1 URL = 1 row)
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관
 - `checks` — 중복으로 저장 생략된 확인 기록
@@ -119,7 +119,7 @@ archive/
 - [x] **A3 TOTP 2FA**: QR 등록/해제, 2단계 로그인 (패스워드 로그인에만 적용).
 - [x] **A4 OIDC SSO**: `oidc.py` — Authentik Authorization Code Flow, 계정 연결.
 - [x] **A5 외부 노출 준비**: `serve --host`, auth-off×외부 바인딩 거부, 보안 헤더.
-- [x] **A7 최초 구동 부트스트랩**: 사용자 0명이면 `ARCHIVER_ADMIN_*` 환경변수로
+- [x] **A7 최초 구동 부트스트랩**: 사용자 0명이면 `WCCG_ADMIN_*` 환경변수로
       관리자 자동 등록, 없으면 `/setup` 등록 페이지 (등록 후 페이지·API 차단).
 - [x] **A8 패스키 2FA**: WebAuthn 자격증명 등록/삭제(`/settings/passkey`),
       2단계 로그인에서 TOTP 와 병행 (둘 중 하나만 있어도 2단계 발동).

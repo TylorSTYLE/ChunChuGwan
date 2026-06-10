@@ -4,8 +4,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from archiver import capture, config, db, pipeline, storage
-from archiver.web import app as web_app
+from chunchugwan import capture, config, db, pipeline, storage
+from chunchugwan.web import app as web_app
 
 
 @pytest.fixture
@@ -295,7 +295,7 @@ def test_logs_page_shows_files_and_sizes(archive_env, monkeypatch):
 
 
 def test_filesize_filter():
-    from archiver.web.templating import filesize
+    from chunchugwan.web.templating import filesize
 
     assert filesize(None) == "-"
     assert filesize(0) == "0 B"

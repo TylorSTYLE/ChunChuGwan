@@ -3,8 +3,8 @@ import pyotp
 import pytest
 from fastapi.testclient import TestClient
 
-from archiver import auth, config, db
-from archiver.web import app as web_app
+from chunchugwan import auth, config, db
+from chunchugwan.web import app as web_app
 
 
 @pytest.fixture

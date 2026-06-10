@@ -33,7 +33,7 @@ from .templating import templates
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Web Archiver")
+app = FastAPI(title="춘추관")
 app.include_router(auth_routes.router)
 
 # 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)

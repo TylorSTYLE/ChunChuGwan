@@ -4,8 +4,8 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from fastapi.testclient import TestClient
 
-from archiver import auth, config, db, oidc
-from archiver.web import app as web_app
+from chunchugwan import auth, config, db, oidc
+from chunchugwan.web import app as web_app
 
 CLAIMS = {"sub": "ak-user-1", "email": "sso@example.com", "email_verified": True}
 

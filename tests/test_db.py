@@ -1,7 +1,7 @@
 """db.py 쿼리 함수 테스트. 임시 디렉토리에 격리된 DB 사용."""
 import pytest
 
-from archiver import config, db
+from chunchugwan import config, db
 
 
 @pytest.fixture

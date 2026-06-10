@@ -3,7 +3,7 @@ import pytest
 from click.testing import CliRunner
 from PIL import Image
 
-from archiver import cli, config, db, storage
+from chunchugwan import cli, config, db, storage
 
 
 @pytest.fixture

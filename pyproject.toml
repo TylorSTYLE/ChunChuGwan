@@ -1,5 +1,5 @@
 [project]
-name = "web-archiver"
+name = "chunchugwan"
 version = "0.1.0"
 description = "개인 웹 아카이빙 시스템 — 스냅샷 히스토리와 diff 지원"
 requires-python = ">=3.12"
@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-archiver = "archiver.cli:main"
+wccg = "chunchugwan.cli:main"
 
 [dependency-groups]
 dev = [
@@ -33,4 +33,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["archiver"]
+packages = ["chunchugwan"]

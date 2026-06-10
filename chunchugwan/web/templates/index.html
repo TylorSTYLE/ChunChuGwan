@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}목록 — Web Archiver{% endblock %}
+{% block title %}목록 — 춘추관{% endblock %}
 {% block content %}
 {% if queued %}
 <div class="notice">아카이빙이 백그라운드에서 시작되었습니다: <span class="mono">{{ queued }}</span> — 완료되면 목록이 자동 갱신됩니다.</div>
@@ -20,7 +20,7 @@
 </div>
 
 {% if not pages and not pending_new %}
-<p class="muted">아카이브된 페이지가 없습니다. 위 입력란이나 <span class="mono">archiver add &lt;url&gt;</span> 로 시작하세요.</p>
+<p class="muted">아카이브된 페이지가 없습니다. 위 입력란이나 <span class="mono">wccg add &lt;url&gt;</span> 로 시작하세요.</p>
 {% else %}
 <table id="pages">
   <thead>
