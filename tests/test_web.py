@@ -3,8 +3,8 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from archiver import config, db, storage
-from archiver.web import app as web_app
+from chunchugwan import config, db, storage
+from chunchugwan.web import app as web_app
 
 
 @pytest.fixture

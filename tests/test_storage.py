@@ -1,6 +1,6 @@
 """URL 정규화/slug 테스트. M1에서 구현과 함께 통과시킬 것."""
 import pytest
-from archiver import storage
+from chunchugwan import storage
 
 
 @pytest.mark.parametrize("raw,expected", [

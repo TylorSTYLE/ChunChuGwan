@@ -18,8 +18,8 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 from cryptography.hazmat.primitives.hashes import SHA256
 from fastapi.testclient import TestClient
 
-from archiver import auth, config, db
-from archiver.web import app as web_app
+from chunchugwan import auth, config, db
+from chunchugwan.web import app as web_app
 
 ORIGIN = config.WEBAUTHN_ORIGINS[0]
 

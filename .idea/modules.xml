@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/web-archiver.iml" filepath="$PROJECT_DIR$/.idea/web-archiver.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/chunchugwan.iml" filepath="$PROJECT_DIR$/.idea/chunchugwan.iml" />
     </modules>
   </component>
 </project>

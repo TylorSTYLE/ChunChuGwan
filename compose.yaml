@@ -3,7 +3,7 @@ services:
     build: .
     command: serve
     environment:
-      ARCHIVER_HOST: "0.0.0.0"      # 컨테이너 내부 바인딩. 외부 노출은 아래 127.0.0.1 매핑이 차단.
+      WCCG_HOST: "0.0.0.0"          # 컨테이너 내부 바인딩. 외부 노출은 아래 127.0.0.1 매핑이 차단.
     ports:
       - "127.0.0.1:8765:8765"       # localhost 전용 원칙 유지
     volumes:

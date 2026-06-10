@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from archiver import config
+from chunchugwan import config
 
 
 @pytest.fixture

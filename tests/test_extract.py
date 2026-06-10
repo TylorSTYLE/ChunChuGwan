@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from archiver import extract
+from chunchugwan import extract
 
 FIXTURE = Path(__file__).parent / "fixtures" / "article.html"
 

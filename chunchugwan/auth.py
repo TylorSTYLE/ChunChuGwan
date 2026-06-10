@@ -88,7 +88,7 @@ def bootstrap_admin_from_env(conn: sqlite3.Connection) -> bool:
         return False
     error = validate_credentials(config.ADMIN_EMAIL, config.ADMIN_PASSWORD)
     if error is not None:
-        logger.warning("ARCHIVER_ADMIN_* 환경변수 무시 — %s", error)
+        logger.warning("WCCG_ADMIN_* 환경변수 무시 — %s", error)
         return False
     user_id = db.create_first_admin(
         conn, config.ADMIN_EMAIL, hash_password(config.ADMIN_PASSWORD)

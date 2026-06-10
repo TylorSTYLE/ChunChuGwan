@@ -20,19 +20,19 @@ RUN /app/.venv/bin/playwright install --with-deps chromium \
     && chmod -R a+rX /ms-playwright
 
 COPY pyproject.toml uv.lock ./
-COPY archiver/ archiver/
+COPY chunchugwan/ chunchugwan/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 # 비루트 실행 — chromium 샌드박스를 --no-sandbox 없이 유지
-RUN useradd -m -u 1000 archiver \
+RUN useradd -m -u 1000 wccg \
     && mkdir -p /data/archive \
-    && chown -R archiver:archiver /data
-USER archiver
+    && chown -R wccg:wccg /data
+USER wccg
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    ARCHIVER_ROOT=/data/archive
+    WCCG_ROOT=/data/archive
 
 EXPOSE 8765
-ENTRYPOINT ["archiver"]
+ENTRYPOINT ["wccg"]
 CMD ["serve"]

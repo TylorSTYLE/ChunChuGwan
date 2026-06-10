@@ -6,7 +6,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from PIL import Image
 
-from archiver import capture
+from chunchugwan import capture
 
 INDEX_HTML = """<!doctype html>
 <html><head>

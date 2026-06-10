@@ -2,7 +2,7 @@
 import pytest
 from PIL import Image
 
-from archiver import config, differ
+from chunchugwan import config, differ
 
 
 def test_identical():
