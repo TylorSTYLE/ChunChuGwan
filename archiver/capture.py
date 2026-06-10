@@ -126,6 +126,9 @@ def capture(
                         url, wait_until="networkidle", timeout=config.PAGE_LOAD_TIMEOUT_MS
                     )
                 except PlaywrightTimeoutError:
+                    if page.url == "about:blank":
+                        # 네비게이션이 시작조차 못함(연결 불가) — 재시도 무의미
+                        raise
                     logger.warning("networkidle 미도달, load 기준으로 재시도: %s", url)
                     response = page.goto(
                         url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS

@@ -109,6 +109,53 @@ def test_pipeline_writes_success_log(archive_env, monkeypatch):
     assert json.loads(logs[0]["steps"])[-1]["step"] == "decide"
 
 
+def _https_only_fails(html: str):
+    """https 는 CaptureError, http 는 성공하는 가짜 capture (HTTP 전용 사이트 흉내)."""
+    def fake(url, out_dir, remove_selectors=()):
+        if url.startswith("https://"):
+            raise capture.CaptureError(f"{url} 캡처 실패: Timeout 30000ms exceeded.")
+        return capture.CaptureResult(
+            final_url=url, http_status=200, title="제목",
+            raw_html=html, content_html=html,
+        )
+    return fake
+
+
+def test_pipeline_falls_back_to_http_when_scheme_inferred(archive_env, monkeypatch):
+    monkeypatch.setattr(
+        pipeline.capture, "capture",
+        _https_only_fails("<html><body><p>본문</p></body></html>"),
+    )
+    # 스킴 생략 입력 → https 실패 후 http 로 재시도해 성공
+    outcome = pipeline.archive_url("example.com/post")
+    assert outcome.status == "new"
+    assert outcome.url == "http://example.com/post"
+
+    with db.connect() as conn:
+        log = db.list_archive_logs(conn)[0]
+    assert log["status"] == "new"
+    assert log["url"] == "http://example.com/post"
+    steps = json.loads(log["steps"])
+    assert [s["step"] for s in steps] == [
+        "normalize", "capture", "capture", "extract", "hash", "store"
+    ]
+    assert "http 로 재시도" in steps[1]["detail"]
+
+
+def test_pipeline_no_http_fallback_for_explicit_https(archive_env, monkeypatch):
+    monkeypatch.setattr(
+        pipeline.capture, "capture", _https_only_fails("<html></html>")
+    )
+    # 사용자가 명시한 https 는 폴백하지 않고 그대로 실패
+    with pytest.raises(capture.CaptureError):
+        pipeline.archive_url("https://example.com/post")
+
+    with db.connect() as conn:
+        log = db.list_archive_logs(conn)[0]
+    assert log["status"] == "error"
+    assert log["url"] == "https://example.com/post"
+
+
 def test_pipeline_writes_error_log(archive_env, monkeypatch):
     def boom(url, out_dir, remove_selectors=()):
         raise capture.CaptureError("페이지 로드 실패")
