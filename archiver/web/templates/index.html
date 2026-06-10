@@ -2,7 +2,7 @@
 {% block title %}목록 — Web Archiver{% endblock %}
 {% block content %}
 {% if queued %}
-<div class="notice">아카이빙이 백그라운드에서 시작되었습니다: <span class="mono">{{ queued }}</span> — 잠시 후 새로고침하세요.</div>
+<div class="notice">아카이빙이 백그라운드에서 시작되었습니다: <span class="mono">{{ queued }}</span> — 완료되면 목록이 자동 갱신됩니다.</div>
 {% endif %}
 {% if error %}
 <div class="error">아카이빙 실패: {{ error }}</div>
@@ -19,7 +19,7 @@
   <input type="text" id="q" placeholder="URL 필터…" autocomplete="off">
 </div>
 
-{% if not pages %}
+{% if not pages and not pending_new %}
 <p class="muted">아카이브된 페이지가 없습니다. 위 입력란이나 <span class="mono">archiver add &lt;url&gt;</span> 로 시작하세요.</p>
 {% else %}
 <table id="pages">
@@ -27,6 +27,15 @@
     <tr><th>URL</th><th>도메인</th><th>스냅샷</th><th>마지막 캡처</th><th></th></tr>
   </thead>
   <tbody>
+  {% for j in pending_new %}
+    <tr data-url="{{ j['url']|lower }}">
+      <td><span class="mono">{{ j['url'] }}</span></td>
+      <td class="mono">{{ j['domain'] }}</td>
+      <td class="num">-</td>
+      <td class="mono">{{ j['started_at'] }} 시작</td>
+      <td><span class="badge running">아카이빙 중</span></td>
+    </tr>
+  {% endfor %}
   {% for p in pages %}
     <tr data-url="{{ p['url']|lower }}">
       <td><a href="/page/{{ p['id'] }}">{{ p['url'] }}</a></td>
@@ -34,9 +43,13 @@
       <td class="num">{{ p['snapshot_count'] }}</td>
       <td class="mono">{{ p['last_taken_at'] or '-' }}</td>
       <td>
+        {% if p['url'] in active_urls %}
+        <span class="badge running">아카이빙 중</span>
+        {% else %}
         <form class="inline" method="post" action="/page/{{ p['id'] }}/rearchive">
           <button type="submit">재아카이빙</button>
         </form>
+        {% endif %}
       </td>
     </tr>
   {% endfor %}
@@ -51,5 +64,19 @@ document.getElementById('q')?.addEventListener('input', (e) => {
     tr.style.display = tr.dataset.url.includes(q) ? '' : 'none';
   });
 });
+
+// 진행 중 작업이 있으면 폴링하다가 목록이 바뀌는 순간 새로고침
+const active = {{ active_list | tojson }};
+if (active.length) {
+  setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      const res = await fetch('/archive/active');
+      if (!res.ok) return;
+      const now = (await res.json()).active;
+      if (JSON.stringify(now) !== JSON.stringify(active)) location.reload();
+    } catch (e) { /* 일시적 오류 — 다음 폴링에서 재시도 */ }
+  }, 2000);
+}
 </script>
 {% endblock %}

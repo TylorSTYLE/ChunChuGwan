@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -113,6 +115,33 @@ _ALLOWED_FILES: dict[str, str] = {
 
 _BADGES = {1: "changed", 0: "same"}
 
+# 진행 중 아카이빙 레지스트리 — 정규화 URL → 시작 시각(ISO 8601 UTC).
+# 이 프로세스의 BackgroundTasks 로 실행되는 작업만 추적한다
+# (CLI 등 별도 프로세스 실행은 보이지 않음. serve 는 단일 워커 전제).
+_active_jobs: dict[str, str] = {}
+_active_lock = threading.Lock()
+
+
+def _register_job(url: str) -> bool:
+    """진행 목록에 등록. 이미 진행 중인 URL 이면 False (중복 실행 방지)."""
+    with _active_lock:
+        if url in _active_jobs:
+            return False
+        _active_jobs[url] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return True
+
+
+def _unregister_job(url: str) -> None:
+    """진행 목록에서 제거 (완료/실패 공통)."""
+    with _active_lock:
+        _active_jobs.pop(url, None)
+
+
+def _active_snapshot() -> dict[str, str]:
+    """진행 중 작업의 사본 (렌더링/폴링용)."""
+    with _active_lock:
+        return dict(_active_jobs)
+
 
 @app.get("/healthz")
 def healthz() -> dict:
@@ -121,11 +150,30 @@ def healthz() -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request, queued: str = "", error: str = ""):
+    active = _active_snapshot()
     with db.connect() as conn:
         pages = db.list_pages(conn)
+    # 아직 pages 행이 없는 신규 URL 진행 건은 별도 행으로 보여준다
+    known = {p["url"] for p in pages}
+    pending_new = [
+        {"url": u, "domain": urlsplit(u).hostname or "", "started_at": t}
+        for u, t in sorted(active.items())
+        if u not in known
+    ]
     return templates.TemplateResponse(
-        request, "index.html", {"pages": pages, "queued": queued, "error": error}
+        request, "index.html",
+        {
+            "pages": pages, "queued": queued, "error": error,
+            "active_urls": set(active), "active_list": sorted(active),
+            "pending_new": pending_new,
+        },
     )
+
+
+@app.get("/archive/active")
+def archive_active() -> dict:
+    """진행 중 아카이빙 URL 목록 (목록 화면 자동 갱신 폴링용)."""
+    return {"active": sorted(_active_snapshot())}
 
 
 @app.get("/page/{page_id}", response_class=HTMLResponse)
@@ -360,6 +408,17 @@ def _run_archive(url: str) -> None:
         logger.info("아카이빙 완료: %s [%s]", url, outcome.status)
     except Exception:
         logger.exception("아카이빙 실패: %s", url)
+    finally:
+        _unregister_job(url)
+
+
+def _queue_archive(background: BackgroundTasks, url: str) -> None:
+    """진행 목록 등록 후 백그라운드 작업 추가. 이미 진행 중이면 무시.
+
+    등록은 응답 전(동기)에 해서 리다이렉트된 목록 화면이 바로 진행 상태를 본다.
+    """
+    if _register_job(url):
+        background.add_task(_run_archive, url)
 
 
 @app.post("/archive")
@@ -371,7 +430,7 @@ def archive_new(background: BackgroundTasks, url: str = Form(...)):
         return RedirectResponse(
             f"/?error={quote(str(exc), safe='')}", status_code=303
         )
-    background.add_task(_run_archive, norm)
+    _queue_archive(background, norm)
     return RedirectResponse(f"/?queued={quote(norm, safe='')}", status_code=303)
 
 
@@ -381,5 +440,5 @@ def rearchive(page_id: int, background: BackgroundTasks):
         page = db.get_page_by_id(conn, page_id)
     if page is None:
         raise HTTPException(404, "페이지 없음")
-    background.add_task(_run_archive, page["url"])
+    _queue_archive(background, page["url"])
     return RedirectResponse(url=f"/page/{page_id}?queued=1", status_code=303)
