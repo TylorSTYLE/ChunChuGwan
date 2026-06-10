@@ -541,6 +541,96 @@ def test_change_password_sso_only_rejected(client):
     assert "SSO 전용" in client.get("/settings/account").text
 
 
+def test_account_page_links_2fa_settings(client):
+    """2FA(TOTP)·패스키 설정은 계정 메뉴 안에서 접근한다."""
+    signup(client)
+    page = client.get("/settings/account").text
+    assert "/settings/totp" in page
+    assert "/settings/passkey" in page
+    # 헤더에는 계정 링크만 남고 개별 2FA 링크는 없다
+    index = client.get("/").text
+    assert "/settings/account" in index
+    assert "/settings/totp" not in index
+    assert "/settings/passkey" not in index
+
+
+def test_account_page_danger_zone_only_for_non_admin(client):
+    """위험 영역(계정 삭제)은 관리자가 아닌 계정에만 보인다."""
+    signup(client)
+    assert "위험 영역" in client.get("/settings/account").text
+    client.cookies.clear()
+    client.post(
+        "/login", data={"email": "admin@test.co", "password": "adminpass123"},
+        follow_redirects=False,
+    )
+    admin_page = client.get("/settings/account").text
+    assert "위험 영역" not in admin_page
+    assert "/settings/account/delete" not in admin_page
+
+
+def test_delete_account(client):
+    signup(client)
+    with db.connect() as conn:
+        uid = db.get_user_by_email(conn, "a@b.co")["id"]
+        other_token = auth.issue_session(conn, uid)  # 다른 기기의 세션
+    res = client.post(
+        "/settings/account/delete", data={"password": "12345678"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"] == "/login"
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "a@b.co") is None
+        assert auth.resolve_session(conn, other_token) is None
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM sessions WHERE user_id = ?", (uid,)
+        ).fetchone()["c"] == 0
+    # 삭제 후에는 인증이 풀린다
+    assert client.get("/", follow_redirects=False).status_code in (302, 303)
+
+
+def test_delete_account_rejects_wrong_password(client):
+    signup(client)
+    res = client.post("/settings/account/delete", data={"password": "wrongpass"})
+    assert res.status_code == 401
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "a@b.co") is not None
+
+
+def test_delete_account_rejects_admin(client):
+    client.post(
+        "/login", data={"email": "admin@test.co", "password": "adminpass123"},
+        follow_redirects=False,
+    )
+    res = client.post(
+        "/settings/account/delete", data={"password": "adminpass123"}
+    )
+    assert res.status_code == 403
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "admin@test.co") is not None
+
+
+def test_delete_account_sso_only_confirms_email(client):
+    """SSO 전용 계정은 패스워드가 없으므로 이메일 입력으로 확인한다."""
+    with db.connect() as conn:
+        uid = db.create_user(conn, "sso@b.co")  # password_hash NULL = SSO 전용
+        db.create_identity(conn, uid, "authentik", "sub-1")
+        token = auth.issue_session(conn, uid)
+    client.cookies.set(config.SESSION_COOKIE, token)
+    bad = client.post("/settings/account/delete", data={"confirm": "other@b.co"})
+    assert bad.status_code == 400
+    res = client.post(
+        "/settings/account/delete", data={"confirm": "SSO@b.co"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "sso@b.co") is None
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM identities WHERE user_id = ?", (uid,)
+        ).fetchone()["c"] == 0
+
+
 def test_display_name_migration_adds_column(tmp_db):
     """display_name 이전 스키마의 DB 도 connect 시 컬럼이 추가된다."""
     import sqlite3

@@ -10,7 +10,7 @@
   --amber: #92400e; --amber-bg: #fef3c7;
   --green: #166534; --green-bg: #dcfce7;
   --gray: #374151;  --gray-bg: #e5e7eb;
-  --red-bg: #fee2e2;
+  --red-bg: #fee2e2; --red: #dc2626;
   --link: #1d4ed8;
 }
 * { box-sizing: border-box; }
@@ -62,6 +62,13 @@ header .spacer { flex: 1; }
                   border-top: 1px solid var(--border); font-size: 13px; }
 .error { background: var(--red-bg); color: var(--amber); border-radius: 4px;
          padding: 6px 12px; margin-bottom: 12px; font-size: 13px; }
+fieldset.danger-zone { border: 1px solid var(--red); border-radius: 6px;
+                       margin-top: 28px; padding: 10px 14px 14px; }
+fieldset.danger-zone legend { color: var(--red); font-size: 12px; font-weight: 600;
+                              text-transform: uppercase; letter-spacing: .04em;
+                              padding: 0 4px; }
+button.danger { color: #fff; background: var(--red); border-color: var(--red); }
+button.danger:hover { background: #b91c1c; }
 </style>
 {% block head %}{% endblock %}
 </head>
@@ -74,8 +81,6 @@ header .spacer { flex: 1; }
   {% if user %}
   <span class="mono muted">{{ user['display_name'] or user['email'] }}</span>
   <a href="/settings/account" style="font-size:12px">계정</a>
-  <a href="/settings/totp" style="font-size:12px">2FA</a>
-  <a href="/settings/passkey" style="font-size:12px">패스키</a>
   <form class="inline" method="post" action="/logout"><button>로그아웃</button></form>
   {% endif %}
 </header>

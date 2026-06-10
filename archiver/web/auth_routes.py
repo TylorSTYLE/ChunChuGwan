@@ -387,9 +387,15 @@ def passkey_delete(request: Request, passkey_id: int, password: str = Form(...))
 def _account_ctx(
     user, *, error: str | None = None, notice: str | None = None
 ) -> dict:
+    with db.connect() as conn:
+        passkey_count = db.count_passkeys(conn, user["id"])
     return {
         "display_name": user["display_name"] or "",
         "has_password": user["password_hash"] is not None,
+        "email": user["email"],
+        "is_admin": bool(user["is_admin"]),
+        "totp_enabled": user["totp_secret"] is not None,
+        "passkey_count": passkey_count,
         "error": error,
         "notice": notice,
     }
@@ -456,6 +462,41 @@ def change_password(
             conn, user["id"], request.state.session["token_hash"]
         )
     return RedirectResponse(url="/settings/account?ok=password", status_code=303)
+
+
+@router.post("/settings/account/delete", response_class=HTMLResponse)
+def delete_account(
+    request: Request, password: str = Form(""), confirm: str = Form("")
+):
+    """본인 계정 삭제 (관리자 불가). 세션 탈취 방어를 위해 재확인을 요구한다.
+
+    패스워드 계정은 패스워드 재입력, SSO 전용 계정은 이메일 입력으로 확인한다.
+    """
+    user = request.state.user
+    if user["is_admin"]:
+        return templates.TemplateResponse(
+            request, "account.html",
+            _account_ctx(user, error="관리자 계정은 삭제할 수 없습니다."),
+            status_code=403,
+        )
+    if user["password_hash"] is not None:
+        if not auth.verify_password(user["password_hash"], password):
+            return templates.TemplateResponse(
+                request, "account.html",
+                _account_ctx(user, error="패스워드가 올바르지 않습니다."),
+                status_code=401,
+            )
+    elif confirm.strip().lower() != user["email"].lower():
+        return templates.TemplateResponse(
+            request, "account.html",
+            _account_ctx(user, error="확인 이메일이 일치하지 않습니다."),
+            status_code=400,
+        )
+    with db.connect() as conn:
+        db.delete_user(conn, user["id"])
+    res = RedirectResponse(url="/login", status_code=303)
+    res.delete_cookie(config.SESSION_COOKIE)
+    return res
 
 
 # ---- OIDC (Authentik) SSO ----

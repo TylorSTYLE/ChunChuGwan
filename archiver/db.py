@@ -370,6 +370,14 @@ def set_password_hash(conn: sqlite3.Connection, user_id: int, password_hash: str
     )
 
 
+def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
+    """사용자와 종속 데이터(세션·OIDC 연결·패스키)를 일괄 삭제 (계정 탈퇴)."""
+    conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM identities WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM webauthn_credentials WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+
 def set_totp_pending(conn: sqlite3.Connection, user_id: int, secret: str) -> None:
     """TOTP 등록 확인 대기 시크릿 저장 (재발급 시 덮어씀)."""
     conn.execute(
