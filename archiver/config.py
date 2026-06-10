@@ -1,4 +1,4 @@
-"""전역 설정. 환경변수 ARCHIVER_ROOT 로 아카이브 위치 변경 가능."""
+"""전역 설정. 환경변수 ARCHIVER_ROOT(아카이브 위치), ARCHIVER_HOST(대시보드 바인딩) 오버라이드 가능."""
 
 from __future__ import annotations
 
@@ -21,7 +21,8 @@ USER_AGENT = "Mozilla/5.0 (compatible; PersonalArchiver/0.1)"
 # URL 정규화 시 제거할 트래킹 파라미터 prefix
 TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")
 
-DASHBOARD_HOST = "127.0.0.1"
+# 기본 127.0.0.1 (localhost 전용). 컨테이너 등에서만 ARCHIVER_HOST=0.0.0.0 으로 오버라이드.
+DASHBOARD_HOST = os.environ.get("ARCHIVER_HOST", "127.0.0.1")
 DASHBOARD_PORT = 8765
 
 

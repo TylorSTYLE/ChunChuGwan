@@ -25,6 +25,8 @@ uv run archiver diff <url>               # 최신 2개 스냅샷 비교
 uv run archiver diff <url> --from 1 --to 3
 uv run archiver serve                    # 대시보드 (127.0.0.1:8765)
 uv run pytest                            # 테스트
+docker compose up -d dashboard           # 대시보드 컨테이너 (127.0.0.1:8765)
+docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 ```
 
 ## 아키텍처 원칙 (중요 — 반드시 지킬 것)
