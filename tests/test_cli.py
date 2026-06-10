@@ -75,3 +75,10 @@ def test_diff_bad_range(archive_env):
     result = CliRunner().invoke(cli.main, ["diff", archive_env, "--from", "2", "--to", "1"])
     assert result.exit_code != 0
     assert "잘못된 범위" in result.output
+
+
+def test_serve_rejects_external_bind_without_auth(monkeypatch):
+    monkeypatch.setattr(config, "AUTH_ENABLED", False)
+    result = CliRunner().invoke(cli.main, ["serve", "--host", "0.0.0.0"])
+    assert result.exit_code != 0
+    assert "인증이 필수" in result.output

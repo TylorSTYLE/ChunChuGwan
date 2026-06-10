@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
 from . import config
@@ -39,6 +39,41 @@ CREATE TABLE IF NOT EXISTS checks (
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_page ON snapshots(page_id, taken_at);
 CREATE INDEX IF NOT EXISTS idx_checks_page ON checks(page_id, checked_at);
+
+CREATE TABLE IF NOT EXISTS users (
+    id                  INTEGER PRIMARY KEY,
+    email               TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash       TEXT,               -- NULL = SSO 전용 계정
+    totp_secret         TEXT,               -- NULL = 2FA 미설정
+    totp_pending_secret TEXT,               -- 등록 확인 전 임시 시크릿
+    totp_last_used_at   TEXT,               -- 마지막으로 사용된 코드의 시간창 (재사용 방지)
+    created_at          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS identities (
+    id          INTEGER PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    provider    TEXT NOT NULL,              -- 예: 'authentik'
+    subject     TEXT NOT NULL,              -- OIDC sub 클레임
+    created_at  TEXT NOT NULL,
+    UNIQUE (provider, subject)
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash  TEXT PRIMARY KEY,           -- 세션 토큰의 SHA-256 (원문은 쿠키에만 존재)
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    state       TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'pending_totp'
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS oidc_states (
+    state       TEXT PRIMARY KEY,
+    nonce       TEXT NOT NULL,
+    redirect_to TEXT NOT NULL DEFAULT '/',
+    created_at  TEXT NOT NULL
+);
 """
 
 
@@ -158,3 +193,178 @@ def list_snapshots(conn: sqlite3.Connection, page_id: int) -> list[sqlite3.Row]:
         "SELECT * FROM snapshots WHERE page_id = ? ORDER BY taken_at ASC, id ASC",
         (page_id,),
     ).fetchall()
+
+
+# ---- 사용자 ----
+# 주의: SCHEMA 는 CREATE IF NOT EXISTS 라 새 테이블 추가는 자동이지만
+# 기존 테이블에 컬럼을 추가하는 변경은 별도 마이그레이션이 필요하다.
+
+
+def _later(seconds: int) -> str:
+    """지금으로부터 seconds 뒤의 ISO 8601 UTC 시각."""
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(
+        timespec="seconds"
+    )
+
+
+def get_user_by_email(conn: sqlite3.Connection, email: str) -> sqlite3.Row | None:
+    """이메일로 사용자 조회 (대소문자 무시, 없으면 None)."""
+    return conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+
+
+def get_user_by_id(conn: sqlite3.Connection, user_id: int) -> sqlite3.Row | None:
+    """id로 사용자 조회 (없으면 None)."""
+    return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
+def create_user(
+    conn: sqlite3.Connection, email: str, password_hash: str | None = None
+) -> int:
+    """사용자 생성 후 id 반환. password_hash=None 이면 SSO 전용 계정."""
+    cur = conn.execute(
+        "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
+        (email, password_hash, _utcnow()),
+    )
+    return cur.lastrowid
+
+
+def set_totp_pending(conn: sqlite3.Connection, user_id: int, secret: str) -> None:
+    """TOTP 등록 확인 대기 시크릿 저장 (재발급 시 덮어씀)."""
+    conn.execute(
+        "UPDATE users SET totp_pending_secret = ? WHERE id = ?", (secret, user_id)
+    )
+
+
+def confirm_totp(conn: sqlite3.Connection, user_id: int) -> None:
+    """대기 중 시크릿을 정식 totp_secret 으로 승격."""
+    conn.execute(
+        """
+        UPDATE users SET totp_secret = totp_pending_secret, totp_pending_secret = NULL
+        WHERE id = ? AND totp_pending_secret IS NOT NULL
+        """,
+        (user_id,),
+    )
+
+
+def disable_totp(conn: sqlite3.Connection, user_id: int) -> None:
+    """TOTP 해제 (시크릿/대기 시크릿/재사용 기록 모두 제거)."""
+    conn.execute(
+        """
+        UPDATE users SET totp_secret = NULL, totp_pending_secret = NULL,
+                         totp_last_used_at = NULL
+        WHERE id = ?
+        """,
+        (user_id,),
+    )
+
+
+def set_totp_last_used(conn: sqlite3.Connection, user_id: int, window: str) -> None:
+    """마지막으로 검증에 성공한 TOTP 시간창 기록 (코드 재사용 방지)."""
+    conn.execute(
+        "UPDATE users SET totp_last_used_at = ? WHERE id = ?", (window, user_id)
+    )
+
+
+# ---- 세션 ----
+
+
+def create_session(
+    conn: sqlite3.Connection,
+    token_hash: str,
+    user_id: int,
+    state: str,
+    ttl_seconds: int,
+) -> None:
+    """세션 row 생성. state 는 'active' 또는 'pending_totp'."""
+    conn.execute(
+        """
+        INSERT INTO sessions (token_hash, user_id, state, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (token_hash, user_id, state, _utcnow(), _later(ttl_seconds)),
+    )
+
+
+def get_session(conn: sqlite3.Connection, token_hash: str) -> sqlite3.Row | None:
+    """만료되지 않은 세션 조회 (없거나 만료면 None).
+
+    저장 형식이 동일한 ISO 8601 UTC 라 문자열 비교로 만료를 판정한다.
+    """
+    return conn.execute(
+        "SELECT * FROM sessions WHERE token_hash = ? AND expires_at > ?",
+        (token_hash, _utcnow()),
+    ).fetchone()
+
+
+def activate_session(
+    conn: sqlite3.Connection, token_hash: str, ttl_seconds: int
+) -> None:
+    """pending_totp 세션을 active 로 승격하고 만료를 연장."""
+    conn.execute(
+        "UPDATE sessions SET state = 'active', expires_at = ? WHERE token_hash = ?",
+        (_later(ttl_seconds), token_hash),
+    )
+
+
+def delete_session(conn: sqlite3.Connection, token_hash: str) -> None:
+    """세션 삭제 (로그아웃)."""
+    conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
+
+def delete_expired_sessions(conn: sqlite3.Connection) -> None:
+    """만료 세션 일괄 삭제 (기회적 정리용)."""
+    conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (_utcnow(),))
+
+
+# ---- OIDC ----
+
+
+def get_identity(
+    conn: sqlite3.Connection, provider: str, subject: str
+) -> sqlite3.Row | None:
+    """(provider, sub)로 연결된 identity 조회 (없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM identities WHERE provider = ? AND subject = ?",
+        (provider, subject),
+    ).fetchone()
+
+
+def create_identity(
+    conn: sqlite3.Connection, user_id: int, provider: str, subject: str
+) -> None:
+    """사용자에 OIDC identity 연결."""
+    conn.execute(
+        """
+        INSERT INTO identities (user_id, provider, subject, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (user_id, provider, subject, _utcnow()),
+    )
+
+
+def create_oidc_state(
+    conn: sqlite3.Connection, state: str, nonce: str, redirect_to: str
+) -> None:
+    """OIDC 로그인 시작 시 state/nonce 기록."""
+    conn.execute(
+        "INSERT INTO oidc_states (state, nonce, redirect_to, created_at) VALUES (?, ?, ?, ?)",
+        (state, nonce, redirect_to, _utcnow()),
+    )
+
+
+def consume_oidc_state(
+    conn: sqlite3.Connection, state: str, max_age_seconds: int = 600
+) -> sqlite3.Row | None:
+    """state 를 조회 후 즉시 삭제 (1회용). 기한 초과면 None."""
+    row = conn.execute(
+        "SELECT * FROM oidc_states WHERE state = ?", (state,)
+    ).fetchone()
+    if row is None:
+        return None
+    conn.execute("DELETE FROM oidc_states WHERE state = ?", (state,))
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)).isoformat(
+        timespec="seconds"
+    )
+    if row["created_at"] <= cutoff:
+        return None
+    return row

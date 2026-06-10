@@ -128,15 +128,35 @@ def diff(url: str, from_idx: int | None, to_idx: int | None) -> None:
         click.echo(f"스크린샷 변경 픽셀 {ratio:.2%}  (하이라이트: {out_png})")
 
 
+def _is_loopback(host: str) -> bool:
+    """바인딩 주소가 루프백인지 (외부 노출 안전장치 판정용)."""
+    return host in ("127.0.0.1", "::1", "localhost") or host.startswith("127.")
+
+
 @main.command()
 @click.option("--port", default=None, type=int)
-def serve(port: int | None) -> None:
-    """대시보드 실행 (localhost 전용)."""
+@click.option("--host", default=None, help="바인딩 주소 (기본 127.0.0.1, 외부 노출 시 인증 필수)")
+def serve(port: int | None, host: str | None) -> None:
+    """대시보드 실행 (기본 loopback 전용)."""
     import uvicorn
+
+    bind_host = host or config.DASHBOARD_HOST
+    if not _is_loopback(bind_host):
+        if not config.AUTH_ENABLED:
+            raise click.ClickException(
+                f"ARCHIVER_AUTH=off 상태로는 {bind_host} 에 바인딩할 수 없습니다. "
+                "외부 노출에는 인증이 필수입니다."
+            )
+        if config.oidc_enabled() and not config.PUBLIC_URL:
+            click.echo(
+                "경고: 외부 바인딩 + OIDC 사용 중인데 ARCHIVER_PUBLIC_URL 이 비어 있습니다. "
+                "redirect_uri 가 localhost 로 조립되어 SSO 콜백이 실패할 수 있습니다.",
+                err=True,
+            )
 
     uvicorn.run(
         "archiver.web.app:app",
-        host=config.DASHBOARD_HOST,
+        host=bind_host,
         port=port or config.DASHBOARD_PORT,
     )
 

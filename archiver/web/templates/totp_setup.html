@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}2FA 설정 — Web Archiver{% endblock %}
+{% block content %}
+<div class="auth-card">
+  <h2>2단계 인증 (TOTP)</h2>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  {% if enabled %}
+  <div class="notice">활성화됨 — 패스워드 로그인 시 OTP 코드가 요구됩니다.</div>
+  <form method="post" action="/settings/totp/disable">
+    <label>해제하려면 패스워드 확인
+      <input type="password" name="password" required>
+    </label>
+    <button type="submit">2FA 해제</button>
+  </form>
+
+  {% elif not has_password %}
+  <p class="muted">SSO 전용 계정입니다. 2FA는 IdP(Authentik)에서 관리하세요.</p>
+
+  {% else %}
+  <p class="muted">Google Authenticator 등 인증 앱으로 QR을 스캔한 뒤,
+     표시된 코드를 입력해 등록을 완료하세요.</p>
+  <p><img src="{{ qr }}" alt="TOTP QR" width="196" height="196"></p>
+  <p class="mono muted">수동 입력: {{ secret }}</p>
+  <form method="post" action="/settings/totp">
+    <label>확인 코드
+      <input type="text" name="code" inputmode="numeric" pattern="[0-9]*"
+             maxlength="6" autocomplete="one-time-code" required class="mono">
+    </label>
+    <button type="submit">등록 완료</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

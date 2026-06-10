@@ -25,6 +25,31 @@ TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")
 DASHBOARD_HOST = os.environ.get("ARCHIVER_HOST", "127.0.0.1")
 DASHBOARD_PORT = 8765
 
+# ---- 인증 ----
+# ARCHIVER_AUTH=off 는 loopback 바인딩일 때만 허용 (cli.serve 에서 강제)
+AUTH_ENABLED = os.environ.get("ARCHIVER_AUTH", "on") != "off"
+SESSION_TTL_DAYS = int(os.environ.get("ARCHIVER_SESSION_TTL_DAYS", "14"))
+SESSION_COOKIE = "archiver_session"
+TOTP_ISSUER = "Web Archiver"
+PENDING_TOTP_TTL_SECONDS = 600          # 패스워드 통과 후 OTP 입력 제한 시간
+MIN_PASSWORD_LENGTH = 8
+
+# 외부 노출 시 공개 URL (OIDC redirect_uri 조립, https 면 Secure 쿠키)
+PUBLIC_URL = os.environ.get("ARCHIVER_PUBLIC_URL", "").rstrip("/")
+COOKIE_SECURE = PUBLIC_URL.startswith("https://")
+
+# ---- OIDC (Authentik) ----
+OIDC_PROVIDER = "authentik"
+OIDC_ISSUER = os.environ.get("ARCHIVER_OIDC_ISSUER", "").rstrip("/")
+OIDC_CLIENT_ID = os.environ.get("ARCHIVER_OIDC_CLIENT_ID", "")
+OIDC_CLIENT_SECRET = os.environ.get("ARCHIVER_OIDC_CLIENT_SECRET", "")
+OIDC_STATE_TTL_SECONDS = 600
+
+
+def oidc_enabled() -> bool:
+    """OIDC 설정이 모두 채워졌는지 (테스트에서 monkeypatch 가능하도록 함수)."""
+    return bool(OIDC_ISSUER and OIDC_CLIENT_ID and OIDC_CLIENT_SECRET)
+
 
 def ensure_dirs() -> None:
     """아카이브 루트 디렉토리 생성."""
