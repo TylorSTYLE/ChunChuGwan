@@ -18,7 +18,17 @@ def tmp_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(tmp_db):
-    """인증이 켜진 TestClient (쿠키 유지)."""
+    """인증이 켜진 TestClient (쿠키 유지). 최초 구동을 끝낸 상태(관리자 존재)."""
+    with db.connect() as conn:
+        db.create_user(
+            conn, "admin@test.co", auth.hash_password("adminpass123"), is_admin=True
+        )
+    return TestClient(web_app.app)
+
+
+@pytest.fixture
+def fresh_client(tmp_db):
+    """사용자가 0명인 최초 구동 상태의 TestClient."""
     return TestClient(web_app.app)
 
 
@@ -246,6 +256,106 @@ def test_security_headers(client):
     assert res.headers["x-frame-options"] == "SAMEORIGIN"
     assert res.headers["referrer-policy"] == "same-origin"
     assert "default-src 'self'" in res.headers["content-security-policy"]
+
+
+# ---- 라우트: 최초 구동 관리자 등록 ----
+
+
+def test_first_run_redirects_everything_to_setup(fresh_client):
+    for path in ("/", "/login", "/signup", "/page/1"):
+        res = fresh_client.get(path, follow_redirects=False)
+        assert res.status_code == 302, path
+        assert res.headers["location"] == "/setup", path
+    assert fresh_client.get("/healthz").status_code == 200
+    assert fresh_client.get("/setup").status_code == 200
+
+
+def test_setup_registers_admin_and_logs_in(fresh_client):
+    res = fresh_client.post(
+        "/setup", data={"email": "boss@test.co", "password": "longpassword1"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and res.headers["location"] == "/"
+    assert fresh_client.get("/").status_code == 200  # 자동 로그인
+    with db.connect() as conn:
+        user = db.get_user_by_email(conn, "boss@test.co")
+        assert user["is_admin"] == 1
+
+
+def test_setup_hidden_and_blocked_after_registration(fresh_client):
+    fresh_client.post(
+        "/setup", data={"email": "boss@test.co", "password": "longpassword1"}
+    )
+    # 등록 후에는 페이지가 표시되지 않는다 (로그인 상태 → / 로 리다이렉트)
+    res = fresh_client.get("/setup", follow_redirects=False)
+    assert res.status_code == 302 and res.headers["location"] == "/"
+    # 같은 API 로 추가 등록 불가
+    res = fresh_client.post(
+        "/setup", data={"email": "evil@test.co", "password": "longpassword1"}
+    )
+    assert res.status_code == 403
+    # 미인증 상태에서도 /setup 은 더 이상 닿지 않는다 (로그인으로 리다이렉트)
+    fresh_client.cookies.clear()
+    res = fresh_client.get("/setup", follow_redirects=False)
+    assert res.status_code == 302 and res.headers["location"].startswith("/login")
+    with db.connect() as conn:
+        assert db.count_users(conn) == 1
+
+
+def test_setup_invalid_input(fresh_client):
+    res = fresh_client.post("/setup", data={"email": "bad", "password": "longpassword1"})
+    assert res.status_code == 400
+    res = fresh_client.post("/setup", data={"email": "a@b.co", "password": "short"})
+    assert res.status_code == 400
+    with db.connect() as conn:
+        assert db.count_users(conn) == 0
+
+
+def test_admin_bootstrap_from_env(fresh_client, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_EMAIL", "env-admin@test.co")
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "envpassword1")
+    # 첫 요청에서 환경변수 관리자가 자동 등록되고, /setup 이 아닌 /login 으로 간다
+    res = fresh_client.get("/", follow_redirects=False)
+    assert res.headers["location"].startswith("/login")
+    with db.connect() as conn:
+        user = db.get_user_by_email(conn, "env-admin@test.co")
+        assert user is not None and user["is_admin"] == 1
+    ok = fresh_client.post(
+        "/login", data={"email": "env-admin@test.co", "password": "envpassword1"},
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303
+
+
+def test_admin_bootstrap_invalid_env_falls_back_to_setup(fresh_client, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_EMAIL", "env-admin@test.co")
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "short")  # 정책 미달 — 무시
+    res = fresh_client.get("/", follow_redirects=False)
+    assert res.headers["location"] == "/setup"
+    with db.connect() as conn:
+        assert db.count_users(conn) == 0
+
+
+def test_migration_adds_is_admin_to_old_db(tmp_db):
+    """is_admin 도입 전 스키마의 기존 DB 도 connect() 시 자동 보강된다."""
+    import sqlite3 as s
+
+    config.ensure_dirs()
+    raw = s.connect(config.DB_PATH)
+    raw.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, "
+        "email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT, "
+        "totp_secret TEXT, totp_pending_secret TEXT, totp_last_used_at TEXT, "
+        "created_at TEXT NOT NULL)"
+    )
+    raw.execute(
+        "INSERT INTO users (email, created_at) VALUES ('old@test.co', '2026-01-01')"
+    )
+    raw.commit()
+    raw.close()
+    with db.connect() as conn:
+        user = db.get_user_by_email(conn, "old@test.co")
+        assert user["is_admin"] == 0
 
 
 # ---- 라우트: TOTP 등록 + 2단계 로그인 ----

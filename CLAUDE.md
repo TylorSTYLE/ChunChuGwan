@@ -113,5 +113,7 @@ archive/
 - [x] **A3 TOTP 2FA**: QR 등록/해제, 2단계 로그인 (패스워드 로그인에만 적용).
 - [x] **A4 OIDC SSO**: `oidc.py` — Authentik Authorization Code Flow, 계정 연결.
 - [x] **A5 외부 노출 준비**: `serve --host`, auth-off×외부 바인딩 거부, 보안 헤더.
+- [x] **A7 최초 구동 부트스트랩**: 사용자 0명이면 `ARCHIVER_ADMIN_*` 환경변수로
+      관리자 자동 등록, 없으면 `/setup` 등록 페이지 (등록 후 페이지·API 차단).
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.

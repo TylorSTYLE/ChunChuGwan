@@ -47,6 +47,38 @@ def _login_redirect(token: str, next_url: str | None) -> RedirectResponse:
     return res
 
 
+# ---- 최초 구동 관리자 등록 ----
+
+
+@router.get("/setup", response_class=HTMLResponse)
+def setup_page(request: Request):
+    """관리자 등록 페이지 — 사용자가 1명이라도 있으면 절대 표시하지 않는다."""
+    with db.connect() as conn:
+        if db.count_users(conn) > 0:
+            return RedirectResponse(url="/", status_code=302)
+    return templates.TemplateResponse(
+        request, "setup.html", {"error": None, "email": ""}
+    )
+
+
+@router.post("/setup", response_class=HTMLResponse)
+def setup(request: Request, email: str = Form(...), password: str = Form(...)):
+    """최초 구동 관리자 등록. users 가 비어 있지 않으면 INSERT 자체가 거부된다."""
+    email = email.strip()
+    error = auth.validate_credentials(email, password)
+    if error is None:
+        with db.connect() as conn:
+            user_id = db.create_first_admin(conn, email, auth.hash_password(password))
+            if user_id is None:
+                # 관리자가 이미 등록됨 — 이 API 로는 더 이상 계정을 만들 수 없다
+                raise HTTPException(403, "이미 관리자가 등록되어 있습니다")
+            token = auth.issue_session(conn, user_id)
+        return _login_redirect(token, "/")
+    return templates.TemplateResponse(
+        request, "setup.html", {"error": error, "email": email}, status_code=400
+    )
+
+
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str | None = None):
     if getattr(request.state, "user", None) is not None:

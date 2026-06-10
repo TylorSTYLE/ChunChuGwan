@@ -28,6 +28,10 @@ DASHBOARD_PORT = 8765
 # ---- 인증 ----
 # ARCHIVER_AUTH=off 는 loopback 바인딩일 때만 허용 (cli.serve 에서 강제)
 AUTH_ENABLED = os.environ.get("ARCHIVER_AUTH", "on") != "off"
+
+# 최초 구동(사용자 0명) 시 자동 등록할 관리자. 미설정이면 /setup 페이지로 유도.
+ADMIN_EMAIL = os.environ.get("ARCHIVER_ADMIN_EMAIL", "").strip()
+ADMIN_PASSWORD = os.environ.get("ARCHIVER_ADMIN_PASSWORD", "")
 SESSION_TTL_DAYS = int(os.environ.get("ARCHIVER_SESSION_TTL_DAYS", "14"))
 SESSION_COOKIE = "archiver_session"
 TOTP_ISSUER = "Web Archiver"

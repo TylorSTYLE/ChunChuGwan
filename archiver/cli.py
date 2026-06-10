@@ -154,6 +154,19 @@ def serve(port: int | None, host: str | None) -> None:
                 err=True,
             )
 
+    if config.AUTH_ENABLED:
+        from . import auth
+
+        with db.connect() as conn:
+            if db.count_users(conn) == 0:
+                if auth.bootstrap_admin_from_env(conn):
+                    click.echo(f"최초 구동 — 관리자 계정 등록: {config.ADMIN_EMAIL}")
+                else:
+                    click.echo(
+                        "최초 구동 — 관리자 미등록. 브라우저 첫 접속 시 /setup 에서 "
+                        "등록하거나 ARCHIVER_ADMIN_EMAIL/PASSWORD 를 설정하세요."
+                    )
+
     uvicorn.run(
         "archiver.web.app:app",
         host=bind_host,

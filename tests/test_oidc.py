@@ -32,6 +32,11 @@ def client(tmp_path, monkeypatch):
         return dict(CLAIMS)
 
     monkeypatch.setattr(oidc, "validate_id_token", fake_validate)
+    # 최초 구동 모드를 벗어나도록 관리자 1명 사전 등록
+    with db.connect() as conn:
+        db.create_user(
+            conn, "admin@test.co", auth.hash_password("adminpass123"), is_admin=True
+        )
     return TestClient(web_app.app)
 
 
@@ -75,7 +80,7 @@ def test_callback_existing_sub_reuses_user(client):
         client.get(f"/auth/oidc/callback?code=abc&state={state}")
     with db.connect() as conn:
         count = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-    assert count == 1
+    assert count == 2  # 사전 등록된 관리자 + SSO 사용자 1명 (재로그인은 재사용)
 
 
 def test_callback_links_existing_email_account(client):
@@ -85,7 +90,7 @@ def test_callback_links_existing_email_account(client):
     client.get(f"/auth/oidc/callback?code=abc&state={state}")
     with db.connect() as conn:
         assert db.get_identity(conn, "authentik", "ak-user-1")["user_id"] == uid
-        assert conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"] == 1
+        assert conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"] == 2
 
 
 def test_callback_unverified_email_cannot_link(client, monkeypatch):
