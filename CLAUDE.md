@@ -79,6 +79,7 @@ archive/
 - `pages` — 정규화된 URL 단위 (1 URL = 1 row)
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관
 - `checks` — 중복으로 저장 생략된 확인 기록
+- `archive_logs` — 아카이브 실행 로그 (성공/실패, 단계별 소요시간 JSON, 출처 cli/web)
 - `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
   서버사이드 세션, OIDC state 1회용 기록)
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
@@ -93,7 +94,8 @@ archive/
 
 ## 대시보드 디자인 방향
 
-- 화면 4개: 목록(index) / 타임라인(timeline) / 스냅샷 뷰어(snapshot) / diff 뷰어(diff)
+- 화면 5개: 목록(index) / 타임라인(timeline) / 스냅샷 뷰어(snapshot) / diff 뷰어(diff)
+  / 로그(logs — 실행 기록, 도메인·페이지·스냅샷·상태 필터 + 단계별 상세 펼침)
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
 - diff 뷰: 텍스트 side-by-side + 스크린샷 비교(슬라이더 또는 토글)

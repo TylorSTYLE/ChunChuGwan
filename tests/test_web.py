@@ -101,7 +101,10 @@ def test_diff_bad_range(client):
 
 def test_rearchive_triggers_pipeline(client, monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(web_app.pipeline, "archive_url", lambda url, force=False: calls.append(url))
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": calls.append(url),
+    )
     res = client.post("/page/1/rearchive", follow_redirects=False)
     assert res.status_code == 303
     assert res.headers["location"] == "/page/1?queued=1"
@@ -114,7 +117,10 @@ def test_rearchive_unknown_page(client):
 
 def test_archive_new_url_triggers_pipeline(client, monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(web_app.pipeline, "archive_url", lambda url, force=False: calls.append(url))
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": calls.append(url),
+    )
     res = client.post(
         "/archive",
         data={"url": "https://example.com/new?utm_source=x"},
@@ -128,7 +134,10 @@ def test_archive_new_url_triggers_pipeline(client, monkeypatch):
 
 def test_archive_invalid_url_rejected(client, monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(web_app.pipeline, "archive_url", lambda url, force=False: calls.append(url))
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": calls.append(url),
+    )
     res = client.post("/archive", data={"url": "ftp://example.com/x"}, follow_redirects=False)
     assert res.status_code == 303
     assert res.headers["location"].startswith("/?error=")

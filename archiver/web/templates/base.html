@@ -37,6 +37,7 @@ td.num { text-align: right; color: var(--muted); }
 .badge.changed { color: var(--amber); background: var(--amber-bg); }
 .badge.same    { color: var(--gray);  background: var(--gray-bg); }
 .badge.new     { color: var(--green); background: var(--green-bg); }
+.badge.error   { color: #991b1b;      background: var(--red-bg); }
 button, input[type=number], input[type=text], input[type=url],
 input[type=email], input[type=password] {
   font: inherit; font-size: 13px; padding: 3px 10px;
@@ -68,6 +69,7 @@ header .spacer { flex: 1; }
 <header>
   <h1><a href="/">Web Archiver</a></h1>
   <span class="muted" style="font-size:12px">개인 웹 아카이브</span>
+  <a href="/logs" style="font-size:12px">로그</a>
   <span class="spacer"></span>
   {% if user %}
   <span class="mono muted">{{ user['display_name'] or user['email'] }}</span>

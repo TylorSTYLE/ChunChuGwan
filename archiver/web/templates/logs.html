@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}로그 — Web Archiver{% endblock %}
+{% block head %}
+<style>
+tr.steps-row { display: none; }
+tr.steps-row.open { display: table-row; }
+tr.steps-row > td { background: var(--bg-soft); padding: 10px 14px 14px; }
+.steps-table { max-width: 760px; }
+.steps-table th, .steps-table td { padding: 3px 10px; }
+td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; }
+</style>
+{% endblock %}
+{% block content %}
+{% set badge_class = {'new': 'new', 'changed': 'changed', 'unchanged': 'same',
+                      'forced_same': 'same', 'error': 'error'} %}
+{% set status_label = {'new': '신규', 'changed': '변경', 'unchanged': '동일',
+                       'forced_same': '동일(강제)', 'error': '실패'} %}
+
+<div class="toolbar">
+  <h2 style="margin:0">아카이브 로그</h2>
+  {% if page %}
+  <span class="mono muted">페이지: <a href="/page/{{ page['id'] }}">{{ page['url'] }}</a></span>
+  {% endif %}
+  {% if snapshot_id %}
+  <span class="mono muted">스냅샷: <a href="/snapshot/{{ snapshot_id }}">#{{ snapshot_id }}</a></span>
+  {% endif %}
+  {% if page or snapshot_id %}<a href="/logs">필터 해제</a>{% endif %}
+  <span class="spacer"></span>
+  <form method="get" action="/logs" class="toolbar" style="margin:0">
+    {% if page %}<input type="hidden" name="page_id" value="{{ page['id'] }}">{% endif %}
+    {% if snapshot_id %}<input type="hidden" name="snapshot_id" value="{{ snapshot_id }}">{% endif %}
+    <select name="domain">
+      <option value="">모든 도메인</option>
+      {% for d in domains %}
+      <option value="{{ d }}" {% if d == domain %}selected{% endif %}>{{ d }}</option>
+      {% endfor %}
+    </select>
+    <select name="status">
+      <option value="">모든 상태</option>
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ status_label[s] }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">필터</button>
+  </form>
+</div>
+
+{% if not items %}
+<p class="muted">로그가 없습니다. 아카이빙을 실행하면 결과가 여기에 기록됩니다.</p>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>시각</th><th>상태</th><th>URL</th><th>소요</th><th>HTTP</th>
+      <th>해시</th><th>출처</th><th>스냅샷</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for it in items %}
+    {% set log = it.log %}
+    <tr>
+      <td class="mono">{{ log['started_at'] }}</td>
+      <td><span class="badge {{ badge_class[log['status']] }}">{{ status_label[log['status']] }}</span></td>
+      <td class="url-cell">
+        {% if log['page_id'] %}
+        <a href="/page/{{ log['page_id'] }}" title="{{ log['url'] }}">{{ log['url'] }}</a>
+        {% else %}
+        <span title="{{ log['url'] }}">{{ log['url'] }}</span>
+        {% endif %}
+      </td>
+      <td class="num mono">{{ log['duration_ms'] }}ms</td>
+      <td class="num">{{ log['http_status'] or '-' }}</td>
+      <td class="mono">{{ log['content_hash'][:12] if log['content_hash'] else '-' }}</td>
+      <td class="mono muted">{{ log['source'] }}</td>
+      <td>
+        {% if log['snapshot_id'] %}
+        <a href="/snapshot/{{ log['snapshot_id'] }}">보기</a>
+        {% endif %}
+      </td>
+      <td>
+        {% if it.steps or log['error'] %}
+        <button type="button" class="toggle" data-target="steps-{{ log['id'] }}">상세</button>
+        {% endif %}
+      </td>
+    </tr>
+    <tr class="steps-row" id="steps-{{ log['id'] }}">
+      <td colspan="9">
+        {% if log['error'] %}<div class="error mono">{{ log['error'] }}</div>{% endif %}
+        {% if it.steps %}
+        <table class="steps-table">
+          <thead><tr><th>단계</th><th>소요</th><th>내용</th></tr></thead>
+          <tbody>
+          {% for s in it.steps %}
+            <tr>
+              <td class="mono">{{ s['step'] }}</td>
+              <td class="num mono">{{ s['ms'] }}ms</td>
+              <td class="mono">{{ s['detail'] }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if items|length >= limit %}
+<p class="muted" style="margin-top:8px">최근 {{ limit }}건만 표시 중.
+  <a href="/logs?limit={{ limit * 2 }}{% if domain %}&domain={{ domain }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if page %}&page_id={{ page['id'] }}{% endif %}{% if snapshot_id %}&snapshot_id={{ snapshot_id }}{% endif %}">더 보기</a>
+</p>
+{% endif %}
+{% endif %}
+
+<script>
+document.querySelectorAll('button.toggle').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.getElementById(btn.dataset.target).classList.toggle('open');
+    btn.classList.toggle('active');
+  });
+});
+</script>
+{% endblock %}
