@@ -240,6 +240,14 @@ def test_csrf_same_origin_allowed(client):
     assert res.status_code == 303
 
 
+def test_security_headers(client):
+    res = client.get("/login")
+    assert res.headers["x-content-type-options"] == "nosniff"
+    assert res.headers["x-frame-options"] == "SAMEORIGIN"
+    assert res.headers["referrer-policy"] == "same-origin"
+    assert "default-src 'self'" in res.headers["content-security-policy"]
+
+
 # ---- 라우트: TOTP 등록 + 2단계 로그인 ----
 
 

@@ -45,6 +45,8 @@ async def auth_gate(request: Request, call_next):
       (쿠키는 SameSite=Lax 라 이중 방어)
     - AUTH_ENABLED 면 공개 경로 외에는 active 세션 필수.
       미인증 HTML 요청은 401 대신 /login?next= 으로 보낸다.
+    - 모든 응답에 보안 헤더 부착. CSP 는 핸들러가 이미 설정한 경우
+      (page.html 의 `sandbox`) 덮어쓰지 않는다. HSTS 는 리버스 프록시 책임.
     """
     request.state.user = None
     request.state.session = None
@@ -72,7 +74,20 @@ async def auth_gate(request: Request, call_next):
                 f"/login?next={quote(target, safe='')}", status_code=302
             )
 
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    # DENY 금지 — snapshot.html 이 same-origin iframe 으로 page.html 을 임베드한다
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    if response.headers.get("content-type", "").startswith("text/html"):
+        # 대시보드 템플릿이 인라인 <style>/<script> 를 쓰므로 unsafe-inline 허용.
+        # 아카이빙된 page.html 은 위 setdefault 에서 기존 `sandbox` CSP 가 유지된다.
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; img-src 'self' data:",
+        )
+    return response
 
 # 스냅샷 디렉토리에서 서빙을 허용하는 파일 화이트리스트
 _ALLOWED_FILES: dict[str, str] = {
