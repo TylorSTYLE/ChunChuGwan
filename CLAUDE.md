@@ -10,6 +10,7 @@
 - DB: SQLite (`archive/index.db`) — ORM 없이 표준 `sqlite3` 사용
 - CLI: click
 - 대시보드: FastAPI + Jinja2 템플릿 (읽기 전용 + 재아카이빙 트리거)
+- 인증: argon2-cffi(패스워드), pyotp+qrcode(TOTP), httpx+PyJWT(OIDC — Authentik)
 - 테스트: pytest
 
 ## 명령어
@@ -24,6 +25,7 @@ uv run archiver history <url>            # 해당 URL 스냅샷 목록
 uv run archiver diff <url>               # 최신 2개 스냅샷 비교
 uv run archiver diff <url> --from 1 --to 3
 uv run archiver serve                    # 대시보드 (127.0.0.1:8765)
+uv run archiver serve --host 0.0.0.0     # 외부 노출 (인증 켜진 상태에서만 허용)
 uv run pytest                            # 테스트
 ```
 
@@ -38,9 +40,14 @@ uv run pytest                            # 테스트
    (`--force` 시 예외)
 4. **비교는 정규화된 텍스트 기준.** 타임스탬프, CSRF 토큰, 광고 등 노이즈는
    `extract.py`의 정규화 단계에서 제거한 후 해시/diff 한다.
-5. **대시보드는 localhost 전용.** 기본 바인딩 127.0.0.1. 아카이빙된 HTML을
-   렌더링할 때는 반드시 `<iframe sandbox>` (스크립트 실행 금지) 안에서만 보여준다.
-   아카이빙된 페이지의 JS를 대시보드 컨텍스트에서 실행하는 일은 절대 없어야 한다.
+5. **대시보드는 기본 loopback, 외부 노출 시 인증 필수.** 기본 바인딩 127.0.0.1.
+   `ARCHIVER_AUTH=off` 는 loopback 바인딩일 때만 허용 (`cli.serve` 가 강제).
+   아카이빙된 HTML을 렌더링할 때는 반드시 `<iframe sandbox>` (스크립트 실행 금지)
+   안에서만 보여준다. 아카이빙된 페이지의 JS를 대시보드 컨텍스트에서 실행하는
+   일은 절대 없어야 한다.
+6. **인증 데이터 규칙.** 패스워드는 Argon2id 해시만, 세션은 서버사이드로 토큰의
+   SHA-256 만 저장. TOTP 는 패스워드 로그인에만 적용하고 SSO(OIDC)는 IdP 의
+   2FA 를 신뢰한다. 환경변수 목록은 README "인증" 절 참조.
 
 ## 저장 구조
 
@@ -64,6 +71,8 @@ archive/
 - `pages` — 정규화된 URL 단위 (1 URL = 1 row)
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관
 - `checks` — 중복으로 저장 생략된 확인 기록
+- `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
+  서버사이드 세션, OIDC state 1회용 기록)
 
 ## 코딩 컨벤션
 
@@ -94,5 +103,10 @@ archive/
       BackgroundTasks로 코어 호출.
 - [x] **M5 고도화**: 스크린샷 픽셀 diff(Pillow), 폰트 인라인, 도메인별 정규화
       룰(셀렉터 제거 목록) 설정 파일, robots.txt 무시.
+- [x] **A1 인증 코어**: users/sessions 스키마, `auth.py`(argon2·세션·TOTP).
+- [x] **A2 로그인/가입**: `web/auth_routes.py`, 인증·CSRF 미들웨어, 라우트 보호.
+- [x] **A3 TOTP 2FA**: QR 등록/해제, 2단계 로그인 (패스워드 로그인에만 적용).
+- [x] **A4 OIDC SSO**: `oidc.py` — Authentik Authorization Code Flow, 계정 연결.
+- [x] **A5 외부 노출 준비**: `serve --host`, auth-off×외부 바인딩 거부, 보안 헤더.
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.
