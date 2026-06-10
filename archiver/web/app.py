@@ -43,6 +43,8 @@ async def auth_gate(request: Request, call_next):
 
     - POST 는 Origin(없으면 Referer) 호스트가 Host 와 일치해야 한다.
       (쿠키는 SameSite=Lax 라 이중 방어)
+    - 최초 구동(사용자 0명)이면 환경변수 관리자를 등록하고, 환경변수가
+      없으면 /setup 등록 페이지 외 모든 접근을 /setup 으로 보낸다.
     - AUTH_ENABLED 면 공개 경로 외에는 active 세션 필수.
       미인증 HTML 요청은 401 대신 /login?next= 으로 보낸다.
     - 모든 응답에 보안 헤더 부착. CSP 는 핸들러가 이미 설정한 경우
@@ -57,22 +59,29 @@ async def auth_gate(request: Request, call_next):
             return PlainTextResponse("CSRF 검증 실패", status_code=403)
 
     if config.AUTH_ENABLED:
+        path = request.url.path
+        first_run = False
         token = request.cookies.get(config.SESSION_COOKIE, "")
-        if token:
-            with db.connect() as conn:
+        with db.connect() as conn:
+            if db.count_users(conn) == 0:
+                first_run = not auth.bootstrap_admin_from_env(conn)
+            if not first_run and token:
                 sess = auth.resolve_session(conn, token)
                 if sess is not None:
                     request.state.session = sess
                     if sess["state"] == "active":
                         request.state.user = db.get_user_by_id(conn, sess["user_id"])
 
-        path = request.url.path
-        public = path in _PUBLIC_PATHS or path.startswith("/auth/oidc/")
-        if request.state.user is None and not public:
-            target = path + (f"?{request.url.query}" if request.url.query else "")
-            return RedirectResponse(
-                f"/login?next={quote(target, safe='')}", status_code=302
-            )
+        if first_run:
+            if path not in ("/setup", "/healthz"):
+                return RedirectResponse("/setup", status_code=302)
+        else:
+            public = path in _PUBLIC_PATHS or path.startswith("/auth/oidc/")
+            if request.state.user is None and not public:
+                target = path + (f"?{request.url.query}" if request.url.query else "")
+                return RedirectResponse(
+                    f"/login?next={quote(target, safe='')}", status_code=302
+                )
 
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")

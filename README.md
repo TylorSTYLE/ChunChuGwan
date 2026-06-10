@@ -97,7 +97,17 @@ archive/
 
 ## 인증
 
-첫 접속 시 `/signup` 에서 가입한다 (이메일 + 패스워드 8자 이상).
+### 최초 구동 (관리자 등록)
+
+사용자가 한 명도 없으면 최초 구동으로 판단한다.
+`ARCHIVER_ADMIN_EMAIL` / `ARCHIVER_ADMIN_PASSWORD` 가 설정되어 있으면 그 값으로
+관리자 계정이 자동 등록되고, 없으면 브라우저 첫 접속 시 `/setup` 관리자 등록
+페이지로 이동한다. `/setup` 은 관리자 등록이 끝나면 페이지·API 모두 차단된다
+(추가 계정은 일반 `/signup` 으로만).
+
+### 가입 / 2FA
+
+이후 사용자는 `/signup` 에서 가입한다 (이메일 + 패스워드 8자 이상).
 로그인 후 헤더의 **2FA** 링크에서 TOTP(Google Authenticator 등)를 등록할 수
 있고, 등록하면 패스워드 로그인 시 OTP 코드가 추가로 요구된다.
 SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 OTP 단계를 건너뛴다.
@@ -110,6 +120,8 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 OTP 단계를 건너뛴다
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `ARCHIVER_AUTH` | `on` | `off` 로 인증 비활성화 — loopback 바인딩일 때만 허용 |
+| `ARCHIVER_ADMIN_EMAIL` | (없음) | 최초 구동 시 자동 등록할 관리자 이메일 |
+| `ARCHIVER_ADMIN_PASSWORD` | (없음) | 최초 구동 시 자동 등록할 관리자 패스워드 (8자 이상) |
 | `ARCHIVER_SESSION_TTL_DAYS` | `14` | 세션 수명 (일) |
 | `ARCHIVER_PUBLIC_URL` | (없음) | 외부 노출 시 공개 URL (예: `https://archive.example.com`) — OIDC redirect_uri 조립과 Secure 쿠키 판정에 사용 |
 | `ARCHIVER_OIDC_ISSUER` | (없음) | Authentik issuer URL (예: `https://auth.example.com/application/o/archiver`) |

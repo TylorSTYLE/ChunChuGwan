@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret         TEXT,               -- NULL = 2FA 미설정
     totp_pending_secret TEXT,               -- 등록 확인 전 임시 시크릿
     totp_last_used_at   TEXT,               -- 마지막으로 사용된 코드의 시간창 (재사용 방지)
+    is_admin            INTEGER NOT NULL DEFAULT 0,  -- 최초 구동 시 등록된 관리자
     created_at          TEXT NOT NULL
 );
 
@@ -77,6 +78,13 @@ CREATE TABLE IF NOT EXISTS oidc_states (
 """
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """CREATE IF NOT EXISTS 로 커버되지 않는 기존 테이블 변경(컬럼 추가)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+    if cols and "is_admin" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+
+
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
     """스키마가 보장된 커넥션을 컨텍스트로 제공."""
@@ -85,6 +93,7 @@ def connect() -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     try:
         yield conn
         conn.commit()
@@ -218,14 +227,39 @@ def get_user_by_id(conn: sqlite3.Connection, user_id: int) -> sqlite3.Row | None
 
 
 def create_user(
-    conn: sqlite3.Connection, email: str, password_hash: str | None = None
+    conn: sqlite3.Connection,
+    email: str,
+    password_hash: str | None = None,
+    is_admin: bool = False,
 ) -> int:
     """사용자 생성 후 id 반환. password_hash=None 이면 SSO 전용 계정."""
     cur = conn.execute(
-        "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
-        (email, password_hash, _utcnow()),
+        "INSERT INTO users (email, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)",
+        (email, password_hash, int(is_admin), _utcnow()),
     )
     return cur.lastrowid
+
+
+def count_users(conn: sqlite3.Connection) -> int:
+    """전체 사용자 수 (0 이면 최초 구동으로 판단)."""
+    return conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+
+
+def create_first_admin(
+    conn: sqlite3.Connection, email: str, password_hash: str
+) -> int | None:
+    """users 가 비어 있을 때만 관리자를 생성 (원자적). 이미 사용자가 있으면 None.
+
+    최초 구동 등록 API 가 관리자 등록 후 재사용되는 것을 INSERT 단계에서 차단한다.
+    """
+    cur = conn.execute(
+        """
+        INSERT INTO users (email, password_hash, is_admin, created_at)
+        SELECT ?, ?, 1, ? WHERE NOT EXISTS (SELECT 1 FROM users)
+        """,
+        (email, password_hash, _utcnow()),
+    )
+    return cur.lastrowid if cur.rowcount == 1 else None
 
 
 def set_totp_pending(conn: sqlite3.Connection, user_id: int, secret: str) -> None:

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import io
+import logging
 import re
 import secrets
 import sqlite3
@@ -17,6 +18,8 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 
 from . import config, db
+
+logger = logging.getLogger(__name__)
 
 _hasher = PasswordHasher()  # Argon2id, 라이브러리 권장 기본 파라미터
 
@@ -48,6 +51,29 @@ def validate_credentials(email: str, password: str) -> str | None:
     if len(password) < config.MIN_PASSWORD_LENGTH:
         return f"패스워드는 {config.MIN_PASSWORD_LENGTH}자 이상이어야 합니다."
     return None
+
+
+# ---- 최초 구동 부트스트랩 ----
+
+
+def bootstrap_admin_from_env(conn: sqlite3.Connection) -> bool:
+    """환경변수의 관리자 계정을 등록하고 성공 여부 반환.
+
+    users 가 비어 있을 때만 호출되는 전제. 환경변수가 없거나 형식이
+    틀리면 False — 호출자는 /setup 등록 페이지로 유도한다.
+    """
+    if not (config.ADMIN_EMAIL and config.ADMIN_PASSWORD):
+        return False
+    error = validate_credentials(config.ADMIN_EMAIL, config.ADMIN_PASSWORD)
+    if error is not None:
+        logger.warning("ARCHIVER_ADMIN_* 환경변수 무시 — %s", error)
+        return False
+    user_id = db.create_first_admin(
+        conn, config.ADMIN_EMAIL, hash_password(config.ADMIN_PASSWORD)
+    )
+    if user_id is not None:
+        logger.info("최초 구동 — 관리자 계정 등록: %s", config.ADMIN_EMAIL)
+    return user_id is not None
 
 
 # ---- 세션 ----
