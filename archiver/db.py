@@ -67,6 +67,31 @@ def get_page(conn: sqlite3.Connection, url: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM pages WHERE url = ?", (url,)).fetchone()
 
 
+def get_page_by_id(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
+    """id로 page row 조회 (없으면 None)."""
+    return conn.execute("SELECT * FROM pages WHERE id = ?", (page_id,)).fetchone()
+
+
+def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> sqlite3.Row | None:
+    """스냅샷 row + 소속 페이지 정보(page_url, domain, slug) 조회."""
+    return conn.execute(
+        """
+        SELECT s.*, p.url AS page_url, p.domain, p.slug
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.id = ?
+        """,
+        (snapshot_id,),
+    ).fetchone()
+
+
+def list_checks(conn: sqlite3.Connection, page_id: int, limit: int = 20) -> list[sqlite3.Row]:
+    """해당 페이지의 최근 확인 기록 (최신 순)."""
+    return conn.execute(
+        "SELECT * FROM checks WHERE page_id = ? ORDER BY checked_at DESC LIMIT ?",
+        (page_id, limit),
+    ).fetchall()
+
+
 def get_or_create_page(conn: sqlite3.Connection, url: str, domain: str, slug: str) -> int:
     """정규화 URL로 page row를 찾거나 생성하고 id 반환."""
     row = conn.execute("SELECT id FROM pages WHERE url = ?", (url,)).fetchone()

@@ -90,7 +90,7 @@ archive/
       정규화. `cli.py`의 `add` 연결. 실제 URL 1개로 수동 검증.
 - [x] **M3 히스토리/diff**: `differ.py` — difflib unified + side-by-side 데이터,
       변경 요약(추가/삭제 줄 수). `cli.py`의 `history`, `diff`, `list` 연결.
-- [ ] **M4 대시보드**: `web/app.py` + 템플릿 4종. 재아카이빙 버튼은
+- [x] **M4 대시보드**: `web/app.py` + 템플릿 4종. 재아카이빙 버튼은
       BackgroundTasks로 코어 호출.
 - [ ] **M5 고도화**: 스크린샷 픽셀 diff(Pillow), 폰트 인라인, 도메인별 정규화
       룰(셀렉터 제거 목록) 설정 파일, robots.txt 무시.

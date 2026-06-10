@@ -1,4 +1,55 @@
 {% extends "base.html" %}
+{% block title %}타임라인 — {{ page['url'] }}{% endblock %}
 {% block content %}
-<!-- TODO(M4): timeline 화면 구현 -->
+{% if queued %}<div class="notice">재아카이빙이 백그라운드에서 시작되었습니다. 잠시 후 새로고침하세요.</div>{% endif %}
+
+<div class="toolbar">
+  <h2 style="margin:0">{{ page['url'] }}</h2>
+  <span class="spacer"></span>
+  <form class="inline" method="post" action="/page/{{ page['id'] }}/rearchive">
+    <button type="submit">재아카이빙</button>
+  </form>
+</div>
+<p class="muted mono" style="margin-top:0">{{ page['domain'] }} / {{ page['slug'] }}</p>
+
+{% if not items %}
+<p class="muted">스냅샷이 없습니다.</p>
+{% else %}
+<table>
+  <thead>
+    <tr><th>#</th><th>캡처 시각</th><th>해시</th><th>상태</th><th>HTTP</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for it in items %}
+    <tr>
+      <td class="num">{{ it.idx }}</td>
+      <td class="mono"><a href="/snapshot/{{ it.snap['id'] }}">{{ it.snap['taken_at'] }}</a></td>
+      <td class="mono">{{ it.snap['content_hash'][:12] }}</td>
+      <td><span class="badge {{ it.badge }}">{{ {'new': '신규', 'changed': '변경', 'same': '동일'}[it.badge] }}</span></td>
+      <td class="num">{{ it.snap['http_status'] or '-' }}</td>
+      <td>
+        {% if it.idx > 1 %}
+        <a href="/diff/{{ page['id'] }}?from={{ it.idx - 1 }}&to={{ it.idx }}">이전과 비교</a>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if checks %}
+<h3>변경 없음 확인 기록 (최근 {{ checks|length }}건)</h3>
+<table style="max-width:520px">
+  <tbody>
+  {% for c in checks %}
+    <tr>
+      <td class="mono">{{ c['checked_at'] }}</td>
+      <td class="mono muted">{{ c['content_hash'][:12] }}</td>
+      <td><span class="badge same">동일</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
 {% endblock %}

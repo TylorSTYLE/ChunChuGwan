@@ -1,7 +1,50 @@
 {% extends "base.html" %}
+{% block title %}스냅샷 — {{ snap['page_url'] }}{% endblock %}
 {% block content %}
-<!-- TODO(M4): 메타 정보 헤더 (URL, 시각, 해시) -->
+<div class="toolbar">
+  <h2 style="margin:0">{{ title or snap['page_url'] }}</h2>
+  <span class="spacer"></span>
+  <a href="/page/{{ snap['page_id'] }}">타임라인으로</a>
+</div>
+
+<table style="max-width:760px; margin-bottom:16px">
+  <tbody>
+    <tr><th>URL</th><td class="mono">{{ snap['page_url'] }}</td></tr>
+    <tr><th>최종 URL</th><td class="mono">{{ snap['final_url'] }}</td></tr>
+    <tr><th>캡처 시각</th><td class="mono">{{ snap['taken_at'] }}</td></tr>
+    <tr><th>해시</th><td class="mono">{{ snap['content_hash'] }}</td></tr>
+    <tr><th>HTTP</th><td class="mono">{{ snap['http_status'] or '-' }}</td></tr>
+  </tbody>
+</table>
+
+<div class="toolbar">
+  <button type="button" class="tab active" data-target="view-render">렌더링</button>
+  <button type="button" class="tab" data-target="view-shot">스크린샷</button>
+  <button type="button" class="tab" data-target="view-text">텍스트</button>
+</div>
+
 <!-- 보안: sandbox 속성은 빈 값 유지. allow-scripts 절대 추가 금지 -->
-<iframe sandbox="" src="{{ page_html_url }}"
-        style="width:100%; height:80vh; border:1px solid #ccc;"></iframe>
+<div id="view-render">
+  <iframe sandbox="" src="{{ page_html_url }}"
+          style="width:100%; height:80vh; border:1px solid var(--border);"></iframe>
+</div>
+<div id="view-shot" style="display:none">
+  <img src="{{ screenshot_url }}" alt="전체 페이지 스크린샷"
+       style="max-width:100%; border:1px solid var(--border);">
+</div>
+<div id="view-text" style="display:none">
+  <iframe sandbox="" src="{{ content_url }}"
+          style="width:100%; height:80vh; border:1px solid var(--border);"></iframe>
+</div>
+
+<script>
+document.querySelectorAll('button.tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('button.tab').forEach((b) => b.classList.toggle('active', b === btn));
+    ['view-render', 'view-shot', 'view-text'].forEach((id) => {
+      document.getElementById(id).style.display = id === btn.dataset.target ? '' : 'none';
+    });
+  });
+});
+</script>
 {% endblock %}

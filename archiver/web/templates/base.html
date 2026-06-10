@@ -5,13 +5,59 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Web Archiver{% endblock %}</title>
 <style>
-/* TODO(M4): 도구다운 밀도 있는 스타일. CLAUDE.md '대시보드 디자인 방향' 참조.
-   해시·시각은 모노스페이스, 상태 뱃지: 변경=amber / 동일=gray / 신규=green */
-body { font-family: system-ui, sans-serif; margin: 0; }
+:root {
+  --fg: #1a1a1a; --muted: #6b7280; --border: #e2e2e2; --bg-soft: #f7f7f7;
+  --amber: #92400e; --amber-bg: #fef3c7;
+  --green: #166534; --green-bg: #dcfce7;
+  --gray: #374151;  --gray-bg: #e5e7eb;
+  --red-bg: #fee2e2;
+  --link: #1d4ed8;
+}
+* { box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; margin: 0; color: var(--fg); font-size: 14px; }
+header { border-bottom: 1px solid var(--border); padding: 8px 16px;
+         display: flex; gap: 16px; align-items: baseline; }
+header h1 { font-size: 15px; margin: 0; }
+header h1 a { color: var(--fg); text-decoration: none; }
+main { padding: 16px; max-width: 1280px; margin: 0 auto; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+h3 { font-size: 13px; color: var(--muted); margin: 24px 0 8px;
+     text-transform: uppercase; letter-spacing: .04em; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; font-size: 11px;
+     text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+td.num { text-align: right; color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.muted { color: var(--muted); }
+.badge { display: inline-block; font-size: 11px; font-weight: 600;
+         padding: 1px 7px; border-radius: 9px; white-space: nowrap; }
+.badge.changed { color: var(--amber); background: var(--amber-bg); }
+.badge.same    { color: var(--gray);  background: var(--gray-bg); }
+.badge.new     { color: var(--green); background: var(--green-bg); }
+button, input[type=number], input[type=text] {
+  font: inherit; font-size: 13px; padding: 3px 10px;
+  border: 1px solid var(--border); border-radius: 4px; background: #fff;
+}
+button { cursor: pointer; }
+button:hover { background: var(--bg-soft); }
+button.active { background: var(--gray-bg); border-color: var(--gray); }
+form.inline { display: inline; }
+.notice { background: var(--green-bg); color: var(--green); border-radius: 4px;
+          padding: 6px 12px; margin-bottom: 12px; font-size: 13px; }
+.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
+           flex-wrap: wrap; }
+.toolbar .spacer { flex: 1; }
 </style>
+{% block head %}{% endblock %}
 </head>
 <body>
-<header><!-- TODO(M4): 제목 + 검색 + 아카이빙 버튼 --></header>
+<header>
+  <h1><a href="/">Web Archiver</a></h1>
+  <span class="muted" style="font-size:12px">localhost 전용 대시보드</span>
+</header>
 <main>{% block content %}{% endblock %}</main>
 </body>
 </html>
