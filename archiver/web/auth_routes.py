@@ -229,6 +229,83 @@ def totp_disable(request: Request, password: str = Form(...)):
     return RedirectResponse(url="/settings/totp", status_code=303)
 
 
+# ---- 계정 설정 (이름/패스워드 변경) ----
+
+
+def _account_ctx(
+    user, *, error: str | None = None, notice: str | None = None
+) -> dict:
+    return {
+        "display_name": user["display_name"] or "",
+        "has_password": user["password_hash"] is not None,
+        "error": error,
+        "notice": notice,
+    }
+
+
+@router.get("/settings/account", response_class=HTMLResponse)
+def account_page(request: Request, ok: str | None = None):
+    user = request.state.user
+    notice = {
+        "name": "사용자 이름을 변경했습니다.",
+        "password": "패스워드를 변경했습니다. 다른 기기의 세션은 로그아웃되었습니다.",
+    }.get(ok or "")
+    return templates.TemplateResponse(
+        request, "account.html", _account_ctx(user, notice=notice)
+    )
+
+
+@router.post("/settings/account/name", response_class=HTMLResponse)
+def change_display_name(request: Request, display_name: str = Form("")):
+    user = request.state.user
+    name = display_name.strip() or None  # 빈 입력 = 이름 제거 (이메일 표시로 복귀)
+    if name is not None:
+        error = auth.validate_display_name(name)
+        if error is not None:
+            ctx = _account_ctx(user, error=error)
+            ctx["display_name"] = display_name
+            return templates.TemplateResponse(
+                request, "account.html", ctx, status_code=400
+            )
+    with db.connect() as conn:
+        db.set_display_name(conn, user["id"], name)
+    return RedirectResponse(url="/settings/account?ok=name", status_code=303)
+
+
+@router.post("/settings/account/password", response_class=HTMLResponse)
+def change_password(
+    request: Request,
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    new_password2: str = Form(...),
+):
+    user = request.state.user
+    if user["password_hash"] is None:
+        error = "SSO 전용 계정은 패스워드가 없습니다. IdP(Authentik)에서 관리하세요."
+        status = 400
+    elif not auth.verify_password(user["password_hash"], current_password):
+        error = "현재 패스워드가 올바르지 않습니다."
+        status = 401
+    elif new_password != new_password2:
+        error = "새 패스워드가 서로 일치하지 않습니다."
+        status = 400
+    else:
+        error = auth.validate_password(new_password)
+        status = 400
+    if error is not None:
+        return templates.TemplateResponse(
+            request, "account.html", _account_ctx(user, error=error),
+            status_code=status,
+        )
+    with db.connect() as conn:
+        db.set_password_hash(conn, user["id"], auth.hash_password(new_password))
+        # 탈취된 세션을 끊을 수 있도록 현재 세션만 남기고 모두 무효화
+        db.delete_other_sessions(
+            conn, user["id"], request.state.session["token_hash"]
+        )
+    return RedirectResponse(url="/settings/account?ok=password", status_code=303)
+
+
 # ---- OIDC (Authentik) SSO ----
 
 
