@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS users (
     totp_pending_secret TEXT,               -- 등록 확인 전 임시 시크릿
     totp_last_used_at   TEXT,               -- 마지막으로 사용된 코드의 시간창 (재사용 방지)
     is_admin            INTEGER NOT NULL DEFAULT 0,  -- 최초 구동 시 등록된 관리자
+    display_name        TEXT,               -- 표시용 이름 (NULL = 이메일로 표시)
     created_at          TEXT NOT NULL
 );
 
@@ -83,6 +84,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
     if cols and "is_admin" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+    if cols and "display_name" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
 
 
 @contextmanager
@@ -262,6 +265,18 @@ def create_first_admin(
     return cur.lastrowid if cur.rowcount == 1 else None
 
 
+def set_display_name(conn: sqlite3.Connection, user_id: int, name: str | None) -> None:
+    """표시용 사용자 이름 변경 (None 이면 제거 — 이메일로 표시)."""
+    conn.execute("UPDATE users SET display_name = ? WHERE id = ?", (name, user_id))
+
+
+def set_password_hash(conn: sqlite3.Connection, user_id: int, password_hash: str) -> None:
+    """패스워드 해시 교체 (패스워드 변경)."""
+    conn.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id)
+    )
+
+
 def set_totp_pending(conn: sqlite3.Connection, user_id: int, secret: str) -> None:
     """TOTP 등록 확인 대기 시크릿 저장 (재발급 시 덮어씀)."""
     conn.execute(
@@ -343,6 +358,16 @@ def activate_session(
 def delete_session(conn: sqlite3.Connection, token_hash: str) -> None:
     """세션 삭제 (로그아웃)."""
     conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
+
+def delete_other_sessions(
+    conn: sqlite3.Connection, user_id: int, keep_token_hash: str
+) -> None:
+    """해당 사용자의 다른 세션 일괄 삭제 (패스워드 변경 시 강제 로그아웃)."""
+    conn.execute(
+        "DELETE FROM sessions WHERE user_id = ? AND token_hash != ?",
+        (user_id, keep_token_hash),
+    )
 
 
 def delete_expired_sessions(conn: sqlite3.Connection) -> None:

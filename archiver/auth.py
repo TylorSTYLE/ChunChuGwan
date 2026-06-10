@@ -48,8 +48,25 @@ def validate_credentials(email: str, password: str) -> str | None:
     """가입 입력 검증. 문제 있으면 한국어 오류 메시지, 정상이면 None."""
     if not _EMAIL_RE.match(email):
         return "올바른 이메일 형식이 아닙니다."
+    return validate_password(password)
+
+
+def validate_password(password: str) -> str | None:
+    """패스워드 정책 검증 (가입·변경 공용). 문제 있으면 한국어 오류 메시지."""
     if len(password) < config.MIN_PASSWORD_LENGTH:
         return f"패스워드는 {config.MIN_PASSWORD_LENGTH}자 이상이어야 합니다."
+    return None
+
+
+MAX_DISPLAY_NAME_LENGTH = 50
+
+
+def validate_display_name(name: str) -> str | None:
+    """표시 이름 검증. 문제 있으면 한국어 오류 메시지, 정상이면 None."""
+    if len(name) > MAX_DISPLAY_NAME_LENGTH:
+        return f"이름은 {MAX_DISPLAY_NAME_LENGTH}자 이하여야 합니다."
+    if not name.isprintable():
+        return "이름에 제어 문자를 쓸 수 없습니다."
     return None
 
 

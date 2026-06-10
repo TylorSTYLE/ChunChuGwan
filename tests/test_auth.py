@@ -430,3 +430,135 @@ def test_totp_disable_requires_password(client):
     assert ok.status_code == 303
     with db.connect() as conn:
         assert db.get_user_by_email(conn, "a@b.co")["totp_secret"] is None
+
+
+# ---- 계정 설정 (이름/패스워드 변경) ----
+
+
+def test_change_display_name(client):
+    signup(client)
+    res = client.post(
+        "/settings/account/name", data={"display_name": "  홍길동  "},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "a@b.co")["display_name"] == "홍길동"
+    # 헤더에 이메일 대신 표시 이름이 노출된다
+    assert "홍길동" in client.get("/settings/account").text
+    # 빈 입력이면 이름 제거 (이메일 표시로 복귀)
+    client.post("/settings/account/name", data={"display_name": ""})
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "a@b.co")["display_name"] is None
+
+
+def test_change_display_name_rejects_invalid(client):
+    signup(client)
+    too_long = client.post(
+        "/settings/account/name", data={"display_name": "가" * 51}
+    )
+    assert too_long.status_code == 400
+    control = client.post(
+        "/settings/account/name", data={"display_name": "줄\n바꿈"}
+    )
+    assert control.status_code == 400
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "a@b.co")["display_name"] is None
+
+
+def test_change_password_and_invalidate_other_sessions(client):
+    signup(client)
+    # 다른 기기의 세션을 흉내
+    with db.connect() as conn:
+        uid = db.get_user_by_email(conn, "a@b.co")["id"]
+        other_token = auth.issue_session(conn, uid)
+    res = client.post(
+        "/settings/account/password",
+        data={"current_password": "12345678", "new_password": "newpass99",
+              "new_password2": "newpass99"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    # 현재 세션은 유지되고 다른 세션은 무효화된다
+    assert client.get("/settings/account").status_code == 200
+    with db.connect() as conn:
+        assert auth.resolve_session(conn, other_token) is None
+    # 새 패스워드로만 로그인된다
+    client.cookies.clear()
+    bad = client.post("/login", data={"email": "a@b.co", "password": "12345678"})
+    assert bad.status_code == 401
+    ok = client.post(
+        "/login", data={"email": "a@b.co", "password": "newpass99"},
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303
+
+
+def test_change_password_rejects_wrong_current(client):
+    signup(client)
+    res = client.post(
+        "/settings/account/password",
+        data={"current_password": "wrongpass", "new_password": "newpass99",
+              "new_password2": "newpass99"},
+    )
+    assert res.status_code == 401
+    # 변경되지 않음 — 기존 패스워드로 로그인 가능
+    client.cookies.clear()
+    ok = client.post(
+        "/login", data={"email": "a@b.co", "password": "12345678"},
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303
+
+
+def test_change_password_rejects_short_or_mismatch(client):
+    signup(client)
+    short = client.post(
+        "/settings/account/password",
+        data={"current_password": "12345678", "new_password": "short",
+              "new_password2": "short"},
+    )
+    assert short.status_code == 400
+    mismatch = client.post(
+        "/settings/account/password",
+        data={"current_password": "12345678", "new_password": "newpass99",
+              "new_password2": "different9"},
+    )
+    assert mismatch.status_code == 400
+
+
+def test_change_password_sso_only_rejected(client):
+    with db.connect() as conn:
+        uid = db.create_user(conn, "sso@b.co")  # password_hash NULL = SSO 전용
+        token = auth.issue_session(conn, uid)
+    client.cookies.set(config.SESSION_COOKIE, token)
+    res = client.post(
+        "/settings/account/password",
+        data={"current_password": "x", "new_password": "newpass99",
+              "new_password2": "newpass99"},
+    )
+    assert res.status_code == 400
+    assert "SSO 전용" in client.get("/settings/account").text
+
+
+def test_display_name_migration_adds_column(tmp_db):
+    """display_name 이전 스키마의 DB 도 connect 시 컬럼이 추가된다."""
+    import sqlite3
+
+    config.ensure_dirs()
+    raw = sqlite3.connect(config.DB_PATH)
+    raw.execute(
+        """CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            password_hash TEXT, totp_secret TEXT, totp_pending_secret TEXT,
+            totp_last_used_at TEXT, is_admin INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )"""
+    )
+    raw.commit()
+    raw.close()
+    with db.connect() as conn:
+        uid = db.create_user(conn, "old@b.co")
+        db.set_display_name(conn, uid, "마이그레이션")
+        assert db.get_user_by_id(conn, uid)["display_name"] == "마이그레이션"
