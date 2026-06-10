@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}가입 — Web Archiver{% endblock %}
+{% block content %}
+<div class="auth-card">
+  <h2>가입</h2>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <form method="post" action="/signup">
+    <label>이메일
+      <input type="email" name="email" value="{{ email }}" required autofocus>
+    </label>
+    <label>패스워드 <span class="muted">(8자 이상)</span>
+      <input type="password" name="password" minlength="8" required>
+    </label>
+    <button type="submit">가입</button>
+  </form>
+  <div class="alt muted">이미 계정이 있나요? <a href="/login">로그인</a></div>
+</div>
+{% endblock %}

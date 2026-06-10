@@ -37,7 +37,8 @@ td.num { text-align: right; color: var(--muted); }
 .badge.changed { color: var(--amber); background: var(--amber-bg); }
 .badge.same    { color: var(--gray);  background: var(--gray-bg); }
 .badge.new     { color: var(--green); background: var(--green-bg); }
-button, input[type=number], input[type=text] {
+button, input[type=number], input[type=text],
+input[type=email], input[type=password] {
   font: inherit; font-size: 13px; padding: 3px 10px;
   border: 1px solid var(--border); border-radius: 4px; background: #fff;
 }
@@ -50,13 +51,28 @@ form.inline { display: inline; }
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
            flex-wrap: wrap; }
 .toolbar .spacer { flex: 1; }
+header .spacer { flex: 1; }
+.auth-card { max-width: 360px; margin: 48px auto; border: 1px solid var(--border);
+             border-radius: 6px; padding: 20px 24px; }
+.auth-card label { display: block; margin-bottom: 10px; font-size: 13px; }
+.auth-card input { display: block; width: 100%; margin-top: 3px; padding: 5px 10px; }
+.auth-card button[type=submit] { width: 100%; margin-top: 4px; padding: 6px; }
+.auth-card .alt { margin-top: 14px; padding-top: 12px;
+                  border-top: 1px solid var(--border); font-size: 13px; }
+.error { background: var(--red-bg); color: var(--amber); border-radius: 4px;
+         padding: 6px 12px; margin-bottom: 12px; font-size: 13px; }
 </style>
 {% block head %}{% endblock %}
 </head>
 <body>
 <header>
   <h1><a href="/">Web Archiver</a></h1>
-  <span class="muted" style="font-size:12px">localhost 전용 대시보드</span>
+  <span class="muted" style="font-size:12px">개인 웹 아카이브</span>
+  <span class="spacer"></span>
+  {% if user %}
+  <span class="mono muted">{{ user['email'] }}</span>
+  <form class="inline" method="post" action="/logout"><button>로그아웃</button></form>
+  {% endif %}
 </header>
 <main>{% block content %}{% endblock %}</main>
 </body>

@@ -1,0 +1,19 @@
+"""공용 Jinja2 템플릿 인스턴스 (app/auth_routes 양쪽에서 사용)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import Request
+from fastapi.templating import Jinja2Templates
+
+
+def _auth_context(request: Request) -> dict:
+    """미들웨어가 적재한 로그인 사용자를 모든 템플릿에 주입."""
+    return {"user": getattr(request.state, "user", None)}
+
+
+templates = Jinja2Templates(
+    directory=Path(__file__).parent / "templates",
+    context_processors=[_auth_context],
+)

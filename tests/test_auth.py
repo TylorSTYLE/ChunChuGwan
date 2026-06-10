@@ -1,8 +1,10 @@
 """인증 코어(해싱/세션/TOTP) + 인증 라우트 테스트."""
 import pyotp
 import pytest
+from fastapi.testclient import TestClient
 
 from archiver import auth, config, db
+from archiver.web import app as web_app
 
 
 @pytest.fixture
@@ -12,6 +14,20 @@ def tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+
+
+@pytest.fixture
+def client(tmp_db):
+    """인증이 켜진 TestClient (쿠키 유지)."""
+    return TestClient(web_app.app)
+
+
+def signup(client, email="a@b.co", password="12345678"):
+    """가입 헬퍼 — 세션 쿠키가 client 에 심어진다."""
+    return client.post(
+        "/signup", data={"email": email, "password": password},
+        follow_redirects=False,
+    )
 
 
 # ---- 패스워드 ----
@@ -127,3 +143,98 @@ def test_oidc_state_expired(tmp_db):
     with db.connect() as conn:
         db.create_oidc_state(conn, "st1", "n1", "/")
         assert db.consume_oidc_state(conn, "st1", max_age_seconds=-1) is None
+
+
+# ---- 라우트: 보호 / 로그인 / 가입 / 로그아웃 ----
+
+
+def test_unauthenticated_redirects_to_login(client):
+    res = client.get("/", follow_redirects=False)
+    assert res.status_code == 302
+    assert res.headers["location"] == "/login?next=%2F"
+
+
+def test_redirect_preserves_query(client):
+    res = client.get("/diff/1?from=1&to=2", follow_redirects=False)
+    assert res.status_code == 302
+    assert res.headers["location"] == "/login?next=%2Fdiff%2F1%3Ffrom%3D1%26to%3D2"
+
+
+def test_healthz_public(client):
+    assert client.get("/healthz").status_code == 200
+
+
+def test_login_page_public(client):
+    res = client.get("/login")
+    assert res.status_code == 200
+    assert "로그인" in res.text
+
+
+def test_signup_then_authenticated(client):
+    res = signup(client)
+    assert res.status_code == 303 and res.headers["location"] == "/"
+    assert client.get("/").status_code == 200  # 쿠키로 인증됨
+
+
+def test_signup_duplicate_email(client):
+    signup(client)
+    client.cookies.clear()
+    res = signup(client)
+    assert res.status_code == 400
+    assert "이미 가입된 이메일" in res.text
+
+
+def test_signup_invalid_input(client):
+    res = client.post("/signup", data={"email": "bad", "password": "12345678"})
+    assert res.status_code == 400
+    res = client.post("/signup", data={"email": "a@b.co", "password": "short"})
+    assert res.status_code == 400
+
+
+def test_login_success_and_failure(client):
+    signup(client)
+    client.cookies.clear()
+    bad = client.post("/login", data={"email": "a@b.co", "password": "wrongpass"})
+    assert bad.status_code == 401
+    assert "올바르지 않습니다" in bad.text
+    ok = client.post(
+        "/login", data={"email": "a@b.co", "password": "12345678", "next": "/page/1"},
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303 and ok.headers["location"] == "/page/1"
+    cookie = ok.headers["set-cookie"].lower()
+    assert "httponly" in cookie and "samesite=lax" in cookie
+
+
+def test_login_rejects_open_redirect(client):
+    signup(client)
+    client.cookies.clear()
+    res = client.post(
+        "/login",
+        data={"email": "a@b.co", "password": "12345678", "next": "//evil.com"},
+        follow_redirects=False,
+    )
+    assert res.headers["location"] == "/"
+
+
+def test_logout(client):
+    signup(client)
+    res = client.post("/logout", follow_redirects=False)
+    assert res.status_code == 303
+    assert client.get("/", follow_redirects=False).status_code == 302
+
+
+def test_csrf_origin_mismatch_rejected(client):
+    signup(client)
+    res = client.post(
+        "/logout", headers={"origin": "https://evil.com"}, follow_redirects=False
+    )
+    assert res.status_code == 403
+
+
+def test_csrf_same_origin_allowed(client):
+    signup(client)
+    res = client.post(
+        "/logout", headers={"origin": "http://testserver"}, follow_redirects=False
+    )
+    assert res.status_code == 303

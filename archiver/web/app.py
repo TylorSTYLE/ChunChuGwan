@@ -14,17 +14,65 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from urllib.parse import quote, urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 
-from .. import db, differ, pipeline, storage
+from .. import auth, config, db, differ, pipeline, storage
+from . import auth_routes
+from .templating import templates
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Web Archiver")
-templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+app.include_router(auth_routes.router)
+
+# 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)
+_PUBLIC_PATHS = {"/healthz", "/login", "/login/totp", "/signup"}
+
+
+@app.middleware("http")
+async def auth_gate(request: Request, call_next):
+    """인증 게이트 + CSRF 방어.
+
+    - POST 는 Origin(없으면 Referer) 호스트가 Host 와 일치해야 한다.
+      (쿠키는 SameSite=Lax 라 이중 방어)
+    - AUTH_ENABLED 면 공개 경로 외에는 active 세션 필수.
+      미인증 HTML 요청은 401 대신 /login?next= 으로 보낸다.
+    """
+    request.state.user = None
+    request.state.session = None
+
+    if request.method == "POST":
+        origin = request.headers.get("origin") or request.headers.get("referer")
+        if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
+            return PlainTextResponse("CSRF 검증 실패", status_code=403)
+
+    if config.AUTH_ENABLED:
+        token = request.cookies.get(config.SESSION_COOKIE, "")
+        if token:
+            with db.connect() as conn:
+                sess = auth.resolve_session(conn, token)
+                if sess is not None:
+                    request.state.session = sess
+                    if sess["state"] == "active":
+                        request.state.user = db.get_user_by_id(conn, sess["user_id"])
+
+        path = request.url.path
+        public = path in _PUBLIC_PATHS or path.startswith("/auth/oidc/")
+        if request.state.user is None and not public:
+            target = path + (f"?{request.url.query}" if request.url.query else "")
+            return RedirectResponse(
+                f"/login?next={quote(target, safe='')}", status_code=302
+            )
+
+    return await call_next(request)
 
 # 스냅샷 디렉토리에서 서빙을 허용하는 파일 화이트리스트
 _ALLOWED_FILES: dict[str, str] = {
