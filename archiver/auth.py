@@ -1,4 +1,4 @@
-"""인증 코어 — 패스워드 해싱, 세션 토큰, TOTP. 웹 프레임워크와 무관한 순수 로직."""
+"""인증 코어 — 패스워드 해싱, 세션 토큰, TOTP, 패스키. 웹 프레임워크와 무관한 순수 로직."""
 
 from __future__ import annotations
 
@@ -11,11 +11,16 @@ import re
 import secrets
 import sqlite3
 import time
+from typing import Any
 
 import pyotp
 import qrcode
+import webauthn
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+from webauthn.helpers.exceptions import WebAuthnException
+from webauthn.helpers.structs import PublicKeyCredentialDescriptor
 
 from . import config, db
 
@@ -139,6 +144,81 @@ def verify_totp(secret: str, code: str, last_used: str | None) -> str | None:
                 return None  # 이미 사용된 시간창 — replay 거부
             return str(counter)
     return None
+
+
+# ---- 패스키 (WebAuthn) ----
+# 옵션의 challenge 는 base64url 로 세션에 보관했다가 검증 시 1회용으로 소비한다.
+
+
+def _descriptors(credential_ids: list[str]) -> list[PublicKeyCredentialDescriptor]:
+    """base64url credential_id 목록을 WebAuthn 디스크립터로 변환."""
+    return [
+        PublicKeyCredentialDescriptor(id=base64url_to_bytes(cid))
+        for cid in credential_ids
+    ]
+
+
+def passkey_registration_options(
+    user_id: int, email: str, exclude_ids: list[str]
+) -> tuple[str, str]:
+    """패스키 등록 옵션 생성 → (클라이언트용 JSON, 보관용 챌린지 base64url)."""
+    options = webauthn.generate_registration_options(
+        rp_id=config.WEBAUTHN_RP_ID,
+        rp_name=config.WEBAUTHN_RP_NAME,
+        user_id=str(user_id).encode("ascii"),
+        user_name=email,
+        exclude_credentials=_descriptors(exclude_ids),
+    )
+    return webauthn.options_to_json(options), bytes_to_base64url(options.challenge)
+
+
+def verify_passkey_registration(
+    credential: dict[str, Any], challenge: str
+) -> dict[str, Any] | None:
+    """등록 응답 검증. 성공 시 DB 저장용 필드 dict, 실패 시 None."""
+    try:
+        verified = webauthn.verify_registration_response(
+            credential=credential,
+            expected_challenge=base64url_to_bytes(challenge),
+            expected_rp_id=config.WEBAUTHN_RP_ID,
+            expected_origin=config.WEBAUTHN_ORIGINS,
+        )
+    except (WebAuthnException, ValueError, KeyError, TypeError) as e:
+        logger.warning("패스키 등록 검증 실패: %s", e)
+        return None
+    return {
+        "credential_id": bytes_to_base64url(verified.credential_id),
+        "public_key": bytes_to_base64url(verified.credential_public_key),
+        "sign_count": verified.sign_count,
+    }
+
+
+def passkey_authentication_options(credential_ids: list[str]) -> tuple[str, str]:
+    """패스키 인증 옵션 생성 → (클라이언트용 JSON, 보관용 챌린지 base64url)."""
+    options = webauthn.generate_authentication_options(
+        rp_id=config.WEBAUTHN_RP_ID,
+        allow_credentials=_descriptors(credential_ids),
+    )
+    return webauthn.options_to_json(options), bytes_to_base64url(options.challenge)
+
+
+def verify_passkey_authentication(
+    credential: dict[str, Any], challenge: str, public_key: str, sign_count: int
+) -> int | None:
+    """인증 응답 검증. 성공 시 새 sign_count, 실패 시 None."""
+    try:
+        verified = webauthn.verify_authentication_response(
+            credential=credential,
+            expected_challenge=base64url_to_bytes(challenge),
+            expected_rp_id=config.WEBAUTHN_RP_ID,
+            expected_origin=config.WEBAUTHN_ORIGINS,
+            credential_public_key=base64url_to_bytes(public_key),
+            credential_current_sign_count=sign_count,
+        )
+    except (WebAuthnException, ValueError, KeyError, TypeError) as e:
+        logger.warning("패스키 인증 검증 실패: %s", e)
+        return None
+    return verified.new_sign_count
 
 
 def qr_data_uri(uri: str) -> str:

@@ -34,7 +34,12 @@ app = FastAPI(title="Web Archiver")
 app.include_router(auth_routes.router)
 
 # 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)
-_PUBLIC_PATHS = {"/healthz", "/login", "/login/totp", "/signup"}
+# /login/passkey* 는 패스워드 통과 후 pending 세션 단계라 user 가 아직 없다 —
+# 라우트 핸들러가 pending_totp 세션을 직접 요구한다.
+_PUBLIC_PATHS = {
+    "/healthz", "/login", "/login/totp", "/signup",
+    "/login/passkey/options", "/login/passkey",
+}
 
 
 @app.middleware("http")

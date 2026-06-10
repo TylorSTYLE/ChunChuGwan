@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,13 @@ MIN_PASSWORD_LENGTH = 8
 # 외부 노출 시 공개 URL (OIDC redirect_uri 조립, https 면 Secure 쿠키)
 PUBLIC_URL = os.environ.get("ARCHIVER_PUBLIC_URL", "").rstrip("/")
 COOKIE_SECURE = PUBLIC_URL.startswith("https://")
+
+# ---- 패스키 (WebAuthn) ----
+# RP ID 는 도메인이어야 한다. PUBLIC_URL 미설정 시 localhost 로 동작 —
+# 이 경우 http://localhost:8765 접속에서만 패스키를 쓸 수 있다 (127.0.0.1 불가).
+WEBAUTHN_RP_ID = (urlsplit(PUBLIC_URL).hostname or "localhost") if PUBLIC_URL else "localhost"
+WEBAUTHN_RP_NAME = "Web Archiver"
+WEBAUTHN_ORIGINS = [PUBLIC_URL] if PUBLIC_URL else [f"http://localhost:{DASHBOARD_PORT}"]
 
 # ---- OIDC (Authentik) ----
 OIDC_PROVIDER = "authentik"

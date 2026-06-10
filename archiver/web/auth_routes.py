@@ -1,4 +1,4 @@
-"""인증 라우트 — 로그인 / 가입 / 로그아웃."""
+"""인증 라우트 — 로그인 / 가입 / 로그아웃 / 2FA(TOTP·패스키)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,12 @@ import sqlite3
 import httpx
 import jwt
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 
 from .. import auth, config, db, oidc
 from .templating import templates
@@ -111,8 +116,8 @@ def login(
                  "email": email, "oidc_enabled": config.oidc_enabled()},
                 status_code=401,
             )
-        if user["totp_secret"] is not None:
-            # 2단계: OTP 입력 전까지는 pending 세션 (짧은 수명)
+        if user["totp_secret"] is not None or db.count_passkeys(conn, user["id"]) > 0:
+            # 2단계: TOTP/패스키 확인 전까지는 pending 세션 (짧은 수명)
             token = auth.issue_session(
                 conn, user["id"], state="pending_totp",
                 ttl_seconds=config.PENDING_TOTP_TTL_SECONDS,
@@ -126,7 +131,7 @@ def login(
     return _login_redirect(token, next)
 
 
-# ---- TOTP 2단계 로그인 ----
+# ---- 2단계 로그인 (TOTP / 패스키) ----
 
 
 def _pending_session(request: Request):
@@ -137,13 +142,32 @@ def _pending_session(request: Request):
     return None
 
 
+def _second_factor_ctx(conn: sqlite3.Connection, user_id: int, next_url: str | None) -> dict:
+    """2단계 인증 페이지 템플릿 컨텍스트 (사용 가능한 수단 플래그 포함)."""
+    user = db.get_user_by_id(conn, user_id)
+    return {
+        "next": safe_next(next_url),
+        "error": None,
+        "has_totp": user["totp_secret"] is not None,
+        "has_passkey": db.count_passkeys(conn, user_id) > 0,
+    }
+
+
+def _activate_and_redirect(request: Request, next_url: str) -> RedirectResponse:
+    """2단계 통과 — 쿠키 수명을 정식 세션으로 연장하고 목적지로."""
+    res = RedirectResponse(url=safe_next(next_url), status_code=303)
+    set_session_cookie(res, request.cookies[config.SESSION_COOKIE])
+    return res
+
+
 @router.get("/login/totp", response_class=HTMLResponse)
 def totp_page(request: Request, next: str | None = None):
-    if _pending_session(request) is None:
+    sess = _pending_session(request)
+    if sess is None:
         return RedirectResponse(url="/login", status_code=302)
-    return templates.TemplateResponse(
-        request, "totp.html", {"next": safe_next(next), "error": None}
-    )
+    with db.connect() as conn:
+        ctx = _second_factor_ctx(conn, sess["user_id"], next)
+    return templates.TemplateResponse(request, "totp.html", ctx)
 
 
 @router.post("/login/totp", response_class=HTMLResponse)
@@ -153,20 +177,66 @@ def totp_login(request: Request, code: str = Form(...), next: str = Form("/")):
         return RedirectResponse(url="/login", status_code=302)
     with db.connect() as conn:
         user = db.get_user_by_id(conn, sess["user_id"])
-        window = auth.verify_totp(
+        window = user["totp_secret"] is not None and auth.verify_totp(
             user["totp_secret"], code, user["totp_last_used_at"]
         )
-        if window is None:
+        if not window:
+            ctx = _second_factor_ctx(conn, sess["user_id"], next)
+            ctx["error"] = "코드가 올바르지 않습니다."
             return templates.TemplateResponse(
-                request, "totp.html",
-                {"next": safe_next(next), "error": "코드가 올바르지 않습니다."},
-                status_code=401,
+                request, "totp.html", ctx, status_code=401
             )
         db.set_totp_last_used(conn, user["id"], window)
         db.activate_session(
             conn, sess["token_hash"], ttl_seconds=config.SESSION_TTL_DAYS * 86400
         )
-    res = RedirectResponse(url=safe_next(next), status_code=303)
+    return _activate_and_redirect(request, next)
+
+
+@router.post("/login/passkey/options")
+def passkey_login_options(request: Request):
+    """패스키 2단계 인증 옵션 발급 (pending 세션 전용)."""
+    sess = _pending_session(request)
+    if sess is None:
+        raise HTTPException(401, "패스워드 인증이 필요합니다")
+    with db.connect() as conn:
+        creds = db.list_passkeys(conn, sess["user_id"])
+        if not creds:
+            raise HTTPException(400, "등록된 패스키가 없습니다")
+        options_json, challenge = auth.passkey_authentication_options(
+            [c["credential_id"] for c in creds]
+        )
+        db.set_session_challenge(conn, sess["token_hash"], challenge)
+    return Response(content=options_json, media_type="application/json")
+
+
+@router.post("/login/passkey")
+async def passkey_login(request: Request):
+    """패스키 2단계 인증 응답 검증 → 세션 활성화."""
+    sess = _pending_session(request)
+    if sess is None:
+        raise HTTPException(401, "패스워드 인증이 필요합니다")
+    body = await request.json()
+    credential = body.get("credential")
+    if not isinstance(credential, dict):
+        raise HTTPException(400, "credential 누락")
+    with db.connect() as conn:
+        challenge = db.consume_session_challenge(conn, sess["token_hash"])
+        if challenge is None:
+            raise HTTPException(400, "진행 중인 인증이 없습니다 — 다시 시도하세요")
+        cred = db.get_passkey(conn, sess["user_id"], str(credential.get("id", "")))
+        if cred is None:
+            raise HTTPException(401, "등록되지 않은 패스키입니다")
+        new_count = auth.verify_passkey_authentication(
+            credential, challenge, cred["public_key"], cred["sign_count"]
+        )
+        if new_count is None:
+            raise HTTPException(401, "패스키 인증에 실패했습니다")
+        db.touch_passkey(conn, cred["id"], new_count)
+        db.activate_session(
+            conn, sess["token_hash"], ttl_seconds=config.SESSION_TTL_DAYS * 86400
+        )
+    res = JSONResponse({"ok": True, "next": safe_next(body.get("next"))})
     set_session_cookie(res, request.cookies[config.SESSION_COOKIE])
     return res
 
@@ -227,6 +297,88 @@ def totp_disable(request: Request, password: str = Form(...)):
             )
         db.disable_totp(conn, user["id"])
     return RedirectResponse(url="/settings/totp", status_code=303)
+
+
+# ---- 패스키 설정 (등록/삭제) ----
+# 패스키는 TOTP 와 동일하게 패스워드 로그인의 2단계로만 쓴다 (SSO 는 IdP 2FA 신뢰).
+
+
+def _passkey_setup_ctx(conn: sqlite3.Connection, user) -> dict:
+    return {
+        "creds": db.list_passkeys(conn, user["id"]),
+        "has_password": user["password_hash"] is not None,
+        "error": None,
+    }
+
+
+@router.get("/settings/passkey", response_class=HTMLResponse)
+def passkey_setup_page(request: Request):
+    user = request.state.user
+    with db.connect() as conn:
+        ctx = _passkey_setup_ctx(conn, user)
+    return templates.TemplateResponse(request, "passkey_setup.html", ctx)
+
+
+@router.post("/settings/passkey/options")
+def passkey_register_options(request: Request):
+    """패스키 등록 옵션 발급. 이미 등록된 자격증명은 제외 목록으로 전달."""
+    user = request.state.user
+    if user["password_hash"] is None:
+        raise HTTPException(400, "SSO 전용 계정은 패스키를 등록할 수 없습니다")
+    with db.connect() as conn:
+        creds = db.list_passkeys(conn, user["id"])
+        options_json, challenge = auth.passkey_registration_options(
+            user["id"], user["email"], [c["credential_id"] for c in creds]
+        )
+        db.set_session_challenge(
+            conn, request.state.session["token_hash"], challenge
+        )
+    return Response(content=options_json, media_type="application/json")
+
+
+@router.post("/settings/passkey/register")
+async def passkey_register(request: Request):
+    """패스키 등록 응답 검증 → 저장."""
+    user = request.state.user
+    if user["password_hash"] is None:
+        raise HTTPException(400, "SSO 전용 계정은 패스키를 등록할 수 없습니다")
+    body = await request.json()
+    credential = body.get("credential")
+    if not isinstance(credential, dict):
+        raise HTTPException(400, "credential 누락")
+    name = (str(body.get("name") or "").strip() or "패스키")[:64]
+    with db.connect() as conn:
+        challenge = db.consume_session_challenge(
+            conn, request.state.session["token_hash"]
+        )
+        if challenge is None:
+            raise HTTPException(400, "진행 중인 등록이 없습니다 — 다시 시도하세요")
+        verified = auth.verify_passkey_registration(credential, challenge)
+        if verified is None:
+            raise HTTPException(400, "패스키 등록 검증에 실패했습니다")
+        try:
+            db.create_passkey(conn, user["id"], name=name, **verified)
+        except sqlite3.IntegrityError:
+            raise HTTPException(400, "이미 등록된 패스키입니다")
+    return {"ok": True}
+
+
+@router.post("/settings/passkey/{passkey_id}/delete", response_class=HTMLResponse)
+def passkey_delete(request: Request, passkey_id: int, password: str = Form(...)):
+    """패스키 삭제 — 세션 탈취로 2FA 를 무력화하지 못하도록 패스워드 재확인."""
+    user = request.state.user
+    with db.connect() as conn:
+        if user["password_hash"] is None or not auth.verify_password(
+            user["password_hash"], password
+        ):
+            ctx = _passkey_setup_ctx(conn, user)
+            ctx["error"] = "패스워드가 올바르지 않습니다."
+            return templates.TemplateResponse(
+                request, "passkey_setup.html", ctx, status_code=401
+            )
+        if not db.delete_passkey(conn, user["id"], passkey_id):
+            raise HTTPException(404, "패스키 없음")
+    return RedirectResponse(url="/settings/passkey", status_code=303)
 
 
 # ---- OIDC (Authentik) SSO ----
