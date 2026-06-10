@@ -62,6 +62,11 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def get_page(conn: sqlite3.Connection, url: str) -> sqlite3.Row | None:
+    """정규화 URL로 page row 조회 (없으면 None). 읽기 전용 명령용."""
+    return conn.execute("SELECT * FROM pages WHERE url = ?", (url,)).fetchone()
+
+
 def get_or_create_page(conn: sqlite3.Connection, url: str, domain: str, slug: str) -> int:
     """정규화 URL로 page row를 찾거나 생성하고 id 반환."""
     row = conn.execute("SELECT id FROM pages WHERE url = ?", (url,)).fetchone()

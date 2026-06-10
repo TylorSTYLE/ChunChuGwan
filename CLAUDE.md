@@ -88,7 +88,7 @@ archive/
       자원 인라인 page.html(이미지/CSS를 base64 인라인. 1차 버전은 스타일시트와
       이미지까지만, 폰트는 M5). `extract.py` — 본문 텍스트 추출(trafilatura) +
       정규화. `cli.py`의 `add` 연결. 실제 URL 1개로 수동 검증.
-- [ ] **M3 히스토리/diff**: `differ.py` — difflib unified + side-by-side 데이터,
+- [x] **M3 히스토리/diff**: `differ.py` — difflib unified + side-by-side 데이터,
       변경 요약(추가/삭제 줄 수). `cli.py`의 `history`, `diff`, `list` 연결.
 - [ ] **M4 대시보드**: `web/app.py` + 템플릿 4종. 재아카이빙 버튼은
       BackgroundTasks로 코어 호출.
