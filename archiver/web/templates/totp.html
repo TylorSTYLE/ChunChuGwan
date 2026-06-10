@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}2단계 인증 — Web Archiver{% endblock %}
+{% block content %}
+<div class="auth-card">
+  <h2>2단계 인증</h2>
+  <p class="muted">인증 앱에 표시된 6자리 코드를 입력하세요.</p>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <form method="post" action="/login/totp">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>OTP 코드
+      <input type="text" name="code" inputmode="numeric" pattern="[0-9]*"
+             maxlength="6" autocomplete="one-time-code" required autofocus
+             class="mono">
+    </label>
+    <button type="submit">확인</button>
+  </form>
+</div>
+{% endblock %}

@@ -71,8 +71,122 @@ def login(
                  "email": email, "oidc_enabled": config.oidc_enabled()},
                 status_code=401,
             )
+        if user["totp_secret"] is not None:
+            # 2단계: OTP 입력 전까지는 pending 세션 (짧은 수명)
+            token = auth.issue_session(
+                conn, user["id"], state="pending_totp",
+                ttl_seconds=config.PENDING_TOTP_TTL_SECONDS,
+            )
+            res = RedirectResponse(
+                url=f"/login/totp?next={safe_next(next)}", status_code=303
+            )
+            set_session_cookie(res, token, max_age=config.PENDING_TOTP_TTL_SECONDS)
+            return res
         token = auth.issue_session(conn, user["id"])
     return _login_redirect(token, next)
+
+
+# ---- TOTP 2단계 로그인 ----
+
+
+def _pending_session(request: Request):
+    """미들웨어가 적재한 pending_totp 세션 (없으면 None)."""
+    sess = getattr(request.state, "session", None)
+    if sess is not None and sess["state"] == "pending_totp":
+        return sess
+    return None
+
+
+@router.get("/login/totp", response_class=HTMLResponse)
+def totp_page(request: Request, next: str | None = None):
+    if _pending_session(request) is None:
+        return RedirectResponse(url="/login", status_code=302)
+    return templates.TemplateResponse(
+        request, "totp.html", {"next": safe_next(next), "error": None}
+    )
+
+
+@router.post("/login/totp", response_class=HTMLResponse)
+def totp_login(request: Request, code: str = Form(...), next: str = Form("/")):
+    sess = _pending_session(request)
+    if sess is None:
+        return RedirectResponse(url="/login", status_code=302)
+    with db.connect() as conn:
+        user = db.get_user_by_id(conn, sess["user_id"])
+        window = auth.verify_totp(
+            user["totp_secret"], code, user["totp_last_used_at"]
+        )
+        if window is None:
+            return templates.TemplateResponse(
+                request, "totp.html",
+                {"next": safe_next(next), "error": "코드가 올바르지 않습니다."},
+                status_code=401,
+            )
+        db.set_totp_last_used(conn, user["id"], window)
+        db.activate_session(
+            conn, sess["token_hash"], ttl_seconds=config.SESSION_TTL_DAYS * 86400
+        )
+    res = RedirectResponse(url=safe_next(next), status_code=303)
+    set_session_cookie(res, request.cookies[config.SESSION_COOKIE])
+    return res
+
+
+# ---- TOTP 설정 (등록/해제) ----
+
+
+@router.get("/settings/totp", response_class=HTMLResponse)
+def totp_setup_page(request: Request):
+    user = request.state.user
+    ctx: dict = {"enabled": user["totp_secret"] is not None,
+                 "has_password": user["password_hash"] is not None,
+                 "error": None, "qr": None, "secret": None}
+    if not ctx["enabled"] and ctx["has_password"]:
+        secret = auth.new_totp_secret()
+        with db.connect() as conn:
+            db.set_totp_pending(conn, user["id"], secret)
+        ctx["secret"] = secret
+        ctx["qr"] = auth.qr_data_uri(
+            auth.totp_provisioning_uri(secret, user["email"])
+        )
+    return templates.TemplateResponse(request, "totp_setup.html", ctx)
+
+
+@router.post("/settings/totp", response_class=HTMLResponse)
+def totp_confirm(request: Request, code: str = Form(...)):
+    user = request.state.user
+    with db.connect() as conn:
+        fresh = db.get_user_by_id(conn, user["id"])
+        pending = fresh["totp_pending_secret"]
+        window = pending and auth.verify_totp(pending, code, None)
+        if not window:
+            ctx = {"enabled": False, "has_password": True,
+                   "error": "코드가 올바르지 않습니다. QR을 다시 스캔 후 시도하세요.",
+                   "secret": pending,
+                   "qr": pending and auth.qr_data_uri(
+                       auth.totp_provisioning_uri(pending, user["email"]))}
+            return templates.TemplateResponse(
+                request, "totp_setup.html", ctx, status_code=400
+            )
+        db.confirm_totp(conn, user["id"])
+        db.set_totp_last_used(conn, user["id"], window)
+    return RedirectResponse(url="/settings/totp", status_code=303)
+
+
+@router.post("/settings/totp/disable", response_class=HTMLResponse)
+def totp_disable(request: Request, password: str = Form(...)):
+    user = request.state.user
+    with db.connect() as conn:
+        if user["password_hash"] is None or not auth.verify_password(
+            user["password_hash"], password
+        ):
+            return templates.TemplateResponse(
+                request, "totp_setup.html",
+                {"enabled": True, "has_password": True,
+                 "error": "패스워드가 올바르지 않습니다.", "qr": None, "secret": None},
+                status_code=401,
+            )
+        db.disable_totp(conn, user["id"])
+    return RedirectResponse(url="/settings/totp", status_code=303)
 
 
 @router.get("/signup", response_class=HTMLResponse)

@@ -238,3 +238,77 @@ def test_csrf_same_origin_allowed(client):
         "/logout", headers={"origin": "http://testserver"}, follow_redirects=False
     )
     assert res.status_code == 303
+
+
+# ---- 라우트: TOTP 등록 + 2단계 로그인 ----
+
+
+def enroll_totp(client) -> str:
+    """가입된 상태에서 TOTP 를 등록하고 시크릿을 반환."""
+    res = client.get("/settings/totp")
+    assert res.status_code == 200 and "data:image/png;base64," in res.text
+    with db.connect() as conn:
+        secret = db.get_user_by_email(conn, "a@b.co")["totp_pending_secret"]
+    res = client.post(
+        "/settings/totp", data={"code": pyotp.TOTP(secret).now()},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    return secret
+
+
+def test_totp_enroll_and_two_step_login(client):
+    import time
+
+    signup(client)
+    secret = enroll_totp(client)
+    client.post("/logout")
+
+    # 1단계: 패스워드 → pending 세션 + /login/totp 로 이동
+    res = client.post(
+        "/login", data={"email": "a@b.co", "password": "12345678", "next": "/"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and res.headers["location"].startswith("/login/totp")
+    # pending 상태로는 보호 라우트 접근 불가
+    assert client.get("/", follow_redirects=False).status_code == 302
+
+    # 2단계: 잘못된 코드 거부
+    bad = client.post("/login/totp", data={"code": "000000", "next": "/"})
+    assert bad.status_code == 401
+
+    # 등록 시 사용한 시간창과 겹치지 않게 다음 창 코드 사용 (valid_window=1 허용 범위)
+    code = pyotp.TOTP(secret).at(time.time() + 30)
+    ok = client.post(
+        "/login/totp", data={"code": code, "next": "/"}, follow_redirects=False
+    )
+    assert ok.status_code == 303 and ok.headers["location"] == "/"
+    assert client.get("/").status_code == 200
+
+
+def test_totp_page_requires_pending_session(client):
+    res = client.get("/login/totp", follow_redirects=False)
+    assert res.status_code == 302 and res.headers["location"] == "/login"
+
+
+def test_totp_enroll_wrong_code(client):
+    signup(client)
+    client.get("/settings/totp")
+    res = client.post("/settings/totp", data={"code": "000000"})
+    assert res.status_code == 400
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "a@b.co")["totp_secret"] is None
+
+
+def test_totp_disable_requires_password(client):
+    signup(client)
+    enroll_totp(client)
+    bad = client.post("/settings/totp/disable", data={"password": "wrongpass"})
+    assert bad.status_code == 401
+    ok = client.post(
+        "/settings/totp/disable", data={"password": "12345678"},
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "a@b.co")["totp_secret"] is None

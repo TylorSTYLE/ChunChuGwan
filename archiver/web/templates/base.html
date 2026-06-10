@@ -71,6 +71,7 @@ header .spacer { flex: 1; }
   <span class="spacer"></span>
   {% if user %}
   <span class="mono muted">{{ user['email'] }}</span>
+  <a href="/settings/totp" style="font-size:12px">2FA</a>
   <form class="inline" method="post" action="/logout"><button>로그아웃</button></form>
   {% endif %}
 </header>
