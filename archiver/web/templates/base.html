@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Web Archiver{% endblock %}</title>
+<style>
+/* TODO(M4): 도구다운 밀도 있는 스타일. CLAUDE.md '대시보드 디자인 방향' 참조.
+   해시·시각은 모노스페이스, 상태 뱃지: 변경=amber / 동일=gray / 신규=green */
+body { font-family: system-ui, sans-serif; margin: 0; }
+</style>
+</head>
+<body>
+<header><!-- TODO(M4): 제목 + 검색 + 아카이빙 버튼 --></header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>
