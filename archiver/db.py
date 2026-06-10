@@ -40,6 +40,24 @@ CREATE TABLE IF NOT EXISTS checks (
 CREATE INDEX IF NOT EXISTS idx_snapshots_page ON snapshots(page_id, taken_at);
 CREATE INDEX IF NOT EXISTS idx_checks_page ON checks(page_id, checked_at);
 
+CREATE TABLE IF NOT EXISTS archive_logs (
+    id           INTEGER PRIMARY KEY,
+    url          TEXT NOT NULL,          -- 정규화 URL (정규화 실패 시 입력 원본)
+    domain       TEXT NOT NULL DEFAULT '',
+    page_id      INTEGER REFERENCES pages(id),      -- 페이지 생성 전 실패면 NULL
+    snapshot_id  INTEGER REFERENCES snapshots(id),  -- 새 스냅샷을 만든 경우에만
+    source       TEXT NOT NULL DEFAULT 'cli',       -- 'cli' | 'web'
+    status       TEXT NOT NULL,          -- new|changed|unchanged|forced_same|error
+    started_at   TEXT NOT NULL,          -- ISO 8601 UTC
+    duration_ms  INTEGER NOT NULL DEFAULT 0,
+    http_status  INTEGER,
+    content_hash TEXT,
+    error        TEXT,                   -- status='error' 일 때 예외 요약
+    steps        TEXT                    -- 단계별 기록 JSON [{step, ms, detail}]
+);
+CREATE INDEX IF NOT EXISTS idx_archive_logs_page ON archive_logs(page_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_archive_logs_domain ON archive_logs(domain, started_at);
+
 CREATE TABLE IF NOT EXISTS users (
     id                  INTEGER PRIMARY KEY,
     email               TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -181,6 +199,65 @@ def insert_check(conn: sqlite3.Connection, page_id: int, content_hash: str) -> N
         "INSERT INTO checks (page_id, checked_at, content_hash) VALUES (?, ?, ?)",
         (page_id, _utcnow(), content_hash),
     )
+
+
+_ARCHIVE_LOG_COLUMNS = frozenset(
+    {
+        "url", "domain", "page_id", "snapshot_id", "source", "status",
+        "started_at", "duration_ms", "http_status", "content_hash", "error", "steps",
+    }
+)
+
+
+def insert_archive_log(conn: sqlite3.Connection, **fields) -> int:
+    """아카이브 실행 로그 한 행 삽입 후 id 반환. fields 키는 archive_logs 컬럼만 허용."""
+    unknown = set(fields) - _ARCHIVE_LOG_COLUMNS
+    if unknown:
+        raise ValueError(f"archive_logs에 없는 컬럼: {sorted(unknown)}")
+    cols = list(fields)
+    placeholders = ", ".join("?" for _ in cols)
+    cur = conn.execute(
+        f"INSERT INTO archive_logs ({', '.join(cols)}) VALUES ({placeholders})",
+        tuple(fields.values()),
+    )
+    return cur.lastrowid
+
+
+def list_archive_logs(
+    conn: sqlite3.Connection,
+    *,
+    domain: str | None = None,
+    page_id: int | None = None,
+    snapshot_id: int | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[sqlite3.Row]:
+    """아카이브 실행 로그 (최신 순). 도메인/페이지/스냅샷/상태로 필터."""
+    where: list[str] = []
+    params: list[object] = []
+    for cond, value in (
+        ("domain = ?", domain),
+        ("page_id = ?", page_id),
+        ("snapshot_id = ?", snapshot_id),
+        ("status = ?", status),
+    ):
+        if value is not None:
+            where.append(cond)
+            params.append(value)
+    sql = "SELECT * FROM archive_logs"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY started_at DESC, id DESC LIMIT ?"
+    params.append(limit)
+    return conn.execute(sql, params).fetchall()
+
+
+def list_log_domains(conn: sqlite3.Connection) -> list[str]:
+    """로그에 등장한 도메인 목록 (대시보드 필터 드롭다운용)."""
+    rows = conn.execute(
+        "SELECT DISTINCT domain FROM archive_logs WHERE domain != '' ORDER BY domain"
+    ).fetchall()
+    return [r["domain"] for r in rows]
 
 
 def list_pages(conn: sqlite3.Connection) -> list[sqlite3.Row]:

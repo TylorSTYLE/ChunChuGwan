@@ -1,0 +1,182 @@
+"""아카이브 실행 로그 — db 레이어, 파이프라인 기록, /logs 대시보드 테스트."""
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+from archiver import capture, config, db, pipeline, storage
+from archiver.web import app as web_app
+
+
+@pytest.fixture
+def archive_env(tmp_path, monkeypatch):
+    """임시 아카이브 루트 (인증 off)."""
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "RULES_PATH", tmp_path / "rules.json")
+    monkeypatch.setattr(config, "AUTH_ENABLED", False)
+    return tmp_path
+
+
+def _seed_logs() -> int:
+    """페이지 1개 + 로그 2건(성공/실패)을 넣고 page_id 반환."""
+    with db.connect() as conn:
+        page_id = db.get_or_create_page(
+            conn, "https://a.com/x", "a.com", "x-12345678"
+        )
+        db.insert_archive_log(
+            conn, url="https://a.com/x", domain="a.com", page_id=page_id,
+            snapshot_id=None, source="cli", status="new",
+            started_at="2026-06-11T00:00:00+00:00", duration_ms=1200,
+            http_status=200, content_hash="ab" * 32,
+            steps=json.dumps([{"step": "capture", "ms": 900, "detail": "http 200"}]),
+        )
+        db.insert_archive_log(
+            conn, url="https://b.com/y", domain="b.com", source="web",
+            status="error", started_at="2026-06-11T00:01:00+00:00",
+            duration_ms=300, error="CaptureError: boom",
+        )
+    return page_id
+
+
+# ---- db 레이어 ----
+
+
+def test_insert_and_filter_logs(archive_env):
+    page_id = _seed_logs()
+    with db.connect() as conn:
+        logs = db.list_archive_logs(conn)
+        assert [r["status"] for r in logs] == ["error", "new"]  # 최신 순
+
+        assert [r["domain"] for r in db.list_archive_logs(conn, domain="a.com")] == ["a.com"]
+        assert db.list_archive_logs(conn, status="error")[0]["error"] == "CaptureError: boom"
+        assert db.list_archive_logs(conn, page_id=page_id)[0]["page_id"] == page_id
+        assert db.list_archive_logs(conn, limit=1)[0]["status"] == "error"
+        assert db.list_log_domains(conn) == ["a.com", "b.com"]
+
+
+def test_insert_log_rejects_unknown_column(archive_env):
+    with db.connect() as conn:
+        with pytest.raises(ValueError):
+            db.insert_archive_log(
+                conn, url="https://a.com", status="new",
+                started_at="2026-06-11T00:00:00+00:00", bogus=1,
+            )
+
+
+# ---- 파이프라인 기록 ----
+
+
+def _fake_capture(html: str):
+    def fake(url, out_dir, remove_selectors=()):
+        return capture.CaptureResult(
+            final_url=url, http_status=200, title="제목",
+            raw_html=html, content_html=html,
+        )
+    return fake
+
+
+def test_pipeline_writes_success_log(archive_env, monkeypatch):
+    monkeypatch.setattr(
+        pipeline.capture, "capture",
+        _fake_capture("<html><body><p>본문 텍스트</p></body></html>"),
+    )
+    outcome = pipeline.archive_url("https://example.com/post")
+    assert outcome.status == "new"
+
+    with db.connect() as conn:
+        logs = db.list_archive_logs(conn)
+    assert len(logs) == 1
+    log = logs[0]
+    assert log["status"] == "new"
+    assert log["source"] == "cli"
+    assert log["domain"] == "example.com"
+    assert log["http_status"] == 200
+    assert log["content_hash"] == outcome.content_hash
+    assert log["snapshot_id"] is not None
+    steps = json.loads(log["steps"])
+    assert [s["step"] for s in steps] == ["normalize", "capture", "extract", "hash", "store"]
+
+    # 같은 내용 재실행 → unchanged 로그 (스냅샷 없음)
+    pipeline.archive_url("https://example.com/post")
+    with db.connect() as conn:
+        logs = db.list_archive_logs(conn)
+    assert len(logs) == 2
+    assert logs[0]["status"] == "unchanged"
+    assert logs[0]["snapshot_id"] is None
+    assert json.loads(logs[0]["steps"])[-1]["step"] == "decide"
+
+
+def test_pipeline_writes_error_log(archive_env, monkeypatch):
+    def boom(url, out_dir, remove_selectors=()):
+        raise capture.CaptureError("페이지 로드 실패")
+
+    monkeypatch.setattr(pipeline.capture, "capture", boom)
+    with pytest.raises(capture.CaptureError):
+        pipeline.archive_url("https://example.com/post", source="web")
+
+    with db.connect() as conn:
+        logs = db.list_archive_logs(conn)
+    assert len(logs) == 1
+    log = logs[0]
+    assert log["status"] == "error"
+    assert log["source"] == "web"
+    assert log["page_id"] is None  # 캡처 실패 — 페이지 생성 전
+    assert "CaptureError" in log["error"] and "페이지 로드 실패" in log["error"]
+
+
+def test_pipeline_logs_invalid_url(archive_env):
+    with pytest.raises(ValueError):
+        pipeline.archive_url("not-a-url")
+    with db.connect() as conn:
+        logs = db.list_archive_logs(conn)
+    assert len(logs) == 1
+    assert logs[0]["status"] == "error"
+    assert logs[0]["url"] == "not-a-url"  # 정규화 실패 시 입력 원본
+
+
+# ---- /logs 대시보드 ----
+
+
+@pytest.fixture
+def client(archive_env):
+    _seed_logs()
+    return TestClient(web_app.app)
+
+
+def test_logs_page(client):
+    res = client.get("/logs")
+    assert res.status_code == 200
+    assert "https://a.com/x" in res.text
+    assert "https://b.com/y" in res.text
+    assert "CaptureError: boom" in res.text  # 상세 펼침 영역
+    assert "capture" in res.text             # 단계 기록
+
+
+def test_logs_filter_by_domain(client):
+    res = client.get("/logs?domain=a.com")
+    assert res.status_code == 200
+    assert "https://a.com/x" in res.text
+    assert "https://b.com/y" not in res.text
+
+
+def test_logs_filter_by_status(client):
+    res = client.get("/logs?status=error")
+    assert res.status_code == 200
+    assert "https://b.com/y" in res.text
+    assert "https://a.com/x" not in res.text
+
+
+def test_logs_filter_by_page(client):
+    res = client.get("/logs?page_id=1")
+    assert res.status_code == 200
+    assert "https://a.com/x" in res.text
+    assert "https://b.com/y" not in res.text
+
+
+def test_logs_ignores_invalid_status(client):
+    res = client.get("/logs?status=evil")
+    assert res.status_code == 200
+    assert "https://a.com/x" in res.text and "https://b.com/y" in res.text

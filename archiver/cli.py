@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import click
 
 from . import capture as capture_mod
@@ -11,8 +13,13 @@ _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(�
 
 
 @click.group()
-def main() -> None:
+@click.option("-v", "--verbose", is_flag=True, help="단계별 상세 로그를 stderr 로 출력")
+def main(verbose: bool) -> None:
     """개인 웹 아카이빙 시스템."""
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
 
 @main.command()

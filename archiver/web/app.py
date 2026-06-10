@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -303,10 +304,52 @@ def shotdiff(
     return FileResponse(out_png, media_type="image/png")
 
 
+_LOG_STATUSES = ("new", "changed", "unchanged", "forced_same", "error")
+
+
+@app.get("/logs", response_class=HTMLResponse)
+def logs_view(
+    request: Request,
+    domain: str | None = None,
+    page_id: int | None = None,
+    snapshot_id: int | None = None,
+    status: str | None = None,
+    limit: int = 100,
+):
+    """아카이브 실행 로그. 도메인/페이지/스냅샷/상태 필터 지원."""
+    limit = max(1, min(limit, 500))
+    if status not in _LOG_STATUSES:
+        status = None
+    with db.connect() as conn:
+        logs = db.list_archive_logs(
+            conn, domain=domain or None, page_id=page_id,
+            snapshot_id=snapshot_id, status=status, limit=limit,
+        )
+        domains = db.list_log_domains(conn)
+        page = db.get_page_by_id(conn, page_id) if page_id else None
+
+    items = []
+    for row in logs:
+        try:
+            steps = json.loads(row["steps"]) if row["steps"] else []
+        except ValueError:
+            steps = []
+        items.append({"log": row, "steps": steps})
+    return templates.TemplateResponse(
+        request, "logs.html",
+        {
+            "items": items, "domains": domains, "page": page,
+            "domain": domain or "", "status": status or "",
+            "snapshot_id": snapshot_id, "limit": limit,
+            "statuses": _LOG_STATUSES,
+        },
+    )
+
+
 def _rearchive(url: str) -> None:
-    """백그라운드 재아카이빙. 실패는 로그만 남긴다."""
+    """백그라운드 재아카이빙. 결과는 archive_logs 에 기록된다."""
     try:
-        outcome = pipeline.archive_url(url)
+        outcome = pipeline.archive_url(url, source="web")
         logger.info("재아카이빙 완료: %s [%s]", url, outcome.status)
     except Exception:
         logger.exception("재아카이빙 실패: %s", url)
