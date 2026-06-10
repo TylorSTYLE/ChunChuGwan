@@ -55,23 +55,36 @@ tr.d-skip td { text-align: center; color: var(--muted); background: var(--bg-sof
 {% endif %}
 
 <h3>스크린샷 비교</h3>
+{% if shot_ratio is not none %}
+<p class="mono muted">변경 픽셀 {{ '%.2f%%'|format(shot_ratio * 100) }}</p>
+{% endif %}
 <div class="toolbar">
   <button type="button" id="btn-old" class="active">이전 (#{{ from_idx }})</button>
   <button type="button" id="btn-new">이후 (#{{ to_idx }})</button>
+  {% if shot_ratio is not none %}
+  <button type="button" id="btn-pix">픽셀 diff</button>
+  {% endif %}
 </div>
 <div class="shots">
   <img id="shot-old" class="show" src="{{ old_shot }}" alt="이전 스크린샷">
   <img id="shot-new" src="{{ new_shot }}" alt="이후 스크린샷">
+  {% if shot_ratio is not none %}
+  <img id="shot-pix" src="{{ shotdiff_url }}" alt="픽셀 diff 하이라이트">
+  {% endif %}
 </div>
 
 <script>
-const btns = { old: document.getElementById('btn-old'), new: document.getElementById('btn-new') };
-const shots = { old: document.getElementById('shot-old'), new: document.getElementById('shot-new') };
-for (const key of ['old', 'new']) {
-  btns[key].addEventListener('click', () => {
-    for (const k of ['old', 'new']) {
-      btns[k].classList.toggle('active', k === key);
-      shots[k].classList.toggle('show', k === key);
+const views = {};
+for (const key of ['old', 'new', 'pix']) {
+  const btn = document.getElementById('btn-' + key);
+  const img = document.getElementById('shot-' + key);
+  if (btn && img) views[key] = { btn, img };
+}
+for (const [key, v] of Object.entries(views)) {
+  v.btn.addEventListener('click', () => {
+    for (const [k, o] of Object.entries(views)) {
+      o.btn.classList.toggle('active', k === key);
+      o.img.classList.toggle('show', k === key);
     }
   });
 }

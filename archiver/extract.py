@@ -50,8 +50,13 @@ def _body_text_fallback(raw_html: str) -> str:
     return html.unescape(body)
 
 
-def normalize(text: str) -> str:
-    """비교/해시 전 노이즈 제거. 멱등: normalize(normalize(x)) == normalize(x)."""
+def normalize(text: str, drop_line_patterns: tuple[str, ...] = ()) -> str:
+    """비교/해시 전 노이즈 제거. 멱등: normalize(normalize(x)) == normalize(x).
+
+    drop_line_patterns: 도메인 룰(rules.json)의 추가 줄 제거 정규식.
+    줄 단위로 search 가 걸리면 그 줄을 버린다.
+    """
+    extra = [re.compile(p) for p in drop_line_patterns]
     for pat in _TIMESTAMP_PATTERNS:
         text = pat.sub("[TIME]", text)
     for pat in _RELATIVE_TIME_PATTERNS:
@@ -61,6 +66,8 @@ def normalize(text: str) -> str:
     for line in text.split("\n"):
         line = re.sub(r"[ \t]+", " ", line).strip()
         if _AD_LINE.match(line):
+            continue
+        if any(p.search(line) for p in extra):
             continue
         lines.append(line)
     out = "\n".join(lines)

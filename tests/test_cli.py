@@ -1,6 +1,7 @@
 """list / history / diff 명령 테스트. 캡처 없이 fixture 데이터로 검증."""
 import pytest
 from click.testing import CliRunner
+from PIL import Image
 
 from archiver import cli, config, db, storage
 
@@ -11,11 +12,13 @@ def archive_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
     monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
 
     url = "https://example.com/post"
     domain, slug = "example.com", storage.url_to_slug(url)
     contents = ["첫 줄\n둘째 줄", "첫 줄\n둘째 줄 수정됨\n셋째 줄"]
     dir_names = ["2026-06-01T00-00-00", "2026-06-02T00-00-00"]
+    shot_colors = [(255, 255, 255), (0, 0, 0)]
 
     with db.connect() as conn:
         page_id = db.get_or_create_page(conn, url, domain, slug)
@@ -23,6 +26,7 @@ def archive_env(tmp_path, monkeypatch):
             snap_dir = storage.page_dir(domain, slug) / dir_name
             snap_dir.mkdir(parents=True)
             (snap_dir / "content.md").write_text(text, encoding="utf-8")
+            Image.new("RGB", (8, 8), shot_colors[i]).save(snap_dir / "screenshot.png")
             db.insert_snapshot(
                 conn, page_id,
                 taken_at=f"2026-06-0{i + 1}T00:00:00+00:00", dir_name=dir_name,
@@ -58,6 +62,7 @@ def test_diff_latest_two(archive_env):
     assert result.exit_code == 0
     assert "+2줄 / -1줄" in result.output
     assert "-둘째 줄" in result.output and "+둘째 줄 수정됨" in result.output
+    assert "스크린샷 변경 픽셀 100.00%" in result.output  # 흰색 → 검은색
 
 
 def test_diff_explicit_range(archive_env):

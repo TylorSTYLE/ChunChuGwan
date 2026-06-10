@@ -48,6 +48,14 @@ def test_normalize_idempotent(article_html):
     assert extract.normalize(once) == once
 
 
+def test_normalize_drop_line_patterns():
+    src = "본문 첫줄\n관련 기사: 어쩌고\n구독하기\n본문 둘째줄"
+    out = extract.normalize(src, drop_line_patterns=("^관련 기사", "^구독하기$"))
+    assert out == "본문 첫줄\n본문 둘째줄"
+    # 패턴 없으면 그대로 유지
+    assert "관련 기사" in extract.normalize(src)
+
+
 def test_hash_stable_across_timestamp_noise():
     a = extract.normalize("기사 본문입니다. 작성 2026-06-10T09:00:00Z")
     b = extract.normalize("기사 본문입니다. 작성 2026-06-11T21:42:13Z")

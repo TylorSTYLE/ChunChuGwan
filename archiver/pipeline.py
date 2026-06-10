@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import capture, db, extract, storage
+from . import capture, config, db, extract, storage
 
 
 @dataclass
@@ -37,12 +37,19 @@ def archive_url(url: str, force: bool = False) -> ArchiveOutcome:
     domain = urlsplit(norm).hostname or ""
     slug = storage.url_to_slug(norm)
 
+    rules = config.load_domain_rules(domain)
+
     # 해시가 같으면 스냅샷 디렉토리를 만들지 않도록 임시 디렉토리에 먼저 캡처
     tmp_dir = Path(tempfile.mkdtemp(prefix="archiver-"))
     try:
-        result = capture.capture(norm, tmp_dir)
-        text = extract.extract_text(result.raw_html, norm)
-        normalized = extract.normalize(text)
+        result = capture.capture(
+            norm, tmp_dir,
+            remove_selectors=tuple(rules.get("remove_selectors") or ()),
+        )
+        text = extract.extract_text(result.content_html, norm)
+        normalized = extract.normalize(
+            text, drop_line_patterns=tuple(rules.get("remove_line_patterns") or ())
+        )
         content_hash = storage.content_sha256(normalized)
 
         with db.connect() as conn:

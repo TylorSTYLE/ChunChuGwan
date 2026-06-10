@@ -144,13 +144,8 @@ def _collapse_equal(
     return out
 
 
-@app.get("/diff/{page_id}", response_class=HTMLResponse)
-def diff_view(
-    request: Request,
-    page_id: int,
-    from_idx: int | None = Query(None, alias="from"),
-    to_idx: int | None = Query(None, alias="to"),
-):
+def _resolve_diff_pair(page_id: int, from_idx: int | None, to_idx: int | None):
+    """diff 대상 페이지/스냅샷 쌍을 검증해 반환."""
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
         if page is None:
@@ -165,8 +160,27 @@ def diff_view(
         from_idx = to_idx - 1
     if not (1 <= from_idx < to_idx <= len(snaps)):
         raise HTTPException(400, f"잘못된 범위: from={from_idx} to={to_idx} (1 ~ {len(snaps)})")
+    return page, snaps, from_idx, to_idx, snaps[from_idx - 1], snaps[to_idx - 1]
 
-    old_snap, new_snap = snaps[from_idx - 1], snaps[to_idx - 1]
+
+def _screenshot_paths(page, old_snap, new_snap) -> tuple[Path, Path]:
+    base = storage.page_dir(page["domain"], page["slug"])
+    return (
+        base / old_snap["dir_name"] / "screenshot.png",
+        base / new_snap["dir_name"] / "screenshot.png",
+    )
+
+
+@app.get("/diff/{page_id}", response_class=HTMLResponse)
+def diff_view(
+    request: Request,
+    page_id: int,
+    from_idx: int | None = Query(None, alias="from"),
+    to_idx: int | None = Query(None, alias="to"),
+):
+    page, snaps, from_idx, to_idx, old_snap, new_snap = _resolve_diff_pair(
+        page_id, from_idx, to_idx
+    )
     texts = []
     for snap in (old_snap, new_snap):
         path = storage.page_dir(page["domain"], page["slug"]) / snap["dir_name"] / "content.md"
@@ -175,6 +189,15 @@ def diff_view(
         texts.append(path.read_text(encoding="utf-8"))
 
     d = differ.diff_text(texts[0], texts[1])
+
+    shot_ratio = None
+    old_shot_path, new_shot_path = _screenshot_paths(page, old_snap, new_snap)
+    if old_shot_path.is_file() and new_shot_path.is_file():
+        shot_ratio, _ = differ.cached_screenshot_diff(
+            old_shot_path, new_shot_path,
+            f"shotdiff-{old_snap['id']}-{new_snap['id']}",
+        )
+
     return templates.TemplateResponse(
         request, "diff.html",
         {
@@ -185,8 +208,27 @@ def diff_view(
             "old_snap": old_snap, "new_snap": new_snap,
             "old_shot": f"/snapshot/{old_snap['id']}/file/screenshot.png",
             "new_shot": f"/snapshot/{new_snap['id']}/file/screenshot.png",
+            "shot_ratio": shot_ratio,
+            "shotdiff_url": f"/diff/{page_id}/shotdiff?from={from_idx}&to={to_idx}",
         },
     )
+
+
+@app.get("/diff/{page_id}/shotdiff")
+def shotdiff(
+    page_id: int,
+    from_idx: int | None = Query(None, alias="from"),
+    to_idx: int | None = Query(None, alias="to"),
+):
+    """픽셀 diff 하이라이트 이미지 (캐시에서 서빙)."""
+    page, _snaps, _f, _t, old_snap, new_snap = _resolve_diff_pair(page_id, from_idx, to_idx)
+    old_shot_path, new_shot_path = _screenshot_paths(page, old_snap, new_snap)
+    if not (old_shot_path.is_file() and new_shot_path.is_file()):
+        raise HTTPException(404, "스크린샷 없음")
+    _ratio, out_png = differ.cached_screenshot_diff(
+        old_shot_path, new_shot_path, f"shotdiff-{old_snap['id']}-{new_snap['id']}"
+    )
+    return FileResponse(out_png, media_type="image/png")
 
 
 def _rearchive(url: str) -> None:

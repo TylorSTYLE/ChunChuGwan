@@ -114,9 +114,18 @@ def diff(url: str, from_idx: int | None, to_idx: int | None) -> None:
     click.echo(f"  {from_idx}: {old_snap['taken_at']}  →  {to_idx}: {new_snap['taken_at']}")
     if d.identical:
         click.echo("변경 없음")
-        return
-    click.echo(f"  +{d.added}줄 / -{d.removed}줄")
-    click.echo(d.unified)
+    else:
+        click.echo(f"  +{d.added}줄 / -{d.removed}줄")
+        click.echo(d.unified)
+
+    base = storage.page_dir(page["domain"], page["slug"])
+    old_shot = base / old_snap["dir_name"] / "screenshot.png"
+    new_shot = base / new_snap["dir_name"] / "screenshot.png"
+    if old_shot.is_file() and new_shot.is_file():
+        ratio, out_png = differ.cached_screenshot_diff(
+            old_shot, new_shot, f"shotdiff-{old_snap['id']}-{new_snap['id']}"
+        )
+        click.echo(f"스크린샷 변경 픽셀 {ratio:.2%}  (하이라이트: {out_png})")
 
 
 @main.command()

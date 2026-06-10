@@ -17,7 +17,7 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
-# 페이지 컨텍스트에서 스타일시트/이미지를 data URI로 치환. 실패한 자원 URL 목록 반환.
+# 페이지 컨텍스트에서 스타일시트/이미지/폰트를 data URI로 치환. 실패한 자원 URL 목록 반환.
 _INLINE_JS = """
 async () => {
   const failed = [];
@@ -32,16 +32,37 @@ async () => {
       reader.readAsDataURL(blob);
     });
   };
+  const FONT_URL_RE = /url\\((['"]?)([^)'"]+?\\.(?:woff2?|ttf|otf|eot)(?:[?#][^)'"]*)?)\\1\\)/gi;
+  const inlineFonts = async (cssText, baseUrl) => {
+    const out = [];
+    let last = 0;
+    for (const m of cssText.matchAll(FONT_URL_RE)) {
+      out.push(cssText.slice(last, m.index));
+      let repl = m[0];
+      try {
+        repl = "url(" + (await toDataUrl(new URL(m[2], baseUrl).href)) + ")";
+      } catch (e) {
+        failed.push(m[2]);
+      }
+      out.push(repl);
+      last = m.index + m[0].length;
+    }
+    out.push(cssText.slice(last));
+    return out.join("");
+  };
   for (const link of Array.from(document.querySelectorAll('link[rel="stylesheet"][href]'))) {
     try {
       const res = await fetch(link.href, { credentials: "omit" });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const style = document.createElement("style");
-      style.textContent = await res.text();
+      style.textContent = await inlineFonts(await res.text(), link.href);
       link.replaceWith(style);
     } catch (e) {
       failed.push(link.href);
     }
+  }
+  for (const style of Array.from(document.querySelectorAll("style"))) {
+    style.textContent = await inlineFonts(style.textContent, document.baseURI);
   }
   for (const img of Array.from(document.querySelectorAll("img[src]"))) {
     const src = img.currentSrc || img.src;
@@ -58,6 +79,19 @@ async () => {
 }
 """
 
+# 도메인 룰의 셀렉터에 걸리는 노드 제거. 잘못된 셀렉터는 무시.
+_REMOVE_JS = """
+(selectors) => {
+  let removed = 0;
+  for (const sel of selectors) {
+    try {
+      document.querySelectorAll(sel).forEach((el) => { el.remove(); removed += 1; });
+    } catch (e) { /* 잘못된 셀렉터 무시 */ }
+  }
+  return removed;
+}
+"""
+
 
 @dataclass
 class CaptureResult:
@@ -65,10 +99,17 @@ class CaptureResult:
     http_status: int | None
     title: str | None
     raw_html: str
+    content_html: str  # 도메인 룰 셀렉터 제거 후 DOM (추출용, 룰 없으면 raw와 동일)
 
 
-def capture(url: str, out_dir: Path) -> CaptureResult:
-    """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장."""
+def capture(
+    url: str, out_dir: Path, remove_selectors: tuple[str, ...] = ()
+) -> CaptureResult:
+    """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
+
+    remove_selectors 가 있으면 저장 산출물에는 손대지 않고, 본문 추출용
+    content_html 에서만 해당 노드를 제거한다.
+    """
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
@@ -96,11 +137,19 @@ def capture(url: str, out_dir: Path) -> CaptureResult:
                 (out_dir / "page.html").write_text(
                     _inline_resources(page, raw_html), encoding="utf-8"
                 )
+
+                content_html = raw_html
+                if remove_selectors:
+                    removed = page.evaluate(_REMOVE_JS, list(remove_selectors))
+                    logger.info("도메인 룰로 노드 %d개 제거: %s", removed, url)
+                    content_html = page.content()
+
                 return CaptureResult(
                     final_url=page.url,
                     http_status=response.status if response else None,
                     title=page.title() or None,
                     raw_html=raw_html,
+                    content_html=content_html,
                 )
             finally:
                 browser.close()

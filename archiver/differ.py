@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import difflib
+import json
 from dataclasses import dataclass
 from pathlib import Path
+
+from PIL import Image, ImageChops
+
+from . import config
 
 
 @dataclass
@@ -64,10 +69,54 @@ def diff_text(old: str, new: str, context: int = 3) -> TextDiff:
                     identical=identical)
 
 
+# 안티앨리어싱 미세 차이를 변경으로 치지 않기 위한 채널 차이 임계값
+_PIXEL_THRESHOLD = 16
+
+
+def _pad(img: Image.Image, size: tuple[int, int]) -> Image.Image:
+    """size 보다 작으면 흰색 캔버스 좌상단에 붙여 확장."""
+    if img.size == size:
+        return img
+    canvas = Image.new("RGB", size, (255, 255, 255))
+    canvas.paste(img, (0, 0))
+    return canvas
+
+
 def diff_screenshots(old_png: Path, new_png: Path, out_png: Path) -> float:
     """스크린샷 픽셀 비교. 변경 픽셀 비율(0.0~1.0) 반환, 하이라이트 이미지 저장.
 
-    TODO(M5): Pillow ImageChops.difference 기반. 크기 다르면 큰 쪽에 맞춰
-    패딩 후 비교.
+    크기가 다르면 큰 쪽에 맞춰 흰색 패딩 후 비교. 하이라이트는 새 스크린샷
+    위에 변경 픽셀을 적색으로 칠한 이미지.
     """
-    raise NotImplementedError
+    old_img = Image.open(old_png).convert("RGB")
+    new_img = Image.open(new_png).convert("RGB")
+    size = (max(old_img.width, new_img.width), max(old_img.height, new_img.height))
+    old_img, new_img = _pad(old_img, size), _pad(new_img, size)
+
+    mask = (
+        ImageChops.difference(old_img, new_img)
+        .convert("L")
+        .point(lambda v: 255 if v > _PIXEL_THRESHOLD else 0)
+    )
+    changed = mask.histogram()[255]
+    ratio = changed / (size[0] * size[1])
+
+    red = Image.new("RGB", size, (220, 38, 38))
+    highlight = Image.composite(red, new_img, mask)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    highlight.save(out_png)
+    return ratio
+
+
+def cached_screenshot_diff(old_png: Path, new_png: Path, cache_key: str) -> tuple[float, Path]:
+    """픽셀 diff 결과를 config.CACHE_DIR 에 캐시. (변경 비율, 하이라이트 경로) 반환.
+
+    스냅샷은 불변이므로 같은 cache_key 의 결과는 영구히 유효하다.
+    """
+    out_png = config.CACHE_DIR / f"{cache_key}.png"
+    meta_path = config.CACHE_DIR / f"{cache_key}.json"
+    if out_png.is_file() and meta_path.is_file():
+        return json.loads(meta_path.read_text(encoding="utf-8"))["ratio"], out_png
+    ratio = diff_screenshots(old_png, new_png, out_png)
+    meta_path.write_text(json.dumps({"ratio": ratio}), encoding="utf-8")
+    return ratio, out_png
