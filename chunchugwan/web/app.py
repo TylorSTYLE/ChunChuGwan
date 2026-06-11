@@ -28,7 +28,9 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from .. import auth, config, db, deletion, differ, pipeline, scheduler, storage
+from .. import (
+    auth, config, db, deletion, differ, pipeline, resources, scheduler, storage,
+)
 from . import auth_routes, permissions, system_routes
 from .templating import templates
 
@@ -132,11 +134,16 @@ async def auth_gate(request: Request, call_next):
                 return PlainTextResponse(
                     "차단된 계정입니다. 관리자에게 문의하세요.", status_code=403
                 )
+            # /resource/ 는 인증 예외 — 샌드박스된 page.html(불투명 출처)의
+            # 하위 자원 요청에는 SameSite 쿠키가 붙지 않아 세션 인증이
+            # 불가능하다. 이름이 콘텐츠 sha256 그 자체라 추측 불가능하고,
+            # 화이트리스트 미디어 타입만 CSP sandbox 로 서빙한다.
             public = (
                 path in _PUBLIC_PATHS
                 or path in _BROWSER_ICON_PATHS
                 or path.startswith("/auth/oidc/")
                 or path.startswith("/invite/")
+                or path.startswith("/resource/")
             )
             if request.state.user is None and not public:
                 target = path + (f"?{request.url.query}" if request.url.query else "")
@@ -159,12 +166,16 @@ async def auth_gate(request: Request, call_next):
         )
     return response
 
-# 스냅샷 디렉토리에서 서빙을 허용하는 파일 화이트리스트
-_ALLOWED_FILES: dict[str, str] = {
-    "page.html": "text/html; charset=utf-8",
-    "screenshot.png": "image/png",
-    "content.md": "text/plain; charset=utf-8",
+# 스냅샷 파일 서빙 화이트리스트 — 논리 이름 → (실제 후보 파일, 미디어 타입).
+# 앞선 후보부터 존재하는 파일을 서빙한다 (.gz 후보는 Content-Encoding: gzip).
+# 'screenshot.png' 는 구형 링크 하위 호환 별칭.
+_HTML_TYPE = "text/html; charset=utf-8"
+_ALLOWED_FILES: dict[str, tuple[tuple[str, str], ...]] = {
+    "page.html": (("page.html.gz", _HTML_TYPE), ("page.html", _HTML_TYPE)),
+    "screenshot": (("screenshot.webp", "image/webp"), ("screenshot.png", "image/png")),
+    "content.md": (("content.md", "text/plain; charset=utf-8"),),
 }
+_ALLOWED_FILES["screenshot.png"] = _ALLOWED_FILES["screenshot"]
 
 _BADGES = {1: "changed", 0: "same"}
 
@@ -394,7 +405,7 @@ def snapshot_view(request: Request, snapshot_id: int):
             "snap": snap,
             "title": title,
             "page_html_url": f"/snapshot/{snapshot_id}/file/page.html",
-            "screenshot_url": f"/snapshot/{snapshot_id}/file/screenshot.png",
+            "screenshot_url": f"/snapshot/{snapshot_id}/file/screenshot",
             "content_url": f"/snapshot/{snapshot_id}/file/content.md",
         },
     )
@@ -402,18 +413,47 @@ def snapshot_view(request: Request, snapshot_id: int):
 
 @app.get("/snapshot/{snapshot_id}/file/{name}")
 def snapshot_file(snapshot_id: int, name: str):
-    media_type = _ALLOWED_FILES.get(name)
-    if media_type is None:
+    candidates = _ALLOWED_FILES.get(name)
+    if candidates is None:
         raise HTTPException(404, "허용되지 않은 파일")
     snap = _load_snapshot(snapshot_id)
-    path = _snapshot_dir(snap) / name
-    if not path.is_file():
+    snap_dir = _snapshot_dir(snap)
+    for filename, media_type in candidates:
+        path = snap_dir / filename
+        if path.is_file():
+            break
+    else:
         raise HTTPException(404, "파일 없음")
     headers = {}
+    if filename.endswith(".gz"):
+        headers["Content-Encoding"] = "gzip"
     if name == "page.html":
         # 직접 열어도 아카이빙된 JS가 실행되지 않도록 문서 자체를 샌드박스
         headers["Content-Security-Policy"] = "sandbox"
     return FileResponse(path, media_type=media_type, headers=headers)
+
+
+@app.get("/resource/{name}")
+def resource_file(name: str):
+    """page.html 이 참조하는 스냅샷 간 공유 자원(CAS) 서빙.
+
+    인증 게이트 예외 경로 (auth_gate 참조). 콘텐츠 주소라 불변이므로
+    영구 캐시를 허용하고, SVG 등에서 스크립트가 실행되지 않도록
+    문서 컨텍스트를 샌드박스한다.
+    """
+    if not resources.is_valid_name(name):
+        raise HTTPException(404, "잘못된 자원 이름")
+    path = resources.resource_path(name)
+    if not path.is_file():
+        raise HTTPException(404, "자원 없음")
+    return FileResponse(
+        path,
+        media_type=resources.EXT_MEDIA_TYPES[Path(name).suffix],
+        headers={
+            "Content-Security-Policy": "sandbox",
+            "Cache-Control": "public, max-age=31536000, immutable",
+        },
+    )
 
 
 def _collapse_equal(
@@ -463,11 +503,11 @@ def _resolve_diff_pair(page_id: int, from_idx: int | None, to_idx: int | None):
     return page, snaps, from_idx, to_idx, snaps[from_idx - 1], snaps[to_idx - 1]
 
 
-def _screenshot_paths(page, old_snap, new_snap) -> tuple[Path, Path]:
+def _screenshot_paths(page, old_snap, new_snap) -> tuple[Path | None, Path | None]:
     base = storage.page_dir(page["domain"], page["slug"])
     return (
-        base / old_snap["dir_name"] / "screenshot.png",
-        base / new_snap["dir_name"] / "screenshot.png",
+        storage.find_screenshot(base / old_snap["dir_name"]),
+        storage.find_screenshot(base / new_snap["dir_name"]),
     )
 
 
@@ -492,7 +532,7 @@ def diff_view(
 
     shot_ratio = None
     old_shot_path, new_shot_path = _screenshot_paths(page, old_snap, new_snap)
-    if old_shot_path.is_file() and new_shot_path.is_file():
+    if old_shot_path is not None and new_shot_path is not None:
         shot_ratio, _ = differ.cached_screenshot_diff(
             old_shot_path, new_shot_path,
             f"shotdiff-{old_snap['id']}-{new_snap['id']}",
@@ -506,8 +546,8 @@ def diff_view(
             "rows": _collapse_equal(d.rows),
             "from_idx": from_idx, "to_idx": to_idx, "total": len(snaps),
             "old_snap": old_snap, "new_snap": new_snap,
-            "old_shot": f"/snapshot/{old_snap['id']}/file/screenshot.png",
-            "new_shot": f"/snapshot/{new_snap['id']}/file/screenshot.png",
+            "old_shot": f"/snapshot/{old_snap['id']}/file/screenshot",
+            "new_shot": f"/snapshot/{new_snap['id']}/file/screenshot",
             "shot_ratio": shot_ratio,
             "shotdiff_url": f"/diff/{page_id}/shotdiff?from={from_idx}&to={to_idx}",
         },
@@ -523,7 +563,7 @@ def shotdiff(
     """픽셀 diff 하이라이트 이미지 (캐시에서 서빙)."""
     page, _snaps, _f, _t, old_snap, new_snap = _resolve_diff_pair(page_id, from_idx, to_idx)
     old_shot_path, new_shot_path = _screenshot_paths(page, old_snap, new_snap)
-    if not (old_shot_path.is_file() and new_shot_path.is_file()):
+    if old_shot_path is None or new_shot_path is None:
         raise HTTPException(404, "스크린샷 없음")
     _ratio, out_png = differ.cached_screenshot_diff(
         old_shot_path, new_shot_path, f"shotdiff-{old_snap['id']}-{new_snap['id']}"

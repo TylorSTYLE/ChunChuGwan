@@ -87,6 +87,7 @@ def _pad(img: Image.Image, size: tuple[int, int]) -> Image.Image:
 def diff_screenshots(old_png: Path, new_png: Path, out_png: Path) -> float:
     """스크린샷 픽셀 비교. 변경 픽셀 비율(0.0~1.0) 반환, 하이라이트 이미지 저장.
 
+    입력은 PNG(구형)/WebP(신규) 모두 가능 — Pillow 가 내용으로 판별한다.
     크기가 다르면 큰 쪽에 맞춰 흰색 패딩 후 비교. 하이라이트는 새 스크린샷
     위에 변경 픽셀을 적색으로 칠한 이미지.
     """

@@ -17,6 +17,7 @@ def _patch_root(monkeypatch, root):
     monkeypatch.setattr(config, "SITES_DIR", root / "sites")
     monkeypatch.setattr(config, "DB_PATH", root / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", root / "cache")
+    monkeypatch.setattr(config, "RESOURCES_DIR", root / "resources")
     monkeypatch.setattr(config, "RULES_PATH", root / "rules.json")
 
 
@@ -268,3 +269,27 @@ def test_cli_restore_rejects_export_file(roots, tmp_path, monkeypatch):
     result = CliRunner().invoke(cli.main, ["restore", str(out), "--yes"])
     assert result.exit_code != 0
     assert "wccg import" in result.output
+
+
+# ---- 공유 자원 (resources/) 포함 ----
+
+
+def test_backup_and_export_include_resources(roots, tmp_path, monkeypatch):
+    root_a, root_b = roots
+    name = "a" * 64 + ".png"
+    src = config.RESOURCES_DIR / name[:2] / name
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"resource-bytes")
+
+    full = backup.create_backup(tmp_path / "full.tar.gz")
+    exported = backup.export_archive(tmp_path / "export.tar.gz")
+
+    # 전체 복원 — 공유 자원이 그대로 돌아온다
+    _patch_root(monkeypatch, root_b)
+    backup.restore_backup(full)
+    assert (config.RESOURCES_DIR / name[:2] / name).read_bytes() == b"resource-bytes"
+
+    # 가져오기(merge) — 빈 루트에 공유 자원 포함 복원
+    _patch_root(monkeypatch, tmp_path / "c")
+    backup.import_archive(exported, mode="merge")
+    assert (config.RESOURCES_DIR / name[:2] / name).read_bytes() == b"resource-bytes"

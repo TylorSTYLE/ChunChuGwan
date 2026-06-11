@@ -10,7 +10,7 @@ import click
 
 from . import backup as backup_mod
 from . import capture as capture_mod
-from . import config, db, deletion, differ, pipeline, scheduler, storage
+from . import config, db, deletion, differ, pipeline, resources, scheduler, storage
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
 
@@ -129,9 +129,9 @@ def diff(url: str, from_idx: int | None, to_idx: int | None) -> None:
         click.echo(d.unified)
 
     base = storage.page_dir(page["domain"], page["slug"])
-    old_shot = base / old_snap["dir_name"] / "screenshot.png"
-    new_shot = base / new_snap["dir_name"] / "screenshot.png"
-    if old_shot.is_file() and new_shot.is_file():
+    old_shot = storage.find_screenshot(base / old_snap["dir_name"])
+    new_shot = storage.find_screenshot(base / new_snap["dir_name"])
+    if old_shot is not None and new_shot is not None:
         ratio, out_png = differ.cached_screenshot_diff(
             old_shot, new_shot, f"shotdiff-{old_snap['id']}-{new_snap['id']}"
         )
@@ -243,6 +243,41 @@ def schedule_run() -> None:
         return
     for r in results:
         click.echo(f"{r.url} — {r.status}" + (f" ({r.error})" if r.error else ""))
+
+
+def _fmt_mb(n: int) -> str:
+    return f"{n / 1048576:.1f}MB"
+
+
+@main.command()
+@click.option("--yes", is_flag=True, help="확인 없이 진행")
+def compact(yes: bool) -> None:
+    """기존 스냅샷 저장 공간 압축 — 공유 자원 추출 + HTML gzip + 스크린샷 WebP.
+
+    내용 보존 변환이라 스냅샷이 담는 정보는 그대로다 (불변 원칙의 유일한 예외).
+    새 스냅샷은 저장 시점에 같은 형태로 압축되므로 한 번만 실행하면 된다.
+    """
+    count = len(resources.snapshot_dirs())
+    if count == 0:
+        click.echo("압축할 스냅샷이 없습니다.")
+        return
+    if not yes:
+        click.confirm(
+            f"스냅샷 {count}개의 파일을 압축 저장 형태(page.html.gz·"
+            "raw.html.gz·screenshot.webp + 공유 자원)로 변환합니다. 계속할까요?",
+            abort=True,
+        )
+
+    result = resources.compact_all()
+    if result.converted == 0:
+        click.echo(f"스냅샷 {result.total}개 모두 이미 압축 형태입니다.")
+        return
+    click.echo(
+        f"변환 {result.converted}/{result.total}개 · "
+        f"공유 자원 {result.externalized}개 추출 · "
+        f"{_fmt_mb(result.before_bytes)} → {_fmt_mb(result.after_bytes)} "
+        f"({_fmt_mb(result.saved_bytes)} 절약)"
+    )
 
 
 def _counts_label(manifest: dict) -> str:

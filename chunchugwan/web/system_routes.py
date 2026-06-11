@@ -22,9 +22,9 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
 from .. import auth, backup as backup_mod
-from .. import config, db, mailer
+from .. import config, db, mailer, resources
 from . import permissions
-from .templating import templates
+from .templating import filesize, templates
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "archive_root": str(config.ARCHIVE_ROOT),
             "db_bytes": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
             "sites_bytes": _dir_bytes(config.SITES_DIR),
+            "resources_bytes": _dir_bytes(config.RESOURCES_DIR),
             "notice": notice, "error": error,
         },
     )
@@ -100,6 +101,31 @@ def _save_upload(file: UploadFile) -> Path:
 def _system_redirect(*, notice: str = "", error: str = "") -> RedirectResponse:
     query = f"error={quote(error, safe='')}" if error else f"notice={quote(notice, safe='')}"
     return RedirectResponse(f"/system?{query}", status_code=303)
+
+
+@router.post("/compact")
+def system_compact():
+    """저장 공간 압축 — 구형 스냅샷을 압축 저장 형태로 변환 (CLI compact 와 동일).
+
+    내용 보존 변환이고 멱등이라 여러 번 실행해도 안전하다. 변환은 동기로
+    실행된다 — 스냅샷이 아주 많으면 응답까지 시간이 걸릴 수 있다.
+    """
+    try:
+        result = resources.compact_all()
+    except OSError as e:
+        return _system_redirect(error=f"압축 실패: {e}")
+    if result.total == 0:
+        return _system_redirect(notice="압축할 스냅샷이 없습니다.")
+    if result.converted == 0:
+        return _system_redirect(
+            notice=f"스냅샷 {result.total}개 모두 이미 압축 형태입니다."
+        )
+    return _system_redirect(
+        notice=f"압축 완료: 변환 {result.converted}/{result.total}개 · "
+               f"공유 자원 {result.externalized}개 추출 · "
+               f"{filesize(result.before_bytes)} → {filesize(result.after_bytes)} "
+               f"({filesize(result.saved_bytes)} 절약)"
+    )
 
 
 @router.post("/restore")

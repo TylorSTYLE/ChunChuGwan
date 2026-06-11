@@ -6,7 +6,8 @@
 
 - 콘텐츠 해시 기반 중복 제거 — 본문이 그대로면 새 스냅샷 대신 "확인했음" 기록만 남음
 - 타임스탬프·상대시각·광고 줄 등 노이즈는 정규화 단계에서 제거 후 비교
-- 이미지/CSS/폰트를 base64로 인라인한 단일 page.html (오프라인 열람 가능)
+- 이미지/CSS/폰트를 보존하는 단일 page.html — 큰 자원은 스냅샷 간 공유
+  저장소(CAS)로 중복 제거, HTML 은 gzip, 스크린샷은 WebP 로 저장 공간 절약
 - 읽기 전용 대시보드 (목록/타임라인/스냅샷 뷰어/diff 뷰어/로그 + 재아카이빙·삭제 버튼)
 - 아카이브 실행 로그 — 모든 실행(성공/실패)을 단계별 소요시간과 함께 DB에 기록
 - 사용자 인증 — 이메일/패스워드(+선택 TOTP 2FA), Authentik OIDC SSO 지원
@@ -112,16 +113,29 @@ archive/
 ├── index.db                # SQLite 인덱스 (pages / snapshots / checks)
 ├── rules.json              # (선택) 도메인별 정규화 룰
 ├── cache/                  # 파생 산출물 (픽셀 diff 하이라이트 등, 재생성 가능)
+├── resources/              # 스냅샷 간 공유 자원 CAS — 이미지·폰트·CSS,
+│                           #   sha256 콘텐츠 주소라 같은 자원은 한 번만 저장
 └── sites/{domain}/{slug}-{url_hash8}/{timestamp}/
-    ├── page.html           # 자원 인라인된 단일 HTML
-    ├── raw.html            # 렌더링 후 DOM 소스
+    ├── page.html.gz        # 단일 HTML (gzip). 큰 자원은 /resource/ 참조,
+    │                       #   작은 자원(<4KB)은 data URI 인라인 유지
+    ├── raw.html.gz         # 렌더링 후 DOM 소스 (gzip)
     ├── content.md          # 추출+정규화 텍스트 (해시/diff 기준)
-    ├── screenshot.png      # 전체 페이지
+    ├── screenshot.webp     # 전체 페이지 (WebP 변환 실패 시 screenshot.png 유지)
     └── meta.json           # url, final_url, 시각, 해시, http 정보
 ```
 
 스냅샷 디렉토리는 불변이다. 변경 = 새 스냅샷. 아카이브 위치는 환경변수
 `WCCG_ROOT`로 변경할 수 있다 (기본 `./archive`).
+
+압축 저장 형태 도입 이전에 만든 스냅샷(page.html / raw.html / screenshot.png)도
+그대로 읽힌다. 기존 스냅샷을 압축 형태로 변환해 저장 공간을 줄이려면:
+
+```bash
+uv run wccg compact          # 1회성 마이그레이션 (내용 보존 변환, --yes 로 확인 생략)
+```
+
+대시보드 **시스템** 메뉴(`/system`)의 "저장 공간 압축" 버튼으로도 같은 변환을
+실행할 수 있다 (인증이 켜진 환경에서는 관리자 전용).
 
 ## 도메인별 정규화 룰 (선택)
 

@@ -13,6 +13,7 @@ def archive_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
 
     url = "https://example.com/post"
     domain, slug = "example.com", storage.url_to_slug(url)
@@ -113,3 +114,44 @@ def test_serve_rejects_external_bind_without_auth(monkeypatch):
     result = CliRunner().invoke(cli.main, ["serve", "--host", "0.0.0.0"])
     assert result.exit_code != 0
     assert "인증이 필수" in result.output
+
+
+# ---- compact (저장 공간 압축) ----
+
+
+def test_compact_converts_existing_snapshots(archive_env, monkeypatch):
+    import base64
+
+    monkeypatch.setattr(config, "RESOURCE_MIN_BYTES", 16)
+    domain, slug = "example.com", storage.url_to_slug(archive_env)
+    base = storage.page_dir(domain, slug)
+    snap_dir = base / "2026-06-01T00-00-00"
+    data = b"R" * 64
+    (snap_dir / "page.html").write_text(
+        f'<img src="data:image/png;base64,{base64.b64encode(data).decode()}">',
+        encoding="utf-8",
+    )
+    (snap_dir / "raw.html").write_text("<html>원본</html>", encoding="utf-8")
+    for d in ("2026-06-01T00-00-00", "2026-06-02T00-00-00"):
+        (base / d / "meta.json").write_text("{}", encoding="utf-8")
+
+    result = CliRunner().invoke(cli.main, ["compact", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "변환 2/2개" in result.output
+    assert "공유 자원 1개 추출" in result.output
+
+    assert (snap_dir / "page.html.gz").is_file()
+    assert not (snap_dir / "page.html").exists()
+    assert (snap_dir / "raw.html.gz").is_file()
+    assert (snap_dir / "screenshot.webp").is_file()
+    assert not (snap_dir / "screenshot.png").exists()
+    assert list(config.RESOURCES_DIR.glob("*/*"))  # 추출된 공유 자원
+
+    # 멱등 — 두 번째 실행은 변환할 것이 없다
+    again = CliRunner().invoke(cli.main, ["compact", "--yes"])
+    assert "모두 이미 압축 형태" in again.output
+
+    # 변환 후에도 diff 동작 (WebP 스크린샷)
+    d = CliRunner().invoke(cli.main, ["diff", archive_env])
+    assert d.exit_code == 0
+    assert "스크린샷 변경 픽셀 100.00%" in d.output
