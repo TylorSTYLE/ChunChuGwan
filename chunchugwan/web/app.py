@@ -694,9 +694,9 @@ def _require_archiver(request: Request) -> None:
 
 
 def _require_deleter(request: Request) -> None:
-    """삭제 권한 가드 — 되돌릴 수 없는 작업이라 관리자 전용."""
+    """삭제 권한 가드 (admin/archiver). 보기 전용·차단 계정은 403."""
     if not permissions.can_delete(request.state.user):
-        raise HTTPException(403, "삭제 권한이 없습니다 (관리자 전용)")
+        raise HTTPException(403, "삭제 권한이 없습니다")
 
 
 @app.post("/archive")
@@ -734,7 +734,7 @@ _BUSY_MSG = "아카이빙이 진행 중인 페이지입니다 — 완료 후 다
 
 @app.post("/page/{page_id}/delete")
 def page_delete(request: Request, page_id: int):
-    """페이지 전체 삭제 (모든 스냅샷·확인 기록·스케줄). 관리자 전용."""
+    """페이지 전체 삭제 (모든 스냅샷·확인 기록·스케줄). admin/archiver 전용."""
     _require_deleter(request)
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
@@ -754,7 +754,7 @@ def page_delete(request: Request, page_id: int):
 
 @app.post("/snapshot/{snapshot_id}/delete")
 def snapshot_delete(request: Request, snapshot_id: int):
-    """단일 스냅샷 삭제. 관리자 전용.
+    """단일 스냅샷 삭제. admin/archiver 전용.
 
     다음 스냅샷의 changed 재계산(신/구 비교 보정)은 deletion → db 계층이 한다.
     """

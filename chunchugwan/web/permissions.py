@@ -28,5 +28,5 @@ def can_archive(user: sqlite3.Row | None) -> bool:
 
 
 def can_delete(user: sqlite3.Row | None) -> bool:
-    """아카이브 데이터(페이지/스냅샷) 삭제 가능 여부 — 되돌릴 수 없으므로 관리자 전용."""
-    return not config.AUTH_ENABLED or is_admin(user)
+    """아카이브 데이터(페이지/스냅샷) 삭제 가능 여부 — 아카이빙 권한(admin/archiver)과 동일."""
+    return can_archive(user)

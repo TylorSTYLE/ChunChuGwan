@@ -214,7 +214,7 @@ def test_web_delete_buttons_visible_when_allowed(client, archive):
     )
 
 
-# ---- 권한 (인증 on — 삭제는 관리자 전용) ----
+# ---- 권한 (인증 on — 삭제는 admin/archiver 전용) ----
 
 
 @pytest.fixture
@@ -223,6 +223,9 @@ def role_client(archive):
         db.create_first_admin(conn, "boss@test.co", auth.hash_password("bosspass1234"))
         db.create_user(
             conn, "archiver@test.co", auth.hash_password("password1234"), role="archiver"
+        )
+        db.create_user(
+            conn, "viewer@test.co", auth.hash_password("password1234"), role="viewer"
         )
     web_app._active_jobs.clear()
     yield TestClient(web_app.app)
@@ -235,13 +238,27 @@ def _login(client, email: str, password: str):
     )
 
 
-def test_archiver_cannot_delete(role_client, archive):
-    _login(role_client, "archiver@test.co", "password1234")
+def test_viewer_cannot_delete(role_client, archive):
+    _login(role_client, "viewer@test.co", "password1234")
     assert role_client.post(f"/page/{archive['page_id']}/delete").status_code == 403
     snaps = _snaps(archive["page_id"])
     assert role_client.post(f"/snapshot/{snaps[0]['id']}/delete").status_code == 403
     # 버튼도 노출되지 않는다
     assert "/delete" not in role_client.get("/archives").text
+
+
+def test_archiver_can_delete(role_client, archive):
+    _login(role_client, "archiver@test.co", "password1234")
+    # 버튼이 노출된다
+    assert f'action="/page/{archive["page_id"]}/delete"' in role_client.get("/archives").text
+    snaps = _snaps(archive["page_id"])
+    res = role_client.post(f"/snapshot/{snaps[0]['id']}/delete", follow_redirects=False)
+    assert res.status_code == 303
+    assert len(_snaps(archive["page_id"])) == 2
+    res = role_client.post(f"/page/{archive['page_id']}/delete", follow_redirects=False)
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.get_page_by_id(conn, archive["page_id"]) is None
 
 
 def test_admin_can_delete(role_client, archive):
