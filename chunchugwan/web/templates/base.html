@@ -93,6 +93,13 @@ form.inline { display: inline; }
           padding: 6px 12px; margin-bottom: 12px; font-size: 13px; }
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
            flex-wrap: wrap; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+             gap: 10px; margin-bottom: 8px; }
+.stat-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; }
+.stat-card .label { font-size: 11px; color: var(--muted); font-weight: 600;
+                    text-transform: uppercase; letter-spacing: .04em; }
+.stat-card .value { font-size: 22px; font-weight: 600; margin-top: 2px;
+                    font-variant-numeric: tabular-nums; }
 .toolbar .spacer { flex: 1; }
 header .spacer { flex: 1; }
 .auth-card { max-width: 360px; margin: 48px auto; border: 1px solid var(--border);

@@ -1,90 +1,180 @@
 {% extends "base.html" %}
 {% block title %}시스템 — 춘추관{% endblock %}
+{% block head %}
+<style>
+.storage-card { border: 1px solid var(--border); border-radius: 6px;
+                padding: 12px 16px; max-width: 680px; }
+.storage-bar { display: flex; height: 14px; border-radius: 4px; overflow: hidden;
+               background: var(--bg-soft); margin-bottom: 10px; }
+.storage-bar .seg-db        { background: var(--link);  opacity: .6; }
+.storage-bar .seg-sites     { background: var(--green); opacity: .6; }
+.storage-bar .seg-resources { background: var(--amber); opacity: .6; }
+.storage-legend { display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px; }
+.storage-legend .swatch { display: inline-block; width: 9px; height: 9px;
+                          border-radius: 2px; margin-right: 5px; opacity: .6; }
+.storage-legend .swatch.db        { background: var(--link); }
+.storage-legend .swatch.sites     { background: var(--green); }
+.storage-legend .swatch.resources { background: var(--amber); }
+.storage-root { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+                font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.sys-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 12px; }
+.sys-card { border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px;
+            display: flex; flex-direction: column; gap: 10px; }
+.sys-card h4 { margin: 0; font-size: 13px; display: flex; gap: 8px;
+               align-items: center; }
+.sys-card p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.6;
+              flex: 1; }
+.sys-card .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sys-card .actions form { display: contents; }
+.sys-card input[type=file] { font: inherit; font-size: 12px; color: var(--muted);
+                             max-width: 100%; }
+.sys-card input[type=file]::file-selector-button {
+  font: inherit; font-size: 12px; padding: 3px 10px; margin-right: 8px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface); color: var(--fg); cursor: pointer; }
+.sys-card input[type=file]::file-selector-button:hover { background: var(--bg-soft); }
+.sys-card label.mode { font-size: 12px; color: var(--muted); display: block; }
+.sys-card label.mode b { color: var(--fg); font-weight: 600; }
+.sys-card.danger-card { border-color: var(--red); }
+.sys-card.danger-card h4 { color: var(--red); }
+h3.danger-heading { color: var(--red); }
+</style>
+{% endblock %}
 {% block content %}
 <h2>시스템</h2>
 {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
 <h3>현황</h3>
-<table style="max-width:560px">
-  <tr><th>아카이브 루트</th><td class="mono">{{ archive_root }}</td></tr>
-  <tr><th>페이지 / 스냅샷 / 확인 기록</th>
-      <td>{{ counts.pages }} / {{ counts.snapshots }} / {{ counts.checks }}</td></tr>
-  <tr><th>사용자</th><td>{{ counts.users }}</td></tr>
-  <tr><th>DB / 스냅샷 파일 / 공유 자원 용량</th>
-      <td>{{ db_bytes|filesize }} / {{ sites_bytes|filesize }} / {{ resources_bytes|filesize }}</td></tr>
-</table>
-
-<h3>저장 공간 압축</h3>
-<p class="muted" style="font-size:12px; max-width:640px">
-  구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP)로
-  변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번
-  실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축되므로
-  압축 도입 이전의 스냅샷이 있을 때 한 번 실행하면 됩니다.
-</p>
-{% if compactable %}
-<div class="toolbar">
-  <form class="inline" method="post" action="/system/compact"
-        onsubmit="return confirm('기존 스냅샷 파일을 압축 저장 형태로 변환합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')">
-    <button type="submit">저장 공간 압축 실행 — 대상 {{ compactable }}개</button>
-  </form>
-</div>
-{% else %}
-<div class="toolbar">
-  <button type="button" disabled>저장 공간 압축 실행</button>
-  <span class="muted" style="font-size:12px">압축할 스냅샷이 없습니다 — 모든 스냅샷이 이미 압축 형태입니다.</span>
-</div>
-{% endif %}
-
-<h3>전체 백업/복원</h3>
-<p class="muted" style="font-size:12px; max-width:640px">
-  DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은
-  tar.gz 입니다. 복원하면 현재 데이터가 모두 백업 시점 상태로 교체됩니다.
-</p>
-<div class="toolbar">
-  <form class="inline" method="post" action="/system/backup">
-    <button type="submit">전체 백업 다운로드</button>
-  </form>
-</div>
-<fieldset class="danger-zone" style="max-width:640px">
-  <legend>전체 복원</legend>
-  <p class="muted" style="font-size:12px; margin-top:0">
-    현재 데이터(인증 포함)를 모두 지우고 백업 시점으로 되돌립니다. 되돌릴 수
-    없습니다. 세션도 백업 시점으로 돌아가므로 복원 후 다시 로그인해야 할 수
-    있습니다.
-  </p>
-  <form method="post" action="/system/restore" enctype="multipart/form-data"
-        onsubmit="return confirm('정말 복원할까요? 현재 데이터가 모두 백업 시점으로 교체됩니다.')">
-    <input type="file" name="file" accept=".tar.gz,.tgz,application/gzip" required>
-    <button type="submit" class="danger">복원</button>
-  </form>
-</fieldset>
-
-<h3>아카이브 데이터 내보내기/가져오기</h3>
-<p class="muted" style="font-size:12px; max-width:640px">
-  페이지·스냅샷·확인 기록과 스냅샷 파일만 다룹니다 (인증 데이터·실행 로그 제외) —
-  다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.
-</p>
-<div class="toolbar">
-  <form class="inline" method="post" action="/system/export">
-    <button type="submit">내보내기 다운로드</button>
-  </form>
-</div>
-<form method="post" action="/system/import" enctype="multipart/form-data"
-      style="max-width:640px; border:1px solid var(--border); border-radius:6px; padding:12px 14px"
-      onsubmit="return this.mode.value !== 'overwrite'
-                || confirm('overwrite 모드: 기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. 계속할까요?')">
-  <div class="toolbar" style="margin-bottom:8px">
-    <input type="file" name="file" accept=".tar.gz,.tgz,application/gzip" required>
-    <button type="submit">가져오기</button>
+<div class="stat-grid" style="max-width:980px">
+  <div class="stat-card">
+    <div class="label">페이지</div>
+    <div class="value">{{ counts.pages }}</div>
   </div>
-  <label style="font-size:13px; margin-right:14px">
-    <input type="radio" name="mode" value="merge" checked>
-    merge — 기존 유지, 같은 스냅샷은 스킵 (여러 번 실행해도 안전)
-  </label>
-  <label style="font-size:13px; display:block; margin-top:4px">
-    <input type="radio" name="mode" value="overwrite">
-    overwrite — 기존 아카이브 데이터를 지우고 가져오기 (인증 데이터는 유지)
-  </label>
-</form>
+  <div class="stat-card">
+    <div class="label">스냅샷</div>
+    <div class="value">{{ counts.snapshots }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">확인 기록</div>
+    <div class="value">{{ counts.checks }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">사용자</div>
+    <div class="value">{{ counts.users }}</div>
+  </div>
+</div>
+
+<h3>저장 공간</h3>
+{% set total_bytes = db_bytes + sites_bytes + resources_bytes %}
+<div class="storage-card">
+  {% if total_bytes %}
+  <div class="storage-bar">
+    <div class="seg-db" style="width: {{ '%.2f' % (100 * db_bytes / total_bytes) }}%"></div>
+    <div class="seg-sites" style="width: {{ '%.2f' % (100 * sites_bytes / total_bytes) }}%"></div>
+    <div class="seg-resources" style="width: {{ '%.2f' % (100 * resources_bytes / total_bytes) }}%"></div>
+  </div>
+  {% endif %}
+  <div class="storage-legend">
+    <span><span class="swatch db"></span>DB <span class="mono">{{ db_bytes|filesize }}</span></span>
+    <span><span class="swatch sites"></span>스냅샷 파일 <span class="mono">{{ sites_bytes|filesize }}</span></span>
+    <span><span class="swatch resources"></span>공유 자원 <span class="mono">{{ resources_bytes|filesize }}</span></span>
+    <span class="muted">합계 <span class="mono">{{ total_bytes|filesize }}</span></span>
+  </div>
+  <div class="storage-root">아카이브 루트 <span class="mono">{{ archive_root }}</span></div>
+</div>
+
+<h3>유지 관리</h3>
+<div class="sys-grid">
+  <div class="sys-card">
+    <h4>저장 공간 압축
+      {% if compactable %}<span class="badge changed">대상 {{ compactable }}개</span>
+      {% else %}<span class="badge same">대상 없음</span>{% endif %}
+    </h4>
+    <p>
+      구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP)로
+      변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번
+      실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축됩니다.
+    </p>
+    <div class="actions">
+      {% if compactable %}
+      <form method="post" action="/system/compact"
+            onsubmit="return confirm('기존 스냅샷 파일을 압축 저장 형태로 변환합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')">
+        <button type="submit">압축 실행</button>
+      </form>
+      {% else %}
+      <button type="button" disabled>압축 실행</button>
+      <span class="muted" style="font-size:12px">압축할 스냅샷이 없습니다.</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="sys-card">
+    <h4>전체 백업</h4>
+    <p>
+      DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로
+      담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.
+    </p>
+    <div class="actions">
+      <form method="post" action="/system/backup">
+        <button type="submit">전체 백업 다운로드</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="sys-card">
+    <h4>아카이브 내보내기</h4>
+    <p>
+      페이지·스냅샷·확인 기록과 스냅샷 파일만 담습니다 (인증 데이터·실행 로그
+      제외). 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.
+    </p>
+    <div class="actions">
+      <form method="post" action="/system/export">
+        <button type="submit">내보내기 다운로드</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="sys-card">
+    <h4>아카이브 가져오기</h4>
+    <form method="post" action="/system/import" enctype="multipart/form-data"
+          style="display:flex; flex-direction:column; gap:10px; flex:1"
+          onsubmit="return this.mode.value !== 'overwrite'
+                    || confirm('overwrite 모드: 기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. 계속할까요?')">
+      <div style="flex:1">
+        <label class="mode">
+          <input type="radio" name="mode" value="merge" checked>
+          <b>merge</b> — 기존 유지, 같은 스냅샷은 스킵 (여러 번 실행해도 안전)
+        </label>
+        <label class="mode" style="margin-top:4px">
+          <input type="radio" name="mode" value="overwrite">
+          <b>overwrite</b> — 기존 아카이브 데이터를 지우고 가져오기 (인증 데이터는 유지)
+        </label>
+      </div>
+      <div class="actions">
+        <input type="file" name="file" accept=".tar.gz,.tgz,application/gzip" required>
+        <button type="submit">가져오기</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<h3 class="danger-heading">위험 구역</h3>
+<div class="sys-grid" style="max-width:640px">
+  <div class="sys-card danger-card">
+    <h4>전체 복원</h4>
+    <p>
+      현재 데이터(인증 포함)를 모두 지우고 업로드한 전체 백업 시점으로
+      되돌립니다. 되돌릴 수 없습니다. 세션도 백업 시점으로 돌아가므로 복원 후
+      다시 로그인해야 할 수 있습니다.
+    </p>
+    <form method="post" action="/system/restore" enctype="multipart/form-data"
+          class="actions"
+          onsubmit="return confirm('정말 복원할까요? 현재 데이터가 모두 백업 시점으로 교체됩니다.')">
+      <input type="file" name="file" accept=".tar.gz,.tgz,application/gzip" required>
+      <button type="submit" class="danger">복원</button>
+    </form>
+  </div>
+</div>
 {% endblock %}
