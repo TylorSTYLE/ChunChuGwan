@@ -17,19 +17,13 @@
 
 <div class="toolbar">
   <h2 style="margin:0">아카이브 목록</h2>
-  {% if can_archive %}
-  <form method="post" action="/archive" style="display:flex; gap:6px; flex:1; max-width:520px">
-    <input type="text" name="url" placeholder="새 URL 아카이빙 (https:// 생략 가능)" required
-           autocomplete="off" style="flex:1">
-    <button type="submit">아카이빙</button>
-  </form>
-  {% endif %}
   <span class="spacer"></span>
   <input type="text" id="q" placeholder="URL 필터…" autocomplete="off">
 </div>
 
 {% if not pages and not pending_new %}
-<p class="muted">아카이브된 페이지가 없습니다. 위 입력란이나 <span class="mono">wccg add &lt;url&gt;</span> 로 시작하세요.</p>
+<p class="muted">아카이브된 페이지가 없습니다.
+  {% if can_archive %}<a href="/archive/new">새 아카이빙</a> 메뉴나 {% endif %}<span class="mono">wccg add &lt;url&gt;</span> 로 시작하세요.</p>
 {% else %}
 <table id="pages">
   <thead>

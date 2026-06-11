@@ -51,6 +51,9 @@ def test_index(client):
     res = client.get("/archives")
     assert res.status_code == 200
     assert "https://example.com/post" in res.text
+    # 새 아카이빙 폼은 목록에서 별도 메뉴(/archive/new)로 분리됐다
+    assert 'action="/archive"' not in res.text
+    assert 'href="/archive/new"' in res.text  # 헤더 메뉴
 
 
 def test_root_serves_dashboard(client):
@@ -176,8 +179,86 @@ def test_archive_invalid_url_rejected(client, monkeypatch):
     )
     res = client.post("/archive", data={"url": "ftp://example.com/x"}, follow_redirects=False)
     assert res.status_code == 303
-    assert res.headers["location"].startswith("/archives?error=")
+    # 에러는 새 아카이빙 폼으로 돌아가 입력값을 유지한 채 보여준다
+    assert res.headers["location"].startswith("/archive/new?error=")
+    assert "url=ftp" in res.headers["location"]
     assert calls == []
+
+
+def test_archive_new_form_page(client):
+    """새 아카이빙 화면 — URL 입력과 자동 재아카이빙 주기 선택지를 제공한다."""
+    res = client.get("/archive/new")
+    assert res.status_code == 200
+    assert 'action="/archive"' in res.text
+    assert 'name="interval"' in res.text
+    assert "사용 안 함" in res.text
+    for label in ("1시간", "12시간", "1일", "1주일"):
+        assert f"{label}마다" in res.text
+
+
+def test_archive_with_interval_sets_schedule(client, monkeypatch):
+    """주기를 함께 등록하면 아카이빙 완료 후 스케줄이 생성된다."""
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": None,
+    )
+    res = client.post(
+        "/archive",
+        data={"url": "https://example.com/post", "interval": "3600"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith("/archives?queued=")
+    with db.connect() as conn:
+        sched = db.get_schedule(conn, 1)
+    assert sched is not None and sched["interval_seconds"] == 3600
+
+
+def test_archive_without_interval_no_schedule(client, monkeypatch):
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": None,
+    )
+    client.post(
+        "/archive", data={"url": "https://example.com/post"}, follow_redirects=False
+    )
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1) is None
+
+
+def test_archive_rejects_out_of_range_interval(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": calls.append(url),
+    )
+    res = client.post(
+        "/archive",
+        data={"url": "https://example.com/post", "interval": "60"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith("/archive/new?error=")
+    assert calls == []
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1) is None
+
+
+def test_archive_interval_skipped_when_page_missing(client, monkeypatch):
+    """신규 URL 아카이빙이 실패하면 pages 행이 없어 주기 등록도 건너뛴다."""
+    def boom(url, force=False, source="cli"):
+        raise RuntimeError("캡처 실패")
+
+    monkeypatch.setattr(web_app.pipeline, "archive_url", boom)
+    res = client.post(
+        "/archive",
+        data={"url": "https://example.com/brand-new", "interval": "3600"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303  # 백그라운드 실패가 응답을 깨지 않는다
+    assert client.get("/archive/active").json() == {"active": []}
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM schedules").fetchone()[0] == 0
 
 
 def test_index_shows_queued_banner(client):
