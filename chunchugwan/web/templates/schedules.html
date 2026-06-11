@@ -9,7 +9,7 @@
 </style>
 <div class="toolbar">
   <h2 style="margin:0">자동 재아카이빙</h2>
-  <span class="muted">주기 최소 1시간 ~ 최대 1주일</span>
+  <span class="muted">주기 최소 1시간 ~ 최대 1개월</span>
   <span class="spacer"></span>
   <input type="text" id="q" placeholder="URL 필터…" autocomplete="off">
 </div>
@@ -43,6 +43,14 @@
             {% endfor %}
           </select>
           <button type="submit">주기 변경</button>
+        </form>
+        <form class="inline" method="post" action="/page/{{ s['page_id'] }}/schedule/next-run"
+              style="display:inline-flex; gap:6px">
+          <input type="hidden" name="next" value="/schedules">
+          <input type="hidden" name="tz_offset" class="tz-offset" value="0">
+          <input type="datetime-local" name="next_run" required class="next-run-input"
+                 data-utc="{{ s['next_run_at'] }}" title="브라우저 로컬 시간 기준">
+          <button type="submit">다음 실행 변경</button>
         </form>
         <form class="inline" method="post" action="/page/{{ s['page_id'] }}/schedule/delete"
               onsubmit="return confirm('{{ s['url'] }}\n\n자동 재아카이빙을 해제합니다. 저장된 스냅샷은 그대로 남습니다.')">

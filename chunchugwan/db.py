@@ -43,7 +43,7 @@ CREATE INDEX IF NOT EXISTS idx_checks_page ON checks(page_id, checked_at);
 CREATE TABLE IF NOT EXISTS schedules (
     id               INTEGER PRIMARY KEY,
     page_id          INTEGER NOT NULL UNIQUE REFERENCES pages(id),
-    interval_seconds INTEGER NOT NULL,   -- 3600(1시간) ~ 604800(1주일), scheduler 가 검증
+    interval_seconds INTEGER NOT NULL,   -- 3600(1시간) ~ 2592000(1개월·30일), scheduler 가 검증
     next_run_at      TEXT NOT NULL,      -- ISO 8601 UTC
     last_run_at      TEXT,
     created_at       TEXT NOT NULL
@@ -551,6 +551,17 @@ def upsert_schedule(
         """,
         (page_id, interval_seconds, next_run_at, _utcnow()),
     )
+
+
+def set_schedule_next_run(
+    conn: sqlite3.Connection, page_id: int, next_run_at: str
+) -> bool:
+    """페이지 스케줄의 다음 실행 시각만 변경. 등록이 없었으면 False."""
+    cur = conn.execute(
+        "UPDATE schedules SET next_run_at = ? WHERE page_id = ?",
+        (next_run_at, page_id),
+    )
+    return cur.rowcount == 1
 
 
 def delete_schedule(conn: sqlite3.Connection, page_id: int) -> bool:

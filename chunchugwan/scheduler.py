@@ -1,6 +1,6 @@
 """주기적 재아카이빙 스케줄러.
 
-페이지마다 반복 주기(최소 1시간 ~ 최대 1주일)를 등록하면 기한이 된
+페이지마다 반복 주기(최소 1시간 ~ 최대 1개월)를 등록하면 기한이 된
 페이지를 자동으로 다시 아카이빙한다. 실행 경로는 두 가지:
 
 - 대시보드(serve) 프로세스의 백그라운드 폴링 스레드 (`run_loop`)
@@ -26,32 +26,34 @@ from . import db, pipeline, storage
 logger = logging.getLogger(__name__)
 
 MIN_INTERVAL_SECONDS = 3600          # 1시간
-MAX_INTERVAL_SECONDS = 7 * 86400     # 1주일
+MAX_INTERVAL_SECONDS = 30 * 86400    # 1개월 (30일)
 
-_INTERVAL_RE = re.compile(r"^(\d+)\s*([mhdw])$", re.IGNORECASE)
-_UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400, "w": 7 * 86400}
+_INTERVAL_RE = re.compile(r"^(\d+)\s*(mo|[mhdw])$", re.IGNORECASE)
+_UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400, "w": 7 * 86400, "mo": 30 * 86400}
 
 
 def validate_interval(seconds: int) -> None:
-    """반복 주기 범위 검증 — 1시간 이상 1주일 이하. 위반 시 ValueError."""
+    """반복 주기 범위 검증 — 1시간 이상 1개월 이하. 위반 시 ValueError."""
     if not (MIN_INTERVAL_SECONDS <= seconds <= MAX_INTERVAL_SECONDS):
-        raise ValueError("반복 주기는 1시간(1h) 이상 1주일(1w) 이하여야 합니다")
+        raise ValueError("반복 주기는 1시간(1h) 이상 1개월(1mo) 이하여야 합니다")
 
 
 def parse_interval(text: str) -> int:
-    """'90m'/'6h'/'3d'/'1w' 형식을 초로 변환. 형식·범위 위반 시 ValueError."""
+    """'90m'/'6h'/'3d'/'1w'/'1mo' 형식을 초로 변환. 형식·범위 위반 시 ValueError."""
     m = _INTERVAL_RE.match(text.strip())
     if m is None:
-        raise ValueError(f"잘못된 주기 형식: {text!r} (예: 1h, 90m, 12h, 3d, 1w)")
+        raise ValueError(f"잘못된 주기 형식: {text!r} (예: 1h, 90m, 12h, 3d, 1w, 1mo)")
     seconds = int(m.group(1)) * _UNIT_SECONDS[m.group(2).lower()]
     validate_interval(seconds)
     return seconds
 
 
 def format_interval(seconds: int) -> str:
-    """초를 '1일 12시간' 식 표기로 (목록·대시보드 표시용)."""
+    """초를 '1일 12시간' 식 표기로 (목록·대시보드 표시용). 1개월은 30일 기준."""
     parts: list[str] = []
-    for unit, label in ((7 * 86400, "주"), (86400, "일"), (3600, "시간"), (60, "분")):
+    for unit, label in (
+        (30 * 86400, "개월"), (7 * 86400, "주"), (86400, "일"), (3600, "시간"), (60, "분")
+    ):
         n, seconds = divmod(seconds, unit)
         if n:
             parts.append(f"{n}{label}")
@@ -80,6 +82,24 @@ def set_schedule(url: str, interval_seconds: int) -> sqlite3.Row:
             raise ValueError(f"아카이브에 없는 URL: {norm} — 먼저 아카이빙(add)하세요")
         next_run = _iso(_utcnow() + timedelta(seconds=interval_seconds))
         db.upsert_schedule(conn, page["id"], interval_seconds, next_run)
+        return db.get_schedule(conn, page["id"])
+
+
+def set_next_run(url: str, next_run: datetime) -> sqlite3.Row:
+    """스케줄의 다음 실행 시각을 직접 변경하고 갱신된 row 반환.
+
+    등록된 스케줄이 없는 URL 이면 ValueError. naive datetime 은 UTC 로 간주.
+    과거 시각도 허용한다 — 다음 폴링 회차에서 즉시 실행된다.
+    """
+    norm = storage.normalize_url(url)
+    if next_run.tzinfo is None:
+        next_run = next_run.replace(tzinfo=timezone.utc)
+    with db.connect() as conn:
+        page = db.get_page(conn, norm)
+        if page is None or not db.set_schedule_next_run(
+            conn, page["id"], _iso(next_run.astimezone(timezone.utc))
+        ):
+            raise ValueError(f"등록된 스케줄이 없는 URL: {norm}")
         return db.get_schedule(conn, page["id"])
 
 

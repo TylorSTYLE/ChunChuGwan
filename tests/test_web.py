@@ -230,7 +230,7 @@ def test_archive_new_form_page(client):
     assert 'action="/archive"' in res.text
     assert 'name="interval"' in res.text
     assert "사용 안 함" in res.text
-    for label in ("1시간", "12시간", "1일", "1주일"):
+    for label in ("1시간", "12시간", "1일", "1주일", "1개월"):
         assert f"{label}마다" in res.text
 
 
@@ -450,11 +450,21 @@ def test_schedule_set_and_shown(client):
 def test_schedule_rejects_out_of_range_interval(client):
     assert client.post("/page/1/schedule", data={"interval": "60"}).status_code == 400
     assert (
-        client.post("/page/1/schedule", data={"interval": str(8 * 86400)}).status_code
+        client.post("/page/1/schedule", data={"interval": str(31 * 86400)}).status_code
         == 400
     )
     with db.connect() as conn:
         assert db.get_schedule(conn, 1) is None
+
+
+def test_schedule_accepts_one_month_interval(client):
+    res = client.post(
+        "/page/1/schedule", data={"interval": str(30 * 86400)}, follow_redirects=False
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1)["interval_seconds"] == 30 * 86400
+    assert "1개월" in client.get("/schedules").text
 
 
 def test_schedule_delete(client):
@@ -468,6 +478,71 @@ def test_schedule_delete(client):
 def test_schedule_unknown_page(client):
     assert client.post("/page/999/schedule", data={"interval": "3600"}).status_code == 404
     assert client.post("/page/999/schedule/delete").status_code == 404
+    assert (
+        client.post(
+            "/page/999/schedule/next-run", data={"next_run": "2099-01-01T00:00"}
+        ).status_code
+        == 404
+    )
+
+
+def test_schedule_next_run_update(client):
+    client.post("/page/1/schedule", data={"interval": "3600"})
+    res = client.post(
+        "/page/1/schedule/next-run",
+        data={"next_run": "2099-01-02T03:04", "tz_offset": "0"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"] == "/page/1"
+    with db.connect() as conn:
+        sched = db.get_schedule(conn, 1)
+    assert sched["next_run_at"] == "2099-01-02T03:04:00+00:00"
+    assert sched["interval_seconds"] == 3600  # 주기는 그대로
+
+
+def test_schedule_next_run_applies_tz_offset(client):
+    """tz_offset(분)으로 브라우저 로컬 시각을 UTC 로 환산한다 (KST = -540)."""
+    client.post("/page/1/schedule", data={"interval": "3600"})
+    client.post(
+        "/page/1/schedule/next-run",
+        data={"next_run": "2099-01-02T12:00", "tz_offset": "-540"},
+    )
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1)["next_run_at"] == "2099-01-02T03:00:00+00:00"
+
+
+def test_schedule_next_run_errors(client):
+    # 스케줄 미등록 → 400
+    assert (
+        client.post(
+            "/page/1/schedule/next-run", data={"next_run": "2099-01-01T00:00"}
+        ).status_code
+        == 400
+    )
+    client.post("/page/1/schedule", data={"interval": "3600"})
+    # 잘못된 시각 형식 → 400, 기존 값 유지
+    with db.connect() as conn:
+        before = db.get_schedule(conn, 1)["next_run_at"]
+    assert (
+        client.post(
+            "/page/1/schedule/next-run", data={"next_run": "not-a-date"}
+        ).status_code
+        == 400
+    )
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1)["next_run_at"] == before
+
+
+def test_schedule_next_run_redirects_back_to_schedules(client):
+    client.post("/page/1/schedule", data={"interval": "3600"})
+    res = client.post(
+        "/page/1/schedule/next-run",
+        data={"next_run": "2099-01-01T00:00", "next": "/schedules"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"] == "/schedules"
 
 
 def test_schedules_page_empty(client):
