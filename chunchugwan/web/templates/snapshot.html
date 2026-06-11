@@ -1,27 +1,27 @@
 {% extends "base.html" %}
-{% block title %}스냅샷 — {{ snap['page_url'] }}{% endblock %}
+{% block title %}{{ _("스냅샷", ctx="one") }} — {{ snap['page_url'] }}{% endblock %}
 {% block content %}
 <div class="toolbar">
   <h2 style="margin:0">{{ title or snap['page_url'] }}</h2>
   <span class="spacer"></span>
-  <a href="/logs?snapshot_id={{ snap['id'] }}">로그</a>
-  <a href="/page/{{ snap['page_id'] }}">타임라인으로</a>
+  <a href="/logs?snapshot_id={{ snap['id'] }}">{{ _("로그") }}</a>
+  <a href="/page/{{ snap['page_id'] }}">{{ _("타임라인으로") }}</a>
 </div>
 
 <table style="max-width:760px; margin-bottom:16px">
   <tbody>
     <tr><th>URL</th><td class="mono">{{ snap['page_url'] }}</td></tr>
-    <tr><th>최종 URL</th><td class="mono">{{ snap['final_url'] }}</td></tr>
-    <tr><th>캡처 시각</th><td class="mono">{{ snap['taken_at'] }}</td></tr>
-    <tr><th>해시</th><td class="mono">{{ snap['content_hash'] }}</td></tr>
+    <tr><th>{{ _("최종 URL") }}</th><td class="mono">{{ snap['final_url'] }}</td></tr>
+    <tr><th>{{ _("캡처 시각") }}</th><td class="mono">{{ snap['taken_at'] }}</td></tr>
+    <tr><th>{{ _("해시") }}</th><td class="mono">{{ snap['content_hash'] }}</td></tr>
     <tr><th>HTTP</th><td class="mono">{{ snap['http_status'] or '-' }}</td></tr>
   </tbody>
 </table>
 
 <div class="toolbar">
-  <button type="button" class="tab active" data-target="view-render">렌더링</button>
-  <button type="button" class="tab" data-target="view-shot">스크린샷</button>
-  <button type="button" class="tab" data-target="view-text">텍스트</button>
+  <button type="button" class="tab active" data-target="view-render">{{ _("렌더링") }}</button>
+  <button type="button" class="tab" data-target="view-shot">{{ _("스크린샷") }}</button>
+  <button type="button" class="tab" data-target="view-text">{{ _("텍스트") }}</button>
 </div>
 
 <!-- 보안: sandbox 속성은 빈 값 유지. allow-scripts 절대 추가 금지 -->
@@ -31,7 +31,7 @@
           style="width:100%; height:80vh; border:1px solid var(--border); background:#fff;"></iframe>
 </div>
 <div id="view-shot" style="display:none">
-  <img src="{{ screenshot_url }}" alt="전체 페이지 스크린샷"
+  <img src="{{ screenshot_url }}" alt="{{ _('전체 페이지 스크린샷') }}"
        style="max-width:100%; border:1px solid var(--border);">
 </div>
 <div id="view-text" style="display:none">

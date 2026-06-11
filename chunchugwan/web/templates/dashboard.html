@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}현황 — 춘추관{% endblock %}
+{% block title %}{{ _("현황") }} — {{ _("춘추관") }}{% endblock %}
 {% block head %}
 <style>
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -20,41 +20,41 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
 {% block content %}
 {% set badge_class = {'new': 'new', 'changed': 'changed', 'unchanged': 'same',
                       'forced_same': 'same', 'error': 'error'} %}
-{% set status_label = {'new': '신규', 'changed': '변경', 'unchanged': '동일',
-                       'forced_same': '동일(강제)', 'error': '실패'} %}
+{% set status_label = {'new': _('신규'), 'changed': _('변경'), 'unchanged': _('동일'),
+                       'forced_same': _('동일(강제)'), 'error': _('실패')} %}
 
-<h2>현황</h2>
+<h2>{{ _("현황") }}</h2>
 
 <div class="stat-grid">
   <div class="stat-card">
-    <div class="label">아카이브 페이지</div>
+    <div class="label">{{ _("아카이브 페이지") }}</div>
     <div class="value" id="stat-pages">{{ total_pages }}</div>
   </div>
   <div class="stat-card">
-    <div class="label">전체 스냅샷</div>
+    <div class="label">{{ _("전체 스냅샷") }}</div>
     <div class="value" id="stat-snapshots">{{ total_snapshots }}</div>
   </div>
   <div class="stat-card">
-    <div class="label">이번 주 스냅샷</div>
+    <div class="label">{{ _("이번 주 스냅샷") }}</div>
     <div class="value" id="stat-week">{{ week_count }}</div>
   </div>
   <div class="stat-card">
-    <div class="label">최근 24시간</div>
+    <div class="label">{{ _("최근 24시간") }}</div>
     <div class="value" id="stat-recent">{{ recent_count }}</div>
   </div>
   <div class="stat-card">
-    <div class="label">총 용량</div>
+    <div class="label">{{ _("총 용량") }}</div>
     <div class="value" id="stat-bytes">{{ total_bytes|filesize }}</div>
   </div>
 </div>
 
-<h3>용량 트렌드</h3>
+<h3>{{ _("용량 트렌드") }}</h3>
 <table class="trend-table">
-  <thead><tr><th>기간</th><th>스냅샷</th><th>용량</th><th style="width:45%"></th></tr></thead>
+  <thead><tr><th>{{ _("기간") }}</th><th>{{ _("스냅샷") }}</th><th>{{ _("용량") }}</th><th style="width:45%"></th></tr></thead>
   <tbody>
   {% for t in trend %}
     <tr>
-      <td>{{ t['label'] }}</td>
+      <td>{{ _(t['label']) }}</td>
       <td class="num">{{ t['count'] }}</td>
       <td class="num mono">{{ t['bytes']|filesize }}</td>
       <td><div class="trend-bar" style="width: {{ '%.1f' % t['pct'] }}%"></div></td>
@@ -63,36 +63,36 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
   </tbody>
 </table>
 
-<h3>최근 아카이브</h3>
+<h3>{{ _("최근 아카이브") }}</h3>
 {% if not recent_snaps %}
-<p class="muted">아직 스냅샷이 없습니다.</p>
+<p class="muted">{{ _("아직 스냅샷이 없습니다.") }}</p>
 {% else %}
 <table>
-  <thead><tr><th>시각</th><th>상태</th><th>URL</th><th>용량</th><th></th></tr></thead>
+  <thead><tr><th>{{ _("시각") }}</th><th>{{ _("상태") }}</th><th>URL</th><th>{{ _("용량") }}</th><th></th></tr></thead>
   <tbody>
   {% for s in recent_snaps %}
     <tr>
       <td class="mono">{{ s['taken_at'] }}</td>
       <td>
-        {% if s['is_first'] %}<span class="badge new">신규</span>
-        {% elif s['changed'] %}<span class="badge changed">변경</span>
-        {% else %}<span class="badge same">동일</span>{% endif %}
+        {% if s['is_first'] %}<span class="badge new">{{ _("신규") }}</span>
+        {% elif s['changed'] %}<span class="badge changed">{{ _("변경") }}</span>
+        {% else %}<span class="badge same">{{ _("동일") }}</span>{% endif %}
       </td>
       <td class="url-cell"><a href="/page/{{ s['page_id'] }}" title="{{ s['page_url'] }}">{{ s['page_url'] }}</a></td>
       <td class="num mono">{{ sizes.get(s['id'])|filesize }}</td>
-      <td><a href="/snapshot/{{ s['id'] }}">보기</a></td>
+      <td><a href="/snapshot/{{ s['id'] }}">{{ _("보기") }}</a></td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 {% endif %}
 
-<h3>최근 로그</h3>
+<h3>{{ _("최근 로그") }}</h3>
 {% if not recent_logs %}
-<p class="muted">로그가 없습니다. 아카이빙을 실행하면 결과가 여기에 기록됩니다.</p>
+<p class="muted">{{ _("로그가 없습니다. 아카이빙을 실행하면 결과가 여기에 기록됩니다.") }}</p>
 {% else %}
 <table>
-  <thead><tr><th>시각</th><th>상태</th><th>URL</th><th>소요</th><th>출처</th><th></th></tr></thead>
+  <thead><tr><th>{{ _("시각") }}</th><th>{{ _("상태") }}</th><th>URL</th><th>{{ _("소요") }}</th><th>{{ _("출처") }}</th><th></th></tr></thead>
   <tbody>
   {% for log in recent_logs %}
     <tr>
@@ -109,13 +109,13 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
       <td class="mono muted">{{ log['source'] }}</td>
       <td>
         {% if log['snapshot_id'] %}
-        <a href="/snapshot/{{ log['snapshot_id'] }}">보기</a>
+        <a href="/snapshot/{{ log['snapshot_id'] }}">{{ _("보기") }}</a>
         {% endif %}
       </td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
-<p class="more-link" style="margin-top:8px"><a href="/logs">전체 로그 →</a></p>
+<p class="more-link" style="margin-top:8px"><a href="/logs">{{ _("전체 로그 →") }}</a></p>
 {% endif %}
 {% endblock %}

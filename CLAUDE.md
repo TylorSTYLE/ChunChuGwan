@@ -136,6 +136,11 @@ archive/
   최초 관리자는 변경 불가)
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
+- 다국어(ko/en): `web/i18n.py` — 한국어 원문이 메시지 키(gettext msgid 방식),
+  언어별 "원문 → 번역" dict 로 확장. 로케일은 `wccg_lang` 쿠키(헤더의 언어
+  선택, `POST /lang`) → Accept-Language → ko. 템플릿은 `_("…")`, 라우트는
+  `i18n.t(request, "…")`. 새 UI 문자열 추가 시 en 카탈로그도 채울 것 —
+  템플릿 리터럴 키 누락은 `tests/test_i18n.py` 가 검사한다. CLI 는 한국어 유지.
 - diff 뷰: 텍스트 side-by-side + 스크린샷 비교(슬라이더 또는 토글)
 
 ## 구현 로드맵 (이 순서로 진행할 것)
@@ -179,5 +184,9 @@ archive/
       세션도 미들웨어가 차단. 관리자 전용 사용자 관리 화면(`/system/users`)
       에서 권한 조정 (차단 시 대상 세션 즉시 삭제). 권한 판정은
       `web/permissions.py` 헬퍼로 일원화 (라우트 가드·템플릿 노출 공용).
+- [x] **M8 웹 UI 다국어**: `web/i18n.py` — ko/en 카탈로그(한국어 원문 키),
+      쿠키(`wccg_lang`) + Accept-Language 로케일 결정, 헤더 언어 선택
+      (`POST /lang`), 주기 표기 로케일화(`i18n.format_interval`). 템플릿 전체
+      `_()` 적용 + 라우트 메시지 `i18n.t()` 번역. 향후 언어 추가 = dict 추가.
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.

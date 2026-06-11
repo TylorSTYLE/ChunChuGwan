@@ -1,27 +1,27 @@
 {% extends "base.html" %}
-{% block title %}2단계 인증 — 춘추관{% endblock %}
+{% block title %}{{ _("2단계 인증") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <div class="auth-card">
-  <h2>2단계 인증</h2>
+  <h2>{{ _("2단계 인증") }}</h2>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
   {% if has_passkey %}
   <div class="error" id="pk-error" hidden></div>
-  <p class="muted">등록된 패스키로 본인 확인을 완료하세요.</p>
-  <button type="button" id="pk-btn" style="width:100%;padding:6px">패스키로 인증</button>
+  <p class="muted">{{ _("등록된 패스키로 본인 확인을 완료하세요.") }}</p>
+  <button type="button" id="pk-btn" style="width:100%;padding:6px">{{ _("패스키로 인증") }}</button>
   {% endif %}
 
   {% if has_totp %}
   {% if has_passkey %}<div class="alt">{% endif %}
-  <p class="muted">인증 앱에 표시된 6자리 코드를 입력하세요.</p>
+  <p class="muted">{{ _("인증 앱에 표시된 6자리 코드를 입력하세요.") }}</p>
   <form method="post" action="/login/totp">
     <input type="hidden" name="next" value="{{ next }}">
-    <label>OTP 코드
+    <label>{{ _("OTP 코드") }}
       <input type="text" name="code" inputmode="numeric" pattern="[0-9]*"
              maxlength="6" autocomplete="one-time-code" required
              {% if not has_passkey %}autofocus{% endif %} class="mono">
     </label>
-    <button type="submit">확인</button>
+    <button type="submit">{{ _("확인") }}</button>
   </form>
   {% if has_passkey %}</div>{% endif %}
   {% endif %}
@@ -57,7 +57,7 @@ pkBtn.addEventListener("click", async () => {
     });
     location.assign(out.next);
   } catch (e) {
-    pkErr.textContent = e.message || "패스키 인증이 취소되었습니다.";
+    pkErr.textContent = e.message || {{ _("패스키 인증이 취소되었습니다.")|tojson }};
     pkErr.hidden = false;
     pkBtn.disabled = false;
   }

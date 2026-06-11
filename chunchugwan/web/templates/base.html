@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ko">
+<html lang="{{ locale }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}춘추관{% endblock %}</title>
+<title>{% block title %}{{ _("춘추관") }}{% endblock %}</title>
 <script>
 /* 테마 적용 — 저장값(light|dark) 없으면 시스템 설정. 첫 페인트 전에 실행해 깜빡임 방지 */
 (function () {
@@ -117,25 +117,35 @@ button.danger:hover { background: var(--red-hover); }
 </head>
 <body>
 <header>
-  <h1><a href="/">춘추관</a></h1>
-  <span class="muted" style="font-size:12px">개인 웹 아카이브</span>
-  <a href="/dashboard" style="font-size:12px">현황</a>
-  <a href="/archives" style="font-size:12px">목록</a>
+  <h1><a href="/">{{ _("춘추관") }}</a></h1>
+  <span class="muted" style="font-size:12px">{{ _("개인 웹 아카이브") }}</span>
+  <a href="/dashboard" style="font-size:12px">{{ _("현황") }}</a>
+  <a href="/archives" style="font-size:12px">{{ _("목록") }}</a>
   {% if can_archive %}
-  <a href="/archive/new" style="font-size:12px">새 아카이빙</a>
+  <a href="/archive/new" style="font-size:12px">{{ _("새 아카이빙") }}</a>
   {% endif %}
-  <a href="/schedules" style="font-size:12px">스케줄</a>
-  <a href="/logs" style="font-size:12px">로그</a>
+  <a href="/schedules" style="font-size:12px">{{ _("스케줄") }}</a>
+  <a href="/logs" style="font-size:12px">{{ _("로그") }}</a>
   {% if system_allowed %}
-  <a href="/system/users" style="font-size:12px">사용자</a>
-  <a href="/system" style="font-size:12px">시스템</a>
+  <a href="/system/users" style="font-size:12px">{{ _("사용자") }}</a>
+  <a href="/system" style="font-size:12px">{{ _("시스템") }}</a>
   {% endif %}
   <span class="spacer"></span>
-  <button type="button" id="theme-toggle" title="테마 전환 (자동 → 라이트 → 다크)"></button>
+  <form class="inline" method="post" action="/lang">
+    <input type="hidden" name="next"
+           value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+    <select name="lang" onchange="this.form.submit()" title="{{ _('언어') }}"
+            aria-label="{{ _('언어') }}">
+      {% for code in locales %}
+      <option value="{{ code }}" {% if code == locale %}selected{% endif %}>{{ locale_names[code] }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  <button type="button" id="theme-toggle" title="{{ _('테마 전환 (자동 → 라이트 → 다크)') }}"></button>
   {% if user %}
   <span class="mono muted">{{ user['display_name'] or user['email'] }}</span>
-  <a href="/settings/account" style="font-size:12px">계정</a>
-  <form class="inline" method="post" action="/logout"><button>로그아웃</button></form>
+  <a href="/settings/account" style="font-size:12px">{{ _("계정") }}</a>
+  <form class="inline" method="post" action="/logout"><button>{{ _("로그아웃") }}</button></form>
   {% endif %}
 </header>
 <main>{% block content %}{% endblock %}</main>
@@ -143,7 +153,8 @@ button.danger:hover { background: var(--red-hover); }
 /* 테마 토글 — 자동(시스템) → 라이트 → 다크 순환, localStorage 에 기억 */
 (function () {
   var btn = document.getElementById("theme-toggle");
-  var LABELS = { auto: "테마: 자동", light: "테마: 라이트", dark: "테마: 다크" };
+  var LABELS = { auto: {{ _("테마: 자동")|tojson }}, light: {{ _("테마: 라이트")|tojson }},
+                 dark: {{ _("테마: 다크")|tojson }} };
   var NEXT = { auto: "light", light: "dark", dark: "auto" };
   function mode() { return wccgTheme.stored() || "auto"; }
   function render() { btn.textContent = LABELS[mode()]; }

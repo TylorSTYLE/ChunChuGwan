@@ -1,90 +1,83 @@
 {% extends "base.html" %}
-{% block title %}시스템 — 춘추관{% endblock %}
+{% block title %}{{ _("시스템") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
-<h2>시스템</h2>
+<h2>{{ _("시스템") }}</h2>
 {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
-<h3>현황</h3>
+<h3>{{ _("현황") }}</h3>
 <table style="max-width:560px">
-  <tr><th>아카이브 루트</th><td class="mono">{{ archive_root }}</td></tr>
-  <tr><th>페이지 / 스냅샷 / 확인 기록</th>
+  <tr><th>{{ _("아카이브 루트") }}</th><td class="mono">{{ archive_root }}</td></tr>
+  <tr><th>{{ _("페이지 / 스냅샷 / 확인 기록") }}</th>
       <td>{{ counts.pages }} / {{ counts.snapshots }} / {{ counts.checks }}</td></tr>
-  <tr><th>사용자</th><td>{{ counts.users }}</td></tr>
-  <tr><th>DB / 스냅샷 파일 / 공유 자원 용량</th>
+  <tr><th>{{ _("사용자") }}</th><td>{{ counts.users }}</td></tr>
+  <tr><th>{{ _("DB / 스냅샷 파일 / 공유 자원 용량") }}</th>
       <td>{{ db_bytes|filesize }} / {{ sites_bytes|filesize }} / {{ resources_bytes|filesize }}</td></tr>
 </table>
 
-<h3>저장 공간 압축</h3>
+<h3>{{ _("저장 공간 압축") }}</h3>
 <p class="muted" style="font-size:12px; max-width:640px">
-  구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP)로
-  변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번
-  실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축되므로
-  압축 도입 이전의 스냅샷이 있을 때 한 번 실행하면 됩니다.
+  {{ _("구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP)로 변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축되므로 압축 도입 이전의 스냅샷이 있을 때 한 번 실행하면 됩니다.") }}
 </p>
 {% if compactable %}
 <div class="toolbar">
   <form class="inline" method="post" action="/system/compact"
-        onsubmit="return confirm('기존 스냅샷 파일을 압축 저장 형태로 변환합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')">
-    <button type="submit">저장 공간 압축 실행 — 대상 {{ compactable }}개</button>
+        onsubmit="return confirm({{ _('기존 스냅샷 파일을 압축 저장 형태로 변환합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')|tojson }})">
+    <button type="submit">{{ _("저장 공간 압축 실행 — 대상 {n}개", n=compactable) }}</button>
   </form>
 </div>
 {% else %}
 <div class="toolbar">
-  <button type="button" disabled>저장 공간 압축 실행</button>
-  <span class="muted" style="font-size:12px">압축할 스냅샷이 없습니다 — 모든 스냅샷이 이미 압축 형태입니다.</span>
+  <button type="button" disabled>{{ _("저장 공간 압축 실행") }}</button>
+  <span class="muted" style="font-size:12px">{{ _("압축할 스냅샷이 없습니다 — 모든 스냅샷이 이미 압축 형태입니다.") }}</span>
 </div>
 {% endif %}
 
-<h3>전체 백업/복원</h3>
+<h3>{{ _("전체 백업/복원") }}</h3>
 <p class="muted" style="font-size:12px; max-width:640px">
-  DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은
-  tar.gz 입니다. 복원하면 현재 데이터가 모두 백업 시점 상태로 교체됩니다.
+  {{ _("DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 입니다. 복원하면 현재 데이터가 모두 백업 시점 상태로 교체됩니다.") }}
 </p>
 <div class="toolbar">
   <form class="inline" method="post" action="/system/backup">
-    <button type="submit">전체 백업 다운로드</button>
+    <button type="submit">{{ _("전체 백업 다운로드") }}</button>
   </form>
 </div>
 <fieldset class="danger-zone" style="max-width:640px">
-  <legend>전체 복원</legend>
+  <legend>{{ _("전체 복원") }}</legend>
   <p class="muted" style="font-size:12px; margin-top:0">
-    현재 데이터(인증 포함)를 모두 지우고 백업 시점으로 되돌립니다. 되돌릴 수
-    없습니다. 세션도 백업 시점으로 돌아가므로 복원 후 다시 로그인해야 할 수
-    있습니다.
+    {{ _("현재 데이터(인증 포함)를 모두 지우고 백업 시점으로 되돌립니다. 되돌릴 수 없습니다. 세션도 백업 시점으로 돌아가므로 복원 후 다시 로그인해야 할 수 있습니다.") }}
   </p>
   <form method="post" action="/system/restore" enctype="multipart/form-data"
-        onsubmit="return confirm('정말 복원할까요? 현재 데이터가 모두 백업 시점으로 교체됩니다.')">
+        onsubmit="return confirm({{ _('정말 복원할까요? 현재 데이터가 모두 백업 시점으로 교체됩니다.')|tojson }})">
     <input type="file" name="file" accept=".tar.gz,.tgz,application/gzip" required>
-    <button type="submit" class="danger">복원</button>
+    <button type="submit" class="danger">{{ _("복원") }}</button>
   </form>
 </fieldset>
 
-<h3>아카이브 데이터 내보내기/가져오기</h3>
+<h3>{{ _("아카이브 데이터 내보내기/가져오기") }}</h3>
 <p class="muted" style="font-size:12px; max-width:640px">
-  페이지·스냅샷·확인 기록과 스냅샷 파일만 다룹니다 (인증 데이터·실행 로그 제외) —
-  다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.
+  {{ _("페이지·스냅샷·확인 기록과 스냅샷 파일만 다룹니다 (인증 데이터·실행 로그 제외) — 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.") }}
 </p>
 <div class="toolbar">
   <form class="inline" method="post" action="/system/export">
-    <button type="submit">내보내기 다운로드</button>
+    <button type="submit">{{ _("내보내기 다운로드") }}</button>
   </form>
 </div>
 <form method="post" action="/system/import" enctype="multipart/form-data"
       style="max-width:640px; border:1px solid var(--border); border-radius:6px; padding:12px 14px"
       onsubmit="return this.mode.value !== 'overwrite'
-                || confirm('overwrite 모드: 기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. 계속할까요?')">
+                || confirm({{ _('overwrite 모드: 기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. 계속할까요?')|tojson }})">
   <div class="toolbar" style="margin-bottom:8px">
     <input type="file" name="file" accept=".tar.gz,.tgz,application/gzip" required>
-    <button type="submit">가져오기</button>
+    <button type="submit">{{ _("가져오기") }}</button>
   </div>
   <label style="font-size:13px; margin-right:14px">
     <input type="radio" name="mode" value="merge" checked>
-    merge — 기존 유지, 같은 스냅샷은 스킵 (여러 번 실행해도 안전)
+    {{ _("merge — 기존 유지, 같은 스냅샷은 스킵 (여러 번 실행해도 안전)") }}
   </label>
   <label style="font-size:13px; display:block; margin-top:4px">
     <input type="radio" name="mode" value="overwrite">
-    overwrite — 기존 아카이브 데이터를 지우고 가져오기 (인증 데이터는 유지)
+    {{ _("overwrite — 기존 아카이브 데이터를 지우고 가져오기 (인증 데이터는 유지)") }}
   </label>
 </form>
 {% endblock %}
