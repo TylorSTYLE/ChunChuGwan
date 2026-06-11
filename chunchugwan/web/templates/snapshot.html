@@ -26,8 +26,9 @@
 
 <!-- 보안: sandbox 속성은 빈 값 유지. allow-scripts 절대 추가 금지 -->
 <div id="view-render">
+  <!-- 배경 흰색 고정: 아카이빙 시점 그대로 보이도록 대시보드 다크 테마와 분리 -->
   <iframe sandbox="" src="{{ page_html_url }}"
-          style="width:100%; height:80vh; border:1px solid var(--border);"></iframe>
+          style="width:100%; height:80vh; border:1px solid var(--border); background:#fff;"></iframe>
 </div>
 <div id="view-shot" style="display:none">
   <img src="{{ screenshot_url }}" alt="전체 페이지 스크린샷"
@@ -35,7 +36,7 @@
 </div>
 <div id="view-text" style="display:none">
   <iframe sandbox="" src="{{ content_url }}"
-          style="width:100%; height:80vh; border:1px solid var(--border);"></iframe>
+          style="width:100%; height:80vh; border:1px solid var(--border); background:#fff;"></iframe>
 </div>
 
 <script>
