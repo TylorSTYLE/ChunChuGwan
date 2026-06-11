@@ -7,9 +7,11 @@
   <h2 style="margin:0">{{ page['url'] }}</h2>
   <span class="spacer"></span>
   <a href="/logs?page_id={{ page['id'] }}">로그</a>
+  {% if can_archive %}
   <form class="inline" method="post" action="/page/{{ page['id'] }}/rearchive">
     <button type="submit">재아카이빙</button>
   </form>
+  {% endif %}
 </div>
 <p class="muted mono" style="margin-top:0">{{ page['domain'] }} / {{ page['slug'] }}</p>
 

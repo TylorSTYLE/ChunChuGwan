@@ -20,16 +20,13 @@ from starlette.background import BackgroundTask
 
 from .. import backup as backup_mod
 from .. import config, db
+from . import permissions
 from .templating import templates
-
-def system_allowed(user) -> bool:
-    """시스템 메뉴 접근 가능 여부 — 인증 off(loopback) 이거나 관리자."""
-    return not config.AUTH_ENABLED or bool(user and user["is_admin"])
 
 
 def _require_admin(request: Request) -> None:
     """관리자 게이트. 로그인 자체는 미들웨어가 보장한다."""
-    if not system_allowed(request.state.user):
+    if not permissions.system_allowed(request.state.user):
         raise HTTPException(403, "관리자만 접근할 수 있습니다")
 
 
@@ -118,6 +115,51 @@ def system_restore(file: UploadFile = File(...)):
     return _system_redirect(
         notice=f"복원 완료 (백업: {manifest.get('created_at', '?')}, "
                f"페이지 {c.get('pages', '?')}개, 스냅샷 {c.get('snapshots', '?')}개)"
+    )
+
+
+# ---- 사용자 관리 ----
+
+
+@router.get("/users", response_class=HTMLResponse)
+def users_view(request: Request, notice: str = "", error: str = ""):
+    """사용자 목록 + 권한 조정 (관리자 전용 — 라우터 의존성이 보장)."""
+    me = request.state.user
+    with db.connect() as conn:
+        users = db.list_users(conn)
+    return templates.TemplateResponse(
+        request, "users.html",
+        {
+            "users": users,
+            "me_id": me["id"] if me else None,
+            "roles": db.ROLES,
+            "role_labels": db.ROLE_LABELS,
+            "notice": notice, "error": error,
+        },
+    )
+
+
+def _users_redirect(*, notice: str = "", error: str = "") -> RedirectResponse:
+    query = f"error={quote(error, safe='')}" if error else f"notice={quote(notice, safe='')}"
+    return RedirectResponse(f"/system/users?{query}", status_code=303)
+
+
+@router.post("/users/{user_id}/role")
+def users_set_role(request: Request, user_id: int, role: str = Form(...)):
+    """사용자 권한 변경. 최초 관리자는 변경 불가, 차단 시 세션 즉시 무효화."""
+    if role not in db.ROLES:
+        raise HTTPException(400, f"알 수 없는 역할: {role!r}")
+    with db.connect() as conn:
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, "사용자 없음")
+        if target["is_founder"]:
+            return _users_redirect(error="최초 관리자의 권한은 변경할 수 없습니다.")
+        db.set_role(conn, user_id, role)
+        if role == "blocked":
+            db.delete_user_sessions(conn, user_id)
+    return _users_redirect(
+        notice=f"{target['email']} 권한을 '{db.ROLE_LABELS[role]}'(으)로 변경했습니다."
     )
 
 

@@ -130,7 +130,7 @@ def auth_client(tmp_path, monkeypatch):
     """인증 on. 관리자 + 일반 사용자가 등록된 TestClient."""
     _patch_root(monkeypatch, tmp_path / "a")
     with db.connect() as conn:
-        db.create_user(conn, "admin@test.co", auth.hash_password("adminpass123"), is_admin=True)
+        db.create_user(conn, "admin@test.co", auth.hash_password("adminpass123"), role="admin")
         db.create_user(conn, "user@test.co", auth.hash_password("userpass1234"))
     return TestClient(web_app.app)
 

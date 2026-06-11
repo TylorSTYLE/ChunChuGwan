@@ -9,11 +9,15 @@ from fastapi.templating import Jinja2Templates
 
 
 def _auth_context(request: Request) -> dict:
-    """미들웨어가 적재한 로그인 사용자와 시스템 메뉴 노출 여부를 모든 템플릿에 주입."""
-    from . import system_routes  # 순환 import 회피 (system_routes 가 templates 사용)
+    """미들웨어가 적재한 로그인 사용자와 메뉴/버튼 노출 여부를 모든 템플릿에 주입."""
+    from . import permissions
 
     user = getattr(request.state, "user", None)
-    return {"user": user, "system_allowed": system_routes.system_allowed(user)}
+    return {
+        "user": user,
+        "system_allowed": permissions.system_allowed(user),
+        "can_archive": permissions.can_archive(user),
+    }
 
 
 def filesize(num: int | float | None) -> str:

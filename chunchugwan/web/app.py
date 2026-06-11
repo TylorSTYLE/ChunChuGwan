@@ -28,7 +28,7 @@ from fastapi.responses import (
 )
 
 from .. import auth, config, db, differ, pipeline, storage
-from . import auth_routes, system_routes
+from . import auth_routes, permissions, system_routes
 from .templating import templates
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,16 @@ async def auth_gate(request: Request, call_next):
             if path not in ("/setup", "/healthz"):
                 return RedirectResponse("/setup", status_code=302)
         else:
+            # 차단된 계정 — 로그아웃 외 모든 접근 거부 (세션은 차단 시점에
+            # 삭제되지만, 그 사이 발급된 세션이 있어도 여기서 막힌다)
+            if (
+                request.state.user is not None
+                and request.state.user["role"] == "blocked"
+                and path != "/logout"
+            ):
+                return PlainTextResponse(
+                    "차단된 계정입니다. 관리자에게 문의하세요.", status_code=403
+                )
             public = path in _PUBLIC_PATHS or path.startswith("/auth/oidc/")
             if request.state.user is None and not public:
                 target = path + (f"?{request.url.query}" if request.url.query else "")
@@ -433,9 +443,16 @@ def _queue_archive(background: BackgroundTasks, url: str) -> None:
         background.add_task(_run_archive, url)
 
 
+def _require_archiver(request: Request) -> None:
+    """아카이빙 권한 가드 (admin/archiver). 보기 전용·차단 계정은 403."""
+    if not permissions.can_archive(request.state.user):
+        raise HTTPException(403, "아카이빙 권한이 없습니다")
+
+
 @app.post("/archive")
-def archive_new(background: BackgroundTasks, url: str = Form(...)):
+def archive_new(request: Request, background: BackgroundTasks, url: str = Form(...)):
     """대시보드에서 새 URL 아카이빙. URL 검증은 동기로, 캡처는 백그라운드로."""
+    _require_archiver(request)
     try:
         norm = storage.normalize_url(url)
     except ValueError as exc:
@@ -447,7 +464,8 @@ def archive_new(background: BackgroundTasks, url: str = Form(...)):
 
 
 @app.post("/page/{page_id}/rearchive")
-def rearchive(page_id: int, background: BackgroundTasks):
+def rearchive(request: Request, page_id: int, background: BackgroundTasks):
+    _require_archiver(request)
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
     if page is None:

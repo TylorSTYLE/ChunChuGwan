@@ -49,7 +49,7 @@ def roots(tmp_path, monkeypatch):
     _seed_page(URL_A, ["2026-06-01T00-00-00", "2026-06-02T00-00-00"], with_check=True)
     _seed_page(URL_B, ["2026-06-03T00-00-00"])
     with db.connect() as conn:
-        db.create_user(conn, "admin@example.com", password_hash="x", is_admin=True)
+        db.create_user(conn, "admin@example.com", password_hash="x", role="admin")
     config.RULES_PATH.write_text('{"example.com": {}}', encoding="utf-8")
     return root_a, root_b
 

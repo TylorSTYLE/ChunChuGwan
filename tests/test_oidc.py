@@ -35,7 +35,7 @@ def client(tmp_path, monkeypatch):
     # 최초 구동 모드를 벗어나도록 관리자 1명 사전 등록
     with db.connect() as conn:
         db.create_user(
-            conn, "admin@test.co", auth.hash_password("adminpass123"), is_admin=True
+            conn, "admin@test.co", auth.hash_password("adminpass123"), role="admin"
         )
     return TestClient(web_app.app)
 
