@@ -4,17 +4,49 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}춘추관{% endblock %}</title>
+<script>
+/* 테마 적용 — 저장값(light|dark) 없으면 시스템 설정. 첫 페인트 전에 실행해 깜빡임 방지 */
+(function () {
+  var KEY = "wccg-theme";
+  var mq = window.matchMedia("(prefers-color-scheme: dark)");
+  function stored() {
+    try { var v = localStorage.getItem(KEY); } catch (e) { return null; }
+    return v === "light" || v === "dark" ? v : null;
+  }
+  function apply() {
+    document.documentElement.dataset.theme = stored() || (mq.matches ? "dark" : "light");
+  }
+  mq.addEventListener("change", function () { if (!stored()) apply(); });
+  apply();
+  window.wccgTheme = { KEY: KEY, stored: stored, apply: apply };
+})();
+</script>
 <style>
 :root {
-  --fg: #1a1a1a; --muted: #6b7280; --border: #e2e2e2; --bg-soft: #f7f7f7;
+  color-scheme: light;
+  --bg: #ffffff; --fg: #1a1a1a; --muted: #6b7280; --border: #e2e2e2;
+  --bg-soft: #f7f7f7; --surface: #ffffff;
   --amber: #92400e; --amber-bg: #fef3c7;
   --green: #166534; --green-bg: #dcfce7;
   --gray: #374151;  --gray-bg: #e5e7eb;
-  --red-bg: #fee2e2; --red: #dc2626;
+  --blue: #1e40af;  --blue-bg: #dbeafe;
+  --red-bg: #fee2e2; --red: #dc2626; --red-text: #991b1b; --red-hover: #b91c1c;
   --link: #1d4ed8;
 }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #14171a; --fg: #dde1e6; --muted: #8b929b; --border: #2c3138;
+  --bg-soft: #1c2025; --surface: #1c2025;
+  --amber: #fbbf24; --amber-bg: #423008;
+  --green: #4ade80; --green-bg: #15301f;
+  --gray: #c3c9d1;  --gray-bg: #343a42;
+  --blue: #93c5fd;  --blue-bg: #1e3a5f;
+  --red-bg: #3f181b; --red: #dc2626; --red-text: #f87171; --red-hover: #b91c1c;
+  --link: #60a5fa;
+}
 * { box-sizing: border-box; }
-body { font-family: system-ui, sans-serif; margin: 0; color: var(--fg); font-size: 14px; }
+body { font-family: system-ui, sans-serif; margin: 0; color: var(--fg); font-size: 14px;
+       background: var(--bg); }
 header { border-bottom: 1px solid var(--border); padding: 8px 16px;
          display: flex; gap: 16px; align-items: baseline; }
 header h1 { font-size: 15px; margin: 0; }
@@ -39,18 +71,19 @@ td.num { text-align: right; color: var(--muted); }
 .badge.changed { color: var(--amber); background: var(--amber-bg); }
 .badge.same    { color: var(--gray);  background: var(--gray-bg); }
 .badge.new     { color: var(--green); background: var(--green-bg); }
-.badge.error   { color: #991b1b;      background: var(--red-bg); }
+.badge.error   { color: var(--red-text); background: var(--red-bg); }
 .badge.role-admin    { color: var(--green); background: var(--green-bg); }
-.badge.role-archiver { color: #1e40af;      background: #dbeafe; }
+.badge.role-archiver { color: var(--blue);  background: var(--blue-bg); }
 .badge.role-viewer   { color: var(--gray);  background: var(--gray-bg); }
-.badge.role-blocked  { color: #991b1b;      background: var(--red-bg); }
-.badge.running { color: #1e40af;      background: #dbeafe;
+.badge.role-blocked  { color: var(--red-text); background: var(--red-bg); }
+.badge.running { color: var(--blue);  background: var(--blue-bg);
                  animation: badge-pulse 1.4s ease-in-out infinite; }
 @keyframes badge-pulse { 50% { opacity: .45; } }
 button, select, input[type=number], input[type=text], input[type=url],
 input[type=email], input[type=password] {
   font: inherit; font-size: 13px; padding: 3px 10px;
-  border: 1px solid var(--border); border-radius: 4px; background: #fff;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--surface);
+  color: var(--fg);
 }
 button { cursor: pointer; }
 button:hover { background: var(--bg-soft); }
@@ -78,7 +111,7 @@ fieldset.danger-zone legend { color: var(--red); font-size: 12px; font-weight: 6
                               text-transform: uppercase; letter-spacing: .04em;
                               padding: 0 4px; }
 button.danger { color: #fff; background: var(--red); border-color: var(--red); }
-button.danger:hover { background: #b91c1c; }
+button.danger:hover { background: var(--red-hover); }
 </style>
 {% block head %}{% endblock %}
 </head>
@@ -94,6 +127,7 @@ button.danger:hover { background: #b91c1c; }
   <a href="/system" style="font-size:12px">시스템</a>
   {% endif %}
   <span class="spacer"></span>
+  <button type="button" id="theme-toggle" title="테마 전환 (자동 → 라이트 → 다크)"></button>
   {% if user %}
   <span class="mono muted">{{ user['display_name'] or user['email'] }}</span>
   <a href="/settings/account" style="font-size:12px">계정</a>
@@ -101,5 +135,25 @@ button.danger:hover { background: #b91c1c; }
   {% endif %}
 </header>
 <main>{% block content %}{% endblock %}</main>
+<script>
+/* 테마 토글 — 자동(시스템) → 라이트 → 다크 순환, localStorage 에 기억 */
+(function () {
+  var btn = document.getElementById("theme-toggle");
+  var LABELS = { auto: "테마: 자동", light: "테마: 라이트", dark: "테마: 다크" };
+  var NEXT = { auto: "light", light: "dark", dark: "auto" };
+  function mode() { return wccgTheme.stored() || "auto"; }
+  function render() { btn.textContent = LABELS[mode()]; }
+  btn.addEventListener("click", function () {
+    var next = NEXT[mode()];
+    try {
+      if (next === "auto") localStorage.removeItem(wccgTheme.KEY);
+      else localStorage.setItem(wccgTheme.KEY, next);
+    } catch (e) { /* localStorage 불가 환경에서는 시스템 설정 유지 */ }
+    wccgTheme.apply();
+    render();
+  });
+  render();
+})();
+</script>
 </body>
 </html>

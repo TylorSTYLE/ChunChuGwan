@@ -79,6 +79,16 @@ def test_snapshot_view_sandboxed_iframe(client):
     assert 'sandbox="allow' not in res.text  # iframe에 allow-* 토큰 금지
 
 
+def test_theme_toggle_present(client):
+    """모든 화면(base.html)에 테마 변수·토글·기억(localStorage) 스크립트가 있다."""
+    res = client.get("/")
+    assert res.status_code == 200
+    assert 'data-theme="dark"' in res.text  # 다크 테마 변수 블록
+    assert "prefers-color-scheme" in res.text  # 시스템 기본 설정 따름
+    assert 'id="theme-toggle"' in res.text  # 헤더 토글 버튼
+    assert "wccg-theme" in res.text  # localStorage 키 (사용자 선택 기억)
+
+
 def test_snapshot_file_whitelist(client):
     ok = client.get("/snapshot/1/file/content.md")
     assert ok.status_code == 200 and "첫 줄" in ok.text
