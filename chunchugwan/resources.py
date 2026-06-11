@@ -240,6 +240,24 @@ def snapshot_dirs() -> list[Path]:
     )
 
 
+# compact_snapshot_dir 가 변환하는 구형 산출물 이름
+_LEGACY_NAMES = ("page.html", "raw.html", "screenshot.png")
+
+
+def needs_compaction(snap_dir: Path) -> bool:
+    """압축 변환이 필요한 구형 산출물이 남아 있는지."""
+    return any((snap_dir / name).is_file() for name in _LEGACY_NAMES)
+
+
+def compactable_count() -> int:
+    """압축 변환 대상(구형 산출물이 남은) 스냅샷 수.
+
+    CLI 와 대시보드가 압축 기능의 노출/실행 여부를 판정하는 기준 —
+    0 이면 compact 를 실행할 필요가 없다.
+    """
+    return sum(1 for d in snapshot_dirs() if needs_compaction(d))
+
+
 def _tree_bytes(root: Path) -> int:
     """디렉토리 전체 파일 용량 (없으면 0)."""
     if not root.is_dir():

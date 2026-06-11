@@ -96,6 +96,23 @@ def test_compact_snapshot_dir(cas_env, tmp_path):
     assert again.before_bytes == 0 and again.externalized == 0
 
 
+def test_needs_compaction_and_count(cas_env, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    assert resources.compactable_count() == 0  # 스냅샷 자체가 없음
+
+    base = tmp_path / "sites" / "example.com" / "post-abcd1234"
+    legacy, compacted = base / "2026-06-01T00-00-00", base / "2026-06-02T00-00-00"
+    for d in (legacy, compacted):
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text("{}", encoding="utf-8")
+    (legacy / "raw.html").write_text("<html>원본</html>", encoding="utf-8")
+    (compacted / "raw.html.gz").write_bytes(gzip.compress(b"<html></html>"))
+
+    assert resources.needs_compaction(legacy)
+    assert not resources.needs_compaction(compacted)
+    assert resources.compactable_count() == 1  # 구형 산출물이 남은 스냅샷만
+
+
 def test_compact_keeps_png_when_conversion_fails(cas_env, tmp_path):
     snap = tmp_path / "snap"
     snap.mkdir()

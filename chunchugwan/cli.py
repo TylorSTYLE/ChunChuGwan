@@ -257,21 +257,22 @@ def compact(yes: bool) -> None:
     내용 보존 변환이라 스냅샷이 담는 정보는 그대로다 (불변 원칙의 유일한 예외).
     새 스냅샷은 저장 시점에 같은 형태로 압축되므로 한 번만 실행하면 된다.
     """
-    count = len(resources.snapshot_dirs())
-    if count == 0:
+    dirs = resources.snapshot_dirs()
+    if not dirs:
         click.echo("압축할 스냅샷이 없습니다.")
+        return
+    targets = sum(1 for d in dirs if resources.needs_compaction(d))
+    if targets == 0:
+        click.echo(f"스냅샷 {len(dirs)}개 모두 이미 압축 형태입니다.")
         return
     if not yes:
         click.confirm(
-            f"스냅샷 {count}개의 파일을 압축 저장 형태(page.html.gz·"
+            f"스냅샷 {targets}개의 파일을 압축 저장 형태(page.html.gz·"
             "raw.html.gz·screenshot.webp + 공유 자원)로 변환합니다. 계속할까요?",
             abort=True,
         )
 
     result = resources.compact_all()
-    if result.converted == 0:
-        click.echo(f"스냅샷 {result.total}개 모두 이미 압축 형태입니다.")
-        return
     click.echo(
         f"변환 {result.converted}/{result.total}개 · "
         f"공유 자원 {result.externalized}개 추출 · "

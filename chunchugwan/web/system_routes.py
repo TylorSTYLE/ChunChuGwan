@@ -60,6 +60,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "db_bytes": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
             "sites_bytes": _dir_bytes(config.SITES_DIR),
             "resources_bytes": _dir_bytes(config.RESOURCES_DIR),
+            "compactable": resources.compactable_count(),
             "notice": notice, "error": error,
         },
     )
@@ -109,17 +110,19 @@ def system_compact():
 
     내용 보존 변환이고 멱등이라 여러 번 실행해도 안전하다. 변환은 동기로
     실행된다 — 스냅샷이 아주 많으면 응답까지 시간이 걸릴 수 있다.
+    압축 대상이 없으면 실행 없이 안내만 한다 (화면의 버튼도 비활성화).
     """
+    dirs = resources.snapshot_dirs()
+    if not dirs:
+        return _system_redirect(notice="압축할 스냅샷이 없습니다.")
+    if not any(resources.needs_compaction(d) for d in dirs):
+        return _system_redirect(
+            notice=f"스냅샷 {len(dirs)}개 모두 이미 압축 형태입니다."
+        )
     try:
         result = resources.compact_all()
     except OSError as e:
         return _system_redirect(error=f"압축 실패: {e}")
-    if result.total == 0:
-        return _system_redirect(notice="압축할 스냅샷이 없습니다.")
-    if result.converted == 0:
-        return _system_redirect(
-            notice=f"스냅샷 {result.total}개 모두 이미 압축 형태입니다."
-        )
     return _system_redirect(
         notice=f"압축 완료: 변환 {result.converted}/{result.total}개 · "
                f"공유 자원 {result.externalized}개 추출 · "
