@@ -7,7 +7,10 @@
 
 from __future__ import annotations
 
+import logging
+import secrets
 import shutil
+import smtplib
 import tarfile
 import tempfile
 from pathlib import Path
@@ -18,10 +21,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
-from .. import backup as backup_mod
-from .. import config, db
+from .. import auth, backup as backup_mod
+from .. import config, db, mailer
 from . import permissions
 from .templating import templates
+
+logger = logging.getLogger(__name__)
 
 
 def _require_admin(request: Request) -> None:
@@ -123,17 +128,23 @@ def system_restore(file: UploadFile = File(...)):
 
 @router.get("/users", response_class=HTMLResponse)
 def users_view(request: Request, notice: str = "", error: str = ""):
-    """사용자 목록 + 권한 조정 (관리자 전용 — 라우터 의존성이 보장)."""
+    """사용자 목록 + 권한 조정 + 초대 (관리자 전용 — 라우터 의존성이 보장)."""
     me = request.state.user
     with db.connect() as conn:
+        db.delete_expired_invites(conn)  # 기회적 정리
         users = db.list_users(conn)
+        invites = db.list_invites(conn)
     return templates.TemplateResponse(
         request, "users.html",
         {
             "users": users,
+            "invites": invites,
             "me_id": me["id"] if me else None,
             "roles": db.ROLES,
+            "invitable_roles": db.INVITABLE_ROLES,
             "role_labels": db.ROLE_LABELS,
+            "mail_enabled": config.mail_enabled(),
+            "invite_ttl_days": config.INVITE_TTL_DAYS,
             "notice": notice, "error": error,
         },
     )
@@ -161,6 +172,89 @@ def users_set_role(request: Request, user_id: int, role: str = Form(...)):
     return _users_redirect(
         notice=f"{target['email']} 권한을 '{db.ROLE_LABELS[role]}'(으)로 변경했습니다."
     )
+
+
+@router.post("/users/{user_id}/name")
+def users_set_name(request: Request, user_id: int, display_name: str = Form("")):
+    """사용자 표시 이름 변경 (빈 입력 = 제거, 이메일로 표시)."""
+    name = display_name.strip() or None
+    if name is not None:
+        error = auth.validate_display_name(name)
+        if error is not None:
+            return _users_redirect(error=error)
+    with db.connect() as conn:
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, "사용자 없음")
+        db.set_display_name(conn, user_id, name)
+    return _users_redirect(
+        notice=f"{target['email']} 이름을 "
+               + (f"'{name}'(으)로 변경했습니다." if name else "제거했습니다.")
+    )
+
+
+@router.post("/users/{user_id}/logout")
+def users_force_logout(request: Request, user_id: int):
+    """사용자의 모든 세션 강제 로그아웃 (본인 대상이면 현재 세션도 끊긴다)."""
+    with db.connect() as conn:
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, "사용자 없음")
+        db.delete_user_sessions(conn, user_id)
+    return _users_redirect(notice=f"{target['email']} 의 모든 세션을 로그아웃했습니다.")
+
+
+def _invite_link(request: Request, token: str) -> str:
+    """초대 수락 링크 — 외부 노출 환경이면 WCCG_PUBLIC_URL 기준으로 조립."""
+    base = config.PUBLIC_URL or str(request.base_url).rstrip("/")
+    return f"{base}/invite/{token}"
+
+
+@router.post("/users/invite")
+def users_invite(request: Request, email: str = Form(...), role: str = Form("viewer")):
+    """이메일 초대 발급. 메일 설정이 없으면 링크를 화면에 표시해 직접 전달한다.
+
+    같은 이메일을 다시 초대하면 새 토큰으로 교체된다 (이전 링크 무효화).
+    """
+    email = email.strip()
+    error = auth.validate_email(email)
+    if error is not None:
+        return _users_redirect(error=error)
+    if role not in db.INVITABLE_ROLES:
+        raise HTTPException(400, f"초대할 수 없는 역할: {role!r}")
+    token = secrets.token_urlsafe(32)
+    with db.connect() as conn:
+        if db.get_user_by_email(conn, email) is not None:
+            return _users_redirect(error=f"{email} 은 이미 가입된 이메일입니다.")
+        db.create_invite(
+            conn, email, auth.hash_token(token), role,
+            invited_by=request.state.user["id"] if request.state.user else None,
+            ttl_seconds=config.INVITE_TTL_DAYS * 86400,
+        )
+    link = _invite_link(request, token)
+    if config.mail_enabled():
+        inviter = request.state.user["email"] if request.state.user else "관리자"
+        try:
+            mailer.send_invite(email, link, inviter, db.ROLE_LABELS[role])
+        except (smtplib.SMTPException, OSError) as e:
+            logger.warning("초대 메일 발송 실패 (%s): %s", email, e)
+            return _users_redirect(
+                error=f"{email} 초대를 만들었지만 메일 발송에 실패했습니다 — "
+                      f"링크를 직접 전달하세요: {link}"
+            )
+        return _users_redirect(notice=f"{email} 에게 초대 메일을 보냈습니다.")
+    return _users_redirect(
+        notice=f"{email} 초대 링크 (메일 미설정 — 직접 전달하세요): {link}"
+    )
+
+
+@router.post("/users/invite/{invite_id}/delete")
+def users_invite_delete(invite_id: int):
+    """초대 취소 — 링크가 즉시 무효화된다."""
+    with db.connect() as conn:
+        if not db.delete_invite(conn, invite_id):
+            raise HTTPException(404, "초대 없음")
+    return _users_redirect(notice="초대를 취소했습니다.")
 
 
 @router.post("/import")

@@ -202,6 +202,66 @@ def test_blocking_user_invalidates_sessions(client):
     assert _user("archiver@test.co")["role"] == "blocked"
 
 
+def test_admin_changes_display_name(client):
+    _login(client, "boss@test.co", "bosspass1234")
+    uid = _user("viewer@test.co")["id"]
+    res = client.post(
+        f"/system/users/{uid}/name", data={"display_name": "홍길동"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and "notice=" in res.headers["location"]
+    assert _user("viewer@test.co")["display_name"] == "홍길동"
+    # 빈 입력 = 이름 제거
+    res = client.post(
+        f"/system/users/{uid}/name", data={"display_name": "  "},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert _user("viewer@test.co")["display_name"] is None
+
+
+def test_name_change_rejects_invalid_and_missing(client):
+    _login(client, "boss@test.co", "bosspass1234")
+    uid = _user("viewer@test.co")["id"]
+    res = client.post(
+        f"/system/users/{uid}/name", data={"display_name": "긴" * 51},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and "error=" in res.headers["location"]
+    assert _user("viewer@test.co")["display_name"] is None
+    assert client.post(
+        "/system/users/9999/name", data={"display_name": "x"}
+    ).status_code == 404
+
+
+def test_name_change_requires_admin(client):
+    _login(client, "viewer@test.co")
+    uid = _user("viewer@test.co")["id"]
+    assert client.post(
+        f"/system/users/{uid}/name", data={"display_name": "x"}
+    ).status_code == 403
+
+
+def test_admin_force_logout(client):
+    with db.connect() as conn:
+        uid = db.get_user_by_email(conn, "archiver@test.co")["id"]
+        other_token = auth.issue_session(conn, uid)
+    _login(client, "boss@test.co", "bosspass1234")
+    res = client.post(f"/system/users/{uid}/logout", follow_redirects=False)
+    assert res.status_code == 303 and "notice=" in res.headers["location"]
+    with db.connect() as conn:
+        assert auth.resolve_session(conn, other_token) is None
+    # 권한은 그대로 — 차단과 달리 다시 로그인할 수 있다
+    assert _user("archiver@test.co")["role"] == "archiver"
+    assert client.post("/system/users/9999/logout").status_code == 404
+
+
+def test_force_logout_requires_admin(client):
+    _login(client, "viewer@test.co")
+    uid = _user("archiver@test.co")["id"]
+    assert client.post(f"/system/users/{uid}/logout").status_code == 403
+
+
 def test_signup_defaults_to_viewer(client):
     res = client.post(
         "/signup", data={"email": "new@test.co", "password": "password1234"},

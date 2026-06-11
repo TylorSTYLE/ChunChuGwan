@@ -49,11 +49,16 @@ def verify_password(password_hash: str, password: str) -> bool:
         return False
 
 
-def validate_credentials(email: str, password: str) -> str | None:
-    """가입 입력 검증. 문제 있으면 한국어 오류 메시지, 정상이면 None."""
+def validate_email(email: str) -> str | None:
+    """이메일 형식 검증 (가입·초대 공용). 문제 있으면 한국어 오류 메시지."""
     if not _EMAIL_RE.match(email):
         return "올바른 이메일 형식이 아닙니다."
-    return validate_password(password)
+    return None
+
+
+def validate_credentials(email: str, password: str) -> str | None:
+    """가입 입력 검증. 문제 있으면 한국어 오류 메시지, 정상이면 None."""
+    return validate_email(email) or validate_password(password)
 
 
 def validate_password(password: str) -> str | None:

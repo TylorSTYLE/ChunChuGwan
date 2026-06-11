@@ -612,6 +612,60 @@ def signup(request: Request, email: str = Form(...), password: str = Form(...)):
     )
 
 
+# ---- 초대 수락 ----
+# 초대 발급은 관리자 전용(system_routes), 수락은 링크를 받은 본인이 하므로 공개 경로.
+
+
+def _invite_ctx(invite, token: str, *, email: str = "", error: str | None = None) -> dict:
+    return {
+        "invite": invite,
+        "token": token,
+        "email": email or (invite["email"] if invite is not None else ""),
+        "role_label": db.ROLE_LABELS.get(invite["role"]) if invite is not None else None,
+        "error": error,
+    }
+
+
+@router.get("/invite/{token}", response_class=HTMLResponse)
+def invite_page(request: Request, token: str):
+    """초대 수락 페이지 — 토큰이 유효하면 패스워드 설정 폼."""
+    if getattr(request.state, "user", None) is not None:
+        return RedirectResponse(url="/", status_code=302)
+    with db.connect() as conn:
+        invite = db.get_invite_by_token(conn, auth.hash_token(token))
+    return templates.TemplateResponse(
+        request, "invite.html", _invite_ctx(invite, token),
+        status_code=200 if invite is not None else 404,
+    )
+
+
+@router.post("/invite/{token}", response_class=HTMLResponse)
+def invite_accept(request: Request, token: str, password: str = Form(...)):
+    """초대 수락 — 패스워드 설정 후 초대된 권한으로 가입, 즉시 로그인."""
+    with db.connect() as conn:
+        invite = db.get_invite_by_token(conn, auth.hash_token(token))
+        if invite is None:
+            return templates.TemplateResponse(
+                request, "invite.html", _invite_ctx(None, token), status_code=404
+            )
+        error = auth.validate_password(password)
+        if error is None and db.get_user_by_email(conn, invite["email"]) is not None:
+            # 초대 후 같은 이메일이 일반 가입한 경우 — 초대는 더 이상 유효하지 않다
+            db.delete_invite(conn, invite["id"])
+            error = "이미 가입된 이메일입니다. 로그인하세요."
+        if error is not None:
+            return templates.TemplateResponse(
+                request, "invite.html",
+                _invite_ctx(invite, token, error=error), status_code=400,
+            )
+        user_id = db.create_user(
+            conn, invite["email"], auth.hash_password(password), role=invite["role"]
+        )
+        db.delete_invite(conn, invite["id"])  # 1회용
+        token_session = auth.issue_session(conn, user_id)
+    return _login_redirect(token_session, "/")
+
+
 @router.post("/logout")
 def logout(request: Request):
     token = request.cookies.get(config.SESSION_COOKIE, "")

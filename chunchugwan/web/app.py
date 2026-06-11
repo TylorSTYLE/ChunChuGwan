@@ -70,6 +70,7 @@ app.include_router(system_routes.router)
 # 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)
 # /login/passkey* 는 패스워드 통과 후 pending 세션 단계라 user 가 아직 없다 —
 # 라우트 핸들러가 pending_totp 세션을 직접 요구한다.
+# /invite/{token} 은 초대받은 본인의 가입 페이지 — 토큰 자체가 자격 증명이다.
 _PUBLIC_PATHS = {
     "/healthz", "/login", "/login/totp", "/signup",
     "/login/passkey/options", "/login/passkey",
@@ -135,6 +136,7 @@ async def auth_gate(request: Request, call_next):
                 path in _PUBLIC_PATHS
                 or path in _BROWSER_ICON_PATHS
                 or path.startswith("/auth/oidc/")
+                or path.startswith("/invite/")
             )
             if request.state.user is None and not public:
                 target = path + (f"?{request.url.query}" if request.url.query else "")
