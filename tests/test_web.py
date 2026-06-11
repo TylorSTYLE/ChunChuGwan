@@ -351,6 +351,52 @@ def test_schedule_unknown_page(client):
     assert client.post("/page/999/schedule/delete").status_code == 404
 
 
+def test_schedules_page_empty(client):
+    res = client.get("/schedules")
+    assert res.status_code == 200
+    assert "등록된 자동 재아카이빙이 없습니다" in res.text
+
+
+def test_schedules_page_lists_registered(client):
+    client.post("/page/1/schedule", data={"interval": "86400"})
+    res = client.get("/schedules")
+    assert res.status_code == 200
+    assert "/page/1" in res.text  # 타임라인 링크
+    assert "1일" in res.text  # 주기 라벨
+    assert "주기 변경" in res.text and "해제" in res.text
+
+
+def test_schedule_set_redirects_back_to_schedules(client):
+    res = client.post(
+        "/page/1/schedule",
+        data={"interval": "3600", "next": "/schedules"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"] == "/schedules"
+
+
+def test_schedule_delete_redirects_back_to_schedules(client):
+    client.post("/page/1/schedule", data={"interval": "3600"})
+    res = client.post(
+        "/page/1/schedule/delete", data={"next": "/schedules"}, follow_redirects=False
+    )
+    assert res.status_code == 303
+    assert res.headers["location"] == "/schedules"
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1) is None
+
+
+def test_schedule_next_param_rejects_unknown_path(client):
+    """next 는 알려진 경로만 허용 — 외부 URL 로의 열린 리다이렉트 방지."""
+    res = client.post(
+        "/page/1/schedule",
+        data={"interval": "3600", "next": "https://evil.example/"},
+        follow_redirects=False,
+    )
+    assert res.headers["location"] == "/page/1"
+
+
 # ---- 압축 저장 형태 (gzip HTML · WebP 스크린샷 · 공유 자원) ----
 
 

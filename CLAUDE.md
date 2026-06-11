@@ -119,9 +119,12 @@ archive/
 
 ## 대시보드 디자인 방향
 
-- 화면 8개: 현황(dashboard — 첫 화면 `/`(= `/dashboard`). 페이지·스냅샷 수,
+- 화면 9개: 현황(dashboard — 첫 화면 `/`(= `/dashboard`). 페이지·스냅샷 수,
   기간별 용량 트렌드(오늘/이번 주/이번 달/올해), 최근 스냅샷·최근 로그)
-  / 목록(index — `/archives`, 헤더 메뉴 "목록") / 타임라인(timeline)
+  / 목록(index — `/archives`, 헤더 메뉴 "목록")
+  / 스케줄(schedules — `/schedules`, 헤더 메뉴 "스케줄". 자동 재아카이빙
+  등록 목록 + 주기 변경·해제. 변경/해제는 admin/archiver 만, viewer 는
+  읽기 전용) / 타임라인(timeline)
   / 스냅샷 뷰어(snapshot) / diff 뷰어(diff)
   / 로그(logs — 실행 기록, 도메인·페이지·스냅샷·상태 필터 + 단계별 상세 펼침)
   / 시스템(system — 백업/복원·내보내기/가져오기·저장 공간 압축(`wccg compact`
