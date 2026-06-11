@@ -16,8 +16,8 @@
     {% for c in creds %}
     <tr>
       <td>{{ c['name'] }}</td>
-      <td class="mono muted">{{ c['created_at'] }}</td>
-      <td class="mono muted">{{ c['last_used_at'] or '—' }}</td>
+      <td class="mono muted">{{ c['created_at'] | ts }}</td>
+      <td class="mono muted">{{ c['last_used_at'] | ts if c['last_used_at'] else '—' }}</td>
       <td>
         <form class="inline" method="post" action="/settings/passkey/{{ c['id'] }}/delete">
           <input type="password" name="password" placeholder="패스워드 확인" required

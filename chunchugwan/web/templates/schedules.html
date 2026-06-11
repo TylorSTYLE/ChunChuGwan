@@ -30,8 +30,8 @@
     <tr data-url="{{ s['url']|lower }}">
       <td><a href="/page/{{ s['page_id'] }}">{{ s['url'] }}</a></td>
       <td class="mono">{{ it['label'] }}</td>
-      <td class="mono">{{ s['next_run_at'] }}</td>
-      <td class="mono">{{ s['last_run_at'] or '-' }}</td>
+      <td class="mono">{{ s['next_run_at'] | ts }}</td>
+      <td class="mono">{{ s['last_run_at'] | ts }}</td>
       {% if can_archive %}
       <td>
         <form class="inline" method="post" action="/page/{{ s['page_id'] }}/schedule"

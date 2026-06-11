@@ -65,7 +65,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
   <tbody>
   {% for s in recent_snaps %}
     <tr>
-      <td class="mono">{{ s['taken_at'] }}</td>
+      <td class="mono">{{ s['taken_at'] | ts }}</td>
       <td>
         {% if s['is_first'] %}<span class="badge new">신규</span>
         {% elif s['changed'] %}<span class="badge changed">변경</span>
@@ -89,7 +89,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
   <tbody>
   {% for log in recent_logs %}
     <tr>
-      <td class="mono">{{ log['started_at'] }}</td>
+      <td class="mono">{{ log['started_at'] | ts }}</td>
       <td><span class="badge {{ badge_class[log['status']] }}">{{ status_label[log['status']] }}</span></td>
       <td class="url-cell">
         {% if log['page_id'] %}
