@@ -168,7 +168,8 @@ archive/
       실행은 pipeline 공유 (archive_logs source='schedule').
 - [x] **A9 사용자 권한**: `users.role`(admin/archiver/viewer/blocked) +
       `is_founder`(최초 관리자 — 권한 변경 불가). 신규 가입·SSO 자동 생성은
-      viewer. viewer 는 아카이빙 트리거 403, blocked 는 로그인 거부 + 기존
+      viewer. viewer 는 아카이빙 트리거·아카이브 삭제 403 (삭제는 admin/
+      archiver 만 가능), blocked 는 로그인 거부 + 기존
       세션도 미들웨어가 차단. 관리자 전용 사용자 관리 화면(`/system/users`)
       에서 권한 조정 (차단 시 대상 세션 즉시 삭제). 권한 판정은
       `web/permissions.py` 헬퍼로 일원화 (라우트 가드·템플릿 노출 공용).
