@@ -10,11 +10,13 @@
 
 <div class="toolbar">
   <h2 style="margin:0">아카이브 목록</h2>
+  {% if can_archive %}
   <form method="post" action="/archive" style="display:flex; gap:6px; flex:1; max-width:520px">
     <input type="text" name="url" placeholder="새 URL 아카이빙 (https:// 생략 가능)" required
            autocomplete="off" style="flex:1">
     <button type="submit">아카이빙</button>
   </form>
+  {% endif %}
   <span class="spacer"></span>
   <input type="text" id="q" placeholder="URL 필터…" autocomplete="off">
 </div>
@@ -53,7 +55,7 @@
       <td>
         {% if p['url'] in active_urls %}
         <span class="badge running">아카이빙 중</span>
-        {% else %}
+        {% elif can_archive %}
         <form class="inline" method="post" action="/page/{{ p['id'] }}/rearchive">
           <button type="submit">재아카이빙</button>
         </form>

@@ -38,10 +38,14 @@ td.num { text-align: right; color: var(--muted); }
 .badge.same    { color: var(--gray);  background: var(--gray-bg); }
 .badge.new     { color: var(--green); background: var(--green-bg); }
 .badge.error   { color: #991b1b;      background: var(--red-bg); }
+.badge.role-admin    { color: var(--green); background: var(--green-bg); }
+.badge.role-archiver { color: #1e40af;      background: #dbeafe; }
+.badge.role-viewer   { color: var(--gray);  background: var(--gray-bg); }
+.badge.role-blocked  { color: #991b1b;      background: var(--red-bg); }
 .badge.running { color: #1e40af;      background: #dbeafe;
                  animation: badge-pulse 1.4s ease-in-out infinite; }
 @keyframes badge-pulse { 50% { opacity: .45; } }
-button, input[type=number], input[type=text], input[type=url],
+button, select, input[type=number], input[type=text], input[type=url],
 input[type=email], input[type=password] {
   font: inherit; font-size: 13px; padding: 3px 10px;
   border: 1px solid var(--border); border-radius: 4px; background: #fff;
@@ -81,7 +85,10 @@ button.danger:hover { background: #b91c1c; }
   <span class="muted" style="font-size:12px">개인 웹 아카이브</span>
   <a href="/dashboard" style="font-size:12px">현황</a>
   <a href="/logs" style="font-size:12px">로그</a>
-  {% if system_allowed %}<a href="/system" style="font-size:12px">시스템</a>{% endif %}
+  {% if system_allowed %}
+  <a href="/system/users" style="font-size:12px">사용자</a>
+  <a href="/system" style="font-size:12px">시스템</a>
+  {% endif %}
   <span class="spacer"></span>
   {% if user %}
   <span class="mono muted">{{ user['display_name'] or user['email'] }}</span>

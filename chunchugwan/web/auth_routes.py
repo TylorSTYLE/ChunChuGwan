@@ -116,6 +116,13 @@ def login(
                  "email": email, "oidc_enabled": config.oidc_enabled()},
                 status_code=401,
             )
+        if user["role"] == "blocked":
+            return templates.TemplateResponse(
+                request, "login.html",
+                {"next": safe_next(next), "error": "차단된 계정입니다. 관리자에게 문의하세요.",
+                 "email": email, "oidc_enabled": config.oidc_enabled()},
+                status_code=403,
+            )
         if user["totp_secret"] is not None or db.count_passkeys(conn, user["id"]) > 0:
             # 2단계: TOTP/패스키 확인 전까지는 pending 세션 (짧은 수명)
             token = auth.issue_session(
@@ -393,7 +400,8 @@ def _account_ctx(
         "display_name": user["display_name"] or "",
         "has_password": user["password_hash"] is not None,
         "email": user["email"],
-        "is_admin": bool(user["is_admin"]),
+        "role": user["role"],
+        "role_label": db.ROLE_LABELS.get(user["role"], user["role"]),
         "totp_enabled": user["totp_secret"] is not None,
         "passkey_count": passkey_count,
         "error": error,
@@ -473,7 +481,7 @@ def delete_account(
     패스워드 계정은 패스워드 재입력, SSO 전용 계정은 이메일 입력으로 확인한다.
     """
     user = request.state.user
-    if user["is_admin"]:
+    if user["role"] == "admin":
         return templates.TemplateResponse(
             request, "account.html",
             _account_ctx(user, error="관리자 계정은 삭제할 수 없습니다."),
@@ -570,6 +578,8 @@ def oidc_callback(
 
     with db.connect() as conn:
         user_id = _link_oidc_user(conn, claims)
+        if db.get_user_by_id(conn, user_id)["role"] == "blocked":
+            raise HTTPException(403, "차단된 계정입니다. 관리자에게 문의하세요.")
         # SSO 는 IdP 의 2FA 를 신뢰 — 바로 active 세션
         token = auth.issue_session(conn, user_id)
     return _login_redirect(token, st["redirect_to"])

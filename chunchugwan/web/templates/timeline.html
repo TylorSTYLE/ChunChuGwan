@@ -7,9 +7,11 @@
   <h2 style="margin:0">{{ page['url'] }}</h2>
   <span class="spacer"></span>
   <a href="/logs?page_id={{ page['id'] }}">로그</a>
+  {% if can_archive %}
   <form class="inline" method="post" action="/page/{{ page['id'] }}/rearchive">
     <button type="submit">재아카이빙</button>
   </form>
+  {% endif %}
 </div>
 <p class="muted mono" style="margin-top:0">{{ page['domain'] }} / {{ page['slug'] }}</p>
 
@@ -21,6 +23,7 @@
   {% else %}
   <span class="muted">미설정 (최소 1시간 ~ 최대 1주일)</span>
   {% endif %}
+  {% if can_archive %}
   <form class="inline" method="post" action="/page/{{ page['id'] }}/schedule" style="display:flex; gap:6px">
     <select name="interval">
       {% for v, label in interval_options %}
@@ -33,6 +36,7 @@
   <form class="inline" method="post" action="/page/{{ page['id'] }}/schedule/delete">
     <button type="submit">해제</button>
   </form>
+  {% endif %}
   {% endif %}
 </div>
 

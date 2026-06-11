@@ -90,7 +90,10 @@ archive/
   출처 cli/web/schedule)
 - `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1주일, 다음 실행 시각)
 - `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
-  서버사이드 세션, OIDC state 1회용 기록)
+  서버사이드 세션, OIDC state 1회용 기록). `users.role` 은
+  admin(관리자)/archiver(아카이빙 가능)/viewer(보기 전용)/blocked(차단) —
+  신규 가입·SSO 자동 생성은 viewer, `users.is_founder` 는 최초 등록 관리자로
+  권한 변경 불가
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
 
 ## 코딩 컨벤션
@@ -103,12 +106,14 @@ archive/
 
 ## 대시보드 디자인 방향
 
-- 화면 7개: 목록(index) / 현황(dashboard — 페이지·스냅샷 수, 기간별 용량 트렌드
+- 화면 8개: 목록(index) / 현황(dashboard — 페이지·스냅샷 수, 기간별 용량 트렌드
   (오늘/이번 주/이번 달/올해), 최근 스냅샷·최근 로그) / 타임라인(timeline)
   / 스냅샷 뷰어(snapshot) / diff 뷰어(diff)
   / 로그(logs — 실행 기록, 도메인·페이지·스냅샷·상태 필터 + 단계별 상세 펼침)
   / 시스템(system — 백업/복원·내보내기/가져오기. 백업에 인증 데이터가 포함되므로
   인증이 켜진 환경에서는 관리자 전용)
+  / 사용자(users — 관리자 전용 사용자 관리. 권한 조정, 차단 시 세션 즉시 무효화,
+  최초 관리자는 변경 불가)
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
 - diff 뷰: 텍스트 side-by-side + 스크린샷 비교(슬라이더 또는 토글)
@@ -147,5 +152,11 @@ archive/
       add/list/remove/run`, serve 프로세스의 백그라운드 폴링 스레드
       (`WCCG_SCHEDULER=off` 로 비활성), 대시보드 타임라인에서 설정/해제.
       실행은 pipeline 공유 (archive_logs source='schedule').
+- [x] **A9 사용자 권한**: `users.role`(admin/archiver/viewer/blocked) +
+      `is_founder`(최초 관리자 — 권한 변경 불가). 신규 가입·SSO 자동 생성은
+      viewer. viewer 는 아카이빙 트리거 403, blocked 는 로그인 거부 + 기존
+      세션도 미들웨어가 차단. 관리자 전용 사용자 관리 화면(`/system/users`)
+      에서 권한 조정 (차단 시 대상 세션 즉시 삭제). 권한 판정은
+      `web/permissions.py` 헬퍼로 일원화 (라우트 가드·템플릿 노출 공용).
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.

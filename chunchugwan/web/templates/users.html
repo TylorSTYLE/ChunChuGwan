@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}사용자 — 춘추관{% endblock %}
+{% block content %}
+<h2>사용자 관리</h2>
+{% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<p class="muted" style="font-size:12px; max-width:720px">
+  관리자=전체 관리, 아카이브=아카이빙 가능, 보기 전용=열람만, 차단됨=접근 불가.
+  차단하면 해당 사용자의 모든 세션이 즉시 로그아웃됩니다.
+  최초 등록된 관리자의 권한은 변경할 수 없습니다.
+</p>
+
+<table>
+  <thead>
+    <tr><th>이메일</th><th>이름</th><th>권한</th><th>2FA</th><th>SSO</th>
+        <th>활성 세션</th><th>가입일</th><th>권한 변경</th></tr>
+  </thead>
+  <tbody>
+  {% for u in users %}
+    <tr>
+      <td class="mono">{{ u['email'] }}{% if u['id'] == me_id %} <span class="muted">(나)</span>{% endif %}</td>
+      <td>{{ u['display_name'] or '-' }}</td>
+      <td>
+        <span class="badge role-{{ u['role'] }}">{{ role_labels.get(u['role'], u['role']) }}</span>
+        {% if u['is_founder'] %}<span class="badge role-admin">최초 관리자</span>{% endif %}
+      </td>
+      <td>
+        {% if u['totp_secret'] %}<span class="badge new">TOTP</span>{% endif %}
+        {% if u['passkey_count'] > 0 %}<span class="badge new">패스키 {{ u['passkey_count'] }}</span>{% endif %}
+        {% if not u['totp_secret'] and u['passkey_count'] == 0 %}<span class="muted">-</span>{% endif %}
+      </td>
+      <td>{% if u['identity_count'] > 0 %}<span class="badge same">OIDC</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+      <td class="num">{{ u['session_count'] }}</td>
+      <td class="mono">{{ u['created_at'][:10] }}</td>
+      <td>
+        {% if u['is_founder'] %}
+        <span class="muted" style="font-size:12px">변경 불가</span>
+        {% else %}
+        <form class="inline" method="post" action="/system/users/{{ u['id'] }}/role"
+              {% if u['id'] == me_id %}
+              onsubmit="return confirm('본인 계정의 권한을 변경합니다. 관리자 권한을 잃으면 이 화면에 다시 접근할 수 없습니다. 계속할까요?')"
+              {% elif u['role'] != 'blocked' %}
+              onsubmit="return this.role.value !== 'blocked'
+                        || confirm('{{ u['email'] }} 계정을 차단할까요? 모든 세션이 즉시 로그아웃됩니다.')"
+              {% endif %}>
+          <select name="role">
+            {% for r in roles %}
+            <option value="{{ r }}" {% if r == u['role'] %}selected{% endif %}>{{ role_labels[r] }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit">변경</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

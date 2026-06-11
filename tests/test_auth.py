@@ -21,7 +21,7 @@ def client(tmp_db):
     """인증이 켜진 TestClient (쿠키 유지). 최초 구동을 끝낸 상태(관리자 존재)."""
     with db.connect() as conn:
         db.create_user(
-            conn, "admin@test.co", auth.hash_password("adminpass123"), is_admin=True
+            conn, "admin@test.co", auth.hash_password("adminpass123"), role="admin"
         )
     return TestClient(web_app.app)
 
@@ -279,7 +279,7 @@ def test_setup_registers_admin_and_logs_in(fresh_client):
     assert fresh_client.get("/").status_code == 200  # 자동 로그인
     with db.connect() as conn:
         user = db.get_user_by_email(conn, "boss@test.co")
-        assert user["is_admin"] == 1
+        assert user["role"] == "admin" and user["is_founder"] == 1
 
 
 def test_setup_hidden_and_blocked_after_registration(fresh_client):
@@ -319,7 +319,7 @@ def test_admin_bootstrap_from_env(fresh_client, monkeypatch):
     assert res.headers["location"].startswith("/login")
     with db.connect() as conn:
         user = db.get_user_by_email(conn, "env-admin@test.co")
-        assert user is not None and user["is_admin"] == 1
+        assert user is not None and user["role"] == "admin" and user["is_founder"] == 1
     ok = fresh_client.post(
         "/login", data={"email": "env-admin@test.co", "password": "envpassword1"},
         follow_redirects=False,
@@ -336,8 +336,11 @@ def test_admin_bootstrap_invalid_env_falls_back_to_setup(fresh_client, monkeypat
         assert db.count_users(conn) == 0
 
 
-def test_migration_adds_is_admin_to_old_db(tmp_db):
-    """is_admin 도입 전 스키마의 기존 DB 도 connect() 시 자동 보강된다."""
+def test_migration_maps_is_admin_to_role(tmp_db):
+    """is_admin 시절 스키마의 기존 DB 는 connect() 시 role/is_founder 로 보강된다.
+
+    관리자 → admin(최초 관리자), 일반 사용자 → archiver (기존 동작 유지).
+    """
     import sqlite3 as s
 
     config.ensure_dirs()
@@ -346,16 +349,22 @@ def test_migration_adds_is_admin_to_old_db(tmp_db):
         "CREATE TABLE users (id INTEGER PRIMARY KEY, "
         "email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT, "
         "totp_secret TEXT, totp_pending_secret TEXT, totp_last_used_at TEXT, "
-        "created_at TEXT NOT NULL)"
+        "is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)"
     )
     raw.execute(
-        "INSERT INTO users (email, created_at) VALUES ('old@test.co', '2026-01-01')"
+        "INSERT INTO users (email, is_admin, created_at) "
+        "VALUES ('boss@test.co', 1, '2026-01-01')"
+    )
+    raw.execute(
+        "INSERT INTO users (email, created_at) VALUES ('old@test.co', '2026-01-02')"
     )
     raw.commit()
     raw.close()
     with db.connect() as conn:
+        boss = db.get_user_by_email(conn, "boss@test.co")
+        assert boss["role"] == "admin" and boss["is_founder"] == 1
         user = db.get_user_by_email(conn, "old@test.co")
-        assert user["is_admin"] == 0
+        assert user["role"] == "archiver" and user["is_founder"] == 0
 
 
 # ---- 라우트: TOTP 등록 + 2단계 로그인 ----

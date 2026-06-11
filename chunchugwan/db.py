@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret         TEXT,               -- NULL = 2FA 미설정
     totp_pending_secret TEXT,               -- 등록 확인 전 임시 시크릿
     totp_last_used_at   TEXT,               -- 마지막으로 사용된 코드의 시간창 (재사용 방지)
-    is_admin            INTEGER NOT NULL DEFAULT 0,  -- 최초 구동 시 등록된 관리자
+    role                TEXT NOT NULL DEFAULT 'viewer',  -- admin|archiver|viewer|blocked
+    is_founder          INTEGER NOT NULL DEFAULT 0,  -- 최초 등록 관리자 (권한 변경 불가)
     display_name        TEXT,               -- 표시용 이름 (NULL = 이메일로 표시)
     created_at          TEXT NOT NULL
 );
@@ -123,10 +124,27 @@ CREATE TABLE IF NOT EXISTS oidc_states (
 def _migrate(conn: sqlite3.Connection) -> None:
     """CREATE IF NOT EXISTS 로 커버되지 않는 기존 테이블 변경(컬럼 추가)."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
-    if cols and "is_admin" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
     if cols and "display_name" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+    if cols and "role" not in cols:
+        # is_admin 시절 사용자: 관리자는 admin, 그 외에는 기존처럼 아카이빙이
+        # 가능했으므로 archiver 로 매핑 (레거시 is_admin 컬럼은 그대로 둔다)
+        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'")
+        if "is_admin" in cols:
+            conn.execute(
+                "UPDATE users SET role = CASE WHEN is_admin = 1 THEN 'admin' ELSE 'archiver' END"
+            )
+        else:
+            conn.execute("UPDATE users SET role = 'archiver'")
+    if cols and "is_founder" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN is_founder INTEGER NOT NULL DEFAULT 0")
+        # 가장 먼저 등록된 관리자를 최초 관리자로 본다
+        conn.execute(
+            """
+            UPDATE users SET is_founder = 1
+            WHERE id = (SELECT MIN(id) FROM users WHERE role = 'admin')
+            """
+        )
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
     if cols and "webauthn_challenge" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN webauthn_challenge TEXT")
@@ -431,6 +449,15 @@ def mark_schedule_run(
 # 주의: SCHEMA 는 CREATE IF NOT EXISTS 라 새 테이블 추가는 자동이지만
 # 기존 테이블에 컬럼을 추가하는 변경은 별도 마이그레이션이 필요하다.
 
+# 권한 역할. admin=관리자, archiver=아카이빙 가능, viewer=보기만, blocked=차단
+ROLES = ("admin", "archiver", "viewer", "blocked")
+ROLE_LABELS = {
+    "admin": "관리자",
+    "archiver": "아카이브",
+    "viewer": "보기 전용",
+    "blocked": "차단됨",
+}
+
 
 def _later(seconds: int) -> str:
     """지금으로부터 seconds 뒤의 ISO 8601 UTC 시각."""
@@ -453,12 +480,17 @@ def create_user(
     conn: sqlite3.Connection,
     email: str,
     password_hash: str | None = None,
-    is_admin: bool = False,
+    role: str = "viewer",
 ) -> int:
-    """사용자 생성 후 id 반환. password_hash=None 이면 SSO 전용 계정."""
+    """사용자 생성 후 id 반환. password_hash=None 이면 SSO 전용 계정.
+
+    기본 권한은 보기 전용(viewer) — 승격은 관리자가 사용자 관리에서 한다.
+    """
+    if role not in ROLES:
+        raise ValueError(f"알 수 없는 역할: {role!r}")
     cur = conn.execute(
-        "INSERT INTO users (email, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)",
-        (email, password_hash, int(is_admin), _utcnow()),
+        "INSERT INTO users (email, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+        (email, password_hash, role, _utcnow()),
     )
     return cur.lastrowid
 
@@ -471,18 +503,51 @@ def count_users(conn: sqlite3.Connection) -> int:
 def create_first_admin(
     conn: sqlite3.Connection, email: str, password_hash: str
 ) -> int | None:
-    """users 가 비어 있을 때만 관리자를 생성 (원자적). 이미 사용자가 있으면 None.
+    """users 가 비어 있을 때만 최초 관리자를 생성 (원자적). 이미 사용자가 있으면 None.
 
     최초 구동 등록 API 가 관리자 등록 후 재사용되는 것을 INSERT 단계에서 차단한다.
+    is_founder=1 — 이 계정의 권한은 이후 변경할 수 없다.
     """
     cur = conn.execute(
         """
-        INSERT INTO users (email, password_hash, is_admin, created_at)
-        SELECT ?, ?, 1, ? WHERE NOT EXISTS (SELECT 1 FROM users)
+        INSERT INTO users (email, password_hash, role, is_founder, created_at)
+        SELECT ?, ?, 'admin', 1, ? WHERE NOT EXISTS (SELECT 1 FROM users)
         """,
         (email, password_hash, _utcnow()),
     )
     return cur.lastrowid if cur.rowcount == 1 else None
+
+
+def list_users(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """전체 사용자 목록 (등록 순) + 2FA/OIDC/활성 세션 집계 (사용자 관리 화면용)."""
+    return conn.execute(
+        """
+        SELECT u.*,
+            (SELECT COUNT(*) FROM webauthn_credentials w WHERE w.user_id = u.id)
+                AS passkey_count,
+            (SELECT COUNT(*) FROM identities i WHERE i.user_id = u.id)
+                AS identity_count,
+            (SELECT COUNT(*) FROM sessions s
+              WHERE s.user_id = u.id AND s.expires_at > ?) AS session_count
+        FROM users u ORDER BY u.created_at, u.id
+        """,
+        (_utcnow(),),
+    ).fetchall()
+
+
+def set_role(conn: sqlite3.Connection, user_id: int, role: str) -> bool:
+    """사용자 권한 변경. 최초 관리자(is_founder)는 변경 불가 — False 반환."""
+    if role not in ROLES:
+        raise ValueError(f"알 수 없는 역할: {role!r}")
+    cur = conn.execute(
+        "UPDATE users SET role = ? WHERE id = ? AND is_founder = 0", (role, user_id)
+    )
+    return cur.rowcount == 1
+
+
+def delete_user_sessions(conn: sqlite3.Connection, user_id: int) -> None:
+    """해당 사용자의 세션 전체 삭제 (차단 시 즉시 로그아웃)."""
+    conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
 
 
 def set_display_name(conn: sqlite3.Connection, user_id: int, name: str | None) -> None:
