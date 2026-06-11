@@ -27,6 +27,8 @@ a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); }
+/* 긴 URL 등 공백 없는 문자열이 셀/제목 폭을 밀어내지 않도록 줄바꿈 허용 */
+td, h2, .notice { overflow-wrap: anywhere; }
 th { color: var(--muted); font-weight: 600; font-size: 11px;
      text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
 td.num { text-align: right; color: var(--muted); }
