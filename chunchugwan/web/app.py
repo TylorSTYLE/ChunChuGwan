@@ -75,6 +75,12 @@ _PUBLIC_PATHS = {
     "/login/passkey/options", "/login/passkey",
 }
 
+# 브라우저가 주소만 보고 자동 요청하는 아이콘 경로 — 라우트가 없으므로 404 가
+# 정답이다. /login·/setup 으로 리다이렉트하면 로그만 오염되므로 그대로 통과시킨다.
+_BROWSER_ICON_PATHS = {
+    "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png",
+}
+
 
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
@@ -112,7 +118,7 @@ async def auth_gate(request: Request, call_next):
                         request.state.user = db.get_user_by_id(conn, sess["user_id"])
 
         if first_run:
-            if path not in ("/setup", "/healthz"):
+            if path not in ("/setup", "/healthz") and path not in _BROWSER_ICON_PATHS:
                 return RedirectResponse("/setup", status_code=302)
         else:
             # 차단된 계정 — 로그아웃 외 모든 접근 거부 (세션은 차단 시점에
@@ -125,7 +131,11 @@ async def auth_gate(request: Request, call_next):
                 return PlainTextResponse(
                     "차단된 계정입니다. 관리자에게 문의하세요.", status_code=403
                 )
-            public = path in _PUBLIC_PATHS or path.startswith("/auth/oidc/")
+            public = (
+                path in _PUBLIC_PATHS
+                or path in _BROWSER_ICON_PATHS
+                or path.startswith("/auth/oidc/")
+            )
             if request.state.user is None and not public:
                 target = path + (f"?{request.url.query}" if request.url.query else "")
                 return RedirectResponse(
