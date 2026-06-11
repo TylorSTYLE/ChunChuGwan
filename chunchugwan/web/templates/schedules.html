@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}스케줄 — 춘추관{% endblock %}
 {% block content %}
+<style>
+/* URL 컬럼이 내용 길이대로 과점하지 않도록 폭 제한 — 긴 URL 은 줄바꿈 */
+#schedules th:first-child { width: 35%; }
+/* 주기·실행 시각·버튼은 한 줄 유지 */
+#schedules td:not(:first-child) { white-space: nowrap; }
+</style>
 <div class="toolbar">
   <h2 style="margin:0">자동 재아카이빙</h2>
   <span class="muted">주기 최소 1시간 ~ 최대 1주일</span>
