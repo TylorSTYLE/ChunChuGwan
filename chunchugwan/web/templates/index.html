@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}목록 — 춘추관{% endblock %}
 {% block content %}
+<style>
+/* URL 컬럼이 내용 길이대로 과점하지 않도록 폭 제한 — 긴 URL 은 줄바꿈 */
+#pages th:first-child { width: 35%; }
+</style>
 {% if queued %}
 <div class="notice">아카이빙이 백그라운드에서 시작되었습니다: <span class="mono">{{ queued }}</span> — 완료되면 목록이 자동 갱신됩니다.</div>
 {% endif %}
