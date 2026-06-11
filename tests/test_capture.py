@@ -79,6 +79,60 @@ def test_capture_without_rules_keeps_content(site_url, tmp_path):
     assert "광고 위젯 문구" in result.content_html
 
 
+@pytest.fixture
+def cross_origin_url(tmp_path):
+    """다른 포트(=다른 origin)의 자원을 참조하는 페이지.
+
+    자원 서버는 CORS 헤더를 주지 않으므로 페이지 컨텍스트 fetch() 는 막히고,
+    context.request 폴백 경로가 실행된다 (pstatic.net 등 실서비스 재현).
+    """
+    asset = tmp_path / "asset"
+    asset.mkdir()
+    Image.new("RGB", (4, 4), (0, 0, 255)).save(asset / "remote.png")
+    asset_server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(asset))
+    )
+    asset_thread = threading.Thread(target=asset_server.serve_forever, daemon=True)
+    asset_thread.start()
+    asset_base = f"http://127.0.0.1:{asset_server.server_address[1]}"
+
+    site = tmp_path / "xo-site"
+    site.mkdir()
+    (site / "index.html").write_text(
+        f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>xo</title></head><body>
+  <img src="{asset_base}/remote.png" alt="원격">
+  <img src="{asset_base}/missing.png" alt="없음">
+</body></html>
+""",
+        encoding="utf-8",
+    )
+    site_server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    site_thread = threading.Thread(target=site_server.serve_forever, daemon=True)
+    site_thread.start()
+
+    yield f"http://127.0.0.1:{site_server.server_address[1]}/index.html"
+    site_server.shutdown()
+    asset_server.shutdown()
+    site_thread.join(timeout=5)
+    asset_thread.join(timeout=5)
+
+
+def test_capture_cors_blocked_image_inlined_via_fallback(cross_origin_url, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    capture.capture(cross_origin_url, out)
+
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    # CORS 로 fetch() 가 막혀도 context.request 폴백으로 인라인된다
+    assert "remote.png" not in page_html
+    assert "data:image/png;base64," in page_html
+    # 폴백으로도 못 받는 자원(404)만 원본 URL 유지
+    assert "missing.png" in page_html
+
+
 def test_capture_connect_error_on_closed_port(tmp_path):
     # 아무도 리슨하지 않는 포트 → ERR_CONNECTION_REFUSED → CaptureConnectError
     import socket
