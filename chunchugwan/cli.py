@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+import tarfile
+from pathlib import Path
 
 import click
 
+from . import backup as backup_mod
 from . import capture as capture_mod
 from . import config, db, differ, pipeline, storage
 
@@ -133,6 +136,89 @@ def diff(url: str, from_idx: int | None, to_idx: int | None) -> None:
             old_shot, new_shot, f"shotdiff-{old_snap['id']}-{new_snap['id']}"
         )
         click.echo(f"스크린샷 변경 픽셀 {ratio:.2%}  (하이라이트: {out_png})")
+
+
+def _counts_label(manifest: dict) -> str:
+    """manifest 의 counts 를 확인 메시지용 한 줄로."""
+    c = manifest.get("counts", {})
+    return (
+        f"페이지 {c.get('pages', '?')}개, 스냅샷 {c.get('snapshots', '?')}개, "
+        f"확인 기록 {c.get('checks', '?')}개"
+    )
+
+
+@main.command()
+@click.argument("dest", type=click.Path(path_type=Path), default=".", required=False)
+def backup(dest: Path) -> None:
+    """전체 백업 tar.gz 생성 — DB(인증 포함)·스냅샷 파일·rules.json."""
+    try:
+        out = backup_mod.create_backup(dest)
+    except OSError as e:
+        raise click.ClickException(f"백업 실패: {e}")
+    click.echo(f"백업 생성: {out}")
+
+
+@main.command()
+@click.argument("src", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--yes", is_flag=True, help="확인 없이 진행")
+def restore(src: Path, yes: bool) -> None:
+    """전체 백업에서 복원 — 현재 아카이브 루트를 백업 시점 상태로 교체."""
+    try:
+        manifest = backup_mod.read_manifest(src)
+    except (ValueError, tarfile.TarError, OSError) as e:
+        raise click.ClickException(f"백업 파일을 읽을 수 없습니다: {e}")
+    if manifest["kind"] != "full":
+        raise click.ClickException(
+            "전체 백업 파일이 아닙니다 — 아카이브 내보내기는 wccg import 로 가져오세요"
+        )
+    if not yes:
+        click.confirm(
+            f"현재 데이터(인증 포함)를 모두 백업 시점으로 대체합니다 "
+            f"(백업: {manifest.get('created_at', '?')}, {_counts_label(manifest)}). 계속할까요?",
+            abort=True,
+        )
+    try:
+        backup_mod.restore_backup(src)
+    except (ValueError, tarfile.TarError, OSError) as e:
+        raise click.ClickException(f"복원 실패: {e}")
+    click.echo(f"복원 완료: {_counts_label(manifest)}")
+
+
+@main.command()
+@click.argument("dest", type=click.Path(path_type=Path), default=".", required=False)
+def export(dest: Path) -> None:
+    """아카이브 데이터만 내보내기 — 페이지·스냅샷·확인 기록 + 파일 (인증·로그 제외)."""
+    try:
+        out = backup_mod.export_archive(dest)
+    except OSError as e:
+        raise click.ClickException(f"내보내기 실패: {e}")
+    click.echo(f"내보내기 생성: {out}")
+
+
+@main.command("import")
+@click.argument("src", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--mode", type=click.Choice(["merge", "overwrite"]), default="merge",
+    show_default=True, help="merge=기존 유지+중복 스킵, overwrite=아카이브 데이터 교체",
+)
+@click.option("--yes", is_flag=True, help="overwrite 확인 없이 진행")
+def import_cmd(src: Path, mode: str, yes: bool) -> None:
+    """내보낸 아카이브 데이터 가져오기 (인증 데이터는 건드리지 않음)."""
+    if mode == "overwrite" and not yes:
+        click.confirm(
+            "기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. "
+            "계속할까요?",
+            abort=True,
+        )
+    try:
+        result = backup_mod.import_archive(src, mode=mode)
+    except (ValueError, tarfile.TarError, OSError) as e:
+        raise click.ClickException(f"가져오기 실패: {e}")
+    click.echo(
+        f"가져오기 완료 [{mode}]: 페이지 +{result.pages_added}, "
+        f"스냅샷 +{result.snapshots_added} (스킵 {result.snapshots_skipped}), "
+        f"확인 기록 +{result.checks_added}"
+    )
 
 
 def _is_loopback(host: str) -> bool:

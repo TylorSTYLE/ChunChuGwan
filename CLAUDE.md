@@ -27,6 +27,10 @@ uv run wccg diff <url>                   # 최신 2개 스냅샷 비교
 uv run wccg diff <url> --from 1 --to 3
 uv run wccg serve                        # 대시보드 (127.0.0.1:8765)
 uv run wccg serve --host 0.0.0.0         # 외부 노출 (인증 켜진 상태에서만 허용)
+uv run wccg backup [dest]                # 전체 백업 tar.gz (DB·인증 포함)
+uv run wccg restore <file> [--yes]       # 전체 복원 (현재 데이터를 백업 시점으로 교체)
+uv run wccg export [dest]                # 아카이브 데이터만 내보내기 (인증·로그 제외)
+uv run wccg import <file> --mode merge   # 가져오기 (merge | overwrite)
 uv run pytest                            # 테스트
 docker compose up -d dashboard           # 대시보드 컨테이너 (127.0.0.1:8765)
 docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
@@ -123,5 +127,10 @@ archive/
       관리자 자동 등록, 없으면 `/setup` 등록 페이지 (등록 후 페이지·API 차단).
 - [x] **A8 패스키 2FA**: WebAuthn 자격증명 등록/삭제(`/settings/passkey`),
       2단계 로그인에서 TOTP 와 병행 (둘 중 하나만 있어도 2단계 발동).
+- [x] **M6 백업/복원**: `backup.py` — 전체 백업/복원(`wccg backup`/`restore`:
+      DB 일관 복사 + sites + rules.json 을 tar.gz 로, 인증 데이터 포함, 복원은
+      루트 전체 교체). 아카이브 데이터만 내보내기/가져오기(`wccg export`/
+      `import --mode merge|overwrite`: pages·snapshots·checks + 스냅샷 파일만 —
+      인증 테이블·실행 로그 제외, merge 는 dir_name 기준 중복 스킵).
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.
