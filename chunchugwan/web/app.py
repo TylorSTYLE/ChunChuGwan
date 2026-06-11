@@ -28,13 +28,14 @@ from fastapi.responses import (
 )
 
 from .. import auth, config, db, differ, pipeline, storage
-from . import auth_routes
+from . import auth_routes, system_routes
 from .templating import templates
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="춘추관")
 app.include_router(auth_routes.router)
+app.include_router(system_routes.router)
 
 # 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)
 # /login/passkey* 는 패스워드 통과 후 pending 세션 단계라 user 가 아직 없다 —

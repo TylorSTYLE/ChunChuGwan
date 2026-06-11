@@ -98,8 +98,10 @@ archive/
 
 ## 대시보드 디자인 방향
 
-- 화면 5개: 목록(index) / 타임라인(timeline) / 스냅샷 뷰어(snapshot) / diff 뷰어(diff)
+- 화면 6개: 목록(index) / 타임라인(timeline) / 스냅샷 뷰어(snapshot) / diff 뷰어(diff)
   / 로그(logs — 실행 기록, 도메인·페이지·스냅샷·상태 필터 + 단계별 상세 펼침)
+  / 시스템(system — 백업/복원·내보내기/가져오기. 백업에 인증 데이터가 포함되므로
+  인증이 켜진 환경에서는 관리자 전용)
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
 - diff 뷰: 텍스트 side-by-side + 스크린샷 비교(슬라이더 또는 토글)
@@ -132,5 +134,6 @@ archive/
       루트 전체 교체). 아카이브 데이터만 내보내기/가져오기(`wccg export`/
       `import --mode merge|overwrite`: pages·snapshots·checks + 스냅샷 파일만 —
       인증 테이블·실행 로그 제외, merge 는 dir_name 기준 중복 스킵).
+      대시보드 시스템 메뉴(`/system`, 관리자 전용)에서도 동일 기능 제공.
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.
