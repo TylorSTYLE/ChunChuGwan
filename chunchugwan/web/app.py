@@ -28,7 +28,7 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from .. import auth, config, db, differ, pipeline, scheduler, storage
+from .. import auth, config, db, deletion, differ, pipeline, scheduler, storage
 from . import auth_routes, permissions, system_routes
 from .templating import templates
 
@@ -190,7 +190,7 @@ def healthz() -> dict:
 
 
 @app.get("/archives", response_class=HTMLResponse)
-def index(request: Request, queued: str = "", error: str = ""):
+def index(request: Request, queued: str = "", error: str = "", notice: str = ""):
     active = _active_snapshot()
     with db.connect() as conn:
         pages = db.list_pages(conn)
@@ -208,7 +208,7 @@ def index(request: Request, queued: str = "", error: str = ""):
     return templates.TemplateResponse(
         request, "index.html",
         {
-            "pages": pages, "queued": queued, "error": error,
+            "pages": pages, "queued": queued, "error": error, "notice": notice,
             "active_urls": set(active), "active_list": sorted(active),
             "pending_new": pending_new, "schedule_labels": schedule_labels,
         },
@@ -299,7 +299,9 @@ _SCHEDULE_OPTIONS = [
 
 
 @app.get("/page/{page_id}", response_class=HTMLResponse)
-def timeline(request: Request, page_id: int, queued: int = 0):
+def timeline(
+    request: Request, page_id: int, queued: int = 0, notice: str = "", error: str = ""
+):
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
         if page is None:
@@ -317,6 +319,7 @@ def timeline(request: Request, page_id: int, queued: int = 0):
         request, "timeline.html",
         {
             "page": page, "items": items, "checks": checks, "queued": queued,
+            "notice": notice, "error": error,
             "schedule": schedule,
             "schedule_label": (
                 scheduler.format_interval(schedule["interval_seconds"]) if schedule else ""
@@ -595,6 +598,12 @@ def _require_archiver(request: Request) -> None:
         raise HTTPException(403, "아카이빙 권한이 없습니다")
 
 
+def _require_deleter(request: Request) -> None:
+    """삭제 권한 가드 — 되돌릴 수 없는 작업이라 관리자 전용."""
+    if not permissions.can_delete(request.state.user):
+        raise HTTPException(403, "삭제 권한이 없습니다 (관리자 전용)")
+
+
 @app.post("/archive")
 def archive_new(request: Request, background: BackgroundTasks, url: str = Form(...)):
     """대시보드에서 새 URL 아카이빙. URL 검증은 동기로, 캡처는 백그라운드로."""
@@ -603,7 +612,7 @@ def archive_new(request: Request, background: BackgroundTasks, url: str = Form(.
         norm = storage.normalize_url(url)
     except ValueError as exc:
         return RedirectResponse(
-            f"/archives?error={quote(str(exc), safe='')}", status_code=303
+            f"/archives?error={quote(f'아카이빙 실패: {exc}', safe='')}", status_code=303
         )
     _queue_archive(background, norm)
     return RedirectResponse(f"/archives?queued={quote(norm, safe='')}", status_code=303)
@@ -623,3 +632,47 @@ def rearchive(
         raise HTTPException(404, "페이지 없음")
     _queue_archive(background, page["url"], force=force)
     return RedirectResponse(url=f"/page/{page_id}?queued=1", status_code=303)
+
+
+_BUSY_MSG = "아카이빙이 진행 중인 페이지입니다 — 완료 후 다시 시도하세요"
+
+
+@app.post("/page/{page_id}/delete")
+def page_delete(request: Request, page_id: int):
+    """페이지 전체 삭제 (모든 스냅샷·확인 기록·스케줄). 관리자 전용."""
+    _require_deleter(request)
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, "페이지 없음")
+    # 진행 중인 아카이빙과 경합하면 삭제 직후 스냅샷이 다시 생긴다 — 거부
+    if page["url"] in _active_snapshot():
+        return RedirectResponse(
+            f"/archives?error={quote(_BUSY_MSG, safe='')}", status_code=303
+        )
+    result = deletion.delete_page(page_id)
+    msg = f"삭제됨: {result.url} (스냅샷 {result.snapshots_deleted}개)"
+    return RedirectResponse(
+        f"/archives?notice={quote(msg, safe='')}", status_code=303
+    )
+
+
+@app.post("/snapshot/{snapshot_id}/delete")
+def snapshot_delete(request: Request, snapshot_id: int):
+    """단일 스냅샷 삭제. 관리자 전용.
+
+    다음 스냅샷의 changed 재계산(신/구 비교 보정)은 deletion → db 계층이 한다.
+    """
+    _require_deleter(request)
+    snap = _load_snapshot(snapshot_id)
+    # 진행 중이면 파이프라인이 '직전 스냅샷'을 읽는 중일 수 있다 — 거부
+    if snap["page_url"] in _active_snapshot():
+        return RedirectResponse(
+            f"/page/{snap['page_id']}?error={quote(_BUSY_MSG, safe='')}",
+            status_code=303,
+        )
+    deletion.delete_snapshot(snapshot_id)
+    msg = f"스냅샷 삭제됨: {snap['taken_at']}"
+    return RedirectResponse(
+        f"/page/{snap['page_id']}?notice={quote(msg, safe='')}", status_code=303
+    )

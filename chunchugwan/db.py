@@ -240,6 +240,74 @@ def insert_snapshot(conn: sqlite3.Connection, page_id: int, **fields) -> int:
     return cur.lastrowid
 
 
+def _adjacent_snapshot(
+    conn: sqlite3.Connection, snap: sqlite3.Row, *, after: bool
+) -> sqlite3.Row | None:
+    """(taken_at, id) 순서상 바로 앞/뒤 스냅샷 (없으면 None)."""
+    op, order = (">", "ASC") if after else ("<", "DESC")
+    return conn.execute(
+        f"""
+        SELECT * FROM snapshots
+        WHERE page_id = ?
+          AND (taken_at {op} ? OR (taken_at = ? AND id {op} ?))
+        ORDER BY taken_at {order}, id {order} LIMIT 1
+        """,
+        (snap["page_id"], snap["taken_at"], snap["taken_at"], snap["id"]),
+    ).fetchone()
+
+
+def delete_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> bool:
+    """스냅샷 row 삭제. 없는 id 면 False.
+
+    - archive_logs 의 snapshot_id 참조는 NULL 로 해제 (실행 이력은 보존).
+    - 바로 다음 스냅샷의 changed 를 '새 직전 스냅샷' 기준으로 재계산해
+      히스토리의 변경 표시가 어긋나지 않게 한다 (예: A→B→A 에서 B 를
+      지우면 마지막 스냅샷은 '동일'이 된다). 첫 스냅샷이 되면 changed=1.
+    """
+    snap = conn.execute(
+        "SELECT * FROM snapshots WHERE id = ?", (snapshot_id,)
+    ).fetchone()
+    if snap is None:
+        return False
+    prev = _adjacent_snapshot(conn, snap, after=False)
+    nxt = _adjacent_snapshot(conn, snap, after=True)
+    conn.execute(
+        "UPDATE archive_logs SET snapshot_id = NULL WHERE snapshot_id = ?",
+        (snapshot_id,),
+    )
+    conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
+    if nxt is not None:
+        changed = 1 if prev is None else int(prev["content_hash"] != nxt["content_hash"])
+        conn.execute(
+            "UPDATE snapshots SET changed = ? WHERE id = ?", (changed, nxt["id"])
+        )
+    return True
+
+
+def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
+    """페이지와 종속 데이터(스냅샷·확인 기록·스케줄)를 일괄 삭제. 없으면 False.
+
+    archive_logs 는 실행 이력으로 보존하되 page_id/snapshot_id 참조만 해제한다.
+    """
+    if get_page_by_id(conn, page_id) is None:
+        return False
+    conn.execute(
+        """
+        UPDATE archive_logs SET snapshot_id = NULL
+        WHERE snapshot_id IN (SELECT id FROM snapshots WHERE page_id = ?)
+        """,
+        (page_id,),
+    )
+    conn.execute(
+        "UPDATE archive_logs SET page_id = NULL WHERE page_id = ?", (page_id,)
+    )
+    conn.execute("DELETE FROM checks WHERE page_id = ?", (page_id,))
+    conn.execute("DELETE FROM schedules WHERE page_id = ?", (page_id,))
+    conn.execute("DELETE FROM snapshots WHERE page_id = ?", (page_id,))
+    conn.execute("DELETE FROM pages WHERE id = ?", (page_id,))
+    return True
+
+
 def insert_check(conn: sqlite3.Connection, page_id: int, content_hash: str) -> None:
     """콘텐츠 동일로 저장을 생략한 확인 기록 추가."""
     conn.execute(

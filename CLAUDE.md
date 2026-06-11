@@ -25,6 +25,7 @@ uv run wccg list                         # 전체 아카이브 현황
 uv run wccg history <url>                # 해당 URL 스냅샷 목록
 uv run wccg diff <url>                   # 최신 2개 스냅샷 비교
 uv run wccg diff <url> --from 1 --to 3
+uv run wccg delete <url>                 # 아카이브 전체 삭제 (--snapshot N 으로 하나만)
 uv run wccg schedule add <url> --every 12h  # 주기적 재아카이빙 등록 (1h ~ 1w)
 uv run wccg schedule list                # 스케줄 목록 / remove <url> 로 해제
 uv run wccg schedule run                 # 기한이 된 스케줄 1회 실행 (cron 용)

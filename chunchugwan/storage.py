@@ -153,6 +153,47 @@ def snapshot_files(snapshot_dir: Path) -> list[dict[str, object]]:
     return out
 
 
+def _validate_path_parts(*parts: str) -> None:
+    """디렉토리 경로 조각 검증 — 구분자/상위 참조가 섞이면 ValueError.
+
+    값은 DB 에 기록된 domain/slug/dir_name 만 쓰지만(app.py 보안 노트),
+    SITES_DIR 밖을 지우는 사고가 없도록 삭제 직전에 한 번 더 막는다.
+    """
+    for part in parts:
+        if not part or "/" in part or "\\" in part or part in (".", ".."):
+            raise ValueError(f"잘못된 경로 조각: {part!r}")
+
+
+def _prune_empty_dirs(domain: str) -> None:
+    """빈 페이지/도메인 디렉토리 정리 (비어 있지 않으면 그대로 둔다)."""
+    domain_dir = config.SITES_DIR / domain
+    if not domain_dir.is_dir():
+        return
+    for d in domain_dir.iterdir():
+        try:
+            d.rmdir()
+        except OSError:
+            pass
+    try:
+        domain_dir.rmdir()
+    except OSError:
+        pass
+
+
+def delete_snapshot_dir(domain: str, slug: str, dir_name: str) -> None:
+    """스냅샷 디렉토리 하나 삭제 (이미 없으면 무시). 빈 상위 디렉토리도 정리."""
+    _validate_path_parts(domain, slug, dir_name)
+    shutil.rmtree(page_dir(domain, slug) / dir_name, ignore_errors=True)
+    _prune_empty_dirs(domain)
+
+
+def delete_page_dir(domain: str, slug: str) -> None:
+    """페이지 디렉토리 전체(모든 스냅샷) 삭제. 빈 도메인 디렉토리도 정리."""
+    _validate_path_parts(domain, slug)
+    shutil.rmtree(page_dir(domain, slug), ignore_errors=True)
+    _prune_empty_dirs(domain)
+
+
 def finalize_snapshot(
     tmp_dir: Path,
     domain: str,
