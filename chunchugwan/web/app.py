@@ -352,8 +352,18 @@ def timeline(
     )
 
 
+def _schedule_redirect(page_id: int, next_path: str) -> str:
+    """스케줄 변경 후 돌아갈 경로. 열린 리다이렉트 방지 — 알려진 경로만 허용."""
+    return "/schedules" if next_path == "/schedules" else f"/page/{page_id}"
+
+
 @app.post("/page/{page_id}/schedule")
-def schedule_set(request: Request, page_id: int, interval: int = Form(...)):
+def schedule_set(
+    request: Request,
+    page_id: int,
+    interval: int = Form(...),
+    next_path: str = Form("", alias="next"),
+):
     """페이지 반복 주기 등록/변경. 주기는 1시간 ~ 1주일(초 단위)."""
     _require_archiver(request)
     with db.connect() as conn:
@@ -364,11 +374,13 @@ def schedule_set(request: Request, page_id: int, interval: int = Form(...)):
         scheduler.set_schedule(page["url"], interval)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return RedirectResponse(f"/page/{page_id}", status_code=303)
+    return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
 
 
 @app.post("/page/{page_id}/schedule/delete")
-def schedule_delete(request: Request, page_id: int):
+def schedule_delete(
+    request: Request, page_id: int, next_path: str = Form("", alias="next")
+):
     """페이지 반복 주기 해제."""
     _require_archiver(request)
     with db.connect() as conn:
@@ -376,7 +388,22 @@ def schedule_delete(request: Request, page_id: int):
     if page is None:
         raise HTTPException(404, "페이지 없음")
     scheduler.remove_schedule(page["url"])
-    return RedirectResponse(f"/page/{page_id}", status_code=303)
+    return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
+
+
+@app.get("/schedules", response_class=HTMLResponse)
+def schedules_view(request: Request):
+    """자동 재아카이빙 목록 — 등록된 스케줄 현황과 주기 변경·해제 관리."""
+    with db.connect() as conn:
+        rows = db.list_schedules(conn)
+    items = [
+        {"row": s, "label": scheduler.format_interval(s["interval_seconds"])}
+        for s in rows
+    ]
+    return templates.TemplateResponse(
+        request, "schedules.html",
+        {"items": items, "interval_options": _SCHEDULE_OPTIONS},
+    )
 
 
 def _load_snapshot(snapshot_id: int):

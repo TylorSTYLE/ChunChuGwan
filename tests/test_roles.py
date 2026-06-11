@@ -92,6 +92,15 @@ def test_viewer_cannot_manage_schedule(client):
     assert client.post("/page/1/schedule/delete").status_code == 403
 
 
+def test_viewer_sees_schedules_readonly(client):
+    """viewer 도 스케줄 화면은 볼 수 있지만 변경/해제 폼은 보이지 않는다."""
+    _login(client, "viewer@test.co")
+    res = client.get("/schedules")
+    assert res.status_code == 200
+    assert "주기 변경" not in res.text
+    assert "/schedule/delete" not in res.text
+
+
 def test_archiver_can_manage_schedule(client):
     _login(client, "archiver@test.co")
     # 없는 페이지 — 권한 통과 후 404
