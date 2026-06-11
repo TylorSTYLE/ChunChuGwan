@@ -11,9 +11,23 @@
   <tr><th>페이지 / 스냅샷 / 확인 기록</th>
       <td>{{ counts.pages }} / {{ counts.snapshots }} / {{ counts.checks }}</td></tr>
   <tr><th>사용자</th><td>{{ counts.users }}</td></tr>
-  <tr><th>DB / 스냅샷 파일 용량</th>
-      <td>{{ db_bytes|filesize }} / {{ sites_bytes|filesize }}</td></tr>
+  <tr><th>DB / 스냅샷 파일 / 공유 자원 용량</th>
+      <td>{{ db_bytes|filesize }} / {{ sites_bytes|filesize }} / {{ resources_bytes|filesize }}</td></tr>
 </table>
+
+<h3>저장 공간 압축</h3>
+<p class="muted" style="font-size:12px; max-width:640px">
+  구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP)로
+  변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번
+  실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축되므로
+  압축 도입 이전의 스냅샷이 있을 때 한 번 실행하면 됩니다.
+</p>
+<div class="toolbar">
+  <form class="inline" method="post" action="/system/compact"
+        onsubmit="return confirm('기존 스냅샷 파일을 압축 저장 형태로 변환합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')">
+    <button type="submit">저장 공간 압축 실행</button>
+  </form>
+</div>
 
 <h3>전체 백업/복원</h3>
 <p class="muted" style="font-size:12px; max-width:640px">

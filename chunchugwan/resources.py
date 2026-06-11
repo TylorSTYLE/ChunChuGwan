@@ -31,6 +31,7 @@ import hashlib
 import logging
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -224,3 +225,63 @@ def compact_snapshot_dir(snap_dir: Path) -> CompactStats:
             stats.after_bytes += webp.stat().st_size
 
     return stats
+
+
+def snapshot_dirs() -> list[Path]:
+    """확정된(meta.json 이 있는) 스냅샷 디렉토리 전체 — compact 대상 스캔.
+
+    finalize_snapshot 은 meta.json 을 마지막에 쓰므로, 저장 진행 중인
+    디렉토리는 자연스럽게 제외된다.
+    """
+    if not config.SITES_DIR.is_dir():
+        return []
+    return sorted(
+        p for p in config.SITES_DIR.glob("*/*/*") if (p / "meta.json").is_file()
+    )
+
+
+def _tree_bytes(root: Path) -> int:
+    """디렉토리 전체 파일 용량 (없으면 0)."""
+    if not root.is_dir():
+        return 0
+    return sum(f.stat().st_size for f in root.rglob("*") if f.is_file())
+
+
+@dataclass
+class CompactRunResult:
+    """compact_all 결과 — 전체 대상 수와 변환 합계."""
+
+    total: int = 0          # 대상 스냅샷 수
+    converted: int = 0      # 이번 실행에서 변환된 스냅샷 수
+    externalized: int = 0   # CAS 로 추출한 자원 수
+    before_bytes: int = 0
+    after_bytes: int = 0    # CAS 에 새로 추가된 자원 용량 포함
+
+    @property
+    def saved_bytes(self) -> int:
+        return self.before_bytes - self.after_bytes
+
+
+def compact_all() -> CompactRunResult:
+    """모든 확정 스냅샷에 압축 변환을 적용 (멱등).
+
+    CLI(``wccg compact``)와 대시보드 시스템 메뉴가 공유하는 단일 진입점.
+    after_bytes 에는 추출 자원이 CAS 에 차지하는 증가분을 포함해 절약량이
+    과장되지 않게 한다. 변환이 있었으면 픽셀 diff 캐시를 비운다 —
+    스크린샷 형식이 바뀌어 어긋날 수 있고, 재생성 가능하다.
+    """
+    dirs = snapshot_dirs()
+    result = CompactRunResult(total=len(dirs))
+    cas_before = _tree_bytes(config.RESOURCES_DIR)
+    for d in dirs:
+        stats = compact_snapshot_dir(d)
+        if stats.before_bytes == 0:
+            continue  # 이미 변환된 스냅샷
+        result.converted += 1
+        result.externalized += stats.externalized
+        result.before_bytes += stats.before_bytes
+        result.after_bytes += stats.after_bytes
+    result.after_bytes += _tree_bytes(config.RESOURCES_DIR) - cas_before
+    if result.converted:
+        shutil.rmtree(config.CACHE_DIR, ignore_errors=True)
+    return result

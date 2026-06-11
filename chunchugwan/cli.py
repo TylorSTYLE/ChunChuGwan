@@ -214,49 +214,26 @@ def compact(yes: bool) -> None:
     내용 보존 변환이라 스냅샷이 담는 정보는 그대로다 (불변 원칙의 유일한 예외).
     새 스냅샷은 저장 시점에 같은 형태로 압축되므로 한 번만 실행하면 된다.
     """
-    import shutil
-
-    snap_dirs = sorted(
-        p for p in config.SITES_DIR.glob("*/*/*")
-        if (p / "meta.json").is_file()
-    ) if config.SITES_DIR.is_dir() else []
-    if not snap_dirs:
+    count = len(resources.snapshot_dirs())
+    if count == 0:
         click.echo("압축할 스냅샷이 없습니다.")
         return
     if not yes:
         click.confirm(
-            f"스냅샷 {len(snap_dirs)}개의 파일을 압축 저장 형태(page.html.gz·"
+            f"스냅샷 {count}개의 파일을 압축 저장 형태(page.html.gz·"
             "raw.html.gz·screenshot.webp + 공유 자원)로 변환합니다. 계속할까요?",
             abort=True,
         )
 
-    def _dir_bytes(root: Path) -> int:
-        if not root.is_dir():
-            return 0
-        return sum(f.stat().st_size for f in root.rglob("*") if f.is_file())
-
-    cas_before = _dir_bytes(config.RESOURCES_DIR)
-    converted = externalized = before = after = 0
-    for d in snap_dirs:
-        stats = resources.compact_snapshot_dir(d)
-        if stats.before_bytes == 0:
-            continue  # 이미 변환된 스냅샷
-        converted += 1
-        externalized += stats.externalized
-        before += stats.before_bytes
-        after += stats.after_bytes
-    # 추출된 자원이 CAS 에 차지하는 용량도 '후' 합계에 포함해야 정직한 수치다
-    after += _dir_bytes(config.RESOURCES_DIR) - cas_before
-
-    # 스크린샷 형식이 바뀌어 픽셀 diff 캐시가 어긋날 수 있다 — 재생성 가능하므로 비운다
-    shutil.rmtree(config.CACHE_DIR, ignore_errors=True)
-
-    if converted == 0:
-        click.echo(f"스냅샷 {len(snap_dirs)}개 모두 이미 압축 형태입니다.")
+    result = resources.compact_all()
+    if result.converted == 0:
+        click.echo(f"스냅샷 {result.total}개 모두 이미 압축 형태입니다.")
         return
     click.echo(
-        f"변환 {converted}/{len(snap_dirs)}개 · 공유 자원 {externalized}개 추출 · "
-        f"{_fmt_mb(before)} → {_fmt_mb(after)} ({_fmt_mb(before - after)} 절약)"
+        f"변환 {result.converted}/{result.total}개 · "
+        f"공유 자원 {result.externalized}개 추출 · "
+        f"{_fmt_mb(result.before_bytes)} → {_fmt_mb(result.after_bytes)} "
+        f"({_fmt_mb(result.saved_bytes)} 절약)"
     )
 
 

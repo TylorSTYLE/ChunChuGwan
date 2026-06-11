@@ -147,6 +147,7 @@ def test_system_requires_admin(auth_client):
     _login(auth_client, "user@test.co", "userpass1234")
     assert auth_client.get("/system").status_code == 403
     assert auth_client.post("/system/backup").status_code == 403
+    assert auth_client.post("/system/compact").status_code == 403
     assert 'href="/system"' not in auth_client.get("/").text  # 메뉴도 숨김
 
 
@@ -161,3 +162,37 @@ def test_system_requires_login(auth_client):
     res = auth_client.get("/system", follow_redirects=False)
     assert res.status_code == 302
     assert res.headers["location"].startswith("/login")
+
+
+# ---- 저장 공간 압축 ----
+
+
+def test_compact_button_and_run(client):
+    """시스템 메뉴의 압축 실행 — 구형 스냅샷이 압축 형태로 변환된다."""
+    res = client.get("/system")
+    assert "저장 공간 압축" in res.text and 'action="/system/compact"' in res.text
+
+    snap_dir = (
+        storage.page_dir("example.com", storage.url_to_slug(URL)) / "2026-06-01T00-00-00"
+    )
+    (snap_dir / "page.html").write_text("<html>본문</html>", encoding="utf-8")
+    (snap_dir / "raw.html").write_text("<html>원본</html>", encoding="utf-8")
+    (snap_dir / "meta.json").write_text("{}", encoding="utf-8")
+
+    res = client.post("/system/compact")
+    assert res.status_code == 200
+    assert "압축 완료: 변환 1/1개" in res.text
+    assert (snap_dir / "page.html.gz").is_file()
+    assert (snap_dir / "raw.html.gz").is_file()
+    assert not (snap_dir / "page.html").exists()
+
+    # 멱등 — 두 번째 실행은 변환할 것이 없다
+    res = client.post("/system/compact")
+    assert "모두 이미 압축 형태" in res.text
+
+
+def test_compact_without_snapshots(client, tmp_path, monkeypatch):
+    _patch_root(monkeypatch, tmp_path / "empty")
+    res = client.post("/system/compact")
+    assert res.status_code == 200
+    assert "압축할 스냅샷이 없습니다" in res.text
