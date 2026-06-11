@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -27,13 +28,42 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from .. import auth, config, db, differ, pipeline, storage
+from .. import auth, config, db, differ, pipeline, scheduler, storage
 from . import auth_routes, system_routes
 from .templating import templates
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="춘추관")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """서버 구동 동안 스케줄러 폴링 스레드 운영 (WCCG_SCHEDULER=off 면 비활성).
+
+    진행 중 작업 레지스트리(claim/release)를 같이 써서 수동 재아카이빙과
+    같은 URL 이 동시에 돌지 않게 한다.
+    """
+    stop = threading.Event()
+    thread: threading.Thread | None = None
+    if config.SCHEDULER_ENABLED:
+        thread = threading.Thread(
+            target=scheduler.run_loop,
+            args=(stop,),
+            kwargs={
+                "poll_seconds": config.SCHEDULER_POLL_SECONDS,
+                "claim": _register_job,
+                "release": _unregister_job,
+            },
+            name="wccg-scheduler",
+            daemon=True,
+        )
+        thread.start()
+    yield
+    stop.set()
+    if thread is not None:
+        thread.join(timeout=5)
+
+
+app = FastAPI(title="춘추관", lifespan=_lifespan)
 app.include_router(auth_routes.router)
 app.include_router(system_routes.router)
 
@@ -154,6 +184,10 @@ def index(request: Request, queued: str = "", error: str = ""):
     active = _active_snapshot()
     with db.connect() as conn:
         pages = db.list_pages(conn)
+        schedules = db.list_schedules(conn)
+    schedule_labels = {
+        s["page_id"]: scheduler.format_interval(s["interval_seconds"]) for s in schedules
+    }
     # 아직 pages 행이 없는 신규 URL 진행 건은 별도 행으로 보여준다
     known = {p["url"] for p in pages}
     pending_new = [
@@ -166,7 +200,7 @@ def index(request: Request, queued: str = "", error: str = ""):
         {
             "pages": pages, "queued": queued, "error": error,
             "active_urls": set(active), "active_list": sorted(active),
-            "pending_new": pending_new,
+            "pending_new": pending_new, "schedule_labels": schedule_labels,
         },
     )
 
@@ -246,6 +280,13 @@ def dashboard(request: Request):
     )
 
 
+# 대시보드 주기 선택지 (초 단위 — 1시간 ~ 1주일)
+_SCHEDULE_OPTIONS = [
+    (3600, "1시간"), (3 * 3600, "3시간"), (6 * 3600, "6시간"), (12 * 3600, "12시간"),
+    (86400, "1일"), (3 * 86400, "3일"), (7 * 86400, "1주일"),
+]
+
+
 @app.get("/page/{page_id}", response_class=HTMLResponse)
 def timeline(request: Request, page_id: int, queued: int = 0):
     with db.connect() as conn:
@@ -254,6 +295,7 @@ def timeline(request: Request, page_id: int, queued: int = 0):
             raise HTTPException(404, "페이지 없음")
         snaps = db.list_snapshots(conn, page_id)
         checks = db.list_checks(conn, page_id)
+        schedule = db.get_schedule(conn, page_id)
 
     items = []
     for i, s in enumerate(snaps, 1):
@@ -262,8 +304,40 @@ def timeline(request: Request, page_id: int, queued: int = 0):
     items.reverse()  # 최신 먼저
     return templates.TemplateResponse(
         request, "timeline.html",
-        {"page": page, "items": items, "checks": checks, "queued": queued},
+        {
+            "page": page, "items": items, "checks": checks, "queued": queued,
+            "schedule": schedule,
+            "schedule_label": (
+                scheduler.format_interval(schedule["interval_seconds"]) if schedule else ""
+            ),
+            "interval_options": _SCHEDULE_OPTIONS,
+        },
     )
+
+
+@app.post("/page/{page_id}/schedule")
+def schedule_set(page_id: int, interval: int = Form(...)):
+    """페이지 반복 주기 등록/변경. 주기는 1시간 ~ 1주일(초 단위)."""
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, "페이지 없음")
+    try:
+        scheduler.set_schedule(page["url"], interval)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return RedirectResponse(f"/page/{page_id}", status_code=303)
+
+
+@app.post("/page/{page_id}/schedule/delete")
+def schedule_delete(page_id: int):
+    """페이지 반복 주기 해제."""
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, "페이지 없음")
+    scheduler.remove_schedule(page["url"])
+    return RedirectResponse(f"/page/{page_id}", status_code=303)
 
 
 def _load_snapshot(snapshot_id: int):

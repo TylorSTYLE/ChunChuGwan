@@ -26,6 +26,12 @@ TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")
 DASHBOARD_HOST = os.environ.get("WCCG_HOST", "127.0.0.1")
 DASHBOARD_PORT = 8765
 
+# ---- 스케줄러 (주기적 재아카이빙) ----
+# 대시보드(serve) 프로세스 안에서 폴링 스레드로 동작한다.
+# off 면 serve 는 스케줄을 실행하지 않는다 — cron 의 `wccg schedule run` 으로 대체 가능.
+SCHEDULER_ENABLED = os.environ.get("WCCG_SCHEDULER", "on") != "off"
+SCHEDULER_POLL_SECONDS = 60
+
 # ---- 인증 ----
 # WCCG_AUTH=off 는 loopback 바인딩일 때만 허용 (cli.serve 에서 강제)
 AUTH_ENABLED = os.environ.get("WCCG_AUTH", "on") != "off"

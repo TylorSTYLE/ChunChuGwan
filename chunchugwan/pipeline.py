@@ -100,7 +100,7 @@ def archive_url(url: str, force: bool = False, source: str = "cli") -> ArchiveOu
 
     잘못된 URL은 ValueError, 캡처 실패는 capture.CaptureError 를 던진다.
     해시가 직전 스냅샷과 같으면 checks 기록만 남긴다 (force 시 예외).
-    source 는 실행 주체('cli' | 'web') — archive_logs 에 기록된다.
+    source 는 실행 주체('cli' | 'web' | 'schedule') — archive_logs 에 기록된다.
     """
     run = _RunLog(url, source)
     try:
@@ -129,9 +129,13 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
                 remove_selectors=tuple(rules.get("remove_selectors") or ()),
             )
         except capture.CaptureError as e:
-            # 스킴 생략 입력에 https 를 추정 보완한 경우, HTTP 전용 사이트
-            # (443 닫힘 등)일 수 있으므로 http 로 한 번 더 시도한다.
-            if not (storage.scheme_inferred(url) and norm.startswith("https://")):
+            # HTTP 전용 사이트(443 닫힘 등)일 수 있으므로 http 로 한 번 더 시도한다:
+            # 스킴 생략 입력에 https 를 추정 보완한 경우는 모든 캡처 실패에서,
+            # 명시적 https 는 서버 연결 자체가 안 된 실패에 한해서만.
+            retriable = storage.scheme_inferred(url) or isinstance(
+                e, capture.CaptureConnectError
+            )
+            if not (retriable and norm.startswith("https://")):
                 raise
             run.step("capture", f"https 캡처 실패 — http 로 재시도: {str(e).splitlines()[0]}")
             norm = "http://" + norm.removeprefix("https://")

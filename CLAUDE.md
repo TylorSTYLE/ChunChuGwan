@@ -25,6 +25,9 @@ uv run wccg list                         # 전체 아카이브 현황
 uv run wccg history <url>                # 해당 URL 스냅샷 목록
 uv run wccg diff <url>                   # 최신 2개 스냅샷 비교
 uv run wccg diff <url> --from 1 --to 3
+uv run wccg schedule add <url> --every 12h  # 주기적 재아카이빙 등록 (1h ~ 1w)
+uv run wccg schedule list                # 스케줄 목록 / remove <url> 로 해제
+uv run wccg schedule run                 # 기한이 된 스케줄 1회 실행 (cron 용)
 uv run wccg serve                        # 대시보드 (127.0.0.1:8765)
 uv run wccg serve --host 0.0.0.0         # 외부 노출 (인증 켜진 상태에서만 허용)
 uv run wccg backup [dest]                # 전체 백업 tar.gz (DB·인증 포함)
@@ -83,7 +86,9 @@ archive/
 - `pages` — 정규화된 URL 단위 (1 URL = 1 row)
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관
 - `checks` — 중복으로 저장 생략된 확인 기록
-- `archive_logs` — 아카이브 실행 로그 (성공/실패, 단계별 소요시간 JSON, 출처 cli/web)
+- `archive_logs` — 아카이브 실행 로그 (성공/실패, 단계별 소요시간 JSON,
+  출처 cli/web/schedule)
+- `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1주일, 다음 실행 시각)
 - `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
   서버사이드 세션, OIDC state 1회용 기록)
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
@@ -137,5 +142,10 @@ archive/
       `import --mode merge|overwrite`: pages·snapshots·checks + 스냅샷 파일만 —
       인증 테이블·실행 로그 제외, merge 는 dir_name 기준 중복 스킵).
       대시보드 시스템 메뉴(`/system`, 관리자 전용)에서도 동일 기능 제공.
+- [x] **M7 주기적 재아카이빙**: `scheduler.py` — 페이지별 반복 주기(최소 1시간
+      ~ 최대 1주일) 등록, `schedules` 테이블. CLI `wccg schedule
+      add/list/remove/run`, serve 프로세스의 백그라운드 폴링 스레드
+      (`WCCG_SCHEDULER=off` 로 비활성), 대시보드 타임라인에서 설정/해제.
+      실행은 pipeline 공유 (archive_logs source='schedule').
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.
