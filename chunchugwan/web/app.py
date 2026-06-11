@@ -16,9 +16,9 @@ import json
 import logging
 import threading
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
@@ -532,6 +532,16 @@ def shotdiff(
 _LOG_STATUSES = ("new", "changed", "unchanged", "forced_same", "error")
 
 
+def _clean_date(value: str | None) -> str | None:
+    """날짜 입력을 YYYY-MM-DD 로 정규화, 파싱 불가면 None (필터 무시)."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
+
+
 @app.get("/logs", response_class=HTMLResponse)
 def logs_view(
     request: Request,
@@ -539,19 +549,33 @@ def logs_view(
     page_id: int | None = None,
     snapshot_id: int | None = None,
     status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    page: int = 1,
     limit: int = 100,
 ):
-    """아카이브 실행 로그. 도메인/페이지/스냅샷/상태 필터 지원."""
+    """아카이브 실행 로그. 도메인/페이지/스냅샷/상태/기간 필터 + 페이징."""
     limit = max(1, min(limit, 500))
     if status not in _LOG_STATUSES:
         status = None
+    date_from = _clean_date(date_from)
+    date_to = _clean_date(date_to)
+    if date_from and date_to and date_from > date_to:
+        date_from, date_to = date_to, date_from
+    filters = {
+        "domain": domain or None, "page_id": page_id,
+        "snapshot_id": snapshot_id, "status": status,
+        "date_from": date_from, "date_to": date_to,
+    }
     with db.connect() as conn:
+        total = db.count_archive_logs(conn, **filters)
+        total_pages = max(1, -(-total // limit))  # ceil
+        page = max(1, min(page, total_pages))
         logs = db.list_archive_logs(
-            conn, domain=domain or None, page_id=page_id,
-            snapshot_id=snapshot_id, status=status, limit=limit,
+            conn, **filters, limit=limit, offset=(page - 1) * limit,
         )
         domains = db.list_log_domains(conn)
-        page = db.get_page_by_id(conn, page_id) if page_id else None
+        filter_page = db.get_page_by_id(conn, page_id) if page_id else None
 
     items = []
     for row in logs:
@@ -571,13 +595,32 @@ def logs_view(
             "log": row, "steps": steps, "files": files,
             "total_bytes": sum(f["bytes"] for f in files) if files else None,
         })
+    # 페이징 링크 — 현재 필터를 유지한 채 page 만 바꾼다
+    qs_base = [
+        (k, v) for k, v in (
+            ("domain", domain or None), ("page_id", page_id),
+            ("snapshot_id", snapshot_id), ("status", status),
+            ("date_from", date_from), ("date_to", date_to),
+        ) if v is not None
+    ]
+    if limit != 100:
+        qs_base.append(("limit", limit))
+
+    def _page_url(n: int) -> str:
+        params = qs_base + ([("page", n)] if n > 1 else [])
+        return "/logs" + ("?" + urlencode(params) if params else "")
+
     return templates.TemplateResponse(
         request, "logs.html",
         {
-            "items": items, "domains": domains, "page": page,
+            "items": items, "domains": domains, "filter_page": filter_page,
             "domain": domain or "", "status": status or "",
+            "date_from": date_from or "", "date_to": date_to or "",
             "snapshot_id": snapshot_id, "limit": limit,
             "statuses": _LOG_STATUSES,
+            "total": total, "total_pages": total_pages, "page_num": page,
+            "prev_url": _page_url(page - 1) if page > 1 else None,
+            "next_url": _page_url(page + 1) if page < total_pages else None,
         },
     )
 
