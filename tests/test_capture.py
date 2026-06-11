@@ -51,7 +51,8 @@ def site_url(tmp_path):
 def test_capture_artifacts_and_inlining(site_url, tmp_path):
     out = tmp_path / "out"
     out.mkdir()
-    result = capture.capture(site_url, out, remove_selectors=(".ad",))
+    # 잘못된 셀렉터(":::bad")는 무시되고 나머지는 정상 적용되어야 한다
+    result = capture.capture(site_url, out, remove_selectors=(".ad", ":::bad"))
 
     assert result.http_status == 200
     assert result.title == "fixture"
@@ -70,6 +71,9 @@ def test_capture_artifacts_and_inlining(site_url, tmp_path):
     # 추출용 content_html 에서만 셀렉터 제거
     assert "광고 위젯 문구" not in result.content_html
     assert "본문 내용입니다." in result.content_html
+    # content_html 은 인라인 전 raw_html 기준 — base64 데이터가 섞이면 안 된다
+    assert "data:image" not in result.content_html
+    assert "url(data:" not in result.content_html
 
 
 def test_capture_without_rules_keeps_content(site_url, tmp_path):
