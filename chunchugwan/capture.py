@@ -125,10 +125,10 @@ def capture(
                     response = page.goto(
                         url, wait_until="networkidle", timeout=config.PAGE_LOAD_TIMEOUT_MS
                     )
-                except PlaywrightTimeoutError:
+                except PlaywrightTimeoutError as e:
                     if page.url == "about:blank":
-                        # 네비게이션이 시작조차 못함(연결 불가) — 재시도 무의미
-                        raise
+                        # 네비게이션이 시작조차 못함(연결 불가) — load 재시도 무의미
+                        raise CaptureConnectError(f"{url} 캡처 실패: {e}") from e
                     logger.warning("networkidle 미도달, load 기준으로 재시도: %s", url)
                     response = page.goto(
                         url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS
@@ -157,6 +157,8 @@ def capture(
             finally:
                 browser.close()
     except PlaywrightError as e:
+        if any(marker in str(e) for marker in _CONNECT_ERROR_MARKERS):
+            raise CaptureConnectError(f"{url} 캡처 실패: {e}") from e
         raise CaptureError(f"{url} 캡처 실패: {e}") from e
 
 
@@ -175,5 +177,19 @@ def _inline_resources(page, raw_html: str) -> str:
         return raw_html
 
 
+# 서버 연결 단계에서 나는 chromium 네트워크 오류 (DNS 실패는 스킴과 무관하므로 제외)
+_CONNECT_ERROR_MARKERS = (
+    "net::ERR_CONNECTION_",
+    "net::ERR_SSL_",
+    "net::ERR_CERT_",
+    "net::ERR_TIMED_OUT",
+    "net::ERR_ADDRESS_UNREACHABLE",
+)
+
+
 class CaptureError(RuntimeError):
     pass
+
+
+class CaptureConnectError(CaptureError):
+    """서버 연결 자체가 안 된 실패 (443 닫힘·SSL 오류 등) — https→http 폴백 판단용."""

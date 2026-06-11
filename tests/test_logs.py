@@ -142,6 +142,32 @@ def test_pipeline_falls_back_to_http_when_scheme_inferred(archive_env, monkeypat
     assert "http 로 재시도" in steps[1]["detail"]
 
 
+def test_pipeline_http_fallback_for_explicit_https_on_connect_error(
+    archive_env, monkeypatch
+):
+    html = "<html><body><p>본문</p></body></html>"
+
+    def fake(url, out_dir, remove_selectors=()):
+        if url.startswith("https://"):
+            raise capture.CaptureConnectError(f"{url} 캡처 실패: 연결 불가")
+        return capture.CaptureResult(
+            final_url=url, http_status=200, title="제목",
+            raw_html=html, content_html=html,
+        )
+
+    monkeypatch.setattr(pipeline.capture, "capture", fake)
+    # 명시적 https 라도 서버 연결 자체가 안 되면 http 로 폴백 (HTTP 전용 사이트)
+    outcome = pipeline.archive_url("https://example.com/post")
+    assert outcome.status == "new"
+    assert outcome.url == "http://example.com/post"
+
+    with db.connect() as conn:
+        log = db.list_archive_logs(conn)[0]
+    assert log["status"] == "new"
+    assert log["url"] == "http://example.com/post"
+    assert "http 로 재시도" in json.loads(log["steps"])[1]["detail"]
+
+
 def test_pipeline_no_http_fallback_for_explicit_https(archive_env, monkeypatch):
     monkeypatch.setattr(
         pipeline.capture, "capture", _https_only_fails("<html></html>")

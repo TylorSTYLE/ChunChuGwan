@@ -77,3 +77,14 @@ def test_capture_without_rules_keeps_content(site_url, tmp_path):
     out.mkdir()
     result = capture.capture(site_url, out)
     assert "광고 위젯 문구" in result.content_html
+
+
+def test_capture_connect_error_on_closed_port(tmp_path):
+    # 아무도 리슨하지 않는 포트 → ERR_CONNECTION_REFUSED → CaptureConnectError
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with pytest.raises(capture.CaptureConnectError):
+        capture.capture(f"https://127.0.0.1:{port}/", tmp_path)
