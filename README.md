@@ -180,6 +180,21 @@ archive/
 최초 구동 때 등록된 관리자(founder)의 권한은 누구도 변경할 수 없어,
 관리자가 한 명도 없는 상태가 되지 않는다.
 
+사용자 관리 화면에서는 권한 외에도 사용자의 **표시 이름 변경**과
+**모든 세션 강제 로그아웃**이 가능하다.
+
+### 이메일 초대
+
+관리자는 사용자 관리 화면에서 이메일로 새 사용자를 초대할 수 있다.
+초대 시 부여할 권한(관리자/아카이브/보기 전용)을 함께 지정하며, 초대받은
+사람은 링크(`/invite/{token}`)에서 패스워드만 설정하면 해당 권한으로 가입된다.
+초대 링크는 1회용으로 기본 7일 후 만료되고(`WCCG_INVITE_TTL_DAYS`),
+같은 이메일을 다시 초대하면 새 링크로 교체된다 (이전 링크 무효화).
+토큰은 세션과 동일하게 SHA-256 해시만 DB 에 저장된다.
+
+`WCCG_SMTP_HOST` 가 설정되어 있으면 초대 메일을 발송하고, 없으면 초대
+링크가 화면에 표시되므로 관리자가 직접 전달하면 된다.
+
 ### 가입 / 2FA
 
 이후 사용자는 `/signup` 에서 가입한다 (이메일 + 패스워드 8자 이상).
@@ -211,6 +226,13 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 2단계를 건너뛴다.
 | `WCCG_OIDC_ISSUER` | (없음) | Authentik issuer URL (예: `https://auth.example.com/application/o/chunchugwan`) |
 | `WCCG_OIDC_CLIENT_ID` | (없음) | OIDC 클라이언트 ID |
 | `WCCG_OIDC_CLIENT_SECRET` | (없음) | OIDC 클라이언트 시크릿 |
+| `WCCG_SMTP_HOST` | (없음) | 초대 메일 발송 SMTP 호스트 — 미설정 시 초대 링크를 화면에 표시 |
+| `WCCG_SMTP_PORT` | `587` | SMTP 포트 |
+| `WCCG_SMTP_USER` | (없음) | SMTP 로그인 사용자 (없으면 인증 생략) |
+| `WCCG_SMTP_PASSWORD` | (없음) | SMTP 로그인 패스워드 |
+| `WCCG_SMTP_FROM` | `WCCG_SMTP_USER` | 발신자 주소 |
+| `WCCG_SMTP_TLS` | `starttls` | `starttls` \| `ssl` \| `off` |
+| `WCCG_INVITE_TTL_DAYS` | `7` | 초대 링크 수명 (일) |
 
 OIDC 변수 3개가 모두 설정되면 로그인 페이지에 "Authentik으로 로그인" 버튼이
 나타난다. HTTPS 종료(HSTS 포함)는 리버스 프록시 책임이다.

@@ -112,6 +112,16 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
+CREATE TABLE IF NOT EXISTS invites (
+    id          INTEGER PRIMARY KEY,
+    email       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    token_hash  TEXT NOT NULL UNIQUE,    -- 초대 토큰의 SHA-256 (원문은 링크에만 존재)
+    role        TEXT NOT NULL DEFAULT 'viewer',  -- 가입 시 부여할 권한 (blocked 제외)
+    invited_by  INTEGER REFERENCES users(id),
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS oidc_states (
     state       TEXT PRIMARY KEY,
     nonce       TEXT NOT NULL,
@@ -673,6 +683,66 @@ def set_totp_last_used(conn: sqlite3.Connection, user_id: int, window: str) -> N
     conn.execute(
         "UPDATE users SET totp_last_used_at = ? WHERE id = ?", (window, user_id)
     )
+
+
+# ---- 초대 ----
+
+# 초대로 부여할 수 있는 권한 (차단 계정을 초대하는 것은 의미가 없다)
+INVITABLE_ROLES = ("admin", "archiver", "viewer")
+
+
+def create_invite(
+    conn: sqlite3.Connection,
+    email: str,
+    token_hash: str,
+    role: str,
+    invited_by: int | None,
+    ttl_seconds: int,
+) -> int:
+    """초대 생성 후 id 반환. 같은 이메일의 기존 초대는 교체된다 (이전 링크 무효화)."""
+    if role not in INVITABLE_ROLES:
+        raise ValueError(f"초대할 수 없는 역할: {role!r}")
+    conn.execute("DELETE FROM invites WHERE email = ?", (email,))
+    cur = conn.execute(
+        """
+        INSERT INTO invites (email, token_hash, role, invited_by, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (email, token_hash, role, invited_by, _utcnow(), _later(ttl_seconds)),
+    )
+    return cur.lastrowid
+
+
+def get_invite_by_token(conn: sqlite3.Connection, token_hash: str) -> sqlite3.Row | None:
+    """만료되지 않은 초대를 토큰 해시로 조회 (없거나 만료면 None)."""
+    return conn.execute(
+        "SELECT * FROM invites WHERE token_hash = ? AND expires_at > ?",
+        (token_hash, _utcnow()),
+    ).fetchone()
+
+
+def list_invites(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """만료되지 않은 초대 목록 (+ 초대한 사용자 이메일, 최신 순)."""
+    return conn.execute(
+        """
+        SELECT i.*, u.email AS inviter_email
+        FROM invites i LEFT JOIN users u ON u.id = i.invited_by
+        WHERE i.expires_at > ?
+        ORDER BY i.created_at DESC, i.id DESC
+        """,
+        (_utcnow(),),
+    ).fetchall()
+
+
+def delete_invite(conn: sqlite3.Connection, invite_id: int) -> bool:
+    """초대 취소 (가입 완료 시에도 호출 — 1회용). 없으면 False."""
+    cur = conn.execute("DELETE FROM invites WHERE id = ?", (invite_id,))
+    return cur.rowcount == 1
+
+
+def delete_expired_invites(conn: sqlite3.Connection) -> None:
+    """만료 초대 일괄 삭제 (기회적 정리용)."""
+    conn.execute("DELETE FROM invites WHERE expires_at <= ?", (_utcnow(),))
 
 
 # ---- 패스키 (WebAuthn) ----

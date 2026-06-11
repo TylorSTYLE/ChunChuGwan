@@ -56,6 +56,24 @@ WEBAUTHN_RP_ID = (urlsplit(PUBLIC_URL).hostname or "localhost") if PUBLIC_URL el
 WEBAUTHN_RP_NAME = "ChunChuGwan"
 WEBAUTHN_ORIGINS = [PUBLIC_URL] if PUBLIC_URL else [f"http://localhost:{DASHBOARD_PORT}"]
 
+# ---- 메일 (초대 발송) ----
+# WCCG_SMTP_HOST 가 설정되면 초대 메일을 발송한다. 미설정 시 초대 링크를
+# 화면에 표시해 관리자가 직접 전달한다.
+SMTP_HOST = os.environ.get("WCCG_SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("WCCG_SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("WCCG_SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("WCCG_SMTP_PASSWORD", "")
+SMTP_FROM = os.environ.get("WCCG_SMTP_FROM", "") or SMTP_USER
+SMTP_TLS = os.environ.get("WCCG_SMTP_TLS", "starttls")  # starttls | ssl | off
+SMTP_TIMEOUT_SECONDS = 10
+INVITE_TTL_DAYS = int(os.environ.get("WCCG_INVITE_TTL_DAYS", "7"))
+
+
+def mail_enabled() -> bool:
+    """메일 발송 설정이 채워졌는지 (테스트에서 monkeypatch 가능하도록 함수)."""
+    return bool(SMTP_HOST)
+
+
 # ---- OIDC (Authentik) ----
 OIDC_PROVIDER = "authentik"
 OIDC_ISSUER = os.environ.get("WCCG_OIDC_ISSUER", "").rstrip("/")
