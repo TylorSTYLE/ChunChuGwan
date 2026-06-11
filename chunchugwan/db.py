@@ -338,19 +338,19 @@ def insert_archive_log(conn: sqlite3.Connection, **fields) -> int:
     return cur.lastrowid
 
 
-def list_archive_logs(
-    conn: sqlite3.Connection,
+def _archive_log_where(
     *,
-    domain: str | None = None,
-    page_id: int | None = None,
-    snapshot_id: int | None = None,
-    status: str | None = None,
-    limit: int = 100,
-) -> list[sqlite3.Row]:
-    """아카이브 실행 로그 (최신 순). 도메인/페이지/스냅샷/상태로 필터.
+    domain: str | None,
+    page_id: int | None,
+    snapshot_id: int | None,
+    status: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str, list[object]]:
+    """archive_logs 필터 WHERE 절 조립 (list/count 공용).
 
-    스냅샷이 생긴 로그에는 디렉토리 위치(snap_domain, snap_slug, snap_dir_name)를
-    함께 반환한다 — 대시보드가 저장된 파일 목록/용량을 조회하는 데 쓴다.
+    date_from/date_to 는 YYYY-MM-DD. started_at 이 ISO 8601 이므로 하한은
+    문자열 비교로, 상한은 다음날 0시 미만으로 비교한다 (해당 날짜 포함).
     """
     where: list[str] = []
     params: list[object] = []
@@ -359,10 +359,36 @@ def list_archive_logs(
         ("al.page_id = ?", page_id),
         ("al.snapshot_id = ?", snapshot_id),
         ("al.status = ?", status),
+        ("al.started_at >= ?", date_from),
+        ("al.started_at < DATE(?, '+1 day')", date_to),
     ):
         if value is not None:
             where.append(cond)
             params.append(value)
+    return (" WHERE " + " AND ".join(where)) if where else "", params
+
+
+def list_archive_logs(
+    conn: sqlite3.Connection,
+    *,
+    domain: str | None = None,
+    page_id: int | None = None,
+    snapshot_id: int | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """아카이브 실행 로그 (최신 순). 도메인/페이지/스냅샷/상태/기간으로 필터.
+
+    스냅샷이 생긴 로그에는 디렉토리 위치(snap_domain, snap_slug, snap_dir_name)를
+    함께 반환한다 — 대시보드가 저장된 파일 목록/용량을 조회하는 데 쓴다.
+    """
+    where_sql, params = _archive_log_where(
+        domain=domain, page_id=page_id, snapshot_id=snapshot_id,
+        status=status, date_from=date_from, date_to=date_to,
+    )
     sql = """
         SELECT al.*, s.dir_name AS snap_dir_name,
                sp.domain AS snap_domain, sp.slug AS snap_slug
@@ -370,11 +396,31 @@ def list_archive_logs(
         LEFT JOIN snapshots s ON s.id = al.snapshot_id
         LEFT JOIN pages sp ON sp.id = s.page_id
     """
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY al.started_at DESC, al.id DESC LIMIT ?"
-    params.append(limit)
+    sql += where_sql
+    sql += " ORDER BY al.started_at DESC, al.id DESC LIMIT ? OFFSET ?"
+    params += [limit, offset]
     return conn.execute(sql, params).fetchall()
+
+
+def count_archive_logs(
+    conn: sqlite3.Connection,
+    *,
+    domain: str | None = None,
+    page_id: int | None = None,
+    snapshot_id: int | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """필터 조건에 맞는 아카이브 로그 총 건수 (페이징용)."""
+    where_sql, params = _archive_log_where(
+        domain=domain, page_id=page_id, snapshot_id=snapshot_id,
+        status=status, date_from=date_from, date_to=date_to,
+    )
+    row = conn.execute(
+        "SELECT COUNT(*) FROM archive_logs al" + where_sql, params
+    ).fetchone()
+    return row[0]
 
 
 def list_log_domains(conn: sqlite3.Connection) -> list[str]:
