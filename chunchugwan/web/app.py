@@ -189,7 +189,7 @@ def healthz() -> dict:
     return {"ok": True}
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/archives", response_class=HTMLResponse)
 def index(request: Request, queued: str = "", error: str = ""):
     active = _active_snapshot()
     with db.connect() as conn:
@@ -241,9 +241,10 @@ def _period_starts(now: datetime) -> dict[str, str]:
 _TREND_PERIODS = (("today", "오늘"), ("week", "이번 주"), ("month", "이번 달"), ("year", "올해"))
 
 
+@app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request):
-    """시스템 현황 — 아카이브 수, 기간별 용량 트렌드, 최근 스냅샷·로그."""
+    """시스템 현황 (첫 화면) — 아카이브 수, 기간별 용량 트렌드, 최근 스냅샷·로그."""
     starts = _period_starts(datetime.now(timezone.utc))
     with db.connect() as conn:
         total_pages = db.count_pages(conn)
@@ -602,10 +603,10 @@ def archive_new(request: Request, background: BackgroundTasks, url: str = Form(.
         norm = storage.normalize_url(url)
     except ValueError as exc:
         return RedirectResponse(
-            f"/?error={quote(str(exc), safe='')}", status_code=303
+            f"/archives?error={quote(str(exc), safe='')}", status_code=303
         )
     _queue_archive(background, norm)
-    return RedirectResponse(f"/?queued={quote(norm, safe='')}", status_code=303)
+    return RedirectResponse(f"/archives?queued={quote(norm, safe='')}", status_code=303)
 
 
 @app.post("/page/{page_id}/rearchive")
