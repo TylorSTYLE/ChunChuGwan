@@ -47,9 +47,17 @@ def client(tmp_path, monkeypatch):
 
 
 def test_index(client):
-    res = client.get("/")
+    res = client.get("/archives")
     assert res.status_code == 200
     assert "https://example.com/post" in res.text
+
+
+def test_root_serves_dashboard(client):
+    """첫 페이지(/)는 현황 화면이고, 목록은 /archives 에 있다."""
+    res = client.get("/")
+    assert res.status_code == 200
+    assert "현황" in res.text
+    assert 'href="/archives"' in res.text  # 헤더 메뉴의 목록 링크
 
 
 def test_timeline(client):
@@ -144,7 +152,7 @@ def test_archive_new_url_triggers_pipeline(client, monkeypatch):
         follow_redirects=False,
     )
     assert res.status_code == 303
-    assert res.headers["location"].startswith("/?queued=")
+    assert res.headers["location"].startswith("/archives?queued=")
     # 정규화된 URL(트래킹 파라미터 제거)로 파이프라인 호출
     assert calls == ["https://example.com/new"]
 
@@ -157,12 +165,12 @@ def test_archive_invalid_url_rejected(client, monkeypatch):
     )
     res = client.post("/archive", data={"url": "ftp://example.com/x"}, follow_redirects=False)
     assert res.status_code == 303
-    assert res.headers["location"].startswith("/?error=")
+    assert res.headers["location"].startswith("/archives?error=")
     assert calls == []
 
 
 def test_index_shows_queued_banner(client):
-    res = client.get("/?queued=https%3A%2F%2Fexample.com%2Fnew")
+    res = client.get("/archives?queued=https%3A%2F%2Fexample.com%2Fnew")
     assert res.status_code == 200
     assert "백그라운드에서 시작" in res.text
 
@@ -196,7 +204,7 @@ def test_active_job_cleared_even_on_failure(client, monkeypatch):
 def test_index_shows_active_jobs(client):
     web_app._register_job("https://example.com/post")       # 기존 페이지 재아카이빙
     web_app._register_job("https://example.com/brand-new")  # 아직 pages 행 없는 신규 URL
-    res = client.get("/")
+    res = client.get("/archives")
     assert res.status_code == 200
     assert res.text.count("아카이빙 중") == 2
     assert "https://example.com/brand-new" in res.text
@@ -301,7 +309,7 @@ def test_schedule_set_and_shown(client):
     assert "자동 재아카이빙" in timeline.text
     assert "1시간" in timeline.text and "다음 실행" in timeline.text
 
-    index = client.get("/")
+    index = client.get("/archives")
     assert "1시간" in index.text  # 목록의 '자동' 컬럼
 
     with db.connect() as conn:
