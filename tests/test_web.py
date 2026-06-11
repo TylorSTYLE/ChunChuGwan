@@ -221,3 +221,43 @@ def test_rearchive_duplicate_not_requeued(client, monkeypatch):
     res = client.post("/page/1/rearchive", follow_redirects=False)
     assert res.status_code == 303
     assert calls == []
+
+
+def test_schedule_set_and_shown(client):
+    res = client.post("/page/1/schedule", data={"interval": "3600"}, follow_redirects=False)
+    assert res.status_code == 303
+    assert res.headers["location"] == "/page/1"
+
+    timeline = client.get("/page/1")
+    assert "자동 재아카이빙" in timeline.text
+    assert "1시간" in timeline.text and "다음 실행" in timeline.text
+
+    index = client.get("/")
+    assert "1시간" in index.text  # 목록의 '자동' 컬럼
+
+    with db.connect() as conn:
+        sched = db.get_schedule(conn, 1)
+    assert sched["interval_seconds"] == 3600
+
+
+def test_schedule_rejects_out_of_range_interval(client):
+    assert client.post("/page/1/schedule", data={"interval": "60"}).status_code == 400
+    assert (
+        client.post("/page/1/schedule", data={"interval": str(8 * 86400)}).status_code
+        == 400
+    )
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1) is None
+
+
+def test_schedule_delete(client):
+    client.post("/page/1/schedule", data={"interval": "86400"})
+    res = client.post("/page/1/schedule/delete", follow_redirects=False)
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1) is None
+
+
+def test_schedule_unknown_page(client):
+    assert client.post("/page/999/schedule", data={"interval": "3600"}).status_code == 404
+    assert client.post("/page/999/schedule/delete").status_code == 404
