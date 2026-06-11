@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -175,6 +175,75 @@ def index(request: Request, queued: str = "", error: str = ""):
 def archive_active() -> dict:
     """진행 중 아카이빙 URL 목록 (목록 화면 자동 갱신 폴링용)."""
     return {"active": sorted(_active_snapshot())}
+
+
+def _period_starts(now: datetime) -> dict[str, str]:
+    """현황 집계 기간의 시작 시각 (ISO 8601 UTC).
+
+    today/week(월요일)/month/year 는 용량 트렌드, recent 는 최근 24시간 카드용.
+    taken_at 컬럼과 같은 포맷이라 문자열 비교로 기간 포함을 판정한다.
+    """
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    starts = {
+        "today": today,
+        "week": today - timedelta(days=today.weekday()),
+        "month": today.replace(day=1),
+        "year": today.replace(month=1, day=1),
+        "recent": now - timedelta(hours=24),
+    }
+    return {k: v.isoformat(timespec="seconds") for k, v in starts.items()}
+
+
+_TREND_PERIODS = (("today", "오늘"), ("week", "이번 주"), ("month", "이번 달"), ("year", "올해"))
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request):
+    """시스템 현황 — 아카이브 수, 기간별 용량 트렌드, 최근 스냅샷·로그."""
+    starts = _period_starts(datetime.now(timezone.utc))
+    with db.connect() as conn:
+        total_pages = db.count_pages(conn)
+        snap_dirs = db.list_snapshot_dirs(conn)
+        recent_snaps = db.list_recent_snapshots(conn, limit=10)
+        recent_logs = db.list_archive_logs(conn, limit=10)
+
+    # 스냅샷은 불변이므로 디렉토리 용량을 그대로 합산한다
+    sizes: dict[int, int] = {}
+    counts = {k: 0 for k in starts}
+    period_bytes = {k: 0 for k in starts}
+    total_bytes = 0
+    for row in snap_dirs:
+        snap_dir = storage.page_dir(row["domain"], row["slug"]) / row["dir_name"]
+        size = sum(f["bytes"] for f in storage.snapshot_files(snap_dir))
+        sizes[row["id"]] = size
+        total_bytes += size
+        for key, start in starts.items():
+            if row["taken_at"] >= start:
+                counts[key] += 1
+                period_bytes[key] += size
+
+    trend = [
+        {"label": label, "count": counts[key], "bytes": period_bytes[key]}
+        for key, label in _TREND_PERIODS
+    ]
+    max_bytes = max(max(t["bytes"] for t in trend), 1)
+    for t in trend:
+        t["pct"] = t["bytes"] / max_bytes * 100
+
+    return templates.TemplateResponse(
+        request, "dashboard.html",
+        {
+            "total_pages": total_pages,
+            "total_snapshots": len(snap_dirs),
+            "total_bytes": total_bytes,
+            "week_count": counts["week"],
+            "recent_count": counts["recent"],
+            "trend": trend,
+            "recent_snaps": recent_snaps,
+            "sizes": sizes,
+            "recent_logs": recent_logs,
+        },
+    )
 
 
 @app.get("/page/{page_id}", response_class=HTMLResponse)

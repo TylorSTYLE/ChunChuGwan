@@ -310,6 +310,42 @@ def list_snapshots(conn: sqlite3.Connection, page_id: int) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def count_pages(conn: sqlite3.Connection) -> int:
+    """전체 페이지 수 (현황 대시보드용)."""
+    return conn.execute("SELECT COUNT(*) AS c FROM pages").fetchone()["c"]
+
+
+def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """모든 스냅샷의 시각·디렉토리 위치 (id, taken_at, domain, slug, dir_name).
+
+    현황 대시보드가 기간별 스냅샷 수와 디렉토리 용량을 집계하는 데 쓴다.
+    """
+    return conn.execute(
+        """
+        SELECT s.id, s.taken_at, p.domain, p.slug, s.dir_name
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        """
+    ).fetchall()
+
+
+def list_recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
+    """최근 스냅샷 목록 (최신 순) + 페이지 정보 + 해당 페이지 첫 스냅샷 여부."""
+    return conn.execute(
+        """
+        SELECT s.*, p.url AS page_url, p.domain, p.slug,
+               NOT EXISTS (
+                   SELECT 1 FROM snapshots s2
+                   WHERE s2.page_id = s.page_id
+                     AND (s2.taken_at < s.taken_at
+                          OR (s2.taken_at = s.taken_at AND s2.id < s.id))
+               ) AS is_first
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        ORDER BY s.taken_at DESC, s.id DESC LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
 # ---- 사용자 ----
 # 주의: SCHEMA 는 CREATE IF NOT EXISTS 라 새 테이블 추가는 자동이지만
 # 기존 테이블에 컬럼을 추가하는 변경은 별도 마이그레이션이 필요하다.
