@@ -33,11 +33,22 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
 
 
+def _is_route_fragment(fragment: str) -> bool:
+    """SPA 라우팅 fragment 인지 — 경로 구분자(/)가 있으면 라우트로 본다.
+
+    weather.go.kr 의 `#dong/4148051000/...` 처럼 fragment 가 화면을 결정하는
+    사이트가 있다. 이런 fragment 를 제거하면 기본 화면이 아카이브되므로
+    보존해야 한다. 단순 문서 내 앵커(`#section-2`)는 콘텐츠에 영향이 없어
+    제거 대상이다.
+    """
+    return "/" in fragment
+
+
 def normalize_url(raw: str) -> str:
     """비교/저장 기준이 되는 정규화 URL.
 
     - 스킴 생략 시 https:// 자동 보완 (example.com → https://example.com/)
-    - 스킴/호스트 소문자화, fragment 제거
+    - 스킴/호스트 소문자화, fragment 제거 (단, SPA 라우팅 fragment 는 보존)
     - 쿼리 파라미터 정렬, 트래킹 파라미터 제거 (config.TRACKING_PARAM_PREFIXES)
     - 기본 포트(:80, :443) 제거
     """
@@ -65,7 +76,8 @@ def normalize_url(raw: str) -> str:
         if not k.lower().startswith(config.TRACKING_PARAM_PREFIXES)
     ]
     query = urlencode(sorted(pairs))
-    return urlunsplit((scheme, netloc, path, query, ""))
+    fragment = parts.fragment if _is_route_fragment(parts.fragment) else ""
+    return urlunsplit((scheme, netloc, path, query, fragment))
 
 
 def scheme_inferred(raw: str) -> bool:
@@ -81,9 +93,13 @@ def url_to_slug(normalized_url: str) -> str:
     """디렉토리명용 slug: '{경로요약}-{sha256(url)[:8]}'.
 
     경로요약은 [a-z0-9-]만 허용, 최대 40자. 루트 경로면 'root'.
+    라우팅 fragment 가 보존된 URL 은 fragment 도 요약에 포함한다.
     """
     url_hash = hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()[:8]
-    path = urlsplit(normalized_url).path.lower()
+    parts = urlsplit(normalized_url)
+    path = parts.path.lower()
+    if parts.fragment:
+        path += "-" + parts.fragment.lower()
     summary = re.sub(r"[^a-z0-9]+", "-", path).strip("-")[:40].rstrip("-")
     if not summary:
         summary = "root"
