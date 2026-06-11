@@ -31,7 +31,7 @@ from fastapi.responses import (
 from .. import (
     auth, config, db, deletion, differ, pipeline, resources, scheduler, storage,
 )
-from . import auth_routes, permissions, system_routes
+from . import api_routes, auth_routes, permissions, system_routes
 from .templating import templates
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,7 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(title="춘추관", lifespan=_lifespan)
 app.include_router(auth_routes.router)
 app.include_router(system_routes.router)
+app.include_router(api_routes.router)
 
 # 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)
 # /login/passkey* 는 패스워드 통과 후 pending 세션 단계라 user 가 아직 없다 —
@@ -121,6 +122,11 @@ async def auth_gate(request: Request, call_next):
                         request.state.user = db.get_user_by_id(conn, sess["user_id"])
 
         if first_run:
+            if path.startswith("/api/"):
+                # API 클라이언트에게 /setup 리다이렉트는 의미가 없다
+                return PlainTextResponse(
+                    "최초 설정이 완료되지 않았습니다", status_code=401
+                )
             if path not in ("/setup", "/healthz") and path not in _BROWSER_ICON_PATHS:
                 return RedirectResponse("/setup", status_code=302)
         else:
@@ -138,12 +144,15 @@ async def auth_gate(request: Request, call_next):
             # 하위 자원 요청에는 SameSite 쿠키가 붙지 않아 세션 인증이
             # 불가능하다. 이름이 콘텐츠 sha256 그 자체라 추측 불가능하고,
             # 화이트리스트 미디어 타입만 CSP sandbox 로 서빙한다.
+            # /api/ 는 세션 인증 대상이 아니다 — api_routes 의존성이
+            # API 키를 검증한다 (키 없음/만료 시 401 JSON).
             public = (
                 path in _PUBLIC_PATHS
                 or path in _BROWSER_ICON_PATHS
                 or path.startswith("/auth/oidc/")
                 or path.startswith("/invite/")
                 or path.startswith("/resource/")
+                or path.startswith("/api/")
             )
             if request.state.user is None and not public:
                 target = path + (f"?{request.url.query}" if request.url.query else "")
@@ -695,15 +704,18 @@ def logs_view(
 
 
 def _run_archive(
-    url: str, force: bool = False, interval_seconds: int | None = None
+    url: str,
+    force: bool = False,
+    interval_seconds: int | None = None,
+    source: str = "web",
 ) -> None:
-    """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다.
+    """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다 (source 포함).
 
     interval_seconds 가 있으면 실행 후 자동 재아카이빙 주기를 등록한다 —
     신규 URL 은 아카이빙이 끝나야 pages 행이 생기므로 등록을 여기서 한다.
     """
     try:
-        outcome = pipeline.archive_url(url, force=force, source="web")
+        outcome = pipeline.archive_url(url, force=force, source=source)
         logger.info("아카이빙 완료: %s [%s]", url, outcome.status)
     except Exception:
         logger.exception("아카이빙 실패: %s", url)
@@ -722,13 +734,16 @@ def _queue_archive(
     url: str,
     force: bool = False,
     interval_seconds: int | None = None,
-) -> None:
-    """진행 목록 등록 후 백그라운드 작업 추가. 이미 진행 중이면 무시.
+    source: str = "web",
+) -> bool:
+    """진행 목록 등록 후 백그라운드 작업 추가. 이미 진행 중이면 무시(False).
 
     등록은 응답 전(동기)에 해서 리다이렉트된 목록 화면이 바로 진행 상태를 본다.
     """
-    if _register_job(url):
-        background.add_task(_run_archive, url, force, interval_seconds)
+    if not _register_job(url):
+        return False
+    background.add_task(_run_archive, url, force, interval_seconds, source)
+    return True
 
 
 def _require_archiver(request: Request) -> None:

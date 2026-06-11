@@ -100,7 +100,7 @@ def archive_url(url: str, force: bool = False, source: str = "cli") -> ArchiveOu
 
     잘못된 URL은 ValueError, 캡처 실패는 capture.CaptureError 를 던진다.
     해시가 직전 스냅샷과 같으면 checks 기록만 남긴다 (force 시 예외).
-    source 는 실행 주체('cli' | 'web' | 'schedule') — archive_logs 에 기록된다.
+    source 는 실행 주체('cli' | 'web' | 'schedule' | 'api') — archive_logs 에 기록된다.
     """
     run = _RunLog(url, source)
     try:

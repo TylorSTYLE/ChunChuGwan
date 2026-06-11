@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}API 키 — 춘추관{% endblock %}
+{% block content %}
+<h2>API 키 관리</h2>
+{% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+{% if new_key %}
+<div class="notice" style="word-break: break-all">
+  <strong class="mono" style="font-size:13px">{{ new_key }}</strong>
+  <button type="button" onclick="navigator.clipboard.writeText('{{ new_key }}')
+          .then(() => this.textContent = '복사됨')">복사</button>
+</div>
+{% endif %}
+
+<p class="muted" style="font-size:12px; max-width:720px">
+  외부 소프트웨어가 <span class="mono">Authorization: Bearer &lt;키&gt;</span> 또는
+  <span class="mono">X-API-Key</span> 헤더로 <span class="mono">/api/v1</span> 에
+  접근할 때 쓰는 키입니다. 보기=아카이브 데이터 조회, 아카이브=아카이빙 트리거.
+  키 원문은 발급 직후 한 번만 표시되며, 폐기하면 즉시 무효화됩니다.
+  모든 관리자가 공동으로 관리합니다.
+</p>
+
+<table>
+  <thead>
+    <tr><th>이름</th><th>키</th><th>권한</th><th>발급자</th><th>생성일</th>
+        <th>만료</th><th>마지막 사용</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for k in keys %}
+    <tr>
+      <td>{{ k['name'] }}</td>
+      <td class="mono muted">{{ k['prefix'] }}…</td>
+      <td>
+        {% if k['can_view'] %}<span class="badge role-viewer">보기</span>{% endif %}
+        {% if k['can_archive'] %}<span class="badge role-archiver">아카이브</span>{% endif %}
+      </td>
+      <td class="mono">{{ k['creator_email'] or '-' }}</td>
+      <td class="mono">{{ k['created_at'] | ts('date') }}</td>
+      <td class="mono">
+        {% if k['expires_at'] %}
+          {{ k['expires_at'] | ts('date') }}
+          {% if k['expired'] %}<span class="badge error">만료됨</span>{% endif %}
+        {% else %}
+          <span class="muted">영구</span>
+        {% endif %}
+      </td>
+      <td class="mono">{{ k['last_used_at'] | ts if k['last_used_at'] else '-' }}</td>
+      <td>
+        <form class="inline" method="post" action="/system/api-keys/{{ k['id'] }}/delete"
+              onsubmit="return confirm('{{ k['name'] }} 키를 폐기할까요? 이 키를 쓰는 외부 소프트웨어의 접근이 즉시 차단됩니다.')">
+          <button type="submit" class="danger">폐기</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="muted">발급된 키가 없습니다.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h3 style="margin-top:24px">새 키 발급</h3>
+<form class="inline" method="post" action="/system/api-keys" id="api-key-form">
+  <input type="text" name="name" placeholder="키 이름 (예: rss-bot)" size="20"
+         maxlength="50" required>
+  <label><input type="checkbox" name="can_view" checked> 보기</label>
+  <label><input type="checkbox" name="can_archive"> 아카이브</label>
+  <select name="expiry" id="api-key-expiry">
+    {% for value, label in expiry_options %}
+    <option value="{{ value }}">{{ label }}</option>
+    {% endfor %}
+  </select>
+  <input type="number" name="custom_days" id="api-key-custom-days" value="30"
+         min="1" max="{{ max_custom_days }}" size="6" style="width:80px; display:none"
+         title="만료까지 일 수">
+  <button type="submit">발급</button>
+</form>
+<script>
+/* 만료 '사용자 지정' 선택 시에만 일 수 입력을 노출 */
+(function () {
+  var select = document.getElementById("api-key-expiry");
+  var days = document.getElementById("api-key-custom-days");
+  function apply() { days.style.display = select.value === "custom" ? "" : "none"; }
+  select.addEventListener("change", apply);
+  apply();
+})();
+</script>
+{% endblock %}

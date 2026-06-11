@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS archive_logs (
     domain       TEXT NOT NULL DEFAULT '',
     page_id      INTEGER REFERENCES pages(id),      -- 페이지 생성 전 실패면 NULL
     snapshot_id  INTEGER REFERENCES snapshots(id),  -- 새 스냅샷을 만든 경우에만
-    source       TEXT NOT NULL DEFAULT 'cli',       -- 'cli' | 'web' | 'schedule'
+    source       TEXT NOT NULL DEFAULT 'cli',       -- 'cli' | 'web' | 'schedule' | 'api'
     status       TEXT NOT NULL,          -- new|changed|unchanged|forced_same|error
     started_at   TEXT NOT NULL,          -- ISO 8601 UTC
     duration_ms  INTEGER NOT NULL DEFAULT 0,
@@ -120,6 +120,19 @@ CREATE TABLE IF NOT EXISTS invites (
     invited_by  INTEGER REFERENCES users(id),
     created_at  TEXT NOT NULL,
     expires_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id           INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL,           -- 용도 식별 이름 (예: 'rss-bot')
+    token_hash   TEXT NOT NULL UNIQUE,    -- 키 원문의 SHA-256 (원문은 발급 시 1회만 표시)
+    prefix       TEXT NOT NULL,           -- 표시용 키 앞부분 (목록에서 식별용)
+    can_view     INTEGER NOT NULL DEFAULT 1,   -- 아카이브 데이터 조회 허용
+    can_archive  INTEGER NOT NULL DEFAULT 0,   -- 아카이빙 트리거 허용
+    created_by   INTEGER REFERENCES users(id), -- 발급한 관리자 (기록용 — 관리는 공동)
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT,                    -- ISO 8601 UTC, NULL = 영구
+    last_used_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS oidc_states (
@@ -789,6 +802,74 @@ def delete_invite(conn: sqlite3.Connection, invite_id: int) -> bool:
 def delete_expired_invites(conn: sqlite3.Connection) -> None:
     """만료 초대 일괄 삭제 (기회적 정리용)."""
     conn.execute("DELETE FROM invites WHERE expires_at <= ?", (_utcnow(),))
+
+
+# ---- API 키 ----
+
+
+def create_api_key(
+    conn: sqlite3.Connection,
+    name: str,
+    token_hash: str,
+    prefix: str,
+    *,
+    can_view: bool,
+    can_archive: bool,
+    created_by: int | None,
+    ttl_seconds: int | None,
+) -> int:
+    """API 키 row 생성 후 id 반환. ttl_seconds=None 이면 영구 키."""
+    expires_at = _later(ttl_seconds) if ttl_seconds is not None else None
+    cur = conn.execute(
+        """
+        INSERT INTO api_keys
+            (name, token_hash, prefix, can_view, can_archive,
+             created_by, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (name, token_hash, prefix, int(can_view), int(can_archive),
+         created_by, _utcnow(), expires_at),
+    )
+    return cur.lastrowid
+
+
+def get_api_key_by_hash(
+    conn: sqlite3.Connection, token_hash: str
+) -> sqlite3.Row | None:
+    """유효한(만료되지 않은) API 키를 토큰 해시로 조회 (없거나 만료면 None)."""
+    return conn.execute(
+        """
+        SELECT * FROM api_keys
+        WHERE token_hash = ? AND (expires_at IS NULL OR expires_at > ?)
+        """,
+        (token_hash, _utcnow()),
+    ).fetchone()
+
+
+def list_api_keys(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """전체 API 키 목록 (+ 발급자 이메일, 등록 순). 만료된 키도 포함 — 관리 화면용."""
+    return conn.execute(
+        """
+        SELECT k.*, u.email AS creator_email,
+               (k.expires_at IS NOT NULL AND k.expires_at <= ?) AS expired
+        FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+        ORDER BY k.created_at, k.id
+        """,
+        (_utcnow(),),
+    ).fetchall()
+
+
+def touch_api_key(conn: sqlite3.Connection, key_id: int) -> None:
+    """API 키 마지막 사용 시각 갱신."""
+    conn.execute(
+        "UPDATE api_keys SET last_used_at = ? WHERE id = ?", (_utcnow(), key_id)
+    )
+
+
+def delete_api_key(conn: sqlite3.Connection, key_id: int) -> bool:
+    """API 키 폐기 — 즉시 무효화된다. 없으면 False."""
+    cur = conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
+    return cur.rowcount == 1
 
 
 # ---- 패스키 (WebAuthn) ----

@@ -286,6 +286,109 @@ def users_invite_delete(invite_id: int):
     return _users_redirect(notice="초대를 취소했습니다.")
 
 
+# ---- API 키 ----
+# 외부 소프트웨어용 키 발급/폐기. 발급자는 기록용일 뿐 모든 관리자가
+# 공동으로 보고 폐기할 수 있다. 키 원문은 발급 직후 한 번만 표시된다.
+
+# 만료 선택지 — 값은 ttl 초, None 은 영구. 'custom' 은 일 단위 직접 입력.
+API_KEY_EXPIRY_OPTIONS = [
+    ("permanent", "영구"),
+    ("1d", "1일"),
+    ("1m", "1개월 (30일)"),
+    ("1y", "1년 (365일)"),
+    ("custom", "사용자 지정 (일)"),
+]
+_EXPIRY_TTL_SECONDS: dict[str, int | None] = {
+    "permanent": None,
+    "1d": 86400,
+    "1m": 30 * 86400,
+    "1y": 365 * 86400,
+}
+MAX_API_KEY_CUSTOM_DAYS = 3650  # 10년 — 그 이상은 영구를 쓰면 된다
+
+
+@router.get("/api-keys", response_class=HTMLResponse)
+def api_keys_view(request: Request, notice: str = "", error: str = "", new_key: str = ""):
+    """API 키 목록 + 발급 (관리자 전용 — 라우터 의존성이 보장)."""
+    with db.connect() as conn:
+        keys = db.list_api_keys(conn)
+    return templates.TemplateResponse(
+        request, "api_keys.html",
+        {
+            "keys": keys,
+            "expiry_options": API_KEY_EXPIRY_OPTIONS,
+            "max_custom_days": MAX_API_KEY_CUSTOM_DAYS,
+            "new_key": new_key,
+            "notice": notice, "error": error,
+        },
+    )
+
+
+def _api_keys_redirect(
+    *, notice: str = "", error: str = "", new_key: str = ""
+) -> RedirectResponse:
+    query = f"error={quote(error, safe='')}" if error else f"notice={quote(notice, safe='')}"
+    if new_key:
+        query += f"&new_key={quote(new_key, safe='')}"
+    return RedirectResponse(f"/system/api-keys?{query}", status_code=303)
+
+
+def _api_key_ttl(expiry: str, custom_days: int) -> int | None:
+    """만료 선택지를 ttl 초로 변환 (None=영구). 잘못된 입력은 ValueError."""
+    if expiry in _EXPIRY_TTL_SECONDS:
+        return _EXPIRY_TTL_SECONDS[expiry]
+    if expiry == "custom":
+        if not (1 <= custom_days <= MAX_API_KEY_CUSTOM_DAYS):
+            raise ValueError(
+                f"사용자 지정 만료는 1 ~ {MAX_API_KEY_CUSTOM_DAYS}일 사이여야 합니다."
+            )
+        return custom_days * 86400
+    raise ValueError(f"알 수 없는 만료 선택: {expiry!r}")
+
+
+@router.post("/api-keys")
+def api_keys_create(
+    request: Request,
+    name: str = Form(...),
+    can_view: bool = Form(False),
+    can_archive: bool = Form(False),
+    expiry: str = Form("permanent"),
+    custom_days: int = Form(0),
+):
+    """API 키 발급. 키 원문은 이 응답의 화면에서만 한 번 표시된다."""
+    name = name.strip()
+    name_error = auth.validate_api_key_name(name)
+    if name_error is not None:
+        return _api_keys_redirect(error=name_error)
+    if not (can_view or can_archive):
+        return _api_keys_redirect(error="권한을 하나 이상 선택하세요.")
+    try:
+        ttl_seconds = _api_key_ttl(expiry, custom_days)
+    except ValueError as e:
+        return _api_keys_redirect(error=str(e))
+    with db.connect() as conn:
+        token = auth.issue_api_key(
+            conn, name,
+            can_view=can_view, can_archive=can_archive,
+            created_by=request.state.user["id"] if request.state.user else None,
+            ttl_seconds=ttl_seconds,
+        )
+    return _api_keys_redirect(
+        notice=f"'{name}' 키를 발급했습니다 — 아래 키를 지금 복사하세요. "
+               "다시 표시되지 않습니다.",
+        new_key=token,
+    )
+
+
+@router.post("/api-keys/{key_id}/delete")
+def api_keys_delete(key_id: int):
+    """API 키 폐기 — 즉시 무효화된다."""
+    with db.connect() as conn:
+        if not db.delete_api_key(conn, key_id):
+            raise HTTPException(404, "API 키 없음")
+    return _api_keys_redirect(notice="키를 폐기했습니다.")
+
+
 @router.post("/import")
 def system_import(file: UploadFile = File(...), mode: str = Form("merge")):
     """내보낸 아카이브 데이터 업로드로 가져오기 (인증 데이터는 건드리지 않음)."""
