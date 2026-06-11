@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 from PIL import Image, ImageChops
 
@@ -120,3 +122,21 @@ def cached_screenshot_diff(old_png: Path, new_png: Path, cache_key: str) -> tupl
     ratio = diff_screenshots(old_png, new_png, out_png)
     meta_path.write_text(json.dumps({"ratio": ratio}), encoding="utf-8")
     return ratio, out_png
+
+
+_SHOTDIFF_RE = re.compile(r"^shotdiff-(\d+)-(\d+)\.(?:png|json)$")
+
+
+def purge_shotdiff_cache(snapshot_ids: Iterable[int]) -> None:
+    """삭제된 스냅샷이 한쪽이라도 포함된 픽셀 diff 캐시를 제거.
+
+    SQLite 는 rowid 를 재사용할 수 있어, 지운 스냅샷 id 가 새 스냅샷에 다시
+    부여되면 남은 캐시가 엉뚱한 비교 결과로 서빙될 수 있다.
+    """
+    ids = set(snapshot_ids)
+    if not ids or not config.CACHE_DIR.is_dir():
+        return
+    for f in config.CACHE_DIR.iterdir():
+        m = _SHOTDIFF_RE.match(f.name)
+        if m and (int(m.group(1)) in ids or int(m.group(2)) in ids):
+            f.unlink(missing_ok=True)

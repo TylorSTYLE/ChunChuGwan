@@ -77,6 +77,37 @@ def test_diff_bad_range(archive_env):
     assert "잘못된 범위" in result.output
 
 
+def test_delete_page(archive_env):
+    """확인 프롬프트 거부 시 보존, --yes 면 전체 삭제."""
+    aborted = CliRunner().invoke(cli.main, ["delete", archive_env], input="n\n")
+    assert aborted.exit_code != 0
+    result = CliRunner().invoke(cli.main, ["delete", archive_env, "--yes"])
+    assert result.exit_code == 0
+    assert "스냅샷 2개" in result.output
+    with db.connect() as conn:
+        assert db.get_page(conn, archive_env) is None
+
+
+def test_delete_single_snapshot(archive_env):
+    result = CliRunner().invoke(
+        cli.main, ["delete", archive_env, "--snapshot", "1", "--yes"]
+    )
+    assert result.exit_code == 0
+    assert "2026-06-01T00-00-00" in result.output
+    with db.connect() as conn:
+        page = db.get_page(conn, archive_env)
+        snaps = db.list_snapshots(conn, page["id"])
+    assert len(snaps) == 1 and snaps[0]["changed"] == 1  # 남은 것이 첫 스냅샷
+
+
+def test_delete_bad_snapshot_index(archive_env):
+    result = CliRunner().invoke(
+        cli.main, ["delete", archive_env, "--snapshot", "9", "--yes"]
+    )
+    assert result.exit_code != 0
+    assert "잘못된 번호" in result.output
+
+
 def test_serve_rejects_external_bind_without_auth(monkeypatch):
     monkeypatch.setattr(config, "AUTH_ENABLED", False)
     result = CliRunner().invoke(cli.main, ["serve", "--host", "0.0.0.0"])

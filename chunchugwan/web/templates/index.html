@@ -5,7 +5,10 @@
 <div class="notice">아카이빙이 백그라운드에서 시작되었습니다: <span class="mono">{{ queued }}</span> — 완료되면 목록이 자동 갱신됩니다.</div>
 {% endif %}
 {% if error %}
-<div class="error">아카이빙 실패: {{ error }}</div>
+<div class="error">{{ error }}</div>
+{% endif %}
+{% if notice %}
+<div class="notice">{{ notice }}</div>
 {% endif %}
 
 <div class="toolbar">
@@ -55,10 +58,18 @@
       <td>
         {% if p['url'] in active_urls %}
         <span class="badge running">아카이빙 중</span>
-        {% elif can_archive %}
+        {% else %}
+        {% if can_archive %}
         <form class="inline" method="post" action="/page/{{ p['id'] }}/rearchive">
           <button type="submit">재아카이빙</button>
         </form>
+        {% endif %}
+        {% if can_delete %}
+        <form class="inline" method="post" action="/page/{{ p['id'] }}/delete"
+              onsubmit="return confirm('{{ p['url'] }}\n\n스냅샷 {{ p['snapshot_count'] }}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.')">
+          <button type="submit" class="danger">삭제</button>
+        </form>
+        {% endif %}
         {% endif %}
       </td>
     </tr>
