@@ -32,6 +32,25 @@ uv run wccg serve --host 0.0.0.0     # 외부 노출 (인증 켜진 상태에서
 uv run wccg -v add <url>             # 단계별 상세 로그를 stderr 로 출력
 ```
 
+## 백업/복원
+
+```bash
+uv run wccg backup [dest]                  # 전체 백업 tar.gz (DB·인증 데이터·스냅샷 파일·rules.json)
+uv run wccg restore <file> [--yes]         # 전체 복원 — 현재 데이터를 백업 시점 상태로 교체
+uv run wccg export [dest]                  # 아카이브 데이터만 내보내기 (페이지·스냅샷·확인 기록 + 파일)
+uv run wccg import <file>                  # 가져오기 (기본 merge — 기존 유지, 중복 스냅샷 스킵)
+uv run wccg import <file> --mode overwrite # 기존 아카이브 데이터를 지우고 가져오기 (--yes 로 확인 생략)
+```
+
+- `backup`/`restore` 는 인증 데이터(사용자·세션·패스키)까지 포함한 전체 복구용.
+  복원은 아카이브 루트 전체를 교체하므로 확인 프롬프트를 거친다.
+- `export`/`import` 는 아카이브 데이터(pages·snapshots·checks + 스냅샷 파일)만
+  다룬다 — 인증 테이블과 실행 로그(archive_logs)는 건드리지 않으므로 다른
+  인스턴스로 데이터를 옮기거나 합칠 때 쓴다. `merge` 는 같은 페이지의 같은
+  스냅샷 디렉토리를 스킵해 여러 번 실행해도 안전하다(멱등).
+- `dest` 를 생략하면 현재 디렉토리에 `chunchugwan-{backup|export}-{시각}.tar.gz`
+  로 생성된다.
+
 ## 도커로 실행
 
 로컬에 Python/uv 를 설치하지 않고 Docker Compose 로 실행할 수 있다.
