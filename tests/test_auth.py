@@ -175,6 +175,21 @@ def test_healthz_public(client):
     assert client.get("/healthz").status_code == 200
 
 
+def test_browser_icon_paths_404_without_login_redirect(client):
+    """favicon 등 브라우저 자동 요청은 /login 으로 보내지 않고 404."""
+    for path in (
+        "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"
+    ):
+        res = client.get(path, follow_redirects=False)
+        assert res.status_code == 404, path
+
+
+def test_browser_icon_paths_404_on_first_run(fresh_client):
+    """최초 구동 상태에서도 아이콘 요청은 /setup 으로 보내지 않는다."""
+    res = fresh_client.get("/favicon.ico", follow_redirects=False)
+    assert res.status_code == 404
+
+
 def test_login_page_public(client):
     res = client.get("/login")
     assert res.status_code == 200

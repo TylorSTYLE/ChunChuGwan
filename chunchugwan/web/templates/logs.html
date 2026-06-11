@@ -9,6 +9,13 @@ tr.steps-row > td { background: var(--bg-soft); padding: 10px 14px 14px; }
 .steps-table th, .steps-table td { padding: 3px 10px; }
 td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
               white-space: nowrap; }
+input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
+                   border: 1px solid var(--border); border-radius: 4px;
+                   background: #fff; }
+.date-range, .presets { display: inline-flex; gap: 4px; align-items: center; }
+.pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
+         font-size: 13px; }
+.pager .spacer { flex: 1; }
 </style>
 {% endblock %}
 {% block content %}
@@ -31,16 +38,16 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
 
 <div class="toolbar">
   <h2 style="margin:0">아카이브 로그</h2>
-  {% if page %}
-  <span class="mono muted">페이지: <a href="/page/{{ page['id'] }}">{{ page['url'] }}</a></span>
+  {% if filter_page %}
+  <span class="mono muted">페이지: <a href="/page/{{ filter_page['id'] }}">{{ filter_page['url'] }}</a></span>
   {% endif %}
   {% if snapshot_id %}
   <span class="mono muted">스냅샷: <a href="/snapshot/{{ snapshot_id }}">#{{ snapshot_id }}</a></span>
   {% endif %}
-  {% if page or snapshot_id %}<a href="/logs">필터 해제</a>{% endif %}
+  {% if filter_page or snapshot_id %}<a href="/logs">필터 해제</a>{% endif %}
   <span class="spacer"></span>
-  <form method="get" action="/logs" class="toolbar" style="margin:0">
-    {% if page %}<input type="hidden" name="page_id" value="{{ page['id'] }}">{% endif %}
+  <form method="get" action="/logs" class="toolbar" style="margin:0" id="log-filter">
+    {% if filter_page %}<input type="hidden" name="page_id" value="{{ filter_page['id'] }}">{% endif %}
     {% if snapshot_id %}<input type="hidden" name="snapshot_id" value="{{ snapshot_id }}">{% endif %}
     <select name="domain">
       <option value="">모든 도메인</option>
@@ -54,12 +61,27 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
       <option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ status_label[s] }}</option>
       {% endfor %}
     </select>
+    <span class="date-range">
+      <input type="date" name="date_from" value="{{ date_from }}" aria-label="시작일">
+      <span class="muted">~</span>
+      <input type="date" name="date_to" value="{{ date_to }}" aria-label="종료일">
+    </span>
+    <span class="presets">
+      <button type="button" class="preset" data-days="1">1일</button>
+      <button type="button" class="preset" data-days="7">7일</button>
+      <button type="button" class="preset" data-days="30">30일</button>
+      <button type="button" class="preset" data-days="">전체</button>
+    </span>
     <button type="submit">필터</button>
   </form>
 </div>
 
 {% if not items %}
+  {% if domain or status or date_from or date_to or filter_page or snapshot_id %}
+<p class="muted">조건에 맞는 로그가 없습니다.</p>
+  {% else %}
 <p class="muted">로그가 없습니다. 아카이빙을 실행하면 결과가 여기에 기록됩니다.</p>
+  {% endif %}
 {% else %}
 <table>
   <thead>
@@ -144,11 +166,12 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
-{% if items|length >= limit %}
-<p class="muted" style="margin-top:8px">최근 {{ limit }}건만 표시 중.
-  <a href="/logs?limit={{ limit * 2 }}{% if domain %}&domain={{ domain }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if page %}&page_id={{ page['id'] }}{% endif %}{% if snapshot_id %}&snapshot_id={{ snapshot_id }}{% endif %}">더 보기</a>
-</p>
-{% endif %}
+<div class="pager">
+  <span class="muted">총 {{ total }}건{% if total_pages > 1 %} · {{ page_num }}/{{ total_pages }} 페이지{% endif %}</span>
+  <span class="spacer"></span>
+  {% if prev_url %}<a href="{{ prev_url }}">&larr; 이전</a>{% endif %}
+  {% if next_url %}<a href="{{ next_url }}">다음 &rarr;</a>{% endif %}
+</div>
 {% endif %}
 
 <script>
@@ -158,5 +181,31 @@ document.querySelectorAll('button.toggle').forEach((btn) => {
     btn.classList.toggle('active');
   });
 });
+
+// 기간 프리셋 — 오늘 포함 최근 N일을 날짜 입력에 채우고 바로 필터 적용
+(() => {
+  const form = document.getElementById('log-filter');
+  const fromInput = form.elements.date_from;
+  const toInput = form.elements.date_to;
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const rangeFor = (days) => {
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - (days - 1));
+    return [fmt(from), fmt(to)];
+  };
+  form.querySelectorAll('button.preset').forEach((btn) => {
+    const days = btn.dataset.days;
+    const [from, to] = days ? rangeFor(Number(days)) : ['', ''];
+    if (fromInput.value === from && toInput.value === to) {
+      btn.classList.add('active');
+    }
+    btn.addEventListener('click', () => {
+      fromInput.value = from;
+      toInput.value = to;
+      form.submit();
+    });
+  });
+})();
 </script>
 {% endblock %}

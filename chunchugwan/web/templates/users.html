@@ -20,7 +20,13 @@
   {% for u in users %}
     <tr>
       <td class="mono">{{ u['email'] }}{% if u['id'] == me_id %} <span class="muted">(나)</span>{% endif %}</td>
-      <td>{{ u['display_name'] or '-' }}</td>
+      <td>
+        <form class="inline" method="post" action="/system/users/{{ u['id'] }}/name">
+          <input type="text" name="display_name" value="{{ u['display_name'] or '' }}"
+                 size="10" maxlength="50" placeholder="-">
+          <button type="submit">저장</button>
+        </form>
+      </td>
       <td>
         <span class="badge role-{{ u['role'] }}">{{ role_labels.get(u['role'], u['role']) }}</span>
         {% if u['is_founder'] %}<span class="badge role-admin">최초 관리자</span>{% endif %}
@@ -31,7 +37,19 @@
         {% if not u['totp_secret'] and u['passkey_count'] == 0 %}<span class="muted">-</span>{% endif %}
       </td>
       <td>{% if u['identity_count'] > 0 %}<span class="badge same">OIDC</span>{% else %}<span class="muted">-</span>{% endif %}</td>
-      <td class="num">{{ u['session_count'] }}</td>
+      <td class="num">
+        {{ u['session_count'] }}
+        {% if u['session_count'] > 0 %}
+        <form class="inline" method="post" action="/system/users/{{ u['id'] }}/logout"
+              {% if u['id'] == me_id %}
+              onsubmit="return confirm('본인 계정의 모든 세션을 로그아웃합니다. 지금 이 로그인도 종료됩니다. 계속할까요?')"
+              {% else %}
+              onsubmit="return confirm('{{ u['email'] }} 의 모든 세션을 로그아웃할까요?')"
+              {% endif %}>
+          <button type="submit">로그아웃</button>
+        </form>
+        {% endif %}
+      </td>
       <td class="mono">{{ u['created_at'][:10] }}</td>
       <td>
         {% if u['is_founder'] %}
@@ -57,4 +75,47 @@
   {% endfor %}
   </tbody>
 </table>
+
+<h3 style="margin-top:24px">이메일 초대</h3>
+<p class="muted" style="font-size:12px; max-width:720px">
+  초대 링크는 {{ invite_ttl_days }}일 후 만료되며, 같은 이메일을 다시 초대하면
+  새 링크로 교체됩니다.
+  {% if not mail_enabled %}
+  메일 발송이 설정되지 않아(WCCG_SMTP_*) 초대 링크가 화면에 표시됩니다 —
+  직접 전달하세요.
+  {% endif %}
+</p>
+<form class="inline" method="post" action="/system/users/invite">
+  <input type="email" name="email" placeholder="invite@example.com" size="28" required>
+  <select name="role">
+    {% for r in invitable_roles %}
+    <option value="{{ r }}" {% if r == 'viewer' %}selected{% endif %}>{{ role_labels[r] }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">초대</button>
+</form>
+
+{% if invites %}
+<table style="margin-top:12px">
+  <thead>
+    <tr><th>이메일</th><th>권한</th><th>초대한 사람</th><th>만료</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for i in invites %}
+    <tr>
+      <td class="mono">{{ i['email'] }}</td>
+      <td><span class="badge role-{{ i['role'] }}">{{ role_labels.get(i['role'], i['role']) }}</span></td>
+      <td class="mono">{{ i['inviter_email'] or '-' }}</td>
+      <td class="mono">{{ i['expires_at'][:10] }}</td>
+      <td>
+        <form class="inline" method="post" action="/system/users/invite/{{ i['id'] }}/delete"
+              onsubmit="return confirm('{{ i['email'] }} 초대를 취소할까요? 링크가 즉시 무효화됩니다.')">
+          <button type="submit">취소</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
 {% endblock %}

@@ -10,7 +10,7 @@ import click
 
 from . import backup as backup_mod
 from . import capture as capture_mod
-from . import config, db, differ, pipeline, resources, scheduler, storage
+from . import config, db, deletion, differ, pipeline, resources, scheduler, storage
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
 
@@ -136,6 +136,49 @@ def diff(url: str, from_idx: int | None, to_idx: int | None) -> None:
             old_shot, new_shot, f"shotdiff-{old_snap['id']}-{new_snap['id']}"
         )
         click.echo(f"스크린샷 변경 픽셀 {ratio:.2%}  (하이라이트: {out_png})")
+
+
+@main.command()
+@click.argument("url")
+@click.option(
+    "--snapshot", "snapshot_idx", type=int, default=None,
+    help="history 번호의 스냅샷 하나만 삭제 (생략 시 페이지 전체)",
+)
+@click.option("--yes", is_flag=True, help="확인 없이 진행")
+def delete(url: str, snapshot_idx: int | None, yes: bool) -> None:
+    """아카이브 삭제 — 페이지 전체 또는 단일 스냅샷 (--snapshot N).
+
+    단일 스냅샷 삭제 시 다음 스냅샷의 변경 표시는 새 직전 스냅샷 기준으로
+    자동 보정된다. 실행 로그(archive_logs)는 이력으로 남는다.
+    """
+    with db.connect() as conn:
+        page = _find_page(conn, url)
+        snaps = db.list_snapshots(conn, page["id"])
+
+    if snapshot_idx is None:
+        if not yes:
+            click.confirm(
+                f"{page['url']} — 스냅샷 {len(snaps)}개를 포함한 아카이브 전체를 "
+                "삭제합니다. 되돌릴 수 없습니다. 계속할까요?",
+                abort=True,
+            )
+        result = deletion.delete_page(page["id"])
+        click.echo(f"삭제됨: {result.url} (스냅샷 {result.snapshots_deleted}개)")
+        return
+
+    if not (1 <= snapshot_idx <= len(snaps)):
+        raise click.ClickException(
+            f"잘못된 번호: --snapshot {snapshot_idx} (1 ~ {len(snaps)})"
+        )
+    snap = snaps[snapshot_idx - 1]
+    if not yes:
+        click.confirm(
+            f"스냅샷 {snapshot_idx} ({snap['taken_at']}) 을 삭제합니다. "
+            "되돌릴 수 없습니다. 계속할까요?",
+            abort=True,
+        )
+    deletion.delete_snapshot(snap["id"])
+    click.echo(f"삭제됨: {snap['dir_name']}")
 
 
 @main.group()

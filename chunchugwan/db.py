@@ -112,6 +112,16 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
+CREATE TABLE IF NOT EXISTS invites (
+    id          INTEGER PRIMARY KEY,
+    email       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    token_hash  TEXT NOT NULL UNIQUE,    -- 초대 토큰의 SHA-256 (원문은 링크에만 존재)
+    role        TEXT NOT NULL DEFAULT 'viewer',  -- 가입 시 부여할 권한 (blocked 제외)
+    invited_by  INTEGER REFERENCES users(id),
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS oidc_states (
     state       TEXT PRIMARY KEY,
     nonce       TEXT NOT NULL,
@@ -240,6 +250,74 @@ def insert_snapshot(conn: sqlite3.Connection, page_id: int, **fields) -> int:
     return cur.lastrowid
 
 
+def _adjacent_snapshot(
+    conn: sqlite3.Connection, snap: sqlite3.Row, *, after: bool
+) -> sqlite3.Row | None:
+    """(taken_at, id) 순서상 바로 앞/뒤 스냅샷 (없으면 None)."""
+    op, order = (">", "ASC") if after else ("<", "DESC")
+    return conn.execute(
+        f"""
+        SELECT * FROM snapshots
+        WHERE page_id = ?
+          AND (taken_at {op} ? OR (taken_at = ? AND id {op} ?))
+        ORDER BY taken_at {order}, id {order} LIMIT 1
+        """,
+        (snap["page_id"], snap["taken_at"], snap["taken_at"], snap["id"]),
+    ).fetchone()
+
+
+def delete_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> bool:
+    """스냅샷 row 삭제. 없는 id 면 False.
+
+    - archive_logs 의 snapshot_id 참조는 NULL 로 해제 (실행 이력은 보존).
+    - 바로 다음 스냅샷의 changed 를 '새 직전 스냅샷' 기준으로 재계산해
+      히스토리의 변경 표시가 어긋나지 않게 한다 (예: A→B→A 에서 B 를
+      지우면 마지막 스냅샷은 '동일'이 된다). 첫 스냅샷이 되면 changed=1.
+    """
+    snap = conn.execute(
+        "SELECT * FROM snapshots WHERE id = ?", (snapshot_id,)
+    ).fetchone()
+    if snap is None:
+        return False
+    prev = _adjacent_snapshot(conn, snap, after=False)
+    nxt = _adjacent_snapshot(conn, snap, after=True)
+    conn.execute(
+        "UPDATE archive_logs SET snapshot_id = NULL WHERE snapshot_id = ?",
+        (snapshot_id,),
+    )
+    conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
+    if nxt is not None:
+        changed = 1 if prev is None else int(prev["content_hash"] != nxt["content_hash"])
+        conn.execute(
+            "UPDATE snapshots SET changed = ? WHERE id = ?", (changed, nxt["id"])
+        )
+    return True
+
+
+def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
+    """페이지와 종속 데이터(스냅샷·확인 기록·스케줄)를 일괄 삭제. 없으면 False.
+
+    archive_logs 는 실행 이력으로 보존하되 page_id/snapshot_id 참조만 해제한다.
+    """
+    if get_page_by_id(conn, page_id) is None:
+        return False
+    conn.execute(
+        """
+        UPDATE archive_logs SET snapshot_id = NULL
+        WHERE snapshot_id IN (SELECT id FROM snapshots WHERE page_id = ?)
+        """,
+        (page_id,),
+    )
+    conn.execute(
+        "UPDATE archive_logs SET page_id = NULL WHERE page_id = ?", (page_id,)
+    )
+    conn.execute("DELETE FROM checks WHERE page_id = ?", (page_id,))
+    conn.execute("DELETE FROM schedules WHERE page_id = ?", (page_id,))
+    conn.execute("DELETE FROM snapshots WHERE page_id = ?", (page_id,))
+    conn.execute("DELETE FROM pages WHERE id = ?", (page_id,))
+    return True
+
+
 def insert_check(conn: sqlite3.Connection, page_id: int, content_hash: str) -> None:
     """콘텐츠 동일로 저장을 생략한 확인 기록 추가."""
     conn.execute(
@@ -270,19 +348,19 @@ def insert_archive_log(conn: sqlite3.Connection, **fields) -> int:
     return cur.lastrowid
 
 
-def list_archive_logs(
-    conn: sqlite3.Connection,
+def _archive_log_where(
     *,
-    domain: str | None = None,
-    page_id: int | None = None,
-    snapshot_id: int | None = None,
-    status: str | None = None,
-    limit: int = 100,
-) -> list[sqlite3.Row]:
-    """아카이브 실행 로그 (최신 순). 도메인/페이지/스냅샷/상태로 필터.
+    domain: str | None,
+    page_id: int | None,
+    snapshot_id: int | None,
+    status: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str, list[object]]:
+    """archive_logs 필터 WHERE 절 조립 (list/count 공용).
 
-    스냅샷이 생긴 로그에는 디렉토리 위치(snap_domain, snap_slug, snap_dir_name)를
-    함께 반환한다 — 대시보드가 저장된 파일 목록/용량을 조회하는 데 쓴다.
+    date_from/date_to 는 YYYY-MM-DD. started_at 이 ISO 8601 이므로 하한은
+    문자열 비교로, 상한은 다음날 0시 미만으로 비교한다 (해당 날짜 포함).
     """
     where: list[str] = []
     params: list[object] = []
@@ -291,10 +369,36 @@ def list_archive_logs(
         ("al.page_id = ?", page_id),
         ("al.snapshot_id = ?", snapshot_id),
         ("al.status = ?", status),
+        ("al.started_at >= ?", date_from),
+        ("al.started_at < DATE(?, '+1 day')", date_to),
     ):
         if value is not None:
             where.append(cond)
             params.append(value)
+    return (" WHERE " + " AND ".join(where)) if where else "", params
+
+
+def list_archive_logs(
+    conn: sqlite3.Connection,
+    *,
+    domain: str | None = None,
+    page_id: int | None = None,
+    snapshot_id: int | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """아카이브 실행 로그 (최신 순). 도메인/페이지/스냅샷/상태/기간으로 필터.
+
+    스냅샷이 생긴 로그에는 디렉토리 위치(snap_domain, snap_slug, snap_dir_name)를
+    함께 반환한다 — 대시보드가 저장된 파일 목록/용량을 조회하는 데 쓴다.
+    """
+    where_sql, params = _archive_log_where(
+        domain=domain, page_id=page_id, snapshot_id=snapshot_id,
+        status=status, date_from=date_from, date_to=date_to,
+    )
     sql = """
         SELECT al.*, s.dir_name AS snap_dir_name,
                sp.domain AS snap_domain, sp.slug AS snap_slug
@@ -302,11 +406,31 @@ def list_archive_logs(
         LEFT JOIN snapshots s ON s.id = al.snapshot_id
         LEFT JOIN pages sp ON sp.id = s.page_id
     """
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY al.started_at DESC, al.id DESC LIMIT ?"
-    params.append(limit)
+    sql += where_sql
+    sql += " ORDER BY al.started_at DESC, al.id DESC LIMIT ? OFFSET ?"
+    params += [limit, offset]
     return conn.execute(sql, params).fetchall()
+
+
+def count_archive_logs(
+    conn: sqlite3.Connection,
+    *,
+    domain: str | None = None,
+    page_id: int | None = None,
+    snapshot_id: int | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """필터 조건에 맞는 아카이브 로그 총 건수 (페이징용)."""
+    where_sql, params = _archive_log_where(
+        domain=domain, page_id=page_id, snapshot_id=snapshot_id,
+        status=status, date_from=date_from, date_to=date_to,
+    )
+    row = conn.execute(
+        "SELECT COUNT(*) FROM archive_logs al" + where_sql, params
+    ).fetchone()
+    return row[0]
 
 
 def list_log_domains(conn: sqlite3.Connection) -> list[str]:
@@ -605,6 +729,66 @@ def set_totp_last_used(conn: sqlite3.Connection, user_id: int, window: str) -> N
     conn.execute(
         "UPDATE users SET totp_last_used_at = ? WHERE id = ?", (window, user_id)
     )
+
+
+# ---- 초대 ----
+
+# 초대로 부여할 수 있는 권한 (차단 계정을 초대하는 것은 의미가 없다)
+INVITABLE_ROLES = ("admin", "archiver", "viewer")
+
+
+def create_invite(
+    conn: sqlite3.Connection,
+    email: str,
+    token_hash: str,
+    role: str,
+    invited_by: int | None,
+    ttl_seconds: int,
+) -> int:
+    """초대 생성 후 id 반환. 같은 이메일의 기존 초대는 교체된다 (이전 링크 무효화)."""
+    if role not in INVITABLE_ROLES:
+        raise ValueError(f"초대할 수 없는 역할: {role!r}")
+    conn.execute("DELETE FROM invites WHERE email = ?", (email,))
+    cur = conn.execute(
+        """
+        INSERT INTO invites (email, token_hash, role, invited_by, created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (email, token_hash, role, invited_by, _utcnow(), _later(ttl_seconds)),
+    )
+    return cur.lastrowid
+
+
+def get_invite_by_token(conn: sqlite3.Connection, token_hash: str) -> sqlite3.Row | None:
+    """만료되지 않은 초대를 토큰 해시로 조회 (없거나 만료면 None)."""
+    return conn.execute(
+        "SELECT * FROM invites WHERE token_hash = ? AND expires_at > ?",
+        (token_hash, _utcnow()),
+    ).fetchone()
+
+
+def list_invites(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """만료되지 않은 초대 목록 (+ 초대한 사용자 이메일, 최신 순)."""
+    return conn.execute(
+        """
+        SELECT i.*, u.email AS inviter_email
+        FROM invites i LEFT JOIN users u ON u.id = i.invited_by
+        WHERE i.expires_at > ?
+        ORDER BY i.created_at DESC, i.id DESC
+        """,
+        (_utcnow(),),
+    ).fetchall()
+
+
+def delete_invite(conn: sqlite3.Connection, invite_id: int) -> bool:
+    """초대 취소 (가입 완료 시에도 호출 — 1회용). 없으면 False."""
+    cur = conn.execute("DELETE FROM invites WHERE id = ?", (invite_id,))
+    return cur.rowcount == 1
+
+
+def delete_expired_invites(conn: sqlite3.Connection) -> None:
+    """만료 초대 일괄 삭제 (기회적 정리용)."""
+    conn.execute("DELETE FROM invites WHERE expires_at <= ?", (_utcnow(),))
 
 
 # ---- 패스키 (WebAuthn) ----

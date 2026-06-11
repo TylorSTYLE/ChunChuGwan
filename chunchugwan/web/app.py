@@ -16,9 +16,9 @@ import json
 import logging
 import threading
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
@@ -28,7 +28,9 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from .. import auth, config, db, differ, pipeline, resources, scheduler, storage
+from .. import (
+    auth, config, db, deletion, differ, pipeline, resources, scheduler, storage,
+)
 from . import auth_routes, permissions, system_routes
 from .templating import templates
 
@@ -70,9 +72,16 @@ app.include_router(system_routes.router)
 # 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)
 # /login/passkey* 는 패스워드 통과 후 pending 세션 단계라 user 가 아직 없다 —
 # 라우트 핸들러가 pending_totp 세션을 직접 요구한다.
+# /invite/{token} 은 초대받은 본인의 가입 페이지 — 토큰 자체가 자격 증명이다.
 _PUBLIC_PATHS = {
     "/healthz", "/login", "/login/totp", "/signup",
     "/login/passkey/options", "/login/passkey",
+}
+
+# 브라우저가 주소만 보고 자동 요청하는 아이콘 경로 — 라우트가 없으므로 404 가
+# 정답이다. /login·/setup 으로 리다이렉트하면 로그만 오염되므로 그대로 통과시킨다.
+_BROWSER_ICON_PATHS = {
+    "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png",
 }
 
 
@@ -112,7 +121,7 @@ async def auth_gate(request: Request, call_next):
                         request.state.user = db.get_user_by_id(conn, sess["user_id"])
 
         if first_run:
-            if path not in ("/setup", "/healthz"):
+            if path not in ("/setup", "/healthz") and path not in _BROWSER_ICON_PATHS:
                 return RedirectResponse("/setup", status_code=302)
         else:
             # 차단된 계정 — 로그아웃 외 모든 접근 거부 (세션은 차단 시점에
@@ -131,7 +140,9 @@ async def auth_gate(request: Request, call_next):
             # 화이트리스트 미디어 타입만 CSP sandbox 로 서빙한다.
             public = (
                 path in _PUBLIC_PATHS
+                or path in _BROWSER_ICON_PATHS
                 or path.startswith("/auth/oidc/")
+                or path.startswith("/invite/")
                 or path.startswith("/resource/")
             )
             if request.state.user is None and not public:
@@ -202,7 +213,7 @@ def healthz() -> dict:
 
 
 @app.get("/archives", response_class=HTMLResponse)
-def index(request: Request, queued: str = "", error: str = ""):
+def index(request: Request, queued: str = "", error: str = "", notice: str = ""):
     active = _active_snapshot()
     with db.connect() as conn:
         pages = db.list_pages(conn)
@@ -220,7 +231,7 @@ def index(request: Request, queued: str = "", error: str = ""):
     return templates.TemplateResponse(
         request, "index.html",
         {
-            "pages": pages, "queued": queued, "error": error,
+            "pages": pages, "queued": queued, "error": error, "notice": notice,
             "active_urls": set(active), "active_list": sorted(active),
             "pending_new": pending_new, "schedule_labels": schedule_labels,
         },
@@ -311,7 +322,9 @@ _SCHEDULE_OPTIONS = [
 
 
 @app.get("/page/{page_id}", response_class=HTMLResponse)
-def timeline(request: Request, page_id: int, queued: int = 0):
+def timeline(
+    request: Request, page_id: int, queued: int = 0, notice: str = "", error: str = ""
+):
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
         if page is None:
@@ -329,6 +342,7 @@ def timeline(request: Request, page_id: int, queued: int = 0):
         request, "timeline.html",
         {
             "page": page, "items": items, "checks": checks, "queued": queued,
+            "notice": notice, "error": error,
             "schedule": schedule,
             "schedule_label": (
                 scheduler.format_interval(schedule["interval_seconds"]) if schedule else ""
@@ -560,6 +574,16 @@ def shotdiff(
 _LOG_STATUSES = ("new", "changed", "unchanged", "forced_same", "error")
 
 
+def _clean_date(value: str | None) -> str | None:
+    """날짜 입력을 YYYY-MM-DD 로 정규화, 파싱 불가면 None (필터 무시)."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
+
+
 @app.get("/logs", response_class=HTMLResponse)
 def logs_view(
     request: Request,
@@ -567,19 +591,33 @@ def logs_view(
     page_id: int | None = None,
     snapshot_id: int | None = None,
     status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    page: int = 1,
     limit: int = 100,
 ):
-    """아카이브 실행 로그. 도메인/페이지/스냅샷/상태 필터 지원."""
+    """아카이브 실행 로그. 도메인/페이지/스냅샷/상태/기간 필터 + 페이징."""
     limit = max(1, min(limit, 500))
     if status not in _LOG_STATUSES:
         status = None
+    date_from = _clean_date(date_from)
+    date_to = _clean_date(date_to)
+    if date_from and date_to and date_from > date_to:
+        date_from, date_to = date_to, date_from
+    filters = {
+        "domain": domain or None, "page_id": page_id,
+        "snapshot_id": snapshot_id, "status": status,
+        "date_from": date_from, "date_to": date_to,
+    }
     with db.connect() as conn:
+        total = db.count_archive_logs(conn, **filters)
+        total_pages = max(1, -(-total // limit))  # ceil
+        page = max(1, min(page, total_pages))
         logs = db.list_archive_logs(
-            conn, domain=domain or None, page_id=page_id,
-            snapshot_id=snapshot_id, status=status, limit=limit,
+            conn, **filters, limit=limit, offset=(page - 1) * limit,
         )
         domains = db.list_log_domains(conn)
-        page = db.get_page_by_id(conn, page_id) if page_id else None
+        filter_page = db.get_page_by_id(conn, page_id) if page_id else None
 
     items = []
     for row in logs:
@@ -599,13 +637,32 @@ def logs_view(
             "log": row, "steps": steps, "files": files,
             "total_bytes": sum(f["bytes"] for f in files) if files else None,
         })
+    # 페이징 링크 — 현재 필터를 유지한 채 page 만 바꾼다
+    qs_base = [
+        (k, v) for k, v in (
+            ("domain", domain or None), ("page_id", page_id),
+            ("snapshot_id", snapshot_id), ("status", status),
+            ("date_from", date_from), ("date_to", date_to),
+        ) if v is not None
+    ]
+    if limit != 100:
+        qs_base.append(("limit", limit))
+
+    def _page_url(n: int) -> str:
+        params = qs_base + ([("page", n)] if n > 1 else [])
+        return "/logs" + ("?" + urlencode(params) if params else "")
+
     return templates.TemplateResponse(
         request, "logs.html",
         {
-            "items": items, "domains": domains, "page": page,
+            "items": items, "domains": domains, "filter_page": filter_page,
             "domain": domain or "", "status": status or "",
+            "date_from": date_from or "", "date_to": date_to or "",
             "snapshot_id": snapshot_id, "limit": limit,
             "statuses": _LOG_STATUSES,
+            "total": total, "total_pages": total_pages, "page_num": page,
+            "prev_url": _page_url(page - 1) if page > 1 else None,
+            "next_url": _page_url(page + 1) if page < total_pages else None,
         },
     )
 
@@ -636,6 +693,12 @@ def _require_archiver(request: Request) -> None:
         raise HTTPException(403, "아카이빙 권한이 없습니다")
 
 
+def _require_deleter(request: Request) -> None:
+    """삭제 권한 가드 — 되돌릴 수 없는 작업이라 관리자 전용."""
+    if not permissions.can_delete(request.state.user):
+        raise HTTPException(403, "삭제 권한이 없습니다 (관리자 전용)")
+
+
 @app.post("/archive")
 def archive_new(request: Request, background: BackgroundTasks, url: str = Form(...)):
     """대시보드에서 새 URL 아카이빙. URL 검증은 동기로, 캡처는 백그라운드로."""
@@ -644,7 +707,7 @@ def archive_new(request: Request, background: BackgroundTasks, url: str = Form(.
         norm = storage.normalize_url(url)
     except ValueError as exc:
         return RedirectResponse(
-            f"/archives?error={quote(str(exc), safe='')}", status_code=303
+            f"/archives?error={quote(f'아카이빙 실패: {exc}', safe='')}", status_code=303
         )
     _queue_archive(background, norm)
     return RedirectResponse(f"/archives?queued={quote(norm, safe='')}", status_code=303)
@@ -664,3 +727,47 @@ def rearchive(
         raise HTTPException(404, "페이지 없음")
     _queue_archive(background, page["url"], force=force)
     return RedirectResponse(url=f"/page/{page_id}?queued=1", status_code=303)
+
+
+_BUSY_MSG = "아카이빙이 진행 중인 페이지입니다 — 완료 후 다시 시도하세요"
+
+
+@app.post("/page/{page_id}/delete")
+def page_delete(request: Request, page_id: int):
+    """페이지 전체 삭제 (모든 스냅샷·확인 기록·스케줄). 관리자 전용."""
+    _require_deleter(request)
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, "페이지 없음")
+    # 진행 중인 아카이빙과 경합하면 삭제 직후 스냅샷이 다시 생긴다 — 거부
+    if page["url"] in _active_snapshot():
+        return RedirectResponse(
+            f"/archives?error={quote(_BUSY_MSG, safe='')}", status_code=303
+        )
+    result = deletion.delete_page(page_id)
+    msg = f"삭제됨: {result.url} (스냅샷 {result.snapshots_deleted}개)"
+    return RedirectResponse(
+        f"/archives?notice={quote(msg, safe='')}", status_code=303
+    )
+
+
+@app.post("/snapshot/{snapshot_id}/delete")
+def snapshot_delete(request: Request, snapshot_id: int):
+    """단일 스냅샷 삭제. 관리자 전용.
+
+    다음 스냅샷의 changed 재계산(신/구 비교 보정)은 deletion → db 계층이 한다.
+    """
+    _require_deleter(request)
+    snap = _load_snapshot(snapshot_id)
+    # 진행 중이면 파이프라인이 '직전 스냅샷'을 읽는 중일 수 있다 — 거부
+    if snap["page_url"] in _active_snapshot():
+        return RedirectResponse(
+            f"/page/{snap['page_id']}?error={quote(_BUSY_MSG, safe='')}",
+            status_code=303,
+        )
+    deletion.delete_snapshot(snapshot_id)
+    msg = f"스냅샷 삭제됨: {snap['taken_at']}"
+    return RedirectResponse(
+        f"/page/{snap['page_id']}?notice={quote(msg, safe='')}", status_code=303
+    )

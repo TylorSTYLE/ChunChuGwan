@@ -58,6 +58,31 @@ def test_insert_and_filter_logs(archive_env):
         assert db.list_log_domains(conn) == ["a.com", "b.com"]
 
 
+def test_list_logs_date_filter_and_paging(archive_env):
+    with db.connect() as conn:
+        for i, day in enumerate(("2026-06-01", "2026-06-05", "2026-06-10")):
+            db.insert_archive_log(
+                conn, url=f"https://a.com/{i}", domain="a.com", source="cli",
+                status="new", started_at=f"{day}T12:00:00+00:00", duration_ms=10,
+            )
+    with db.connect() as conn:
+        assert db.count_archive_logs(conn) == 3
+        # 하한·상한 모두 해당 날짜 포함
+        assert [r["url"] for r in db.list_archive_logs(conn, date_from="2026-06-05")] \
+            == ["https://a.com/2", "https://a.com/1"]
+        assert [r["url"] for r in db.list_archive_logs(conn, date_to="2026-06-05")] \
+            == ["https://a.com/1", "https://a.com/0"]
+        assert [r["url"] for r in db.list_archive_logs(
+            conn, date_from="2026-06-05", date_to="2026-06-05"
+        )] == ["https://a.com/1"]
+        assert db.count_archive_logs(
+            conn, date_from="2026-06-02", date_to="2026-06-10"
+        ) == 2
+        # offset 페이징 (최신 순)
+        assert [r["url"] for r in db.list_archive_logs(conn, limit=1, offset=1)] \
+            == ["https://a.com/1"]
+
+
 def test_insert_log_rejects_unknown_column(archive_env):
     with db.connect() as conn:
         with pytest.raises(ValueError):
@@ -256,6 +281,46 @@ def test_logs_ignores_invalid_status(client):
     res = client.get("/logs?status=evil")
     assert res.status_code == 200
     assert "https://a.com/x" in res.text and "https://b.com/y" in res.text
+
+
+def test_logs_filter_by_date(client):
+    # 시드 로그 2건 모두 2026-06-11 — 범위 안이면 표시, 밖이면 비움
+    res = client.get("/logs?date_from=2026-06-11&date_to=2026-06-11")
+    assert res.status_code == 200
+    assert "https://a.com/x" in res.text and "https://b.com/y" in res.text
+
+    res = client.get("/logs?date_from=2026-06-12")
+    assert "https://a.com/x" not in res.text and "https://b.com/y" not in res.text
+    assert "조건에 맞는 로그가 없습니다" in res.text
+
+    res = client.get("/logs?date_to=2026-06-10")
+    assert "https://a.com/x" not in res.text and "https://b.com/y" not in res.text
+
+    # from > to 이면 맞바꿔 적용
+    res = client.get("/logs?date_from=2026-06-12&date_to=2026-06-10")
+    assert "https://a.com/x" in res.text and "https://b.com/y" in res.text
+
+
+def test_logs_ignores_invalid_date(client):
+    res = client.get("/logs?date_from=junk&date_to=2026-13-99")
+    assert res.status_code == 200
+    assert "https://a.com/x" in res.text and "https://b.com/y" in res.text
+
+
+def test_logs_pagination(client):
+    # limit=1 → 2페이지: 1페이지는 최신(error), 2페이지는 이전(new) 로그
+    res = client.get("/logs?limit=1")
+    assert res.status_code == 200
+    assert "https://b.com/y" in res.text and "https://a.com/x" not in res.text
+    assert "총 2건" in res.text and "1/2 페이지" in res.text
+    assert "/logs?limit=1&amp;page=2" in res.text  # 다음 링크에 필터 유지
+
+    res = client.get("/logs?limit=1&page=2")
+    assert "https://a.com/x" in res.text and "https://b.com/y" not in res.text
+
+    # 범위 밖 페이지 번호는 마지막 페이지로 보정
+    res = client.get("/logs?limit=1&page=99")
+    assert "https://a.com/x" in res.text
 
 
 # ---- 저장 파일 목록/용량 표시 ----

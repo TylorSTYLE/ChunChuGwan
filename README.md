@@ -8,7 +8,7 @@
 - 타임스탬프·상대시각·광고 줄 등 노이즈는 정규화 단계에서 제거 후 비교
 - 이미지/CSS/폰트를 보존하는 단일 page.html — 큰 자원은 스냅샷 간 공유
   저장소(CAS)로 중복 제거, HTML 은 gzip, 스크린샷은 WebP 로 저장 공간 절약
-- 읽기 전용 대시보드 (목록/타임라인/스냅샷 뷰어/diff 뷰어/로그 + 재아카이빙 버튼)
+- 읽기 전용 대시보드 (목록/타임라인/스냅샷 뷰어/diff 뷰어/로그 + 재아카이빙·삭제 버튼)
 - 아카이브 실행 로그 — 모든 실행(성공/실패)을 단계별 소요시간과 함께 DB에 기록
 - 사용자 인증 — 이메일/패스워드(+선택 TOTP 2FA), Authentik OIDC SSO 지원
 - 역할 기반 권한 — 관리자/아카이브/보기 전용/차단, 대시보드에서 사용자 관리
@@ -29,10 +29,17 @@ uv run wccg list                     # 전체 아카이브 현황
 uv run wccg history <url>            # 해당 URL 스냅샷 목록 (번호는 diff에 사용)
 uv run wccg diff <url>               # 최신 2개 스냅샷 비교 (+ 스크린샷 픽셀 diff)
 uv run wccg diff <url> --from 1 --to 3
+uv run wccg delete <url>             # 아카이브 전체 삭제 (모든 스냅샷, 확인 후 진행)
+uv run wccg delete <url> --snapshot 2  # history 번호의 스냅샷 하나만 삭제
 uv run wccg serve                    # 대시보드 (http://127.0.0.1:8765)
 uv run wccg serve --host 0.0.0.0     # 외부 노출 (인증 켜진 상태에서만 허용)
 uv run wccg -v add <url>             # 단계별 상세 로그를 stderr 로 출력
 ```
+
+삭제는 대시보드의 목록(아카이브 전체)·타임라인(스냅샷 하나) 화면에서도 할 수
+있다 — 되돌릴 수 없으므로 인증이 켜진 환경에서는 관리자 전용. 스냅샷 하나를
+지우면 바로 다음 스냅샷의 변경 표시(변경/동일)가 새 직전 스냅샷 기준으로 자동
+보정되고, 실행 로그(`/logs`)는 이력으로 남는다.
 
 ## 주기적 자동 재아카이빙
 
@@ -187,6 +194,21 @@ uv run wccg compact          # 1회성 마이그레이션 (내용 보존 변환,
 최초 구동 때 등록된 관리자(founder)의 권한은 누구도 변경할 수 없어,
 관리자가 한 명도 없는 상태가 되지 않는다.
 
+사용자 관리 화면에서는 권한 외에도 사용자의 **표시 이름 변경**과
+**모든 세션 강제 로그아웃**이 가능하다.
+
+### 이메일 초대
+
+관리자는 사용자 관리 화면에서 이메일로 새 사용자를 초대할 수 있다.
+초대 시 부여할 권한(관리자/아카이브/보기 전용)을 함께 지정하며, 초대받은
+사람은 링크(`/invite/{token}`)에서 패스워드만 설정하면 해당 권한으로 가입된다.
+초대 링크는 1회용으로 기본 7일 후 만료되고(`WCCG_INVITE_TTL_DAYS`),
+같은 이메일을 다시 초대하면 새 링크로 교체된다 (이전 링크 무효화).
+토큰은 세션과 동일하게 SHA-256 해시만 DB 에 저장된다.
+
+`WCCG_SMTP_HOST` 가 설정되어 있으면 초대 메일을 발송하고, 없으면 초대
+링크가 화면에 표시되므로 관리자가 직접 전달하면 된다.
+
 ### 가입 / 2FA
 
 이후 사용자는 `/signup` 에서 가입한다 (이메일 + 패스워드 8자 이상).
@@ -218,6 +240,13 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 2단계를 건너뛴다.
 | `WCCG_OIDC_ISSUER` | (없음) | Authentik issuer URL (예: `https://auth.example.com/application/o/chunchugwan`) |
 | `WCCG_OIDC_CLIENT_ID` | (없음) | OIDC 클라이언트 ID |
 | `WCCG_OIDC_CLIENT_SECRET` | (없음) | OIDC 클라이언트 시크릿 |
+| `WCCG_SMTP_HOST` | (없음) | 초대 메일 발송 SMTP 호스트 — 미설정 시 초대 링크를 화면에 표시 |
+| `WCCG_SMTP_PORT` | `587` | SMTP 포트 |
+| `WCCG_SMTP_USER` | (없음) | SMTP 로그인 사용자 (없으면 인증 생략) |
+| `WCCG_SMTP_PASSWORD` | (없음) | SMTP 로그인 패스워드 |
+| `WCCG_SMTP_FROM` | `WCCG_SMTP_USER` | 발신자 주소 |
+| `WCCG_SMTP_TLS` | `starttls` | `starttls` \| `ssl` \| `off` |
+| `WCCG_INVITE_TTL_DAYS` | `7` | 초대 링크 수명 (일) |
 
 OIDC 변수 3개가 모두 설정되면 로그인 페이지에 "Authentik으로 로그인" 버튼이
 나타난다. HTTPS 종료(HSTS 포함)는 리버스 프록시 책임이다.
