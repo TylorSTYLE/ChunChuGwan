@@ -18,6 +18,22 @@
   </tbody>
 </table>
 
+{% if documents %}
+<h3 style="margin:0 0 8px">첨부 문서 ({{ documents|length }})</h3>
+<table style="max-width:760px; margin-bottom:16px">
+  <thead><tr><th>파일</th><th>원본 URL</th><th style="text-align:right">크기</th></tr></thead>
+  <tbody>
+  {% for d in documents %}
+    <tr>
+      <td><a href="/snapshot/{{ snap['id'] }}/doc/{{ d['file'] }}" download>{{ d['file'] }}</a></td>
+      <td class="mono"><a href="{{ d['url'] }}" rel="noopener noreferrer">{{ d['url'] }}</a></td>
+      <td class="mono" style="text-align:right">{{ d['bytes'] | filesize }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <div class="toolbar">
   <button type="button" class="tab active" data-target="view-render">렌더링</button>
   <button type="button" class="tab" data-target="view-shot">스크린샷</button>

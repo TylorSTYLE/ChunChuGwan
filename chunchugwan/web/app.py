@@ -422,8 +422,11 @@ def _snapshot_dir(snap) -> Path:
 def snapshot_view(request: Request, snapshot_id: int):
     snap = _load_snapshot(snapshot_id)
     title = None
+    documents: list[dict] = []
     try:
-        title = storage.read_meta(_snapshot_dir(snap)).title
+        meta = storage.read_meta(_snapshot_dir(snap))
+        title = meta.title
+        documents = meta.documents or []
     except OSError:
         pass
     return templates.TemplateResponse(
@@ -431,6 +434,7 @@ def snapshot_view(request: Request, snapshot_id: int):
         {
             "snap": snap,
             "title": title,
+            "documents": documents,
             "page_html_url": f"/snapshot/{snapshot_id}/file/page.html",
             "screenshot_url": f"/snapshot/{snapshot_id}/file/screenshot",
             "content_url": f"/snapshot/{snapshot_id}/file/content.md",
@@ -458,6 +462,33 @@ def snapshot_file(snapshot_id: int, name: str):
         # 직접 열어도 아카이빙된 JS가 실행되지 않도록 문서 자체를 샌드박스
         headers["Content-Security-Policy"] = "sandbox"
     return FileResponse(path, media_type=media_type, headers=headers)
+
+
+@app.get("/snapshot/{snapshot_id}/doc/{name}")
+def snapshot_document(snapshot_id: int, name: str):
+    """함께 저장된 문서 파일 서빙 — meta.json 의 documents 목록에 있는
+    이름만 허용한다 (목록의 이름은 documents.py 가 정제해 생성한 값).
+
+    /resource/ 와 달리 인증 게이트를 그대로 거치며, 브라우저 안에서
+    렌더링되지 않도록 항상 첨부파일 다운로드로 내려준다.
+    """
+    snap = _load_snapshot(snapshot_id)
+    snap_dir = _snapshot_dir(snap)
+    try:
+        meta = storage.read_meta(snap_dir)
+    except OSError:
+        raise HTTPException(404, "메타데이터 없음")
+    if not any(d.get("file") == name for d in meta.documents or []):
+        raise HTTPException(404, "허용되지 않은 파일")
+    path = snap_dir / "files" / name
+    if not path.is_file():
+        raise HTTPException(404, "파일 없음")
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=name,  # Content-Disposition: attachment
+        headers={"Content-Security-Policy": "sandbox"},
+    )
 
 
 @app.get("/resource/{name}")

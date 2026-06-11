@@ -64,7 +64,10 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
    일은 절대 없어야 한다. `/resource/` (공유 자원 CAS)는 유일한 인증 예외
    경로 — 샌드박스 문서의 하위 요청에는 SameSite 쿠키가 안 붙기 때문이며,
    sha256 콘텐츠 주소 이름 + 미디어 타입 화이트리스트(문서 타입 금지) +
-   CSP sandbox 로만 서빙한다 (`resources.py` 보안 노트 참조).
+   CSP sandbox 로만 서빙한다 (`resources.py` 보안 노트 참조). 함께 저장된
+   문서 파일(`files/`)은 CAS 가 아니라 스냅샷 안에 두고, 인증이 걸린
+   `/snapshot/{id}/doc/{name}` 에서 meta.json 의 documents 목록에 있는
+   이름만 항상 첨부파일 다운로드(렌더링 금지)로 서빙한다.
 6. **인증 데이터 규칙.** 패스워드는 Argon2id 해시만, 세션은 서버사이드로 토큰의
    SHA-256 만 저장. 2FA(TOTP·패스키)는 패스워드 로그인에만 적용하고 SSO(OIDC)는
    IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origin 은
@@ -87,7 +90,10 @@ archive/
                 ├── raw.html.gz     # 렌더링 후 DOM 소스 (gzip)
                 ├── content.md      # 추출+정규화 텍스트
                 ├── screenshot.webp # 전체 페이지 (변환 실패 시 screenshot.png 유지)
-                └── meta.json       # url, final_url, 시각, 해시, http 정보
+                ├── files/          # 페이지가 링크한 문서 파일 (PDF·워드·한글 등,
+                │                   #   documents.py — 문서 링크가 없으면 생기지 않음)
+                └── meta.json       # url, final_url, 시각, 해시, http 정보,
+                                    #   documents 목록(files/ 서빙 화이트리스트)
 ```
 
 `wccg compact` 이전의 구형 스냅샷(page.html / raw.html / screenshot.png)도
