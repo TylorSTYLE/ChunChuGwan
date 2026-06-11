@@ -104,15 +104,28 @@ def test_diff_bad_range(client):
 
 
 def test_rearchive_triggers_pipeline(client, monkeypatch):
-    calls: list[str] = []
+    calls: list[tuple[str, bool]] = []
     monkeypatch.setattr(
         web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
+        lambda url, force=False, source="cli": calls.append((url, force)),
     )
     res = client.post("/page/1/rearchive", follow_redirects=False)
     assert res.status_code == 303
     assert res.headers["location"] == "/page/1?queued=1"
-    assert calls == ["https://example.com/post"]
+    assert calls == [("https://example.com/post", False)]
+
+
+def test_rearchive_force(client, monkeypatch):
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": calls.append((url, force)),
+    )
+    res = client.post(
+        "/page/1/rearchive", data={"force": "1"}, follow_redirects=False
+    )
+    assert res.status_code == 303
+    assert calls == [("https://example.com/post", True)]
 
 
 def test_rearchive_unknown_page(client):

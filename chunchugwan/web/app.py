@@ -568,10 +568,10 @@ def logs_view(
     )
 
 
-def _run_archive(url: str) -> None:
+def _run_archive(url: str, force: bool = False) -> None:
     """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다."""
     try:
-        outcome = pipeline.archive_url(url, source="web")
+        outcome = pipeline.archive_url(url, force=force, source="web")
         logger.info("아카이빙 완료: %s [%s]", url, outcome.status)
     except Exception:
         logger.exception("아카이빙 실패: %s", url)
@@ -579,13 +579,13 @@ def _run_archive(url: str) -> None:
         _unregister_job(url)
 
 
-def _queue_archive(background: BackgroundTasks, url: str) -> None:
+def _queue_archive(background: BackgroundTasks, url: str, force: bool = False) -> None:
     """진행 목록 등록 후 백그라운드 작업 추가. 이미 진행 중이면 무시.
 
     등록은 응답 전(동기)에 해서 리다이렉트된 목록 화면이 바로 진행 상태를 본다.
     """
     if _register_job(url):
-        background.add_task(_run_archive, url)
+        background.add_task(_run_archive, url, force)
 
 
 def _require_archiver(request: Request) -> None:
@@ -609,11 +609,16 @@ def archive_new(request: Request, background: BackgroundTasks, url: str = Form(.
 
 
 @app.post("/page/{page_id}/rearchive")
-def rearchive(request: Request, page_id: int, background: BackgroundTasks):
+def rearchive(
+    request: Request,
+    page_id: int,
+    background: BackgroundTasks,
+    force: bool = Form(False),
+):
     _require_archiver(request)
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
     if page is None:
         raise HTTPException(404, "페이지 없음")
-    _queue_archive(background, page["url"])
+    _queue_archive(background, page["url"], force=force)
     return RedirectResponse(url=f"/page/{page_id}?queued=1", status_code=303)
