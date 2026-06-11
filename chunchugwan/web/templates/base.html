@@ -67,8 +67,9 @@ header .spacer { flex: 1; }
 .auth-card button[type=submit] { width: 100%; margin-top: 4px; padding: 6px; }
 .auth-card .alt { margin-top: 14px; padding-top: 12px;
                   border-top: 1px solid var(--border); font-size: 13px; }
-.error { background: var(--red-bg); color: var(--amber); border-radius: 4px;
-         padding: 6px 12px; margin-bottom: 12px; font-size: 13px; }
+/* 에러 메시지 박스 — div 한정 (span.badge.error 와 충돌 방지) */
+div.error { background: var(--red-bg); color: var(--amber); border-radius: 4px;
+            padding: 6px 12px; margin-bottom: 12px; font-size: 13px; }
 fieldset.danger-zone { border: 1px solid var(--red); border-radius: 6px;
                        margin-top: 28px; padding: 10px 14px 14px; }
 fieldset.danger-zone legend { color: var(--red); font-size: 12px; font-weight: 600;
