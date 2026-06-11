@@ -78,10 +78,11 @@ def test_set_role_refuses_founder(tmp_db):
 def test_viewer_cannot_trigger_archive(client):
     _login(client, "viewer@test.co")
     assert client.post("/archive", data={"url": "https://example.com/x"}).status_code == 403
+    assert client.get("/archive/new").status_code == 403
     assert client.post("/page/1/rearchive").status_code == 403
-    # 화면에서도 아카이빙 폼/버튼이 보이지 않는다
+    # 화면에서도 새 아카이빙 메뉴/버튼이 보이지 않는다
     page = client.get("/archives").text
-    assert 'action="/archive"' not in page
+    assert 'href="/archive/new"' not in page
 
 
 def test_viewer_cannot_manage_schedule(client):
@@ -116,7 +117,9 @@ def test_archiver_can_trigger_archive(client):
     assert res.status_code == 303 and "error=" in res.headers["location"]
     # 없는 페이지 재아카이빙 — 권한 통과 후 404
     assert client.post("/page/999/rearchive").status_code == 404
-    assert 'action="/archive"' in client.get("/archives").text
+    # 새 아카이빙 메뉴·등록 화면 접근 가능
+    assert 'href="/archive/new"' in client.get("/archives").text
+    assert client.get("/archive/new").status_code == 200
 
 
 def test_archiver_has_no_admin_menus(client):

@@ -22,12 +22,19 @@
   실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축되므로
   압축 도입 이전의 스냅샷이 있을 때 한 번 실행하면 됩니다.
 </p>
+{% if compactable %}
 <div class="toolbar">
   <form class="inline" method="post" action="/system/compact"
         onsubmit="return confirm('기존 스냅샷 파일을 압축 저장 형태로 변환합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')">
-    <button type="submit">저장 공간 압축 실행</button>
+    <button type="submit">저장 공간 압축 실행 — 대상 {{ compactable }}개</button>
   </form>
 </div>
+{% else %}
+<div class="toolbar">
+  <button type="button" disabled>저장 공간 압축 실행</button>
+  <span class="muted" style="font-size:12px">압축할 스냅샷이 없습니다 — 모든 스냅샷이 이미 압축 형태입니다.</span>
+</div>
+{% endif %}
 
 <h3>전체 백업/복원</h3>
 <p class="muted" style="font-size:12px; max-width:640px">

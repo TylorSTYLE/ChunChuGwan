@@ -694,24 +694,41 @@ def logs_view(
     )
 
 
-def _run_archive(url: str, force: bool = False) -> None:
-    """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다."""
+def _run_archive(
+    url: str, force: bool = False, interval_seconds: int | None = None
+) -> None:
+    """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다.
+
+    interval_seconds 가 있으면 실행 후 자동 재아카이빙 주기를 등록한다 —
+    신규 URL 은 아카이빙이 끝나야 pages 행이 생기므로 등록을 여기서 한다.
+    """
     try:
         outcome = pipeline.archive_url(url, force=force, source="web")
         logger.info("아카이빙 완료: %s [%s]", url, outcome.status)
     except Exception:
         logger.exception("아카이빙 실패: %s", url)
     finally:
+        if interval_seconds:
+            try:
+                scheduler.set_schedule(url, interval_seconds)
+            except ValueError as e:
+                # 아카이빙 실패로 pages 행이 안 생겼으면 주기 등록도 불가
+                logger.warning("자동 재아카이빙 등록 실패: %s — %s", url, e)
         _unregister_job(url)
 
 
-def _queue_archive(background: BackgroundTasks, url: str, force: bool = False) -> None:
+def _queue_archive(
+    background: BackgroundTasks,
+    url: str,
+    force: bool = False,
+    interval_seconds: int | None = None,
+) -> None:
     """진행 목록 등록 후 백그라운드 작업 추가. 이미 진행 중이면 무시.
 
     등록은 응답 전(동기)에 해서 리다이렉트된 목록 화면이 바로 진행 상태를 본다.
     """
     if _register_job(url):
-        background.add_task(_run_archive, url, force)
+        background.add_task(_run_archive, url, force, interval_seconds)
 
 
 def _require_archiver(request: Request) -> None:
@@ -726,17 +743,33 @@ def _require_deleter(request: Request) -> None:
         raise HTTPException(403, "삭제 권한이 없습니다")
 
 
+@app.get("/archive/new", response_class=HTMLResponse)
+def archive_new_form(request: Request, error: str = "", url: str = ""):
+    """새 아카이빙 등록 화면 — URL 입력 + 자동 재아카이빙 주기 선택."""
+    _require_archiver(request)
+    return templates.TemplateResponse(
+        request, "archive_new.html",
+        {"error": error, "url": url, "interval_options": _SCHEDULE_OPTIONS},
+    )
+
+
 @app.post("/archive")
-def archive_new(request: Request, background: BackgroundTasks, url: str = Form(...)):
-    """대시보드에서 새 URL 아카이빙. URL 검증은 동기로, 캡처는 백그라운드로."""
+def archive_new(
+    request: Request,
+    background: BackgroundTasks,
+    url: str = Form(...),
+    interval: int = Form(0),
+):
+    """새 URL 아카이빙. 검증은 동기로, 캡처·주기 등록(interval>0)은 백그라운드로."""
     _require_archiver(request)
     try:
         norm = storage.normalize_url(url)
+        if interval:
+            scheduler.validate_interval(interval)
     except ValueError as exc:
-        return RedirectResponse(
-            f"/archives?error={quote(f'아카이빙 실패: {exc}', safe='')}", status_code=303
-        )
-    _queue_archive(background, norm)
+        params = urlencode({"error": f"아카이빙 실패: {exc}", "url": url})
+        return RedirectResponse(f"/archive/new?{params}", status_code=303)
+    _queue_archive(background, norm, interval_seconds=interval or None)
     return RedirectResponse(f"/archives?queued={quote(norm, safe='')}", status_code=303)
 
 

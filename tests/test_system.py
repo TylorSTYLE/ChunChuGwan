@@ -168,9 +168,14 @@ def test_system_requires_login(auth_client):
 
 
 def test_compact_button_and_run(client):
-    """시스템 메뉴의 압축 실행 — 구형 스냅샷이 압축 형태로 변환된다."""
-    res = client.get("/system")
-    assert "저장 공간 압축" in res.text and 'action="/system/compact"' in res.text
+    """시스템 메뉴의 압축 실행 — 구형 스냅샷이 압축 형태로 변환된다.
+
+    압축 대상이 없으면 버튼이 비활성화되고, 대상이 생기면 폼이 노출된다.
+    """
+    res = client.get("/system")  # 시드 스냅샷은 meta.json 이 없어 대상 0개
+    assert "저장 공간 압축" in res.text
+    assert 'action="/system/compact"' not in res.text  # 비활성화 — 폼 없음
+    assert "압축할 스냅샷이 없습니다" in res.text
 
     snap_dir = (
         storage.page_dir("example.com", storage.url_to_slug(URL)) / "2026-06-01T00-00-00"
@@ -179,6 +184,10 @@ def test_compact_button_and_run(client):
     (snap_dir / "raw.html").write_text("<html>원본</html>", encoding="utf-8")
     (snap_dir / "meta.json").write_text("{}", encoding="utf-8")
 
+    res = client.get("/system")  # 구형 스냅샷이 생기면 실행 폼 노출
+    assert 'action="/system/compact"' in res.text
+    assert "대상 1개" in res.text
+
     res = client.post("/system/compact")
     assert res.status_code == 200
     assert "압축 완료: 변환 1/1개" in res.text
@@ -186,9 +195,10 @@ def test_compact_button_and_run(client):
     assert (snap_dir / "raw.html.gz").is_file()
     assert not (snap_dir / "page.html").exists()
 
-    # 멱등 — 두 번째 실행은 변환할 것이 없다
+    # 멱등 — 두 번째 실행은 변환 없이 안내만, 버튼도 다시 비활성화
     res = client.post("/system/compact")
     assert "모두 이미 압축 형태" in res.text
+    assert 'action="/system/compact"' not in res.text
 
 
 def test_compact_without_snapshots(client, tmp_path, monkeypatch):
