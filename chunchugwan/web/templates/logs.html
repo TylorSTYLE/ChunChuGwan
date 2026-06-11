@@ -17,12 +17,17 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
 {% set status_label = {'new': '신규', 'changed': '변경', 'unchanged': '동일',
                        'forced_same': '동일(강제)', 'error': '실패'} %}
 {% set file_desc = {'page.html': '자원 인라인 단일 HTML',
+                    'page.html.gz': '단일 HTML (gzip, 공유 자원 참조)',
                     'raw.html': '렌더링 후 DOM 소스',
+                    'raw.html.gz': '렌더링 후 DOM 소스 (gzip)',
                     'content.md': '추출·정규화 텍스트',
                     'screenshot.png': '전체 페이지 스크린샷',
+                    'screenshot.webp': '전체 페이지 스크린샷',
                     'meta.json': '캡처 메타 정보'} %}
-{# /snapshot/{id}/file/ 로 서빙이 허용된 파일 (app._ALLOWED_FILES 와 일치) #}
-{% set file_viewable = ['page.html', 'screenshot.png', 'content.md'] %}
+{# 실제 파일명 → /snapshot/{id}/file/ 서빙 논리 이름 (app._ALLOWED_FILES 와 일치) #}
+{% set file_view_route = {'page.html': 'page.html', 'page.html.gz': 'page.html',
+                          'screenshot.png': 'screenshot', 'screenshot.webp': 'screenshot',
+                          'content.md': 'content.md'} %}
 
 <div class="toolbar">
   <h2 style="margin:0">아카이브 로그</h2>
@@ -102,8 +107,8 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
           {% for f in it.files %}
             <tr>
               <td class="mono">
-                {% if f['name'] in file_viewable %}
-                <a href="/snapshot/{{ log['snapshot_id'] }}/file/{{ f['name'] }}">{{ f['name'] }}</a>
+                {% if f['name'] in file_view_route %}
+                <a href="/snapshot/{{ log['snapshot_id'] }}/file/{{ file_view_route[f['name']] }}">{{ f['name'] }}</a>
                 {% else %}
                 {{ f['name'] }}
                 {% endif %}

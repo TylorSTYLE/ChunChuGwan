@@ -1,13 +1,15 @@
 """백업/복원. 전체 백업(tar.gz)과 아카이브 데이터 내보내기/가져오기.
 
-- 전체 백업(kind=full): index.db 일관 복사본 + sites/ + rules.json.
+- 전체 백업(kind=full): index.db 일관 복사본 + sites/ + resources/ + rules.json.
   복원은 아카이브 루트를 백업 시점 상태로 통째로 되돌린다 (인증 데이터 포함).
-- 아카이브 내보내기(kind=archive): pages/snapshots/checks 와 스냅샷 파일만.
+- 아카이브 내보내기(kind=archive): pages/snapshots/checks 와 스냅샷 파일,
+  page.html.gz 가 참조하는 공유 자원(resources/)만.
   가져오기는 merge(기존 유지 + 중복 스킵) / overwrite(아카이브 데이터 교체).
   인증 테이블(users 등)과 실행 로그(archive_logs)는 건드리지 않는다.
 
 보안 노트: tar 추출은 filter="data" 로 절대경로/상위탈출/심링크를 차단하고,
-가져온 데이터의 domain/slug/dir_name 은 경로 조립 전에 형식을 검증한다.
+가져온 데이터의 domain/slug/dir_name 과 공유 자원 파일명은 경로 조립 전에
+형식을 검증한다.
 """
 
 from __future__ import annotations
@@ -22,9 +24,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, db, storage
+from . import config, db, resources, storage
 
-FORMAT_VERSION = 1
+# 2: 압축 저장 형태 도입 — 공유 자원 디렉토리(resources/) 포함,
+#    스냅샷 파일이 page.html.gz/raw.html.gz/screenshot.webp 일 수 있음.
+#    v1 백업/내보내기는 그대로 읽을 수 있다.
+FORMAT_VERSION = 2
 MANIFEST_NAME = "manifest.json"
 ARCHIVE_DATA_NAME = "archive.json"
 
@@ -120,6 +125,8 @@ def create_backup(dest: Path) -> Path:
             if config.RULES_PATH.is_file():
                 tar.add(config.RULES_PATH, arcname="rules.json")
             tar.add(config.SITES_DIR, arcname="sites")
+            if config.RESOURCES_DIR.is_dir():
+                tar.add(config.RESOURCES_DIR, arcname="resources")
     return out
 
 
@@ -151,6 +158,11 @@ def restore_backup(src: Path) -> dict:
             shutil.move(tmp / "sites", config.SITES_DIR)
         else:
             config.SITES_DIR.mkdir(parents=True, exist_ok=True)
+
+        # 공유 자원도 백업 시점 상태로 — 백업에 없으면(v1) 비워서 일관성 유지
+        shutil.rmtree(config.RESOURCES_DIR, ignore_errors=True)
+        if (tmp / "resources").is_dir():
+            shutil.move(tmp / "resources", config.RESOURCES_DIR)
 
         config.RULES_PATH.unlink(missing_ok=True)
         if (tmp / "rules.json").is_file():
@@ -226,6 +238,9 @@ def export_archive(dest: Path) -> Path:
                         snap_dir,
                         arcname=f"sites/{s['domain']}/{s['slug']}/{s['dir_name']}",
                     )
+            # 모든 스냅샷을 내보내므로 공유 자원도 전량 포함한다
+            if config.RESOURCES_DIR.is_dir():
+                tar.add(config.RESOURCES_DIR, arcname="resources")
     return out
 
 
@@ -269,7 +284,24 @@ def _wipe_archive_data(conn: sqlite3.Connection) -> None:
     if config.SITES_DIR.is_dir():
         for child in config.SITES_DIR.iterdir():
             shutil.rmtree(child) if child.is_dir() else child.unlink()
+    shutil.rmtree(config.RESOURCES_DIR, ignore_errors=True)
     shutil.rmtree(config.CACHE_DIR, ignore_errors=True)
+
+
+def _merge_resources(src_root: Path) -> None:
+    """가져온 공유 자원을 CAS 로 병합 — 콘텐츠 주소라 같은 이름은 같은 내용.
+
+    이름 형식이 유효한 파일만 받는다 (resources.is_valid_name — path traversal).
+    """
+    if not src_root.is_dir():
+        return
+    for f in src_root.glob("*/*"):
+        if not (f.is_file() and resources.is_valid_name(f.name)):
+            continue
+        dst = resources.resource_path(f.name)
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(f, dst)
 
 
 def import_archive(src: Path, mode: str = "merge") -> ImportResult:
@@ -299,6 +331,8 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
         with db.connect() as conn:
             if mode == "overwrite":
                 _wipe_archive_data(conn)
+
+            _merge_resources(tmp / "resources")
 
             # 페이지: URL 매칭. 기존 페이지가 있으면 그 domain/slug 를 따른다.
             page_ids: dict[str, int] = {}

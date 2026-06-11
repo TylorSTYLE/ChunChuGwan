@@ -16,6 +16,7 @@ def archive_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(config, "RULES_PATH", tmp_path / "rules.json")
+    monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
     monkeypatch.setattr(config, "AUTH_ENABLED", False)
     return tmp_path
 
@@ -97,7 +98,9 @@ def test_pipeline_writes_success_log(archive_env, monkeypatch):
     assert log["content_hash"] == outcome.content_hash
     assert log["snapshot_id"] is not None
     steps = json.loads(log["steps"])
-    assert [s["step"] for s in steps] == ["normalize", "capture", "extract", "hash", "store"]
+    assert [s["step"] for s in steps] == [
+        "normalize", "capture", "extract", "hash", "compress", "store"
+    ]
 
     # 같은 내용 재실행 → unchanged 로그 (스냅샷 없음)
     pipeline.archive_url("https://example.com/post")
@@ -137,7 +140,7 @@ def test_pipeline_falls_back_to_http_when_scheme_inferred(archive_env, monkeypat
     assert log["url"] == "http://example.com/post"
     steps = json.loads(log["steps"])
     assert [s["step"] for s in steps] == [
-        "normalize", "capture", "capture", "extract", "hash", "store"
+        "normalize", "capture", "capture", "extract", "hash", "compress", "store"
     ]
     assert "http 로 재시도" in steps[1]["detail"]
 
@@ -291,9 +294,11 @@ def test_list_logs_includes_snapshot_dir_info(archive_env, monkeypatch):
         storage.page_dir(new_log["snap_domain"], new_log["snap_slug"])
         / new_log["snap_dir_name"]
     )
+    # 파이프라인 압축 변환 후 — HTML 은 gzip, 스크린샷은 가짜 PNG 라
+    # WebP 디코딩이 실패해 원본 PNG 가 유지된다 (폴백 검증)
     files = storage.snapshot_files(snap_dir)
     assert [f["name"] for f in files] == [
-        "page.html", "raw.html", "content.md", "screenshot.png", "meta.json"
+        "page.html.gz", "raw.html.gz", "content.md", "screenshot.png", "meta.json"
     ]
     assert all(f["bytes"] > 0 for f in files)
 
@@ -310,13 +315,13 @@ def test_logs_page_shows_files_and_sizes(archive_env, monkeypatch):
     pipeline.archive_url("https://example.com/post")
     res = TestClient(web_app.app).get("/logs")
     assert res.status_code == 200
-    for name in ("page.html", "raw.html", "content.md", "screenshot.png", "meta.json"):
+    for name in ("page.html.gz", "raw.html.gz", "content.md", "screenshot.png", "meta.json"):
         assert name in res.text
     assert "2.0 KB" in res.text  # screenshot.png (2052 B)
     assert "합계 (5개)" in res.text
     with db.connect() as conn:
         snap_id = db.list_archive_logs(conn)[0]["snapshot_id"]
-    assert f"/snapshot/{snap_id}/file/page.html" in res.text  # 보기 링크
+    assert f"/snapshot/{snap_id}/file/page.html" in res.text  # 보기 링크 (논리 이름)
     assert f"/snapshot/{snap_id}/file/raw.html" not in res.text  # 서빙 비허용 파일
 
 

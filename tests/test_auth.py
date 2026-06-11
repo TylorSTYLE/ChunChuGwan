@@ -14,6 +14,7 @@ def tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
 
 
 @pytest.fixture
@@ -661,3 +662,10 @@ def test_display_name_migration_adds_column(tmp_db):
         uid = db.create_user(conn, "old@b.co")
         db.set_display_name(conn, uid, "마이그레이션")
         assert db.get_user_by_id(conn, uid)["display_name"] == "마이그레이션"
+
+
+def test_resource_route_public_without_session(client):
+    """/resource/ 는 인증 예외 — 샌드박스된 page.html(불투명 출처)의 하위
+    자원 요청에는 SameSite 쿠키가 붙지 않아 세션 인증이 불가능하다."""
+    res = client.get(f"/resource/{'a' * 64}.png", follow_redirects=False)
+    assert res.status_code == 404  # 로그인 리다이렉트(302)가 아니라 '자원 없음'

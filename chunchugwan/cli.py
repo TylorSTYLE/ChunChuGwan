@@ -10,7 +10,7 @@ import click
 
 from . import backup as backup_mod
 from . import capture as capture_mod
-from . import config, db, differ, pipeline, scheduler, storage
+from . import config, db, differ, pipeline, resources, scheduler, storage
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
 
@@ -129,9 +129,9 @@ def diff(url: str, from_idx: int | None, to_idx: int | None) -> None:
         click.echo(d.unified)
 
     base = storage.page_dir(page["domain"], page["slug"])
-    old_shot = base / old_snap["dir_name"] / "screenshot.png"
-    new_shot = base / new_snap["dir_name"] / "screenshot.png"
-    if old_shot.is_file() and new_shot.is_file():
+    old_shot = storage.find_screenshot(base / old_snap["dir_name"])
+    new_shot = storage.find_screenshot(base / new_snap["dir_name"])
+    if old_shot is not None and new_shot is not None:
         ratio, out_png = differ.cached_screenshot_diff(
             old_shot, new_shot, f"shotdiff-{old_snap['id']}-{new_snap['id']}"
         )
@@ -200,6 +200,64 @@ def schedule_run() -> None:
         return
     for r in results:
         click.echo(f"{r.url} — {r.status}" + (f" ({r.error})" if r.error else ""))
+
+
+def _fmt_mb(n: int) -> str:
+    return f"{n / 1048576:.1f}MB"
+
+
+@main.command()
+@click.option("--yes", is_flag=True, help="확인 없이 진행")
+def compact(yes: bool) -> None:
+    """기존 스냅샷 저장 공간 압축 — 공유 자원 추출 + HTML gzip + 스크린샷 WebP.
+
+    내용 보존 변환이라 스냅샷이 담는 정보는 그대로다 (불변 원칙의 유일한 예외).
+    새 스냅샷은 저장 시점에 같은 형태로 압축되므로 한 번만 실행하면 된다.
+    """
+    import shutil
+
+    snap_dirs = sorted(
+        p for p in config.SITES_DIR.glob("*/*/*")
+        if (p / "meta.json").is_file()
+    ) if config.SITES_DIR.is_dir() else []
+    if not snap_dirs:
+        click.echo("압축할 스냅샷이 없습니다.")
+        return
+    if not yes:
+        click.confirm(
+            f"스냅샷 {len(snap_dirs)}개의 파일을 압축 저장 형태(page.html.gz·"
+            "raw.html.gz·screenshot.webp + 공유 자원)로 변환합니다. 계속할까요?",
+            abort=True,
+        )
+
+    def _dir_bytes(root: Path) -> int:
+        if not root.is_dir():
+            return 0
+        return sum(f.stat().st_size for f in root.rglob("*") if f.is_file())
+
+    cas_before = _dir_bytes(config.RESOURCES_DIR)
+    converted = externalized = before = after = 0
+    for d in snap_dirs:
+        stats = resources.compact_snapshot_dir(d)
+        if stats.before_bytes == 0:
+            continue  # 이미 변환된 스냅샷
+        converted += 1
+        externalized += stats.externalized
+        before += stats.before_bytes
+        after += stats.after_bytes
+    # 추출된 자원이 CAS 에 차지하는 용량도 '후' 합계에 포함해야 정직한 수치다
+    after += _dir_bytes(config.RESOURCES_DIR) - cas_before
+
+    # 스크린샷 형식이 바뀌어 픽셀 diff 캐시가 어긋날 수 있다 — 재생성 가능하므로 비운다
+    shutil.rmtree(config.CACHE_DIR, ignore_errors=True)
+
+    if converted == 0:
+        click.echo(f"스냅샷 {len(snap_dirs)}개 모두 이미 압축 형태입니다.")
+        return
+    click.echo(
+        f"변환 {converted}/{len(snap_dirs)}개 · 공유 자원 {externalized}개 추출 · "
+        f"{_fmt_mb(before)} → {_fmt_mb(after)} ({_fmt_mb(before - after)} 절약)"
+    )
 
 
 def _counts_label(manifest: dict) -> str:

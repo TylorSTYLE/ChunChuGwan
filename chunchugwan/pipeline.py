@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import capture, config, db, extract, storage
+from . import capture, config, db, extract, resources, storage
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +175,15 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
                     last_taken_at=prev["taken_at"],
                     http_status=result.http_status, title=result.title,
                 )
+
+            # 저장이 확정된 뒤에만 압축 변환 — unchanged 면 CAS 에 자원을
+            # 남기지 않고 임시 디렉토리째 버려진다
+            stats = resources.compact_snapshot_dir(tmp_dir)
+            run.step(
+                "compress",
+                f"자원 {stats.externalized}개 추출 · "
+                f"{stats.before_bytes // 1024}KB → {stats.after_bytes // 1024}KB",
+            )
 
             taken_at = datetime.now(timezone.utc)
             meta = storage.SnapshotMeta(

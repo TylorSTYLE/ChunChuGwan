@@ -98,6 +98,7 @@ def tmp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
 
 
 @pytest.fixture

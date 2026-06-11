@@ -16,6 +16,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
     monkeypatch.setattr(config, "AUTH_ENABLED", False)  # 인증은 test_auth.py 에서 검증
 
     url = "https://example.com/post"
@@ -338,3 +339,64 @@ def test_schedule_delete(client):
 def test_schedule_unknown_page(client):
     assert client.post("/page/999/schedule", data={"interval": "3600"}).status_code == 404
     assert client.post("/page/999/schedule/delete").status_code == 404
+
+
+# ---- 압축 저장 형태 (gzip HTML · WebP 스크린샷 · 공유 자원) ----
+
+
+def _first_snap_dir():
+    return storage.page_dir(
+        "example.com", storage.url_to_slug("https://example.com/post")
+    ) / "2026-06-01T00-00-00"
+
+
+def test_snapshot_file_serves_compressed_forms(client):
+    from chunchugwan import resources
+
+    resources.compact_snapshot_dir(_first_snap_dir())  # 스냅샷 1만 압축 형태로
+
+    page = client.get("/snapshot/1/file/page.html")
+    assert page.status_code == 200
+    assert "본문" in page.text  # Content-Encoding: gzip — 클라이언트가 풀어준다
+    assert page.headers["content-security-policy"] == "sandbox"
+
+    shot = client.get("/snapshot/1/file/screenshot")
+    assert shot.status_code == 200
+    assert shot.headers["content-type"] == "image/webp"
+    # 구형 별칭(.png)도 같은 논리 이름으로 해석된다
+    assert client.get("/snapshot/1/file/screenshot.png").status_code == 200
+    # 스냅샷 2는 구형(PNG) 그대로 서빙
+    shot2 = client.get("/snapshot/2/file/screenshot")
+    assert shot2.headers["content-type"] == "image/png"
+
+
+def test_diff_works_across_webp_and_png(client):
+    from chunchugwan import resources
+
+    resources.compact_snapshot_dir(_first_snap_dir())  # WebP(신규) vs PNG(구형) 비교
+    res = client.get("/diff/1")
+    assert res.status_code == 200
+    assert "변경 픽셀 100.00%" in res.text
+
+
+def test_resource_route(client):
+    import base64
+
+    from chunchugwan import resources
+
+    data = b"R" * 5000
+    html = f'<img src="data:image/png;base64,{base64.b64encode(data).decode()}">'
+    out, count = resources.externalize_data_uris(html)
+    assert count == 1
+    name = out.split("/resource/", 1)[1].split('"', 1)[0]
+
+    res = client.get(f"/resource/{name}")
+    assert res.status_code == 200
+    assert res.content == data
+    assert res.headers["content-type"] == "image/png"
+    assert res.headers["content-security-policy"] == "sandbox"
+    assert "immutable" in res.headers["cache-control"]
+
+    assert client.get("/resource/..%2Findex.db").status_code == 404
+    assert client.get(f"/resource/{'a' * 64}.html").status_code == 404  # 문서 타입 금지
+    assert client.get(f"/resource/{'a' * 64}.png").status_code == 404   # 없는 자원

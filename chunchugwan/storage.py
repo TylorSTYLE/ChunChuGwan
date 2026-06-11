@@ -133,10 +133,27 @@ def content_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-CAPTURE_ARTIFACTS = ("raw.html", "page.html", "screenshot.png")
+# 캡처 산출물 — 압축 변환(resources.compact_snapshot_dir) 전/후 이름 모두 포함.
+# 변환이 일부 실패해도 (예: WebP 한도 초과로 PNG 유지) 산출물이 유실되지 않는다.
+CAPTURE_ARTIFACTS = (
+    "raw.html", "raw.html.gz", "page.html", "page.html.gz",
+    "screenshot.png", "screenshot.webp",
+)
 
 # 스냅샷 디렉토리를 구성하는 파일 전체 (표시 순서 고정)
-SNAPSHOT_FILES = ("page.html", "raw.html", "content.md", "screenshot.png", "meta.json")
+SNAPSHOT_FILES = (
+    "page.html", "page.html.gz", "raw.html", "raw.html.gz",
+    "content.md", "screenshot.webp", "screenshot.png", "meta.json",
+)
+
+
+def find_screenshot(snapshot_dir: Path) -> Path | None:
+    """스냅샷의 스크린샷 경로 — WebP(신규) 우선, PNG(구형) 폴백. 없으면 None."""
+    for name in ("screenshot.webp", "screenshot.png"):
+        path = snapshot_dir / name
+        if path.is_file():
+            return path
+    return None
 
 
 def snapshot_files(snapshot_dir: Path) -> list[dict[str, object]]:

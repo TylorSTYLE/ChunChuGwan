@@ -15,9 +15,14 @@ SITES_DIR = ARCHIVE_ROOT / "sites"
 DB_PATH = ARCHIVE_ROOT / "index.db"
 CACHE_DIR = ARCHIVE_ROOT / "cache"          # 파생 산출물(픽셀 diff 등), 재생성 가능
 RULES_PATH = ARCHIVE_ROOT / "rules.json"    # 도메인별 정규화 룰
+RESOURCES_DIR = ARCHIVE_ROOT / "resources"  # 스냅샷 간 공유 자원 CAS (resources.py)
 
 PAGE_LOAD_TIMEOUT_MS = 30_000
 USER_AGENT = "Mozilla/5.0 (compatible; ChunChuGwan/0.1)"
+
+# ---- 저장 압축 (resources.py) ----
+SCREENSHOT_WEBP_QUALITY = 85    # 스크린샷 PNG → WebP 변환 품질 (손실 압축)
+RESOURCE_MIN_BYTES = 4096       # 이보다 작은 data URI 자원은 추출하지 않고 인라인 유지
 
 # URL 정규화 시 제거할 트래킹 파라미터 prefix
 TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")

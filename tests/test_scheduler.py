@@ -16,6 +16,7 @@ def archive_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
     with db.connect() as conn:
         db.get_or_create_page(conn, URL, "example.com", storage.url_to_slug(URL))
     return URL
