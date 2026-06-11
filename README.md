@@ -33,6 +33,26 @@ uv run wccg serve --host 0.0.0.0     # 외부 노출 (인증 켜진 상태에서
 uv run wccg -v add <url>             # 단계별 상세 로그를 stderr 로 출력
 ```
 
+## 주기적 자동 재아카이빙
+
+같은 페이지를 일정 시간마다 다시 아카이빙한다. 반복 주기는 최소 1시간(`1h`)
+부터 최대 1주일(`1w`)까지 — `m`(분)·`h`(시간)·`d`(일)·`w`(주) 단위를 쓴다.
+
+```bash
+uv run wccg schedule add <url> --every 12h   # 등록/변경 (예: 90m, 12h, 3d, 1w)
+uv run wccg schedule list                    # 등록된 스케줄 목록
+uv run wccg schedule remove <url>            # 해제
+uv run wccg schedule run                     # 기한이 된 스케줄 1회 실행 (cron 용)
+```
+
+- 등록 대상은 이미 아카이빙된 URL 이어야 한다 (`wccg add` 먼저).
+- `wccg serve` 가 떠 있으면 대시보드 프로세스가 1분마다 기한을 확인해 자동
+  실행한다 (`WCCG_SCHEDULER=off` 로 끌 수 있고, 그 경우 cron 에서
+  `wccg schedule run` 을 돌리면 된다).
+- 실행 결과는 실행 로그(`/logs`, source=`schedule`)에 남고, 콘텐츠가 동일하면
+  기존 규칙대로 스냅샷 없이 확인 기록만 쌓인다.
+- 대시보드 타임라인 화면에서도 페이지별로 주기를 설정/해제할 수 있다.
+
 ## 백업/복원
 
 ```bash

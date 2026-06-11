@@ -15,6 +15,31 @@
 </div>
 <p class="muted mono" style="margin-top:0">{{ page['domain'] }} / {{ page['slug'] }}</p>
 
+<div class="toolbar" style="margin-bottom:12px">
+  <span class="muted">자동 재아카이빙</span>
+  {% if schedule %}
+  <span><strong>{{ schedule_label }}</strong> 주기 · 다음 실행 <span class="mono">{{ schedule['next_run_at'] }}</span>
+    {%- if schedule['last_run_at'] %} · 마지막 실행 <span class="mono">{{ schedule['last_run_at'] }}</span>{% endif %}</span>
+  {% else %}
+  <span class="muted">미설정 (최소 1시간 ~ 최대 1주일)</span>
+  {% endif %}
+  {% if can_archive %}
+  <form class="inline" method="post" action="/page/{{ page['id'] }}/schedule" style="display:flex; gap:6px">
+    <select name="interval">
+      {% for v, label in interval_options %}
+      <option value="{{ v }}" {% if schedule and schedule['interval_seconds'] == v %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">{{ '주기 변경' if schedule else '주기 설정' }}</button>
+  </form>
+  {% if schedule %}
+  <form class="inline" method="post" action="/page/{{ page['id'] }}/schedule/delete">
+    <button type="submit">해제</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
+
 {% if not items %}
 <p class="muted">스냅샷이 없습니다.</p>
 {% else %}

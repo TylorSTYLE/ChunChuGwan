@@ -10,7 +10,7 @@ import click
 
 from . import backup as backup_mod
 from . import capture as capture_mod
-from . import config, db, differ, pipeline, storage
+from . import config, db, differ, pipeline, scheduler, storage
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
 
@@ -136,6 +136,70 @@ def diff(url: str, from_idx: int | None, to_idx: int | None) -> None:
             old_shot, new_shot, f"shotdiff-{old_snap['id']}-{new_snap['id']}"
         )
         click.echo(f"스크린샷 변경 픽셀 {ratio:.2%}  (하이라이트: {out_png})")
+
+
+@main.group()
+def schedule() -> None:
+    """주기적 자동 재아카이빙 관리 (최소 1시간 ~ 최대 1주일)."""
+
+
+@schedule.command("add")
+@click.argument("url")
+@click.option(
+    "--every", required=True,
+    help="반복 주기 — 1h ~ 1w (예: 1h, 90m, 12h, 3d, 1w)",
+)
+def schedule_add(url: str, every: str) -> None:
+    """URL에 반복 주기를 등록/변경한다. 다음 실행은 지금 + 주기."""
+    try:
+        seconds = scheduler.parse_interval(every)
+        row = scheduler.set_schedule(url, seconds)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    click.echo(
+        f"스케줄 등록: {row['url']} — {scheduler.format_interval(seconds)} 주기, "
+        f"다음 실행 {row['next_run_at']}"
+    )
+
+
+@schedule.command("list")
+def schedule_list() -> None:
+    """등록된 스케줄 목록 (다음 실행이 가까운 순)."""
+    with db.connect() as conn:
+        rows = db.list_schedules(conn)
+    if not rows:
+        click.echo("등록된 스케줄이 없습니다.")
+        return
+    click.echo(f"{'주기':<12}  {'다음 실행':<25}  {'마지막 실행':<25}  URL")
+    for r in rows:
+        click.echo(
+            f"{scheduler.format_interval(r['interval_seconds']):<12}  "
+            f"{r['next_run_at']:<25}  {r['last_run_at'] or '-':<25}  {r['url']}"
+        )
+
+
+@schedule.command("remove")
+@click.argument("url")
+def schedule_remove(url: str) -> None:
+    """URL의 스케줄을 해제한다."""
+    try:
+        removed = scheduler.remove_schedule(url)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    if not removed:
+        raise click.ClickException("등록된 스케줄이 없는 URL 입니다")
+    click.echo("스케줄 해제됨")
+
+
+@schedule.command("run")
+def schedule_run() -> None:
+    """기한이 된 스케줄을 한 번 실행 (cron 용 — serve 중에는 자동 실행됨)."""
+    results = scheduler.run_due()
+    if not results:
+        click.echo("실행할 스케줄이 없습니다.")
+        return
+    for r in results:
+        click.echo(f"{r.url} — {r.status}" + (f" ({r.error})" if r.error else ""))
 
 
 def _counts_label(manifest: dict) -> str:

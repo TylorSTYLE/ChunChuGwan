@@ -83,6 +83,20 @@ def test_viewer_cannot_trigger_archive(client):
     assert 'action="/archive"' not in page
 
 
+def test_viewer_cannot_manage_schedule(client):
+    """주기적 재아카이빙 설정/해제도 아카이빙 트리거 — viewer 는 403."""
+    _login(client, "viewer@test.co")
+    assert client.post("/page/1/schedule", data={"interval": 3600}).status_code == 403
+    assert client.post("/page/1/schedule/delete").status_code == 403
+
+
+def test_archiver_can_manage_schedule(client):
+    _login(client, "archiver@test.co")
+    # 없는 페이지 — 권한 통과 후 404
+    assert client.post("/page/999/schedule", data={"interval": 3600}).status_code == 404
+    assert client.post("/page/999/schedule/delete").status_code == 404
+
+
 def test_archiver_can_trigger_archive(client):
     _login(client, "archiver@test.co")
     # 스킴이 거부되는 URL — 권한은 통과하고 검증 단계에서 에러 리다이렉트

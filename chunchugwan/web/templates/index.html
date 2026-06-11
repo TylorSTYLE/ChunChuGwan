@@ -26,7 +26,7 @@
 {% else %}
 <table id="pages">
   <thead>
-    <tr><th>URL</th><th>도메인</th><th>스냅샷</th><th>마지막 캡처</th><th></th></tr>
+    <tr><th>URL</th><th>도메인</th><th>스냅샷</th><th>마지막 캡처</th><th>자동</th><th></th></tr>
   </thead>
   <tbody>
   {% for j in pending_new %}
@@ -35,6 +35,7 @@
       <td class="mono">{{ j['domain'] }}</td>
       <td class="num">-</td>
       <td class="mono">{{ j['started_at'] }} 시작</td>
+      <td class="muted">-</td>
       <td><span class="badge running">아카이빙 중</span></td>
     </tr>
   {% endfor %}
@@ -44,6 +45,13 @@
       <td class="mono">{{ p['domain'] }}</td>
       <td class="num">{{ p['snapshot_count'] }}</td>
       <td class="mono">{{ p['last_taken_at'] or '-' }}</td>
+      <td>
+        {% if p['id'] in schedule_labels %}
+        <span class="mono">{{ schedule_labels[p['id']] }}</span>
+        {% else %}
+        <span class="muted">-</span>
+        {% endif %}
+      </td>
       <td>
         {% if p['url'] in active_urls %}
         <span class="badge running">아카이빙 중</span>

@@ -40,13 +40,23 @@ CREATE TABLE IF NOT EXISTS checks (
 CREATE INDEX IF NOT EXISTS idx_snapshots_page ON snapshots(page_id, taken_at);
 CREATE INDEX IF NOT EXISTS idx_checks_page ON checks(page_id, checked_at);
 
+CREATE TABLE IF NOT EXISTS schedules (
+    id               INTEGER PRIMARY KEY,
+    page_id          INTEGER NOT NULL UNIQUE REFERENCES pages(id),
+    interval_seconds INTEGER NOT NULL,   -- 3600(1시간) ~ 604800(1주일), scheduler 가 검증
+    next_run_at      TEXT NOT NULL,      -- ISO 8601 UTC
+    last_run_at      TEXT,
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_next ON schedules(next_run_at);
+
 CREATE TABLE IF NOT EXISTS archive_logs (
     id           INTEGER PRIMARY KEY,
     url          TEXT NOT NULL,          -- 정규화 URL (정규화 실패 시 입력 원본)
     domain       TEXT NOT NULL DEFAULT '',
     page_id      INTEGER REFERENCES pages(id),      -- 페이지 생성 전 실패면 NULL
     snapshot_id  INTEGER REFERENCES snapshots(id),  -- 새 스냅샷을 만든 경우에만
-    source       TEXT NOT NULL DEFAULT 'cli',       -- 'cli' | 'web'
+    source       TEXT NOT NULL DEFAULT 'cli',       -- 'cli' | 'web' | 'schedule'
     status       TEXT NOT NULL,          -- new|changed|unchanged|forced_same|error
     started_at   TEXT NOT NULL,          -- ISO 8601 UTC
     duration_ms  INTEGER NOT NULL DEFAULT 0,
@@ -326,6 +336,113 @@ def list_snapshots(conn: sqlite3.Connection, page_id: int) -> list[sqlite3.Row]:
         "SELECT * FROM snapshots WHERE page_id = ? ORDER BY taken_at ASC, id ASC",
         (page_id,),
     ).fetchall()
+
+
+def count_pages(conn: sqlite3.Connection) -> int:
+    """전체 페이지 수 (현황 대시보드용)."""
+    return conn.execute("SELECT COUNT(*) AS c FROM pages").fetchone()["c"]
+
+
+def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """모든 스냅샷의 시각·디렉토리 위치 (id, taken_at, domain, slug, dir_name).
+
+    현황 대시보드가 기간별 스냅샷 수와 디렉토리 용량을 집계하는 데 쓴다.
+    """
+    return conn.execute(
+        """
+        SELECT s.id, s.taken_at, p.domain, p.slug, s.dir_name
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        """
+    ).fetchall()
+
+
+def list_recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
+    """최근 스냅샷 목록 (최신 순) + 페이지 정보 + 해당 페이지 첫 스냅샷 여부."""
+    return conn.execute(
+        """
+        SELECT s.*, p.url AS page_url, p.domain, p.slug,
+               NOT EXISTS (
+                   SELECT 1 FROM snapshots s2
+                   WHERE s2.page_id = s.page_id
+                     AND (s2.taken_at < s.taken_at
+                          OR (s2.taken_at = s.taken_at AND s2.id < s.id))
+               ) AS is_first
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        ORDER BY s.taken_at DESC, s.id DESC LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+# ---- 반복 아카이빙 스케줄 ----
+
+
+def get_schedule(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
+    """페이지의 스케줄 row (+ 페이지 url) 조회 (없으면 None)."""
+    return conn.execute(
+        """
+        SELECT sc.*, p.url FROM schedules sc JOIN pages p ON p.id = sc.page_id
+        WHERE sc.page_id = ?
+        """,
+        (page_id,),
+    ).fetchone()
+
+
+def list_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """전체 스케줄 목록 (+ 페이지 url, 다음 실행이 가까운 순)."""
+    return conn.execute(
+        """
+        SELECT sc.*, p.url FROM schedules sc JOIN pages p ON p.id = sc.page_id
+        ORDER BY sc.next_run_at, sc.id
+        """
+    ).fetchall()
+
+
+def list_due_schedules(conn: sqlite3.Connection, now_iso: str) -> list[sqlite3.Row]:
+    """다음 실행 시각이 지난 스케줄 목록 (+ 페이지 url).
+
+    저장 형식이 동일한 ISO 8601 UTC 라 문자열 비교로 기한을 판정한다.
+    """
+    return conn.execute(
+        """
+        SELECT sc.*, p.url FROM schedules sc JOIN pages p ON p.id = sc.page_id
+        WHERE sc.next_run_at <= ?
+        ORDER BY sc.next_run_at, sc.id
+        """,
+        (now_iso,),
+    ).fetchall()
+
+
+def upsert_schedule(
+    conn: sqlite3.Connection, page_id: int, interval_seconds: int, next_run_at: str
+) -> None:
+    """페이지 스케줄 등록 (이미 있으면 주기·다음 실행 시각만 교체)."""
+    conn.execute(
+        """
+        INSERT INTO schedules (page_id, interval_seconds, next_run_at, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(page_id) DO UPDATE SET
+            interval_seconds = excluded.interval_seconds,
+            next_run_at = excluded.next_run_at
+        """,
+        (page_id, interval_seconds, next_run_at, _utcnow()),
+    )
+
+
+def delete_schedule(conn: sqlite3.Connection, page_id: int) -> bool:
+    """페이지 스케줄 해제. 등록이 없었으면 False."""
+    cur = conn.execute("DELETE FROM schedules WHERE page_id = ?", (page_id,))
+    return cur.rowcount == 1
+
+
+def mark_schedule_run(
+    conn: sqlite3.Connection, schedule_id: int, last_run_at: str, next_run_at: str
+) -> None:
+    """스케줄 실행 완료 기록 — 마지막 실행 시각과 다음 실행 시각 갱신."""
+    conn.execute(
+        "UPDATE schedules SET last_run_at = ?, next_run_at = ? WHERE id = ?",
+        (last_run_at, next_run_at, schedule_id),
+    )
 
 
 # ---- 사용자 ----

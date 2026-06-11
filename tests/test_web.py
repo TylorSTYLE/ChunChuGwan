@@ -1,4 +1,6 @@
 """대시보드 라우트 테스트. 캡처 없이 fixture 데이터로 검증."""
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -211,6 +213,60 @@ def test_archive_duplicate_url_not_requeued(client, monkeypatch):
     assert calls == []
 
 
+def test_period_starts_boundaries():
+    now = datetime(2026, 6, 11, 15, 30, 45, tzinfo=timezone.utc)  # 목요일
+    starts = web_app._period_starts(now)
+    assert starts["today"] == "2026-06-11T00:00:00+00:00"
+    assert starts["week"] == "2026-06-08T00:00:00+00:00"  # 월요일 자정
+    assert starts["month"] == "2026-06-01T00:00:00+00:00"
+    assert starts["year"] == "2026-01-01T00:00:00+00:00"
+    assert starts["recent"] == "2026-06-10T15:30:45+00:00"
+
+
+def test_dashboard_overview(client):
+    res = client.get("/dashboard")
+    assert res.status_code == 200
+    assert 'id="stat-pages">1</div>' in res.text
+    assert 'id="stat-snapshots">2</div>' in res.text
+    assert "용량 트렌드" in res.text
+    # 최근 아카이브 목록에 fixture 페이지가 보인다
+    assert "https://example.com/post" in res.text
+
+
+def test_dashboard_period_counts(client):
+    # 지금 시각 스냅샷을 추가하면 오늘/이번 주/최근 24시간 집계에 모두 포함된다
+    now = datetime.now(timezone.utc)
+    with db.connect() as conn:
+        db.insert_snapshot(
+            conn, 1, taken_at=now.isoformat(timespec="seconds"), dir_name="now-dir",
+            content_hash="h", final_url="https://example.com/post", changed=1,
+        )
+    # fixture 스냅샷(고정 과거 시각)이 현재 기간에 걸치는지는 실행 시점에 따라
+    # 달라지므로, 라우트와 같은 경계 계산으로 기대값을 구한다
+    starts = web_app._period_starts(now)
+    fixture_times = ["2026-06-01T00:00:00+00:00", "2026-06-02T00:00:00+00:00"]
+    expected_week = 1 + sum(1 for t in fixture_times if t >= starts["week"])
+    expected_recent = 1 + sum(1 for t in fixture_times if t >= starts["recent"])
+
+    res = client.get("/dashboard")
+    assert res.status_code == 200
+    assert 'id="stat-snapshots">3</div>' in res.text
+    assert f'id="stat-week">{expected_week}</div>' in res.text
+    assert f'id="stat-recent">{expected_recent}</div>' in res.text
+
+
+def test_dashboard_total_bytes_sums_snapshot_files(client):
+    # fixture 스냅샷 2개의 파일(content.md, page.html, screenshot.png) 합계
+    expected = 0
+    for dir_name in ("2026-06-01T00-00-00", "2026-06-02T00-00-00"):
+        snap_dir = storage.page_dir(
+            "example.com", storage.url_to_slug("https://example.com/post")
+        ) / dir_name
+        expected += sum(f["bytes"] for f in storage.snapshot_files(snap_dir))
+    res = client.get("/dashboard")
+    assert f'id="stat-bytes">{web_app.templates.env.filters["filesize"](expected)}</div>' in res.text
+
+
 def test_rearchive_duplicate_not_requeued(client, monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(
@@ -221,3 +277,43 @@ def test_rearchive_duplicate_not_requeued(client, monkeypatch):
     res = client.post("/page/1/rearchive", follow_redirects=False)
     assert res.status_code == 303
     assert calls == []
+
+
+def test_schedule_set_and_shown(client):
+    res = client.post("/page/1/schedule", data={"interval": "3600"}, follow_redirects=False)
+    assert res.status_code == 303
+    assert res.headers["location"] == "/page/1"
+
+    timeline = client.get("/page/1")
+    assert "자동 재아카이빙" in timeline.text
+    assert "1시간" in timeline.text and "다음 실행" in timeline.text
+
+    index = client.get("/")
+    assert "1시간" in index.text  # 목록의 '자동' 컬럼
+
+    with db.connect() as conn:
+        sched = db.get_schedule(conn, 1)
+    assert sched["interval_seconds"] == 3600
+
+
+def test_schedule_rejects_out_of_range_interval(client):
+    assert client.post("/page/1/schedule", data={"interval": "60"}).status_code == 400
+    assert (
+        client.post("/page/1/schedule", data={"interval": str(8 * 86400)}).status_code
+        == 400
+    )
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1) is None
+
+
+def test_schedule_delete(client):
+    client.post("/page/1/schedule", data={"interval": "86400"})
+    res = client.post("/page/1/schedule/delete", follow_redirects=False)
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1) is None
+
+
+def test_schedule_unknown_page(client):
+    assert client.post("/page/999/schedule", data={"interval": "3600"}).status_code == 404
+    assert client.post("/page/999/schedule/delete").status_code == 404

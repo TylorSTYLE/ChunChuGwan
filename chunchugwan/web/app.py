@@ -15,7 +15,8 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -27,13 +28,42 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from .. import auth, config, db, differ, pipeline, storage
+from .. import auth, config, db, differ, pipeline, scheduler, storage
 from . import auth_routes, permissions, system_routes
 from .templating import templates
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="춘추관")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """서버 구동 동안 스케줄러 폴링 스레드 운영 (WCCG_SCHEDULER=off 면 비활성).
+
+    진행 중 작업 레지스트리(claim/release)를 같이 써서 수동 재아카이빙과
+    같은 URL 이 동시에 돌지 않게 한다.
+    """
+    stop = threading.Event()
+    thread: threading.Thread | None = None
+    if config.SCHEDULER_ENABLED:
+        thread = threading.Thread(
+            target=scheduler.run_loop,
+            args=(stop,),
+            kwargs={
+                "poll_seconds": config.SCHEDULER_POLL_SECONDS,
+                "claim": _register_job,
+                "release": _unregister_job,
+            },
+            name="wccg-scheduler",
+            daemon=True,
+        )
+        thread.start()
+    yield
+    stop.set()
+    if thread is not None:
+        thread.join(timeout=5)
+
+
+app = FastAPI(title="춘추관", lifespan=_lifespan)
 app.include_router(auth_routes.router)
 app.include_router(system_routes.router)
 
@@ -164,6 +194,10 @@ def index(request: Request, queued: str = "", error: str = ""):
     active = _active_snapshot()
     with db.connect() as conn:
         pages = db.list_pages(conn)
+        schedules = db.list_schedules(conn)
+    schedule_labels = {
+        s["page_id"]: scheduler.format_interval(s["interval_seconds"]) for s in schedules
+    }
     # 아직 pages 행이 없는 신규 URL 진행 건은 별도 행으로 보여준다
     known = {p["url"] for p in pages}
     pending_new = [
@@ -176,7 +210,7 @@ def index(request: Request, queued: str = "", error: str = ""):
         {
             "pages": pages, "queued": queued, "error": error,
             "active_urls": set(active), "active_list": sorted(active),
-            "pending_new": pending_new,
+            "pending_new": pending_new, "schedule_labels": schedule_labels,
         },
     )
 
@@ -187,6 +221,82 @@ def archive_active() -> dict:
     return {"active": sorted(_active_snapshot())}
 
 
+def _period_starts(now: datetime) -> dict[str, str]:
+    """현황 집계 기간의 시작 시각 (ISO 8601 UTC).
+
+    today/week(월요일)/month/year 는 용량 트렌드, recent 는 최근 24시간 카드용.
+    taken_at 컬럼과 같은 포맷이라 문자열 비교로 기간 포함을 판정한다.
+    """
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    starts = {
+        "today": today,
+        "week": today - timedelta(days=today.weekday()),
+        "month": today.replace(day=1),
+        "year": today.replace(month=1, day=1),
+        "recent": now - timedelta(hours=24),
+    }
+    return {k: v.isoformat(timespec="seconds") for k, v in starts.items()}
+
+
+_TREND_PERIODS = (("today", "오늘"), ("week", "이번 주"), ("month", "이번 달"), ("year", "올해"))
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request):
+    """시스템 현황 — 아카이브 수, 기간별 용량 트렌드, 최근 스냅샷·로그."""
+    starts = _period_starts(datetime.now(timezone.utc))
+    with db.connect() as conn:
+        total_pages = db.count_pages(conn)
+        snap_dirs = db.list_snapshot_dirs(conn)
+        recent_snaps = db.list_recent_snapshots(conn, limit=10)
+        recent_logs = db.list_archive_logs(conn, limit=10)
+
+    # 스냅샷은 불변이므로 디렉토리 용량을 그대로 합산한다
+    sizes: dict[int, int] = {}
+    counts = {k: 0 for k in starts}
+    period_bytes = {k: 0 for k in starts}
+    total_bytes = 0
+    for row in snap_dirs:
+        snap_dir = storage.page_dir(row["domain"], row["slug"]) / row["dir_name"]
+        size = sum(f["bytes"] for f in storage.snapshot_files(snap_dir))
+        sizes[row["id"]] = size
+        total_bytes += size
+        for key, start in starts.items():
+            if row["taken_at"] >= start:
+                counts[key] += 1
+                period_bytes[key] += size
+
+    trend = [
+        {"label": label, "count": counts[key], "bytes": period_bytes[key]}
+        for key, label in _TREND_PERIODS
+    ]
+    max_bytes = max(max(t["bytes"] for t in trend), 1)
+    for t in trend:
+        t["pct"] = t["bytes"] / max_bytes * 100
+
+    return templates.TemplateResponse(
+        request, "dashboard.html",
+        {
+            "total_pages": total_pages,
+            "total_snapshots": len(snap_dirs),
+            "total_bytes": total_bytes,
+            "week_count": counts["week"],
+            "recent_count": counts["recent"],
+            "trend": trend,
+            "recent_snaps": recent_snaps,
+            "sizes": sizes,
+            "recent_logs": recent_logs,
+        },
+    )
+
+
+# 대시보드 주기 선택지 (초 단위 — 1시간 ~ 1주일)
+_SCHEDULE_OPTIONS = [
+    (3600, "1시간"), (3 * 3600, "3시간"), (6 * 3600, "6시간"), (12 * 3600, "12시간"),
+    (86400, "1일"), (3 * 86400, "3일"), (7 * 86400, "1주일"),
+]
+
+
 @app.get("/page/{page_id}", response_class=HTMLResponse)
 def timeline(request: Request, page_id: int, queued: int = 0):
     with db.connect() as conn:
@@ -195,6 +305,7 @@ def timeline(request: Request, page_id: int, queued: int = 0):
             raise HTTPException(404, "페이지 없음")
         snaps = db.list_snapshots(conn, page_id)
         checks = db.list_checks(conn, page_id)
+        schedule = db.get_schedule(conn, page_id)
 
     items = []
     for i, s in enumerate(snaps, 1):
@@ -203,8 +314,42 @@ def timeline(request: Request, page_id: int, queued: int = 0):
     items.reverse()  # 최신 먼저
     return templates.TemplateResponse(
         request, "timeline.html",
-        {"page": page, "items": items, "checks": checks, "queued": queued},
+        {
+            "page": page, "items": items, "checks": checks, "queued": queued,
+            "schedule": schedule,
+            "schedule_label": (
+                scheduler.format_interval(schedule["interval_seconds"]) if schedule else ""
+            ),
+            "interval_options": _SCHEDULE_OPTIONS,
+        },
     )
+
+
+@app.post("/page/{page_id}/schedule")
+def schedule_set(request: Request, page_id: int, interval: int = Form(...)):
+    """페이지 반복 주기 등록/변경. 주기는 1시간 ~ 1주일(초 단위)."""
+    _require_archiver(request)
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, "페이지 없음")
+    try:
+        scheduler.set_schedule(page["url"], interval)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return RedirectResponse(f"/page/{page_id}", status_code=303)
+
+
+@app.post("/page/{page_id}/schedule/delete")
+def schedule_delete(request: Request, page_id: int):
+    """페이지 반복 주기 해제."""
+    _require_archiver(request)
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, "페이지 없음")
+    scheduler.remove_schedule(page["url"])
+    return RedirectResponse(f"/page/{page_id}", status_code=303)
 
 
 def _load_snapshot(snapshot_id: int):
