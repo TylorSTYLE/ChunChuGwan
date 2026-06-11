@@ -12,7 +12,7 @@
   <tbody>
     <tr><th>URL</th><td class="mono">{{ snap['page_url'] }}</td></tr>
     <tr><th>최종 URL</th><td class="mono">{{ snap['final_url'] }}</td></tr>
-    <tr><th>캡처 시각</th><td class="mono">{{ snap['taken_at'] }}</td></tr>
+    <tr><th>캡처 시각</th><td class="mono">{{ snap['taken_at'] | ts }}</td></tr>
     <tr><th>해시</th><td class="mono">{{ snap['content_hash'] }}</td></tr>
     <tr><th>HTTP</th><td class="mono">{{ snap['http_status'] or '-' }}</td></tr>
   </tbody>

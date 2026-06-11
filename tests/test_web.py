@@ -92,6 +92,44 @@ def test_theme_toggle_present(client):
     assert "wccg-theme" in res.text  # localStorage 키 (사용자 선택 기억)
 
 
+def test_time_toggle_present(client):
+    """모든 화면(base.html)에 시간 표시(로컬/UTC) 토글·변환 스크립트가 있다."""
+    res = client.get("/")
+    assert res.status_code == 200
+    assert 'id="time-toggle"' in res.text  # 헤더 토글 버튼
+    assert "wccg-time" in res.text  # localStorage 키 (사용자 선택 기억)
+    assert "time.ts" in res.text  # 변환 대상 셀렉터
+
+
+def test_timestamps_rendered_as_time_elements(client):
+    """타임스탬프는 <time class="ts" datetime=UTC ISO> 로 렌더링된다 (JS 토글용)."""
+    res = client.get("/page/1")
+    assert (
+        '<time class="ts" data-fmt="datetime" '
+        'datetime="2026-06-01T00:00:00+00:00">2026-06-01 00:00:00</time>'
+    ) in res.text
+
+
+def test_ts_filter():
+    """ts 필터 — UTC 정규화, date 포맷, 빈 값/비정상 입력 처리."""
+    from chunchugwan.web.templating import ts
+
+    assert ts("2026-06-01T12:34:56+00:00") == (
+        '<time class="ts" data-fmt="datetime" '
+        'datetime="2026-06-01T12:34:56+00:00">2026-06-01 12:34:56</time>'
+    )
+    # 타임존 없는 값은 UTC 로 간주
+    assert 'datetime="2026-06-01T12:34:56+00:00"' in ts("2026-06-01T12:34:56")
+    # date 포맷 — 날짜만 표시
+    assert ts("2026-06-01T12:34:56+00:00", "date") == (
+        '<time class="ts" data-fmt="date" '
+        'datetime="2026-06-01T12:34:56+00:00">2026-06-01</time>'
+    )
+    assert ts(None) == "-"
+    assert ts("") == "-"
+    assert ts("이상한 값") == "이상한 값"  # 파싱 불가 시 원문 유지
+
+
 def test_snapshot_file_whitelist(client):
     ok = client.get("/snapshot/1/file/content.md")
     assert ok.status_code == 200 and "첫 줄" in ok.text
