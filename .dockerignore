@@ -9,7 +9,8 @@ __pycache__/
 .pytest_cache/
 tests/
 Dockerfile
-compose.yaml
+compose*.yaml
+.env
 .dockerignore
 *.md
 LICENSE

@@ -4,3 +4,8 @@ __pycache__/
 archive/
 .pytest_cache/
 .DS_Store
+
+# 개인 설정 — compose.example.yaml 을 복사해 만든 로컬 파일
+compose.yaml
+compose.override.yaml
+.env
