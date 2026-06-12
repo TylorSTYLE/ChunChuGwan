@@ -116,6 +116,29 @@ def test_serve_rejects_external_bind_without_auth(monkeypatch):
     assert "인증이 필수" in result.output
 
 
+def test_worker_command_runs_with_resolved_count(monkeypatch):
+    import signal
+
+    called = {}
+    monkeypatch.setattr(
+        cli.worker_mod, "run",
+        lambda stop, crawl_workers: called.setdefault("n", crawl_workers),
+    )
+    old_int = signal.getsignal(signal.SIGINT)
+    old_term = signal.getsignal(signal.SIGTERM)
+    try:
+        result = CliRunner().invoke(cli.main, ["worker", "--workers", "3"])
+        assert result.exit_code == 0
+        assert called["n"] == 3
+
+        result = CliRunner().invoke(cli.main, ["worker", "--workers", "0"])
+        assert result.exit_code != 0
+        assert "1 이상" in result.output
+    finally:
+        signal.signal(signal.SIGINT, old_int)
+        signal.signal(signal.SIGTERM, old_term)
+
+
 # ---- compact (저장 공간 압축) ----
 
 

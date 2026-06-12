@@ -45,6 +45,8 @@ uv run wccg crawl schedule add <url> --every 1w  # 주기적 사이트 재아카
 uv run wccg crawl schedule list          # 크롤 스케줄 목록 / remove <url> 로 해제
 uv run wccg serve                        # 대시보드 (127.0.0.1:8765)
 uv run wccg serve --host 0.0.0.0         # 외부 노출 (인증 켜진 상태에서만 허용)
+uv run wccg worker [--workers N]         # 아카이빙 워커 — 스케줄·크롤 큐 소비 (worker.py,
+                                         #   serve 와 분리 실행 시 WCCG_SCHEDULER=off, N=동시 크롤 수)
 uv run wccg backup [dest]                # 전체 백업 tar.gz (DB·인증 포함)
 uv run wccg restore <file> [--yes]       # 전체 복원 (현재 데이터를 백업 시점으로 교체)
 uv run wccg export [dest]                # 아카이브 데이터만 내보내기 (인증·로그 제외)
@@ -52,7 +54,7 @@ uv run wccg import <file> --mode merge   # 가져오기 (merge | overwrite)
 uv run wccg compact [--yes]              # 기존 스냅샷 저장 공간 압축 (1회성 마이그레이션)
 uv run pytest                            # 테스트
 cp compose.example.yaml compose.yaml     # 컴포즈 예제 복사 (최초 1회 — compose.yaml 은 gitignore, 개인 설정은 여기서)
-docker compose up -d dashboard           # 대시보드 컨테이너 (127.0.0.1:8765)
+docker compose up -d dashboard           # 대시보드 + 워커 컨테이너 (127.0.0.1:8765)
 docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 ```
 
@@ -131,15 +133,18 @@ archive/
 - `crawls` / `crawl_pages` — 사이트 전체 아카이브. 크롤(범위 host+path
   프리픽스, 옵션, 상태)과 페이지 큐(pending/in_progress/done/failed,
   시도 횟수·재시도 시각, 확인된 snapshot_id 참조). 큐가 DB 에 있어 재시작
-  후에도 이어지고, 클레임은 원자적 UPDATE 라 serve/CLI 동시 실행에 안전.
+  후에도 이어지고, 클레임은 원자적 UPDATE 라 serve/워커/CLI 동시 실행에
+  안전. 같은 크롤은 한 번에 한 페이지만 처리(클레임이 in_progress 배제 +
+  next_page_at 간격) — `wccg worker` 의 크롤 스레드 수만큼 서로 다른
+  크롤이 병렬 진행된다.
   같은 시작 URL 의 크롤이 진행 중이면 새 등록은 그 크롤로 자동 병합
   (`start_crawl` 이 기존 크롤 + merged=True 반환, 새 옵션은 버림).
   실패 재시도 대기·횟수는 `settings` 의 `crawl_retry_backoff_seconds` 기준
 - `crawl_schedules` — 사이트 전체 아카이브의 주기적 재실행 (시작 URL 별
   크롤 옵션 + 주기 1시간~1개월·`run_at_time`). 기한이 되면 같은 옵션으로
   새 크롤을 등록(source=schedule)하되, 같은 URL 의 크롤이 진행 중이면 끝날
-  때까지 미룬다. serve 크롤러 스레드와 `wccg schedule run`/`crawl run` 이
-  실행하며 next_run_at 갱신은 원자적 클레임이라 동시 실행에 안전
+  때까지 미룬다. serve 크롤러 스레드·`wccg worker`·`wccg schedule run`/
+  `crawl run` 이 실행하며 next_run_at 갱신은 원자적 클레임이라 동시 실행에 안전
 - `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
   서버사이드 세션, OIDC state 1회용 기록). `users.role` 은
   admin(관리자)/archiver(아카이빙 가능)/viewer(보기 전용)/pending(권한없음 —

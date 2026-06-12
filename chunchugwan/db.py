@@ -809,10 +809,12 @@ def claim_due_crawl_page(
     """기한이 된 크롤에서 대기 페이지 하나를 원자적으로 클레임.
 
     조건: 크롤이 running 이고 next_page_at(페이지 간 간격)이 지났으며,
+    같은 크롤에 in_progress 페이지가 없고(크롤당 동시 처리 1개 — 워커가
+    여럿이어도 병렬 단위는 크롤이라 대상 서버 부담은 순차와 같다),
     페이지가 pending 이고 재시도 대기(next_attempt_at)가 끝났을 것.
     클레임과 동시에 크롤의 next_page_at 을 delay 만큼 미뤄 같은 크롤의
     다른 페이지가 간격 안에 잡히지 않게 한다. UPDATE 의 status 조건이
-    멀티 프로세스(serve 폴링 + CLI) 경합을 막는다 — 경합 시 None.
+    멀티 프로세스(serve 폴링 + 워커 + CLI) 경합을 막는다 — 경합 시 None.
     """
     sql = """
         SELECT cp.*, c.scope_host, c.scope_path, c.max_pages, c.max_depth,
@@ -821,6 +823,10 @@ def claim_due_crawl_page(
         WHERE c.status = 'running' AND c.next_page_at <= ?
           AND cp.status = 'pending'
           AND (cp.next_attempt_at IS NULL OR cp.next_attempt_at <= ?)
+          AND NOT EXISTS (
+              SELECT 1 FROM crawl_pages busy
+              WHERE busy.crawl_id = c.id AND busy.status = 'in_progress'
+          )
     """
     params: list[object] = [now_iso, now_iso]
     if crawl_id is not None:

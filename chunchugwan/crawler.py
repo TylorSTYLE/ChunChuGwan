@@ -519,10 +519,13 @@ def run_loop(
     poll_seconds: int = config.CRAWLER_POLL_SECONDS,
     claim: Callable[[str], bool] | None = None,
     release: Callable[[str], None] | None = None,
+    run_schedules: bool = True,
 ) -> None:
-    """stop 이 설정될 때까지 크롤 큐를 소비 (serve 백그라운드 스레드용).
+    """stop 이 설정될 때까지 크롤 큐를 소비 (serve·워커 백그라운드 스레드용).
 
-    기한이 된 크롤 스케줄도 매 회차 등록한다 (run_due_schedules).
+    기한이 된 크롤 스케줄도 매 회차 등록한다 (run_due_schedules) —
+    같은 프로세스에 크롤 스레드가 여럿이면(워커) 한 스레드만
+    run_schedules=True 로 두면 된다 (중복 등록은 안 되지만 폴링 낭비).
     처리할 페이지가 있으면 즉시 다음으로 넘어가고 (간격은 next_page_at 이
     강제한다), 없을 때만 poll_seconds 만큼 쉰다.
     """
@@ -530,11 +533,12 @@ def run_loop(
     while not stop.is_set():
         step = None
         try:
-            for fired in run_due_schedules():
-                if fired.status == "started":
-                    logger.info(
-                        "크롤 스케줄 실행: %s → #%d", fired.start_url, fired.crawl_id
-                    )
+            if run_schedules:
+                for fired in run_due_schedules():
+                    if fired.status == "started":
+                        logger.info(
+                            "크롤 스케줄 실행: %s → #%d", fired.start_url, fired.crawl_id
+                        )
             step = process_next(claim=claim, release=release)
         except Exception:
             logger.exception("크롤러 폴링 실패")

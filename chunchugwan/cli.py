@@ -11,6 +11,7 @@ import click
 
 from . import backup as backup_mod
 from . import capture as capture_mod
+from . import worker as worker_mod
 from . import (
     config, crawler, db, deletion, differ, pipeline, resources, scheduler, storage,
 )
@@ -663,6 +664,42 @@ def serve(port: int | None, host: str | None) -> None:
         host=bind_host,
         port=port or config.DASHBOARD_PORT,
     )
+
+
+@main.command()
+@click.option(
+    "--workers", "crawl_workers", default=None, type=int,
+    help=f"크롤 스레드 수 = 동시 진행 크롤 수 "
+         f"(기본 WCCG_CRAWL_WORKERS 또는 {config.CRAWL_WORKERS}, "
+         f"1~{config.CRAWL_WORKERS_LIMIT})",
+)
+def worker(crawl_workers: int | None) -> None:
+    """아카이빙 워커 — 스케줄·크롤 큐를 이 프로세스에서 소비 (종료는 Ctrl-C).
+
+    대시보드(serve)와 분리해 돌리면 아카이빙 부하가 UI 응답에 영향을 주지
+    않는다. 이때 serve 쪽 내장 폴링은 WCCG_SCHEDULER=off 로 끌 것 —
+    켜 두면 페이지 스케줄이 양쪽에서 중복 실행될 수 있다.
+    """
+    import signal
+    import threading
+
+    n = crawl_workers if crawl_workers is not None else config.CRAWL_WORKERS
+    if not (1 <= n <= config.CRAWL_WORKERS_LIMIT):
+        raise click.ClickException(
+            f"크롤 스레드 수는 1 이상 {config.CRAWL_WORKERS_LIMIT} 이하여야 "
+            f"합니다 (현재 {n})"
+        )
+
+    stop = threading.Event()
+
+    def _request_stop(signum, frame) -> None:
+        stop.set()
+
+    signal.signal(signal.SIGINT, _request_stop)
+    signal.signal(signal.SIGTERM, _request_stop)
+    click.echo(f"워커 시작 — 크롤 스레드 {n}개 (종료: Ctrl-C)")
+    worker_mod.run(stop, crawl_workers=n)
+    click.echo("워커 종료")
 
 
 if __name__ == "__main__":
