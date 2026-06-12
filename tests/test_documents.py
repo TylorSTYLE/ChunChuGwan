@@ -179,7 +179,7 @@ def test_pipeline_archives_linked_documents(doc_server, tmp_path, monkeypatch):
     bad_url = f"{doc_server}/missing.pdf"
     html = "<html><body><p>본문 텍스트</p></body></html>"
 
-    def fake_capture(url, out_dir, remove_selectors=(), link_rewriter=None):
+    def fake_capture(url, out_dir, remove_selectors=(), link_rewriter=None, session=None):
         (out_dir / "raw.html").write_text(html, encoding="utf-8")
         (out_dir / "page.html").write_text(html, encoding="utf-8")
         return capture.CaptureResult(

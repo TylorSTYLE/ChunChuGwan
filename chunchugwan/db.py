@@ -3,11 +3,28 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
 from . import config
+
+# 쓰기 락 대기 한도(초) — WAL 에서도 쓰기는 한 번에 하나라, 동시 쓰기가
+# 겹치면 이 시간만큼 기다린 뒤 OperationalError.
+_BUSY_TIMEOUT_SECONDS = 30
+
+# 스키마 보장(executescript + _migrate)은 프로세스당 DB 파일별 1회 —
+# 매 커넥션마다 반복하면 요청 지연과 락 경합만 키운다. restore 처럼
+# DB 파일 자체를 교체하는 코드는 invalidate_schema_cache() 를 호출할 것.
+_schema_ready: set[str] = set()
+_schema_lock = threading.Lock()
+
+
+def invalidate_schema_cache() -> None:
+    """스키마 보장 캐시 무효화 — DB 파일을 교체(복원 등)한 뒤 호출."""
+    with _schema_lock:
+        _schema_ready.clear()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages (
@@ -242,10 +259,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    """스키마가 보장된 커넥션을 컨텍스트로 제공."""
+    """스키마가 보장된 커넥션을 컨텍스트로 제공.
+
+    WAL 저널 모드를 쓴다 — 쓰기(아카이빙·크롤)가 대시보드 읽기를 막지
+    않고, 여러 프로세스(serve·워커·CLI)가 같은 DB 를 봐도 안전하다.
+    synchronous=NORMAL 은 WAL 권장 설정 — 프로세스 크래시에는 안전하고,
+    정전 시 마지막 트랜잭션만 잃을 수 있다 (DB 손상 없음).
+    """
     config.ensure_dirs()
     try:
-        conn = sqlite3.connect(config.DB_PATH)
+        conn = sqlite3.connect(config.DB_PATH, timeout=_BUSY_TIMEOUT_SECONDS)
     except sqlite3.OperationalError as e:
         raise sqlite3.OperationalError(
             f"DB 파일을 열 수 없습니다: {config.DB_PATH} — 아카이브 디렉토리의 "
@@ -254,13 +277,27 @@ def connect() -> Iterator[sqlite3.Connection]:
         ) from e
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(SCHEMA)
-    _migrate(conn)
+    conn.execute("PRAGMA synchronous = NORMAL")
+    _ensure_schema(conn)
     try:
         yield conn
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """프로세스에서 처음 보는 DB 파일이면 WAL 전환 + 스키마 생성·마이그레이션."""
+    key = str(config.DB_PATH)
+    with _schema_lock:
+        if key in _schema_ready:
+            return
+        # journal_mode 는 DB 파일에 영구 저장된다 — 이후 커넥션은 자동 WAL
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        conn.commit()
+        _schema_ready.add(key)
 
 
 def _utcnow() -> str:
@@ -916,10 +953,12 @@ def claim_due_crawl_page(
     """기한이 된 크롤에서 대기 페이지 하나를 원자적으로 클레임.
 
     조건: 크롤이 running 이고 next_page_at(페이지 간 간격)이 지났으며,
+    같은 크롤에 in_progress 페이지가 없고(크롤당 동시 처리 1개 — 워커가
+    여럿이어도 병렬 단위는 크롤이라 대상 서버 부담은 순차와 같다),
     페이지가 pending 이고 재시도 대기(next_attempt_at)가 끝났을 것.
     클레임과 동시에 크롤의 next_page_at 을 delay 만큼 미뤄 같은 크롤의
     다른 페이지가 간격 안에 잡히지 않게 한다. UPDATE 의 status 조건이
-    멀티 프로세스(serve 폴링 + CLI) 경합을 막는다 — 경합 시 None.
+    멀티 프로세스(serve 폴링 + 워커 + CLI) 경합을 막는다 — 경합 시 None.
     """
     sql = """
         SELECT cp.*, c.scope_host, c.scope_path, c.max_pages, c.max_depth,
@@ -928,6 +967,10 @@ def claim_due_crawl_page(
         WHERE c.status = 'running' AND c.next_page_at <= ?
           AND cp.status = 'pending'
           AND (cp.next_attempt_at IS NULL OR cp.next_attempt_at <= ?)
+          AND NOT EXISTS (
+              SELECT 1 FROM crawl_pages busy
+              WHERE busy.crawl_id = c.id AND busy.status = 'in_progress'
+          )
     """
     params: list[object] = [now_iso, now_iso]
     if crawl_id is not None:

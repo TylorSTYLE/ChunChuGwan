@@ -187,6 +187,22 @@ def test_read_manifest_rejects_foreign_tar(tmp_path):
         backup.read_manifest(foreign)
 
 
+def test_restore_clears_stale_wal_files(roots, tmp_path, monkeypatch):
+    """복원이 이전 DB 의 WAL 잔재(-wal/-shm)를 함께 지운다 — 남으면 새 DB 손상."""
+    root_a, root_b = roots
+    out = backup.create_backup(tmp_path / "bk.tar.gz")
+
+    _patch_root(monkeypatch, root_b)
+    config.ensure_dirs()
+    (root_b / "index.db-wal").write_bytes(b"stale")
+    (root_b / "index.db-shm").write_bytes(b"stale")
+    backup.restore_backup(out)
+
+    assert not (root_b / "index.db-wal").exists()
+    assert not (root_b / "index.db-shm").exists()
+    assert _counts()["pages"] == 2
+
+
 # ---- 아카이브 내보내기/가져오기 ----
 
 

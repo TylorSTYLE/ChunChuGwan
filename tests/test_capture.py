@@ -151,7 +151,7 @@ def test_capture_retries_with_http2_disabled(monkeypatch, tmp_path):
     calls = []
 
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
-                  browser_args=()):
+                  browser_args=(), session=None):
         calls.append(browser_args)
         if not browser_args:
             raise capture.CaptureError(
@@ -169,7 +169,7 @@ def test_capture_does_not_retry_other_errors(monkeypatch, tmp_path):
     calls = []
 
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
-                  browser_args=()):
+                  browser_args=(), session=None):
         calls.append(browser_args)
         raise capture.CaptureError(f"{url} 캡처 실패: net::ERR_NAME_NOT_RESOLVED")
 
@@ -177,6 +177,26 @@ def test_capture_does_not_retry_other_errors(monkeypatch, tmp_path):
     with pytest.raises(capture.CaptureError):
         capture.capture("https://example.com/", tmp_path)
     assert calls == [()]
+
+
+def test_browser_session_reuses_and_relaunches(site_url, tmp_path):
+    """세션은 캡처 간 같은 브라우저를 재사용하고, close 후에는 재기동한다."""
+    out1, out2, out3 = tmp_path / "o1", tmp_path / "o2", tmp_path / "o3"
+    for out in (out1, out2, out3):
+        out.mkdir()
+    with capture.BrowserSession() as session:
+        capture.capture(site_url, out1, session=session)
+        first = session._browser
+        assert first is not None and first.is_connected()
+
+        capture.capture(site_url, out2, session=session)
+        assert session._browser is first  # 같은 브라우저 재사용
+
+        session.close()  # 유휴 시 내려도 (큐 빈 폴링) 다음 캡처가 재기동한다
+        capture.capture(site_url, out3, session=session)
+        assert session._browser is not None and session._browser is not first
+    assert (out3 / "raw.html").is_file()
+    assert session._browser is None  # __exit__ 가 정리
 
 
 def test_capture_connect_error_on_closed_port(tmp_path):

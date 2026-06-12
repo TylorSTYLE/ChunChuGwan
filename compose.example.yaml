@@ -9,15 +9,16 @@ services:
     image: ghcr.io/tylorstyle/chunchugwan:latest   # GitHub Actions 가 main 푸시마다 게시 (amd64/arm64)
     # build: .                      # 로컬 소스에서 직접 빌드하려면 image: 줄 대신 사용
     command: serve
+    depends_on: [worker]            # `up -d dashboard` 만으로도 워커가 같이 뜨게
     environment:
       WCCG_HOST: "0.0.0.0"          # 컨테이너 내부 바인딩. 외부 노출은 아래 127.0.0.1 매핑이 차단.
+      WCCG_SCHEDULER: "off"         # 스케줄·크롤 실행은 worker 서비스 전담 — 대시보드 응답이 안 느려진다
       TZ: "Asia/Seoul"              # 1일 주기 스케줄의 실행 시각(HH:MM)이 서버 로컬 시간 기준 — 미설정 시 UTC
       # --- 선택 설정: 필요한 항목만 주석 해제 ---
       # WCCG_ADMIN_EMAIL: "admin@example.com"        # 최초 구동 시 관리자 자동 등록
       # WCCG_ADMIN_PASSWORD: "change-me"             # (8자 이상, 최초 구동 후 제거 권장)
       # WCCG_PUBLIC_URL: "https://archive.example.com"  # 리버스 프록시로 외부 노출 시
       # WCCG_SESSION_TTL_DAYS: "14"                  # 세션 수명 (일)
-      # WCCG_SCHEDULER: "off"                        # serve 내장 스케줄러 끄기 (cron 에서 schedule run 사용 시)
       # WCCG_OIDC_ISSUER: "https://auth.example.com/application/o/chunchugwan"
       # WCCG_OIDC_CLIENT_ID: ""
       # WCCG_OIDC_CLIENT_SECRET: ""
@@ -34,6 +35,19 @@ services:
       - ./archive:/data/archive     # 소유자가 달라도 기동 시 uid 1000 으로 자동 보정
     shm_size: 1gb                   # 재아카이빙 버튼이 chromium 을 띄우므로 /dev/shm 확보
     init: true                      # 좀비 chromium 프로세스 회수
+    restart: unless-stopped
+
+  worker:
+    image: ghcr.io/tylorstyle/chunchugwan:latest
+    # build: .                      # 로컬 소스에서 직접 빌드하려면 image: 줄 대신 사용
+    command: worker                 # 스케줄·크롤 큐 소비 — 아카이빙 부하를 대시보드와 분리
+    environment:
+      TZ: "Asia/Seoul"
+      # WCCG_CRAWL_WORKERS: "2"     # 동시 진행 크롤(사이트) 수 (1~8, 기본 2)
+    volumes:
+      - ./archive:/data/archive
+    shm_size: 1gb                   # 페이지 캡처가 chromium 을 띄운다
+    init: true
     restart: unless-stopped
 
   cli:

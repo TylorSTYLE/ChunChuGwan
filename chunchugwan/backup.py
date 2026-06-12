@@ -135,6 +135,17 @@ def create_backup(dest: Path) -> Path:
     return out
 
 
+def _replace_db_file(new_db: Path) -> None:
+    """index.db 를 새 파일로 교체 — 이전 DB 의 WAL 잔재(-wal/-shm)도 함께
+    지운다 (남으면 새 DB 에 옛 WAL 이 적용돼 손상된다). 같은 프로세스가
+    이어서 DB 를 쓸 수 있으므로 스키마 보장 캐시도 무효화한다."""
+    config.DB_PATH.unlink(missing_ok=True)
+    for suffix in ("-wal", "-shm"):
+        Path(f"{config.DB_PATH}{suffix}").unlink(missing_ok=True)
+    shutil.move(new_db, config.DB_PATH)
+    db.invalidate_schema_cache()
+
+
 def restore_backup(src: Path) -> dict:
     """전체 백업에서 복원 — 아카이브 루트를 백업 시점 상태로 교체.
 
@@ -155,8 +166,7 @@ def restore_backup(src: Path) -> dict:
         if not (tmp / "index.db").is_file():
             raise ValueError("백업에 index.db 가 없습니다")
 
-        config.DB_PATH.unlink(missing_ok=True)
-        shutil.move(tmp / "index.db", config.DB_PATH)
+        _replace_db_file(tmp / "index.db")
 
         shutil.rmtree(config.SITES_DIR, ignore_errors=True)
         if (tmp / "sites").is_dir():

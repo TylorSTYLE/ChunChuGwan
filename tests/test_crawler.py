@@ -163,6 +163,68 @@ def test_process_next_respects_delay_between_pages(archive_env):
     assert crawler.process_next(archive_fn=fake) is None
 
 
+def test_parallel_unit_is_crawl(archive_env):
+    """워커가 여럿이어도 같은 크롤은 한 번에 한 페이지 — in_progress 배제."""
+    row_a, _ = crawler.start_crawl("https://a.example.com/", delay_seconds=1)
+    row_b, _ = crawler.start_crawl("https://b.example.com/", delay_seconds=1)
+    with db.connect() as conn:
+        db.insert_crawl_page(conn, row_a["id"], "https://a.example.com/two", 1)
+
+    later = "2099-01-01T00:00:00+00:00"  # 모든 간격(next_page_at)이 지난 시점
+    with db.connect() as conn:
+        first = db.claim_due_crawl_page(conn, later)
+    assert first is not None and first["crawl_id"] == row_a["id"]
+
+    # 크롤 A 가 in_progress 인 동안에는 간격이 지나도 A 의 다음 페이지 대신
+    # 크롤 B 가 잡힌다 — 병렬 단위는 크롤(사이트)
+    with db.connect() as conn:
+        second = db.claim_due_crawl_page(conn, later)
+    assert second is not None and second["crawl_id"] == row_b["id"]
+    with db.connect() as conn:
+        assert db.claim_due_crawl_page(conn, later) is None
+
+    # A 의 진행 중 페이지가 끝나면 A 의 다음 페이지가 잡힌다
+    with db.connect() as conn:
+        db.finish_crawl_page(conn, first["id"], None)
+        third = db.claim_due_crawl_page(conn, later)
+    assert third is not None and third["crawl_id"] == row_a["id"]
+
+
+def test_run_loop_schedule_polling_toggle(archive_env, monkeypatch):
+    """run_schedules=False 인 크롤 스레드는 크롤 스케줄을 폴링하지 않는다."""
+    import threading
+
+    called = []
+    monkeypatch.setattr(crawler, "run_due_schedules", lambda: called.append(1) or [])
+    stop = threading.Event()
+
+    def fake_process_next(**kwargs):
+        stop.set()
+        return None
+
+    monkeypatch.setattr(crawler, "process_next", fake_process_next)
+    crawler.run_loop(stop, poll_seconds=0, run_schedules=False)
+    assert called == []
+
+    stop.clear()
+    crawler.run_loop(stop, poll_seconds=0)
+    assert called == [1]
+
+
+def test_process_next_passes_browser_session_only_when_given(archive_env):
+    """browser_session 은 줄 때만 archive_fn 에 전달 — 기존 주입 fn 호환."""
+    crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    seen = {}
+
+    def fake(url, source, link_rewriter, browser_session=None):
+        seen["session"] = browser_session
+        return fake_outcome(url)
+
+    sentinel = object()  # BrowserSession 대용 — process_next 는 전달만 한다
+    step = crawler.process_next(archive_fn=fake, browser_session=sentinel)
+    assert step is not None and seen["session"] is sentinel
+
+
 def test_process_next_respects_max_pages_and_depth(archive_env):
     row, _ = crawler.start_crawl(
         "https://example.com/docs/", max_pages=2, max_depth=1, delay_seconds=1

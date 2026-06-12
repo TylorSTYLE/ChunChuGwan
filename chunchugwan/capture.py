@@ -201,11 +201,59 @@ class CaptureResult:
 LinkRewriter = Callable[[Sequence[str]], dict[str, str]]
 
 
+class BrowserSession:
+    """여러 캡처가 재사용하는 Chromium 세션 (크롤러 스레드용).
+
+    캡처마다 브라우저를 새로 띄우는 기동 비용(수 초 + CPU 스파이크)을
+    없앤다. 캡처는 컨텍스트 단위로 격리되고(쿠키·캐시 공유 없음) 브라우저만
+    유지된다. sync Playwright 제약상 스레드 간 공유 금지 — 스레드당 1개.
+    브라우저가 죽었으면 다음 browser() 호출이 재기동하고, close() 후에도
+    다시 쓸 수 있다 (큐가 빌 때 내려서 메모리 점유를 피하는 용도).
+    """
+
+    def __init__(self) -> None:
+        self._playwright = None
+        self._browser = None
+
+    def browser(self):
+        """살아 있는 브라우저 반환 — 없거나 죽었으면 (재)기동."""
+        if self._browser is not None and self._browser.is_connected():
+            return self._browser
+        self.close()
+        from playwright.sync_api import sync_playwright
+
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.launch(headless=True)
+        return self._browser
+
+    def close(self) -> None:
+        """브라우저·드라이버 종료 (이미 닫혔으면 무해). 이후 재사용 가능."""
+        if self._browser is not None:
+            try:
+                self._browser.close()
+            except Exception:
+                pass  # 이미 죽은 브라우저 — 드라이버 정리만 하면 된다
+            self._browser = None
+        if self._playwright is not None:
+            try:
+                self._playwright.stop()
+            except Exception:
+                pass
+            self._playwright = None
+
+    def __enter__(self) -> "BrowserSession":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
 def capture(
     url: str,
     out_dir: Path,
     remove_selectors: tuple[str, ...] = (),
     link_rewriter: LinkRewriter | None = None,
+    session: BrowserSession | None = None,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
 
@@ -213,13 +261,16 @@ def capture(
     content_html 에서만 해당 노드를 제거한다.
     link_rewriter 가 있으면(사이트 전체 아카이브) page.html 의 앵커를
     반환된 매핑대로 재작성한다 — raw.html/content_html 은 원본 유지.
+    session 이 있으면 그 브라우저를 재사용한다 (없으면 1회용 기동).
 
     일부 서버(구형 IIS 등)는 HTTP/2 구현이 깨져 chromium 만
     net::ERR_HTTP2_* 로 실패한다 (curl 등은 정상) — 이 경우 HTTP/2 를
-    끄고(HTTP/1.1) 한 번 더 시도한다.
+    끄고(HTTP/1.1) 한 번 더 시도한다. 이 폴백은 브라우저 인자가 달라
+    session 과 무관하게 항상 1회용으로 띄운다.
     """
     try:
-        return _capture_once(url, out_dir, remove_selectors, link_rewriter)
+        return _capture_once(url, out_dir, remove_selectors, link_rewriter,
+                             session=session)
     except CaptureError as e:
         if "ERR_HTTP2" not in str(e):
             raise
@@ -236,62 +287,22 @@ def _capture_once(
     remove_selectors: tuple[str, ...] = (),
     link_rewriter: LinkRewriter | None = None,
     browser_args: tuple[str, ...] = (),
+    session: BrowserSession | None = None,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
     from playwright.sync_api import Error as PlaywrightError
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 
     try:
+        if session is not None and not browser_args:
+            return _capture_in_browser(
+                session.browser(), url, out_dir, remove_selectors, link_rewriter
+            )
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=list(browser_args))
             try:
-                context = browser.new_context(user_agent=config.USER_AGENT)
-                page = context.new_page()
-                page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
-                try:
-                    response = page.goto(
-                        url, wait_until="networkidle", timeout=config.PAGE_LOAD_TIMEOUT_MS
-                    )
-                except PlaywrightTimeoutError as e:
-                    if page.url == "about:blank":
-                        # 네비게이션이 시작조차 못함(연결 불가) — load 재시도 무의미
-                        raise CaptureConnectError(f"{url} 캡처 실패: {e}") from e
-                    logger.warning("networkidle 미도달, load 기준으로 재시도: %s", url)
-                    response = page.goto(
-                        url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS
-                    )
-
-                raw_html = page.content()
-                (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
-                document_links = _collect_document_links(page)
-                page_links = _collect_page_links(page)
-
-                # 추출용 content_html 은 인라인 전의 raw_html 기준으로 만든다 —
-                # 인라인 후 DOM 에는 base64 데이터가 섞여 extract 가 느려진다.
-                content_html = raw_html
-                if remove_selectors:
-                    content_html, removed = page.evaluate(
-                        _REMOVE_JS, [raw_html, list(remove_selectors)]
-                    )
-                    logger.info("도메인 룰로 노드 %d개 제거: %s", removed, url)
-
-                if link_rewriter is not None:
-                    _rewrite_links(page, link_rewriter, page_links)
-
-                page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
-                (out_dir / "page.html").write_text(
-                    _inline_resources(page, raw_html), encoding="utf-8"
-                )
-
-                return CaptureResult(
-                    final_url=page.url,
-                    http_status=response.status if response else None,
-                    title=page.title() or None,
-                    raw_html=raw_html,
-                    content_html=content_html,
-                    document_links=document_links,
-                    page_links=page_links,
+                return _capture_in_browser(
+                    browser, url, out_dir, remove_selectors, link_rewriter
                 )
             finally:
                 browser.close()
@@ -299,6 +310,68 @@ def _capture_once(
         if any(marker in str(e) for marker in _CONNECT_ERROR_MARKERS):
             raise CaptureConnectError(f"{url} 캡처 실패: {e}") from e
         raise CaptureError(f"{url} 캡처 실패: {e}") from e
+
+
+def _capture_in_browser(
+    browser,
+    url: str,
+    out_dir: Path,
+    remove_selectors: tuple[str, ...],
+    link_rewriter: LinkRewriter | None,
+) -> CaptureResult:
+    """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다."""
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    context = browser.new_context(user_agent=config.USER_AGENT)
+    try:
+        page = context.new_page()
+        page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
+        try:
+            response = page.goto(
+                url, wait_until="networkidle", timeout=config.PAGE_LOAD_TIMEOUT_MS
+            )
+        except PlaywrightTimeoutError as e:
+            if page.url == "about:blank":
+                # 네비게이션이 시작조차 못함(연결 불가) — load 재시도 무의미
+                raise CaptureConnectError(f"{url} 캡처 실패: {e}") from e
+            logger.warning("networkidle 미도달, load 기준으로 재시도: %s", url)
+            response = page.goto(
+                url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS
+            )
+
+        raw_html = page.content()
+        (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
+        document_links = _collect_document_links(page)
+        page_links = _collect_page_links(page)
+
+        # 추출용 content_html 은 인라인 전의 raw_html 기준으로 만든다 —
+        # 인라인 후 DOM 에는 base64 데이터가 섞여 extract 가 느려진다.
+        content_html = raw_html
+        if remove_selectors:
+            content_html, removed = page.evaluate(
+                _REMOVE_JS, [raw_html, list(remove_selectors)]
+            )
+            logger.info("도메인 룰로 노드 %d개 제거: %s", removed, url)
+
+        if link_rewriter is not None:
+            _rewrite_links(page, link_rewriter, page_links)
+
+        page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
+        (out_dir / "page.html").write_text(
+            _inline_resources(page, raw_html), encoding="utf-8"
+        )
+
+        return CaptureResult(
+            final_url=page.url,
+            http_status=response.status if response else None,
+            title=page.title() or None,
+            raw_html=raw_html,
+            content_html=content_html,
+            document_links=document_links,
+            page_links=page_links,
+        )
+    finally:
+        context.close()
 
 
 def _collect_document_links(page) -> list[str]:
