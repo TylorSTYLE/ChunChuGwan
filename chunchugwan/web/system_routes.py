@@ -78,6 +78,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "db_bytes": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
             "sites_bytes": _dir_bytes(config.SITES_DIR),
             "resources_bytes": _dir_bytes(config.RESOURCES_DIR),
+            "documents_bytes": _dir_bytes(config.DOCUMENTS_DIR),
             "compactable": resources.compactable_count(),
             "notice": notice, "error": error,
         },
@@ -145,9 +146,9 @@ def system_compact(request: Request):
         notice=t(
             request,
             "압축 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · "
-            "{before} → {after} ({saved} 절약)",
+            "문서 {documents}개 이전 · {before} → {after} ({saved} 절약)",
             converted=result.converted, total=result.total,
-            externalized=result.externalized,
+            externalized=result.externalized, documents=result.documents,
             before=filesize(result.before_bytes), after=filesize(result.after_bytes),
             saved=filesize(result.saved_bytes),
         )

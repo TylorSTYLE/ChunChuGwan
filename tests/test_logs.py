@@ -17,6 +17,7 @@ def archive_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(config, "RULES_PATH", tmp_path / "rules.json")
     monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
     monkeypatch.setattr(config, "AUTH_ENABLED", False)
     return tmp_path
 

@@ -9,12 +9,14 @@
 .storage-bar .seg-db        { background: var(--link);  opacity: .6; }
 .storage-bar .seg-sites     { background: var(--green); opacity: .6; }
 .storage-bar .seg-resources { background: var(--amber); opacity: .6; }
+.storage-bar .seg-documents { background: var(--red);   opacity: .55; }
 .storage-legend { display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px; }
 .storage-legend .swatch { display: inline-block; width: 9px; height: 9px;
                           border-radius: 2px; margin-right: 5px; opacity: .6; }
 .storage-legend .swatch.db        { background: var(--link); }
 .storage-legend .swatch.sites     { background: var(--green); }
 .storage-legend .swatch.resources { background: var(--amber); }
+.storage-legend .swatch.documents { background: var(--red); opacity: .55; }
 .storage-root { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
                 font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .sys-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -67,19 +69,21 @@ h3.danger-heading { color: var(--red); }
 </div>
 
 <h3>{{ _("저장 공간") }}</h3>
-{% set total_bytes = db_bytes + sites_bytes + resources_bytes %}
+{% set total_bytes = db_bytes + sites_bytes + resources_bytes + documents_bytes %}
 <div class="storage-card">
   {% if total_bytes %}
   <div class="storage-bar">
     <div class="seg-db" style="width: {{ '%.2f' % (100 * db_bytes / total_bytes) }}%"></div>
     <div class="seg-sites" style="width: {{ '%.2f' % (100 * sites_bytes / total_bytes) }}%"></div>
     <div class="seg-resources" style="width: {{ '%.2f' % (100 * resources_bytes / total_bytes) }}%"></div>
+    <div class="seg-documents" style="width: {{ '%.2f' % (100 * documents_bytes / total_bytes) }}%"></div>
   </div>
   {% endif %}
   <div class="storage-legend">
     <span><span class="swatch db"></span>DB <span class="mono">{{ db_bytes|filesize }}</span></span>
     <span><span class="swatch sites"></span>{{ _("스냅샷 파일") }} <span class="mono">{{ sites_bytes|filesize }}</span></span>
     <span><span class="swatch resources"></span>{{ _("공유 자원") }} <span class="mono">{{ resources_bytes|filesize }}</span></span>
+    <span><span class="swatch documents"></span>{{ _("문서") }} <span class="mono">{{ documents_bytes|filesize }}</span></span>
     <span class="muted">{{ _("합계") }} <span class="mono">{{ total_bytes|filesize }}</span></span>
   </div>
   <div class="storage-root">{{ _("아카이브 루트") }} <span class="mono">{{ archive_root }}</span></div>
@@ -93,7 +97,7 @@ h3.danger-heading { color: var(--red); }
       {% else %}<span class="badge same">{{ _("대상 없음") }}</span>{% endif %}
     </h4>
     <p>
-      {{ _("구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP)로 변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축됩니다.") }}
+      {{ _("구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP + 문서 파일 공유 저장소 이전)로 변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축됩니다.") }}
     </p>
     <div class="actions">
       {% if compactable %}

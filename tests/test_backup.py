@@ -1,14 +1,19 @@
 """백업/복원(backup.py) 테스트. 두 아카이브 루트를 전환하며 검증."""
+import hashlib
 import json
 import tarfile
 
 import pytest
 from click.testing import CliRunner
 
-from chunchugwan import backup, cli, config, db, storage
+from chunchugwan import backup, cli, config, db, documents, storage
 
 URL_A = "https://example.com/post"
 URL_B = "https://other.org/page"
+
+DOC_BODY = b"%PDF-1.4 backup fixture"
+DOC_SHA = hashlib.sha256(DOC_BODY).hexdigest()
+DOC_FILE = "report-12345678.pdf"
 
 
 def _patch_root(monkeypatch, root):
@@ -18,6 +23,7 @@ def _patch_root(monkeypatch, root):
     monkeypatch.setattr(config, "DB_PATH", root / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", root / "cache")
     monkeypatch.setattr(config, "RESOURCES_DIR", root / "resources")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", root / "documents")
     monkeypatch.setattr(config, "RULES_PATH", root / "rules.json")
 
 
@@ -44,13 +50,22 @@ def _seed_page(url: str, dir_names: list[str], with_check: bool = False) -> None
 
 @pytest.fixture
 def roots(tmp_path, monkeypatch):
-    """루트 A 에 데이터(페이지 2개·사용자·룰)를 구성하고 (A, B) 경로 반환."""
+    """루트 A 에 데이터(페이지 2개·사용자·룰·문서 CAS)를 구성하고 (A, B) 경로 반환."""
     root_a, root_b = tmp_path / "a", tmp_path / "b"
     _patch_root(monkeypatch, root_a)
     _seed_page(URL_A, ["2026-06-01T00-00-00", "2026-06-02T00-00-00"], with_check=True)
     _seed_page(URL_B, ["2026-06-03T00-00-00"])
     with db.connect() as conn:
         db.create_user(conn, "admin@example.com", password_hash="x", role="admin")
+        # URL_A 첫 스냅샷(id=1)에 문서 CAS 파일 + 참조 행
+        db.insert_snapshot_documents(conn, 1, [{
+            "url": "https://example.com/files/report.pdf", "file": DOC_FILE,
+            "bytes": len(DOC_BODY), "sha256": DOC_SHA,
+            "content_type": "application/pdf",
+        }])
+    cas = documents.cas_path(DOC_SHA + ".pdf")
+    cas.parent.mkdir(parents=True)
+    cas.write_bytes(DOC_BODY)
     config.RULES_PATH.write_text('{"example.com": {}}', encoding="utf-8")
     return root_a, root_b
 
@@ -79,6 +94,65 @@ def test_backup_restore_roundtrip(roots, tmp_path, monkeypatch):
     content = storage.page_dir("example.com", slug) / "2026-06-01T00-00-00" / "content.md"
     assert content.read_text(encoding="utf-8") == f"{URL_A} 본문 0"
     assert json.loads(config.RULES_PATH.read_text(encoding="utf-8")) == {"example.com": {}}
+
+
+def test_backup_restore_includes_documents(roots, tmp_path, monkeypatch):
+    """전체 백업/복원에 문서 CAS 와 snapshot_documents 행이 포함된다."""
+    root_a, root_b = roots
+    out = backup.create_backup(tmp_path / "full.tar.gz")
+
+    _patch_root(monkeypatch, root_b)
+    backup.restore_backup(out)
+
+    assert documents.cas_path(DOC_SHA + ".pdf").read_bytes() == DOC_BODY
+    with db.connect() as conn:
+        row = db.get_snapshot_document(conn, 1, DOC_FILE)
+    assert row is not None and row["sha256"] == DOC_SHA
+
+
+def test_export_import_includes_documents(roots, tmp_path, monkeypatch):
+    """내보내기/가져오기에 문서 CAS 와 참조 행이 따라온다 (merge 멱등)."""
+    root_a, root_b = roots
+    out = backup.export_archive(tmp_path / "e.tar.gz")
+
+    _patch_root(monkeypatch, root_b)
+    backup.import_archive(out, mode="merge")
+    assert documents.cas_path(DOC_SHA + ".pdf").read_bytes() == DOC_BODY
+    with db.connect() as conn:
+        snap = db.get_page(conn, URL_A)
+        assert snap is not None
+        row = conn.execute("SELECT * FROM snapshot_documents").fetchone()
+    assert row is not None and row["sha256"] == DOC_SHA and row["file"] == DOC_FILE
+
+    backup.import_archive(out, mode="merge")  # 멱등 — 행이 늘지 않는다
+    with db.connect() as conn:
+        n = conn.execute("SELECT COUNT(*) AS c FROM snapshot_documents").fetchone()["c"]
+    assert n == 1
+
+
+def test_import_rejects_bad_document_refs(roots, tmp_path, monkeypatch):
+    """archive.json 의 문서 참조가 형식 위반이면 거부 (path traversal)."""
+    root_a, root_b = roots
+    evil = tmp_path / "evil-doc.tar.gz"
+    manifest = {"kind": "archive", "format_version": 3, "created_at": "x", "counts": {}}
+    data = {
+        "pages": [], "snapshots": [], "checks": [],
+        "documents": [{
+            "page_url": URL_A, "dir_name": "2026-06-01T00-00-00",
+            "url": "x", "file": "../evil.pdf", "bytes": 1,
+            "sha256": DOC_SHA, "content_type": "application/pdf",
+        }],
+    }
+    src = tmp_path / "payload-doc"
+    src.mkdir()
+    (src / backup.MANIFEST_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+    (src / backup.ARCHIVE_DATA_NAME).write_text(json.dumps(data), encoding="utf-8")
+    with tarfile.open(evil, "w:gz") as tar:
+        tar.add(src / backup.MANIFEST_NAME, arcname=backup.MANIFEST_NAME)
+        tar.add(src / backup.ARCHIVE_DATA_NAME, arcname=backup.ARCHIVE_DATA_NAME)
+    _patch_root(monkeypatch, root_b)
+    with pytest.raises(ValueError, match="잘못된 문서 참조"):
+        backup.import_archive(evil)
 
 
 def test_restore_replaces_existing_data(roots, tmp_path, monkeypatch):

@@ -507,7 +507,8 @@ def _fmt_mb(n: int) -> str:
 @main.command()
 @click.option("--yes", is_flag=True, help="확인 없이 진행")
 def compact(yes: bool) -> None:
-    """기존 스냅샷 저장 공간 압축 — 공유 자원 추출 + HTML gzip + 스크린샷 WebP.
+    """기존 스냅샷 저장 공간 압축 — 공유 자원 추출 + HTML gzip + 스크린샷 WebP
+    + 문서 파일의 문서 CAS 이전(중복 제거).
 
     내용 보존 변환이라 스냅샷이 담는 정보는 그대로다 (불변 원칙의 유일한 예외).
     새 스냅샷은 저장 시점에 같은 형태로 압축되므로 한 번만 실행하면 된다.
@@ -523,7 +524,8 @@ def compact(yes: bool) -> None:
     if not yes:
         click.confirm(
             f"스냅샷 {targets}개의 파일을 압축 저장 형태(page.html.gz·"
-            "raw.html.gz·screenshot.webp + 공유 자원)로 변환합니다. 계속할까요?",
+            "raw.html.gz·screenshot.webp + 공유 자원 + 문서 CAS)로 "
+            "변환합니다. 계속할까요?",
             abort=True,
         )
 
@@ -531,6 +533,7 @@ def compact(yes: bool) -> None:
     click.echo(
         f"변환 {result.converted}/{result.total}개 · "
         f"공유 자원 {result.externalized}개 추출 · "
+        f"문서 {result.documents}개 이전 · "
         f"{_fmt_mb(result.before_bytes)} → {_fmt_mb(result.after_bytes)} "
         f"({_fmt_mb(result.saved_bytes)} 절약)"
     )

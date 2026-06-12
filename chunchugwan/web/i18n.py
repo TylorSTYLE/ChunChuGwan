@@ -262,6 +262,23 @@ _EN: dict[str, str] = {
     "문서명": "Document name",
     "형식": "Format",
     "메타데이터 없음": "Metadata not found",
+    # ---- 문서 목록 (documents) ----
+    "문서": "Documents",
+    "고유 문서 {n}개 · 저장 {size}": "{n} unique documents · {size} stored",
+    "중복 제거로 {saved} 절약": "{saved} saved by deduplication",
+    "아카이브된 페이지들이 링크한 문서 파일(PDF·워드·한글 등)의 통합 목록입니다. 같은 내용의 문서는 한 번만 저장되고 여러 스냅샷이 참조합니다.":
+        "All document files (PDF, Word, HWP, …) linked by archived pages in one "
+        "list. Identical documents are stored once and shared by every snapshot "
+        "that references them.",
+    "압축 전 스냅샷에 남아 있는 문서 파일이 있습니다 — 시스템 화면에서 저장 공간 압축을 실행하면 이 목록에 포함되고 중복이 제거됩니다.":
+        "Some documents are still stored inside pre-compaction snapshots — run "
+        "storage compaction from the System screen to include and deduplicate "
+        "them here.",
+    "출처 페이지": "Source page",
+    "참조 스냅샷": "Snapshots",
+    "마지막 저장": "Last saved",
+    "외 {n}곳": "+{n} more",
+    "아직 저장된 문서가 없습니다.": "No documents archived yet.",
     # ---- diff 뷰어 ----
     "비교": "Compare",
     "두 스냅샷의 정규화 텍스트가 같습니다.": "The normalized text of both snapshots is identical.",
@@ -315,11 +332,12 @@ _EN: dict[str, str] = {
     "저장 공간 압축": "Storage compaction",
     "대상 {n}개": "{n} pending",
     "대상 없음": "None pending",
-    "구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP)로 변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축됩니다.":
+    "구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP + 문서 파일 공유 저장소 이전)로 변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축됩니다.":
         "Converts legacy snapshots to the compact storage form (shared-resource "
-        "extraction + gzipped HTML + WebP screenshots). The conversion preserves "
-        "content — snapshots keep exactly the same information — and is idempotent, "
-        "so running it multiple times is safe. New snapshots are compacted on save.",
+        "extraction + gzipped HTML + WebP screenshots + moving document files to "
+        "the shared store). The conversion preserves content — snapshots keep "
+        "exactly the same information — and is idempotent, so running it multiple "
+        "times is safe. New snapshots are compacted on save.",
     "기존 스냅샷 파일을 압축 저장 형태로 변환합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?":
         "Convert existing snapshot files to the compact storage form? "
         "With many snapshots this can take a while.",
@@ -357,9 +375,10 @@ _EN: dict[str, str] = {
     "압축할 스냅샷이 없습니다.": "No snapshots to compact.",
     "스냅샷 {n}개 모두 이미 압축 형태입니다.": "All {n} snapshots are already in compact form.",
     "압축 실패: {e}": "Compaction failed: {e}",
-    "압축 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · {before} → {after} ({saved} 절약)":
+    "압축 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · 문서 {documents}개 이전 · {before} → {after} ({saved} 절약)":
         "Compaction finished: converted {converted}/{total} · extracted "
-        "{externalized} shared resources · {before} → {after} (saved {saved})",
+        "{externalized} shared resources · moved {documents} documents · "
+        "{before} → {after} (saved {saved})",
     "복원 실패: {e}": "Restore failed: {e}",
     "복원 완료 (백업: {created_at}, 페이지 {pages}개, 스냅샷 {snapshots}개)":
         "Restore complete (backup: {created_at}, {pages} pages, {snapshots} snapshots)",

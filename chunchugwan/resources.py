@@ -36,7 +36,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config
+from . import config, documents
 
 logger = logging.getLogger(__name__)
 
@@ -245,8 +245,10 @@ _LEGACY_NAMES = ("page.html", "raw.html", "screenshot.png")
 
 
 def needs_compaction(snap_dir: Path) -> bool:
-    """압축 변환이 필요한 구형 산출물이 남아 있는지."""
-    return any((snap_dir / name).is_file() for name in _LEGACY_NAMES)
+    """압축 변환이 필요한 구형 산출물(또는 files/ 의 구형 문서)이 남아 있는지."""
+    return any(
+        (snap_dir / name).is_file() for name in _LEGACY_NAMES
+    ) or documents.has_legacy_documents(snap_dir)
 
 
 def compactable_count() -> int:
@@ -272,6 +274,7 @@ class CompactRunResult:
     total: int = 0          # 대상 스냅샷 수
     converted: int = 0      # 이번 실행에서 변환된 스냅샷 수
     externalized: int = 0   # CAS 로 추출한 자원 수
+    documents: int = 0      # 문서 CAS 로 이전한 구형 files/ 문서 수
     before_bytes: int = 0
     after_bytes: int = 0    # CAS 에 새로 추가된 자원 용량 포함
 
@@ -284,8 +287,10 @@ def compact_all() -> CompactRunResult:
     """모든 확정 스냅샷에 압축 변환을 적용 (멱등).
 
     CLI(``wccg compact``)와 대시보드 시스템 메뉴가 공유하는 단일 진입점.
-    after_bytes 에는 추출 자원이 CAS 에 차지하는 증가분을 포함해 절약량이
-    과장되지 않게 한다. 변환이 있었으면 픽셀 diff 캐시를 비운다 —
+    스냅샷 산출물 변환에 더해 구형 files/ 문서를 문서 CAS 로 이전한다
+    (documents.compact_legacy_documents — 중복 내용은 한 번만 남는다).
+    after_bytes 에는 추출 자원·이전 문서가 CAS 에 차지하는 증가분을 포함해
+    절약량이 과장되지 않게 한다. 변환이 있었으면 픽셀 diff 캐시를 비운다 —
     스크린샷 형식이 바뀌어 어긋날 수 있고, 재생성 가능하다.
     """
     dirs = snapshot_dirs()
@@ -300,6 +305,10 @@ def compact_all() -> CompactRunResult:
         result.before_bytes += stats.before_bytes
         result.after_bytes += stats.after_bytes
     result.after_bytes += _tree_bytes(config.RESOURCES_DIR) - cas_before
+    doc_stats = documents.compact_legacy_documents()
+    result.documents = doc_stats.moved
+    result.before_bytes += doc_stats.before_bytes
+    result.after_bytes += doc_stats.after_bytes
     if result.converted:
         shutil.rmtree(config.CACHE_DIR, ignore_errors=True)
     return result

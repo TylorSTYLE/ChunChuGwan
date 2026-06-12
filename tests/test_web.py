@@ -1,12 +1,16 @@
 """대시보드 라우트 테스트. 캡처 없이 fixture 데이터로 검증."""
+import hashlib
 from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from chunchugwan import config, db, storage
+from chunchugwan import config, db, documents, storage
 from chunchugwan.web import app as web_app
+
+GUIDE_BODY = b"%PDF-1.4 cas fixture"
+GUIDE_SHA = hashlib.sha256(GUIDE_BODY).hexdigest()
 
 
 @pytest.fixture
@@ -17,6 +21,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
     monkeypatch.setattr(config, "AUTH_ENABLED", False)  # 인증은 test_auth.py 에서 검증
 
     url = "https://example.com/post"
@@ -43,10 +48,21 @@ def client(tmp_path, monkeypatch):
         db.insert_check(conn, page_id, storage.content_sha256(contents[1]))
 
     # 첫 스냅샷에는 함께 저장된 문서 파일 + documents 목록을 가진 meta.json
+    # — report 는 구형(files/), guide 는 신형(문서 CAS + snapshot_documents 행)
     snap1_dir = storage.page_dir(domain, slug) / dir_names[0]
     (snap1_dir / "files").mkdir()
     (snap1_dir / "files" / "report-12345678.pdf").write_bytes(b"%PDF-1.4 fixture")
     (snap1_dir / "files" / "unlisted.pdf").write_bytes(b"%PDF-1.4 manifest-bayuk")
+    cas_file = documents.cas_path(GUIDE_SHA + ".pdf")
+    cas_file.parent.mkdir(parents=True)
+    cas_file.write_bytes(GUIDE_BODY)
+    guide_entry = {
+        "url": "https://example.com/files/guide.pdf",
+        "file": "guide-aabbccdd.pdf", "bytes": len(GUIDE_BODY),
+        "sha256": GUIDE_SHA, "content_type": "application/pdf",
+    }
+    with db.connect() as conn:
+        db.insert_snapshot_documents(conn, 1, [guide_entry])
     storage.write_meta(snap1_dir, storage.SnapshotMeta(
         url=url, final_url=url, taken_at="2026-06-01T00:00:00+00:00",
         content_hash=storage.content_sha256(contents[0]), http_status=200,
@@ -54,7 +70,7 @@ def client(tmp_path, monkeypatch):
             "url": "https://example.com/files/report.pdf",
             "file": "report-12345678.pdf", "bytes": 16,
             "sha256": "ab" * 32, "content_type": "application/pdf",
-        }],
+        }, guide_entry],
     ))
 
     web_app._active_jobs.clear()  # 다른 테스트의 진행 목록 잔재 제거
@@ -196,6 +212,40 @@ def test_snapshot_document_rejects_unlisted_names(client):
     assert client.get("/snapshot/1/doc/..%2Fmeta.json").status_code == 404
     # meta.json 자체가 없는 스냅샷도 404
     assert client.get("/snapshot/2/doc/report-12345678.pdf").status_code == 404
+
+
+def test_snapshot_document_served_from_cas(client):
+    """files/ 에 없는 신형 문서는 snapshot_documents 행의 해시로 CAS 에서 서빙."""
+    res = client.get("/snapshot/1/doc/guide-aabbccdd.pdf")
+    assert res.status_code == 200
+    assert res.content == GUIDE_BODY
+    assert res.headers["content-type"].startswith("application/octet-stream")
+    assert "attachment" in res.headers["content-disposition"]
+    assert res.headers["content-security-policy"] == "sandbox"
+
+
+def test_documents_list_page(client):
+    """문서 통합 목록 — CAS 문서가 출처 페이지·참조 수와 함께 보인다."""
+    res = client.get("/documents")
+    assert res.status_code == 200
+    assert "guide-aabbccdd.pdf" in res.text
+    assert f"/document/{GUIDE_SHA}/guide-aabbccdd.pdf" in res.text
+    assert "https://example.com/post" in res.text  # 출처 페이지 링크
+    # 구형(files/) 문서가 남아 있어 압축 안내가 보인다
+    assert "저장 공간 압축" in res.text
+    # 헤더 메뉴에도 문서 링크가 있다
+    assert 'href="/documents"' in client.get("/").text
+
+
+def test_document_download_route(client):
+    """/document/{sha}/{file} — DB 에 기록된 조합만 CAS 에서 내려준다."""
+    ok = client.get(f"/document/{GUIDE_SHA}/guide-aabbccdd.pdf")
+    assert ok.status_code == 200 and ok.content == GUIDE_BODY
+    assert "attachment" in ok.headers["content-disposition"]
+    # 기록되지 않은 (해시, 이름) 조합·형식 위반은 404
+    assert client.get(f"/document/{GUIDE_SHA}/other-name.pdf").status_code == 404
+    assert client.get(f"/document/{'ab' * 32}/guide-aabbccdd.pdf").status_code == 404
+    assert client.get(f"/document/{GUIDE_SHA}/..%2F..%2Findex.db").status_code == 404
 
 
 def test_diff_default_latest_two(client):

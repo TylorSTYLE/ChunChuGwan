@@ -1,9 +1,10 @@
 """백업/복원. 전체 백업(tar.gz)과 아카이브 데이터 내보내기/가져오기.
 
-- 전체 백업(kind=full): index.db 일관 복사본 + sites/ + resources/ + rules.json.
-  복원은 아카이브 루트를 백업 시점 상태로 통째로 되돌린다 (인증 데이터 포함).
-- 아카이브 내보내기(kind=archive): pages/snapshots/checks 와 스냅샷 파일,
-  page.html.gz 가 참조하는 공유 자원(resources/)만.
+- 전체 백업(kind=full): index.db 일관 복사본 + sites/ + resources/ +
+  documents/ + rules.json. 복원은 아카이브 루트를 백업 시점 상태로 통째로
+  되돌린다 (인증 데이터 포함).
+- 아카이브 내보내기(kind=archive): pages/snapshots/checks/documents(문서
+  참조)와 스냅샷 파일, 공유 자원(resources/)·문서 CAS(documents/)만.
   가져오기는 merge(기존 유지 + 중복 스킵) / overwrite(아카이브 데이터 교체).
   인증 테이블(users 등)과 실행 로그(archive_logs)는 건드리지 않는다.
 
@@ -24,12 +25,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, db, resources, storage
+from . import config, db, documents, resources, storage
 
 # 2: 압축 저장 형태 도입 — 공유 자원 디렉토리(resources/) 포함,
 #    스냅샷 파일이 page.html.gz/raw.html.gz/screenshot.webp 일 수 있음.
-#    v1 백업/내보내기는 그대로 읽을 수 있다.
-FORMAT_VERSION = 2
+# 3: 문서 CAS 도입 — 문서 디렉토리(documents/)와 snapshot_documents 참조
+#    (archive.json 의 documents 목록) 포함.
+#    구버전 백업/내보내기는 그대로 읽을 수 있다.
+FORMAT_VERSION = 3
 MANIFEST_NAME = "manifest.json"
 ARCHIVE_DATA_NAME = "archive.json"
 
@@ -127,6 +130,8 @@ def create_backup(dest: Path) -> Path:
             tar.add(config.SITES_DIR, arcname="sites")
             if config.RESOURCES_DIR.is_dir():
                 tar.add(config.RESOURCES_DIR, arcname="resources")
+            if config.DOCUMENTS_DIR.is_dir():
+                tar.add(config.DOCUMENTS_DIR, arcname="documents")
     return out
 
 
@@ -159,10 +164,13 @@ def restore_backup(src: Path) -> dict:
         else:
             config.SITES_DIR.mkdir(parents=True, exist_ok=True)
 
-        # 공유 자원도 백업 시점 상태로 — 백업에 없으면(v1) 비워서 일관성 유지
+        # 공유 자원·문서 CAS 도 백업 시점 상태로 — 백업에 없으면 비워서 일관성 유지
         shutil.rmtree(config.RESOURCES_DIR, ignore_errors=True)
         if (tmp / "resources").is_dir():
             shutil.move(tmp / "resources", config.RESOURCES_DIR)
+        shutil.rmtree(config.DOCUMENTS_DIR, ignore_errors=True)
+        if (tmp / "documents").is_dir():
+            shutil.move(tmp / "documents", config.DOCUMENTS_DIR)
 
         config.RULES_PATH.unlink(missing_ok=True)
         if (tmp / "rules.json").is_file():
@@ -211,6 +219,25 @@ def export_archive(dest: Path) -> Path:
                 """
             )
         ]
+        # 문서 참조 — 스냅샷은 (page_url, dir_name)으로 식별한다
+        doc_rows = [
+            {
+                k: r[k]
+                for k in (
+                    "page_url", "dir_name", "url", "file", "bytes",
+                    "sha256", "content_type",
+                )
+            }
+            for r in conn.execute(
+                """
+                SELECT d.*, s.dir_name, p.url AS page_url
+                FROM snapshot_documents d
+                JOIN snapshots s ON s.id = d.snapshot_id
+                JOIN pages p ON p.id = s.page_id
+                ORDER BY d.id
+                """
+            )
+        ]
         counts = _archive_counts(conn)
 
     manifest = {
@@ -219,7 +246,10 @@ def export_archive(dest: Path) -> Path:
         "created_at": _utcnow(),
         "counts": counts,
     }
-    data = {"pages": pages, "snapshots": snapshots, "checks": checks}
+    data = {
+        "pages": pages, "snapshots": snapshots, "checks": checks,
+        "documents": doc_rows,
+    }
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         (tmp / MANIFEST_NAME).write_text(
@@ -238,9 +268,11 @@ def export_archive(dest: Path) -> Path:
                         snap_dir,
                         arcname=f"sites/{s['domain']}/{s['slug']}/{s['dir_name']}",
                     )
-            # 모든 스냅샷을 내보내므로 공유 자원도 전량 포함한다
+            # 모든 스냅샷을 내보내므로 공유 자원·문서 CAS 도 전량 포함한다
             if config.RESOURCES_DIR.is_dir():
                 tar.add(config.RESOURCES_DIR, arcname="resources")
+            if config.DOCUMENTS_DIR.is_dir():
+                tar.add(config.DOCUMENTS_DIR, arcname="documents")
     return out
 
 
@@ -267,6 +299,14 @@ def _validate_archive_data(data: dict) -> None:
         for key in ("page_url", "taken_at", "content_hash", "final_url"):
             if not s.get(key):
                 raise ValueError(f"스냅샷에 {key} 가 없습니다: {s.get('dir_name')!r}")
+    # documents 는 v3 부터 — 없으면(구버전) 빈 목록으로 취급
+    for d in data.get("documents") or []:
+        fname = str(d.get("file") or "")
+        sha = str(d.get("sha256") or "")
+        if documents.cas_name(sha, fname) is None or Path(fname).name != fname:
+            raise ValueError(f"잘못된 문서 참조: {sha!r}/{fname!r}")
+        if not (d.get("page_url") and _DIR_NAME_RE.match(str(d.get("dir_name", "")))):
+            raise ValueError(f"문서 참조의 스냅샷 식별자가 잘못됐습니다: {fname!r}")
 
 
 def _wipe_archive_data(conn: sqlite3.Connection) -> None:
@@ -281,6 +321,7 @@ def _wipe_archive_data(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM crawl_pages")
     conn.execute("DELETE FROM crawls")
     conn.execute("DELETE FROM schedules")
+    conn.execute("DELETE FROM snapshot_documents")
     conn.execute("DELETE FROM checks")
     conn.execute("DELETE FROM snapshots")
     conn.execute("DELETE FROM pages")
@@ -288,6 +329,7 @@ def _wipe_archive_data(conn: sqlite3.Connection) -> None:
         for child in config.SITES_DIR.iterdir():
             shutil.rmtree(child) if child.is_dir() else child.unlink()
     shutil.rmtree(config.RESOURCES_DIR, ignore_errors=True)
+    shutil.rmtree(config.DOCUMENTS_DIR, ignore_errors=True)
     shutil.rmtree(config.CACHE_DIR, ignore_errors=True)
 
 
@@ -302,6 +344,19 @@ def _merge_resources(src_root: Path) -> None:
         if not (f.is_file() and resources.is_valid_name(f.name)):
             continue
         dst = resources.resource_path(f.name)
+        if not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(f, dst)
+
+
+def _merge_documents(src_root: Path) -> None:
+    """가져온 문서 CAS 파일 병합 (documents.is_valid_cas_name — path traversal)."""
+    if not src_root.is_dir():
+        return
+    for f in src_root.glob("*/*"):
+        if not (f.is_file() and documents.is_valid_cas_name(f.name)):
+            continue
+        dst = documents.cas_path(f.name)
         if not dst.exists():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(f, dst)
@@ -336,6 +391,7 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                 _wipe_archive_data(conn)
 
             _merge_resources(tmp / "resources")
+            _merge_documents(tmp / "documents")
 
             # 페이지: URL 매칭. 기존 페이지가 있으면 그 domain/slug 를 따른다.
             page_ids: dict[str, int] = {}
@@ -354,18 +410,20 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     page_ids[p["url"]] = row["id"]
                     page_paths[p["url"]] = (row["domain"], row["slug"])
 
+            snap_ids: dict[tuple[str, str], int] = {}
             for s in data["snapshots"]:
                 page_id = page_ids.get(s["page_url"])
                 if page_id is None:
                     raise ValueError(f"pages 에 없는 URL 을 참조하는 스냅샷: {s['page_url']!r}")
                 dup = conn.execute(
-                    "SELECT 1 FROM snapshots WHERE page_id = ? AND dir_name = ?",
+                    "SELECT id FROM snapshots WHERE page_id = ? AND dir_name = ?",
                     (page_id, s["dir_name"]),
                 ).fetchone()
                 if dup is not None:
+                    snap_ids[(s["page_url"], s["dir_name"])] = dup["id"]
                     result.snapshots_skipped += 1
                     continue
-                db.insert_snapshot(
+                snap_ids[(s["page_url"], s["dir_name"])] = db.insert_snapshot(
                     conn, page_id,
                     taken_at=s["taken_at"], dir_name=s["dir_name"],
                     content_hash=s["content_hash"], final_url=s["final_url"],
@@ -395,4 +453,17 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                         (page_id, c["checked_at"], c["content_hash"]),
                     )
                     result.checks_added += 1
+
+            # 문서 참조 — 대상 스냅샷이 있는 행만, 중복은 무시 (멱등)
+            for d in data.get("documents") or []:
+                snapshot_id = snap_ids.get((d["page_url"], d["dir_name"]))
+                if snapshot_id is None:
+                    continue
+                db.insert_snapshot_documents(conn, snapshot_id, [{
+                    "url": d.get("url") or "",
+                    "file": d["file"],
+                    "bytes": int(d.get("bytes") or 0),
+                    "sha256": d["sha256"],
+                    "content_type": d.get("content_type") or "application/octet-stream",
+                }])
     return result

@@ -16,6 +16,7 @@ def _patch_root(monkeypatch, root):
     monkeypatch.setattr(config, "DB_PATH", root / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", root / "cache")
     monkeypatch.setattr(config, "RESOURCES_DIR", root / "resources")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", root / "documents")
     monkeypatch.setattr(config, "RULES_PATH", root / "rules.json")
 
 

@@ -1,10 +1,12 @@
-"""아카이브 삭제 — DB 정합성(changed 재계산·로그 보존), 파일/캐시 정리, 라우트 가드."""
+"""아카이브 삭제 — DB 정합성(changed 재계산·로그 보존), 파일/캐시 정리,
+문서 CAS GC, 라우트 가드."""
+import hashlib
 import json
 
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import auth, config, db, deletion, differ, storage
+from chunchugwan import auth, config, db, deletion, differ, documents, storage
 from chunchugwan.web import app as web_app
 
 URL = "https://example.com/post"
@@ -21,6 +23,7 @@ def archive(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
 
     slug = storage.url_to_slug(URL)
     with db.connect() as conn:
@@ -157,6 +160,69 @@ def test_delete_path_parts_validated(archive):
         storage.delete_snapshot_dir(DOMAIN, archive["slug"], "../evil")
     with pytest.raises(ValueError):
         storage.delete_page_dir("..", archive["slug"])
+
+
+# ---- 문서 CAS GC ----
+
+
+def _attach_document(snapshot_id: int, body: bytes, file: str) -> str:
+    """스냅샷에 문서 참조 행 + CAS 파일을 붙이고 sha256 반환."""
+    sha = hashlib.sha256(body).hexdigest()
+    name = documents.cas_name(sha, file)
+    path = documents.cas_path(name)
+    if not path.is_file():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+    with db.connect() as conn:
+        db.insert_snapshot_documents(conn, snapshot_id, [{
+            "url": f"https://example.com/{file}", "file": file,
+            "bytes": len(body), "sha256": sha,
+            "content_type": "application/pdf",
+        }])
+    return sha
+
+
+def test_delete_snapshot_keeps_shared_document(archive):
+    """다른 스냅샷이 같은 문서를 참조하면 CAS 파일은 남는다."""
+    snaps = _snaps(archive["page_id"])
+    body = b"%PDF shared"
+    sha = _attach_document(snaps[0]["id"], body, "report-11111111.pdf")
+    _attach_document(snaps[1]["id"], body, "report-11111111.pdf")
+
+    deletion.delete_snapshot(snaps[0]["id"])
+    assert documents.cas_path(sha + ".pdf").is_file()
+    with db.connect() as conn:
+        assert db.get_snapshot_document(conn, snaps[0]["id"], "report-11111111.pdf") is None
+        assert db.get_snapshot_document(conn, snaps[1]["id"], "report-11111111.pdf") is not None
+
+    # 마지막 참조 스냅샷까지 지우면 CAS 파일도 삭제된다
+    deletion.delete_snapshot(snaps[1]["id"])
+    assert not documents.cas_path(sha + ".pdf").exists()
+
+
+def test_delete_page_garbage_collects_documents(archive):
+    """페이지 삭제 시 그 페이지만 참조하던 문서 CAS 파일이 정리된다."""
+    snaps = _snaps(archive["page_id"])
+    sha_a = _attach_document(snaps[0]["id"], b"%PDF only-here", "a-22222222.pdf")
+    sha_b = _attach_document(snaps[1]["id"], b"%PDF elsewhere", "b-33333333.pdf")
+
+    # 다른 페이지의 스냅샷이 b 문서를 함께 참조한다
+    with db.connect() as conn:
+        other_page = db.get_or_create_page(
+            conn, "https://other.com/", "other.com", "root-deadbeef"
+        )
+        other_snap = db.insert_snapshot(
+            conn, other_page, taken_at="2026-06-05T00:00:00+00:00",
+            dir_name="2026-06-05T00-00-00", content_hash="x",
+            final_url="https://other.com/", http_status=200, changed=1,
+        )
+    _attach_document(other_snap, b"%PDF elsewhere", "b-33333333.pdf")
+
+    deletion.delete_page(archive["page_id"])
+    assert not documents.cas_path(sha_a + ".pdf").exists()   # 참조 0 → 삭제
+    assert documents.cas_path(sha_b + ".pdf").is_file()       # 잔존 참조 → 유지
+    with db.connect() as conn:
+        assert db.get_snapshot_document(conn, other_snap, "b-33333333.pdf") is not None
 
 
 # ---- 웹 라우트 (인증 off — loopback 전부 허용) ----
