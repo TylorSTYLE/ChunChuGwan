@@ -6,7 +6,6 @@ requires-python = ">=3.12"
 dependencies = [
     "click>=8.1",
     "playwright>=1.44",
-    "trafilatura>=1.9",
     "lxml>=5.0",
     "fastapi>=0.111",
     "uvicorn>=0.30",
