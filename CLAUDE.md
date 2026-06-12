@@ -232,6 +232,13 @@ archive/
 - 네트워크 요청에는 타임아웃 필수 (페이지 로드 기본 30s)
 - 새 기능 = 해당 테스트 추가. 네트워크 의존 테스트는 로컬 fixture HTML 사용
 - 커밋은 기능 단위로 작게
+- **PR 생성 시 버전 라벨 필수.** 변경 성격에 맞는 `release:*` 라벨을 하나
+  붙인다 (`gh pr edit <번호> --add-label release:minor`). 머지되면
+  `.github/workflows/release.yml` 이 라벨로 다음 버전을 결정해 pyproject.toml·
+  uv.lock 갱신 + `vX.Y.Z` 태그 + GitHub Release 를 자동 등록한다 (semver:
+  호환 깨짐=major, 기능 추가=minor, 버그수정·문서·리팩터=patch). 버전을
+  올릴 필요가 없으면 라벨을 생략한다 — 릴리스가 스킵된다. 버전 출처는
+  설치 메타데이터(`chunchugwan.__version__` / `wccg --version`)
 
 ## 대시보드 디자인 방향
 

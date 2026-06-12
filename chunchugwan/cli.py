@@ -9,6 +9,7 @@ from pathlib import Path
 
 import click
 
+from . import __version__
 from . import backup as backup_mod
 from . import capture as capture_mod
 from . import worker as worker_mod
@@ -21,6 +22,7 @@ _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(�
 
 
 @click.group()
+@click.version_option(__version__, "-V", "--version", message="춘추관 %(version)s")
 @click.option("-v", "--verbose", is_flag=True, help="단계별 상세 로그를 stderr 로 출력")
 def main(verbose: bool) -> None:
     """춘추관 — 개인 웹 아카이빙 시스템."""
