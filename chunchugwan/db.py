@@ -1637,6 +1637,52 @@ def list_site_snapshot_dirs(
     ).fetchall()
 
 
+def list_site_failed_logs(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트 소속 페이지 중 최근 실행이 실패인 로그 목록 (+ 페이지 url, 최신 순).
+
+    URL 별 최신 archive_logs 행이 status='error' 인 것만 — 이후 실행이
+    성공하면 최신 행이 바뀌어 목록에서 자연히 사라진다. 페이지 행이 생기기
+    전에 실패한 신규 URL(page_id NULL)은 소속 사이트를 알 수 없어 포함하지
+    않는다 (크롤 중 실패한 신규 URL 은 크롤 진행 화면이 보여준다).
+    """
+    return conn.execute(
+        """
+        SELECT al.*, p.url AS page_url
+        FROM archive_logs al
+        JOIN pages p ON p.id = al.page_id
+        JOIN (
+            SELECT al2.url AS url, MAX(al2.id) AS max_id
+            FROM archive_logs al2
+            JOIN pages p2 ON p2.id = al2.page_id
+            WHERE p2.site_id = ?
+            GROUP BY al2.url
+        ) last ON al.id = last.max_id
+        WHERE al.status = 'error'
+        ORDER BY al.started_at DESC, al.id DESC
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def get_site_failed_log(
+    conn: sqlite3.Connection, site_id: int, log_id: int
+) -> sqlite3.Row | None:
+    """사이트 소속 실패 로그 행 조회 (+ 페이지 url) — 재시도 검증용.
+
+    소속이 아니거나 실패 로그가 아니면 None.
+    """
+    return conn.execute(
+        """
+        SELECT al.*, p.url AS page_url
+        FROM archive_logs al JOIN pages p ON p.id = al.page_id
+        WHERE al.id = ? AND p.site_id = ? AND al.status = 'error'
+        """,
+        (log_id, site_id),
+    ).fetchone()
+
+
 def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
     """사이트 소속 크롤 회차 목록 (최신 순) + 상태별 페이지 수 집계."""
     return conn.execute(

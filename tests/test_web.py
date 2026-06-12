@@ -155,6 +155,68 @@ def test_index_and_site_show_title(client):
     assert "픽스처 글" in client.get(f"/sites/{site['id']}").text
 
 
+def _insert_log(status: str, *, started_at: str, error: str | None = None) -> int:
+    """fixture 페이지(1)의 아카이브 로그 한 행 삽입 (실패 목록 테스트용)."""
+    with db.connect() as conn:
+        return db.insert_archive_log(
+            conn, url="https://example.com/post", domain="example.com",
+            page_id=1, source="web", status=status,
+            started_at=started_at, duration_ms=100, error=error,
+        )
+
+
+def test_site_failed_jobs_listed(client):
+    """최근 실행이 실패인 페이지는 실패한 작업 목록에 보인다."""
+    log_id = _insert_log(
+        "error", started_at="2026-06-03T00:00:00+00:00", error="TimeoutError: 캡처 실패"
+    )
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert "실패한 작업" in res.text
+    assert "TimeoutError: 캡처 실패" in res.text
+    assert f"/sites/{site['id']}/failed/{log_id}/retry" in res.text
+
+
+def test_site_failed_jobs_cleared_after_success(client):
+    """실패 이후 성공 실행이 생기면 (재시도 성공) 실패 목록에서 사라진다."""
+    _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
+    _insert_log("changed", started_at="2026-06-04T00:00:00+00:00")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert "실패한 작업" not in res.text
+    assert "boom" not in res.text
+
+
+def test_site_failed_retry_queues_archive(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": calls.append(url),
+    )
+    log_id = _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.post(
+        f"/sites/{site['id']}/failed/{log_id}/retry", follow_redirects=False
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith(f"/sites/{site['id']}?notice=")
+    assert calls == ["https://example.com/post"]
+
+
+def test_site_failed_retry_unknown_log(client):
+    """없는 로그·실패가 아닌 로그·다른 사이트의 로그는 404."""
+    ok_id = _insert_log("changed", started_at="2026-06-04T00:00:00+00:00")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert client.post(f"/sites/{site['id']}/failed/999/retry").status_code == 404
+    assert client.post(f"/sites/{site['id']}/failed/{ok_id}/retry").status_code == 404
+    err_id = _insert_log("error", started_at="2026-06-05T00:00:00+00:00", error="x")
+    assert client.post(f"/sites/999/failed/{err_id}/retry").status_code == 404
+
+
 def test_root_serves_dashboard(client):
     """첫 페이지(/)는 현황 화면이고, 목록은 /archives 에 있다."""
     res = client.get("/")

@@ -407,6 +407,7 @@ def site_view(
         schedules = db.list_site_schedules(conn, site_id)
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
         certificates = db.list_site_certificates(conn, site_id)
+        failed_logs = db.list_site_failed_logs(conn, site_id)
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
         for s in schedules
@@ -452,6 +453,7 @@ def site_view(
         {
             "site": site, "pages": pages, "crawls": crawls,
             "site_title": _site_title(snap_dirs),
+            "failed_logs": failed_logs,
             "schedule_labels": schedule_labels,
             "crawl_schedules": crawl_schedule_labels,
             "page_count": totals["page_count"],
@@ -466,6 +468,26 @@ def site_view(
             "error": error, "notice": notice,
         },
     )
+
+
+@app.post("/sites/{site_id}/failed/{log_id}/retry")
+def site_failed_retry(
+    request: Request, site_id: int, log_id: int, background: BackgroundTasks
+):
+    """실패한 작업 재시도 — 해당 페이지를 백그라운드로 재아카이빙. admin/archiver 전용.
+
+    성공하면 그 URL 의 최신 로그가 성공으로 바뀌어 실패 목록에서 사라진다.
+    """
+    _require_archiver(request)
+    with db.connect() as conn:
+        log = db.get_site_failed_log(conn, site_id, log_id)
+    if log is None:
+        raise HTTPException(404, t(request, "실패 기록 없음"))
+    if _queue_archive(background, log["page_url"]):
+        params = {"notice": t(request, "아카이빙이 백그라운드에서 시작되었습니다")}
+    else:
+        params = {"error": t(request, _BUSY_MSG)}
+    return RedirectResponse(f"/sites/{site_id}?{urlencode(params)}", status_code=303)
 
 
 @app.get("/sites/{site_id}/certificates/{cert_id}.pem")
