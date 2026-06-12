@@ -79,6 +79,13 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 </table>
 <div class="pager">
   <span class="muted">{{ _("총 {n}건", n=page_count) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
+  <form class="inline" method="get" action="/sites/{{ site['id'] }}">
+    <select name="per_page" aria-label="{{ _('표시 줄 수') }}" onchange="this.form.submit()">
+      {% for n in per_page_choices %}
+      <option value="{{ n }}" {% if n == per_page %}selected{% endif %}>{{ _("{n}줄", n=n) }}</option>
+      {% endfor %}
+    </select>
+  </form>
   <span class="spacer"></span>
   {% if prev_url %}<a href="{{ prev_url }}">&larr; {{ _("이전") }}</a>{% endif %}
   {% if next_url %}<a href="{{ next_url }}">{{ _("다음") }} &rarr;</a>{% endif %}
@@ -87,10 +94,10 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 <p class="muted">{{ _("아직 페이지가 없습니다 — 크롤이 진행되면 여기에 쌓입니다.") }}</p>
 {% endif %}
 
-{% if failed_logs %}
+{% if failed_logs or failed_crawl_pages %}
 <h3>{{ _("실패한 작업") }}</h3>
 <p class="muted" style="font-size:13px">
-  {{ _("최근 실행이 실패로 끝난 페이지입니다. 재시도가 성공하면 목록에서 사라집니다.") }}
+  {{ _("최근 실행이 실패로 끝난 페이지입니다. 크롤 중 실패한 페이지도 포함되며, 재시도가 성공하면 목록에서 사라집니다.") }}
 </p>
 <table id="failed">
   <thead>
@@ -108,6 +115,21 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
         <span class="badge running">{{ _("아카이빙 중") }}</span>
         {% elif can_archive %}
         <form class="inline" method="post" action="/sites/{{ site['id'] }}/failed/{{ f['id'] }}/retry">
+          <button type="submit">{{ _("재시도", ctx="action") }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  {% for f in failed_crawl_pages %}
+    <tr>
+      <td class="mono" title="{{ f['url'] }}">{{ f['url'] }}</td>
+      <td class="mono">{% if f['failed_at'] %}{{ f['failed_at'] | ts }}{% else %}-{% endif %}</td>
+      <td class="mono muted"><a href="/crawls/{{ f['crawl_id'] }}">crawl</a></td>
+      <td class="error-cell mono" title="{{ f['error'] }}">{{ f['error'] or '-' }}</td>
+      <td>
+        {% if can_archive %}
+        <form class="inline" method="post" action="/sites/{{ site['id'] }}/crawl-failed/{{ f['id'] }}/retry">
           <button type="submit">{{ _("재시도", ctx="action") }}</button>
         </form>
         {% endif %}

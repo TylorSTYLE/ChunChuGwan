@@ -206,6 +206,138 @@ def test_site_failed_retry_queues_archive(client, monkeypatch):
     assert calls == ["https://example.com/post"]
 
 
+def _insert_failed_crawl_page(
+    url: str, *, error: str = "CrawlError: 캡처 실패"
+) -> tuple[int, int]:
+    """example.com 크롤 1개 + failed 크롤 페이지 1개 삽입. (crawl_id, cp_id) 반환."""
+    with db.connect() as conn:
+        crawl_id = db.insert_crawl(
+            conn, start_url="https://example.com/", scope_host="example.com",
+            scope_path="/", max_pages=10, max_depth=2, delay_seconds=0, source="web",
+        )
+        db.insert_crawl_page(conn, crawl_id, url, 1)
+        cp_id = conn.execute(
+            "SELECT id FROM crawl_pages WHERE crawl_id = ? AND url = ?",
+            (crawl_id, url),
+        ).fetchone()["id"]
+        db.fail_crawl_page(conn, cp_id, attempts=3, error=error, next_attempt_at=None)
+        db.finish_crawl_if_done(conn, crawl_id)
+    return crawl_id, cp_id
+
+
+def test_site_failed_crawl_pages_listed(client):
+    """페이지 행이 없는 크롤 실패 URL 도 실패한 작업 목록에 보인다."""
+    _, cp_id = _insert_failed_crawl_page("https://example.com/broken")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert "실패한 작업" in res.text
+    assert "https://example.com/broken" in res.text
+    assert "CrawlError: 캡처 실패" in res.text
+    assert f"/sites/{site['id']}/crawl-failed/{cp_id}/retry" in res.text
+
+
+def test_site_failed_crawl_page_cleared_after_later_crawl_success(client):
+    """이후 크롤에서 같은 URL 이 성공하면 (URL 별 최신 행) 목록에서 사라진다."""
+    _insert_failed_crawl_page("https://example.com/broken")
+    with db.connect() as conn:
+        crawl2 = db.insert_crawl(
+            conn, start_url="https://example.com/", scope_host="example.com",
+            scope_path="/", max_pages=10, max_depth=2, delay_seconds=0, source="web",
+        )
+        db.insert_crawl_page(conn, crawl2, "https://example.com/broken", 1)
+        cp2 = conn.execute(
+            "SELECT id FROM crawl_pages WHERE crawl_id = ? AND url = ?",
+            (crawl2, "https://example.com/broken"),
+        ).fetchone()["id"]
+        db.finish_crawl_page(conn, cp2, None)
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert "https://example.com/broken" not in res.text
+
+
+def test_site_failed_crawl_page_cleared_after_direct_archive(client):
+    """크롤 실패 후 직접 아카이빙이 성공한 URL(최신 로그가 성공)은 제외된다."""
+    _insert_failed_crawl_page("https://example.com/broken")
+    with db.connect() as conn:
+        db.insert_archive_log(
+            conn, url="https://example.com/broken", domain="example.com",
+            source="web", status="changed",
+            started_at="2026-06-05T00:00:00+00:00", duration_ms=100,
+        )
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert "https://example.com/broken" not in res.text
+
+
+def test_site_failed_crawl_page_not_duplicated_with_failed_log(client):
+    """페이지 행이 있어 실패한 작업 목록에 이미 있는 URL 은 크롤 실패로 또 안 보인다."""
+    _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
+    _, cp_id = _insert_failed_crawl_page("https://example.com/post")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert f"/sites/{site['id']}/crawl-failed/{cp_id}/retry" not in res.text
+    assert res.text.count("https://example.com/post</a>") >= 1
+
+
+def test_site_crawl_failed_retry(client):
+    """크롤 실패 재시도 — 큐로 돌아가고(pending) 끝난 크롤은 다시 열린다."""
+    crawl_id, cp_id = _insert_failed_crawl_page("https://example.com/broken")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+        assert db.get_crawl(conn, crawl_id)["status"] == "done"
+    res = client.post(
+        f"/sites/{site['id']}/crawl-failed/{cp_id}/retry", follow_redirects=False
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith(f"/sites/{site['id']}?notice=")
+    with db.connect() as conn:
+        cp = conn.execute(
+            "SELECT * FROM crawl_pages WHERE id = ?", (cp_id,)
+        ).fetchone()
+        crawl = db.get_crawl(conn, crawl_id)
+    assert cp["status"] == "pending"
+    assert cp["attempts"] == 0 and cp["error"] is None
+    assert crawl["status"] == "running" and crawl["finished_at"] is None
+
+
+def test_site_crawl_failed_retry_unknown(client):
+    """없는 행·실패가 아닌 행·다른 사이트의 행은 404."""
+    _, cp_id = _insert_failed_crawl_page("https://example.com/broken")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert client.post(f"/sites/{site['id']}/crawl-failed/999/retry").status_code == 404
+    assert client.post(f"/sites/999/crawl-failed/{cp_id}/retry").status_code == 404
+    # 재시도로 pending 이 된 행은 더는 재시도 대상이 아니다
+    client.post(f"/sites/{site['id']}/crawl-failed/{cp_id}/retry")
+    assert (
+        client.post(f"/sites/{site['id']}/crawl-failed/{cp_id}/retry").status_code
+        == 404
+    )
+
+
+def test_site_pages_per_page_choices(client):
+    """페이지 목록 표시 개수 — 기본 25, 25/50/75/100/200 중 선택, 허용 밖은 25."""
+    with db.connect() as conn:
+        for i in range(51):
+            u = f"https://example.com/extra-{i:02d}"
+            db.get_or_create_page(conn, u, "example.com", storage.url_to_slug(u))
+        site = db.get_site_by_key(conn, "example.com")
+    # 52개 → 기본 25개씩 3페이지. 1페이지 = post + extra-00..23
+    page1 = client.get(f"/sites/{site['id']}")
+    assert "1/3 페이지" in page1.text
+    assert 'name="per_page"' in page1.text
+    assert "extra-23" in page1.text and "extra-24" not in page1.text
+    # 50개씩이면 2페이지, 페이징 링크가 표시 개수를 유지한다
+    big = client.get(f"/sites/{site['id']}?per_page=50")
+    assert "1/2 페이지" in big.text
+    assert "extra-48" in big.text
+    assert f"/sites/{site['id']}?page=2&amp;per_page=50" in big.text
+    # 허용 밖 값은 기본(25)으로 보정
+    assert "1/3 페이지" in client.get(f"/sites/{site['id']}?per_page=33").text
+
+
 def test_site_failed_retry_unknown_log(client):
     """없는 로그·실패가 아닌 로그·다른 사이트의 로그는 404."""
     ok_id = _insert_log("changed", started_at="2026-06-04T00:00:00+00:00")
