@@ -148,12 +148,15 @@ def system_compact(request: Request):
         notice=t(
             request,
             "최적화 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · "
-            "문서 {documents}개 이전 · 참조 백필 {indexed}개 · 고아 자원 {swept}개 정리 "
-            "({saved} 절약)",
+            "문서 {documents}개 이전 · 공통 스타일 {styles}개 추출(스냅샷 {styled}개) · "
+            "참조 백필 {indexed}개 · 고아 자원 {swept}개 정리 ({saved} 절약)",
             converted=c.converted, total=c.total,
             externalized=c.externalized, documents=c.documents,
+            styles=result.styles_extracted, styled=result.styles_snapshots,
             indexed=result.indexed, swept=result.swept,
-            saved=filesize(c.saved_bytes + result.swept_bytes),
+            saved=filesize(
+                c.saved_bytes + result.styles_saved_bytes + result.swept_bytes
+            ),
         )
     )
 

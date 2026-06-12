@@ -107,7 +107,50 @@ def test_sweep_skipped_until_backfill_complete(archive_env):
 
 def test_pending_counts(archive_env):
     _seed_snapshot("<html></html>")
-    compactable, unindexed = optimize.pending_counts()
-    assert (compactable, unindexed) == (0, 1)
+    compactable, css_pending, unindexed = optimize.pending_counts()
+    assert (compactable, css_pending, unindexed) == (0, 1, 1)
     optimize.run()
-    assert optimize.pending_counts() == (0, 0)
+    assert optimize.pending_counts() == (0, 0, 0)
+
+
+# ---- 인라인 <style> 추출 ----
+
+
+def test_styles_externalized_from_gz(archive_env, monkeypatch):
+    monkeypatch.setattr(config, "RESOURCE_MIN_BYTES", 16)
+    css = "body { color: #000; font-size: 14px; }"
+    snap_id = _seed_snapshot(f"<html><style>{css}</style>본문</html>")
+
+    result = optimize.run()
+    assert result.styles_snapshots == 1
+    assert result.styles_extracted == 1
+
+    name = hashlib.sha256(css.encode()).hexdigest() + ".css"
+    snap_dir = (
+        storage.page_dir("example.com", storage.url_to_slug(URL))
+        / "2026-06-01T00-00-00"
+    )
+    html = gzip.decompress((snap_dir / "page.html.gz").read_bytes()).decode("utf-8")
+    assert f'<link rel="stylesheet" href="/resource/{name}">' in html
+    assert "<style" not in html and "본문" in html
+    assert gzip.decompress(resources.resource_path(name).read_bytes()) == css.encode()
+
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT snapshot_id, name FROM snapshot_resources"
+        ).fetchall()
+        assert (snap_id, name) in [(r["snapshot_id"], r["name"]) for r in rows]
+        assert db.count_css_pending_snapshots(conn) == 0
+
+    # 참조된 스타일 자원은 sweep 에서 살아남고, 두 번째 실행은 대상이 없다
+    assert resources.resource_path(name).is_file()
+    again = optimize.run()
+    assert again.styles_snapshots == 0 and again.styles_extracted == 0
+
+
+def test_styles_pass_marks_snapshot_without_extractable(archive_env):
+    _seed_snapshot("<html>스타일 없음</html>")  # 추출할 블록 없음
+    result = optimize.run()
+    assert result.styles_snapshots == 0
+    with db.connect() as conn:
+        assert db.count_css_pending_snapshots(conn) == 0  # 그래도 완료 표시

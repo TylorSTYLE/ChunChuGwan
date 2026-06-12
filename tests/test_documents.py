@@ -253,6 +253,39 @@ def test_ingest_into_cas_dedupes(tmp_path, monkeypatch):
     assert stored[0].read_bytes() == b"same-bytes"
 
 
+def test_ingest_into_cas_cross_device(tmp_path, monkeypatch):
+    """스테이징과 아카이브가 다른 파일시스템이면(EXDEV) 복사 폴백으로 저장된다."""
+    import errno
+    import os
+    from pathlib import Path
+
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
+    real_replace = os.replace
+
+    def fake_replace(src, dst):
+        # 스테이징 → CAS 직접 이동만 실패시킨다 (폴백의 같은 디렉토리 교체는 통과)
+        if Path(src).parent != Path(dst).parent:
+            raise OSError(errno.EXDEV, "Invalid cross-device link", str(src))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(documents.os, "replace", fake_replace)
+    files_dir = tmp_path / "tmp" / "files"
+    files_dir.mkdir(parents=True)
+    (files_dir / "doc-aaaaaaaa.pdf").write_bytes(b"cross-device")
+    sha = hashlib.sha256(b"cross-device").hexdigest()
+    manifest = [{
+        "url": "https://example.com/doc.pdf",
+        "file": "doc-aaaaaaaa.pdf", "bytes": 12,
+        "sha256": sha, "content_type": "application/pdf",
+    }]
+    documents.ingest_into_cas(files_dir, manifest)
+    assert len(manifest) == 1
+    assert not files_dir.exists()
+    stored = documents.cas_path(sha + ".pdf")
+    assert stored.read_bytes() == b"cross-device"
+    assert list(stored.parent.glob("*.tmp")) == []  # 임시 파일 잔재 없음
+
+
 def test_delete_cas_removes_file(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
     sha = hashlib.sha256(b"bytes").hexdigest()

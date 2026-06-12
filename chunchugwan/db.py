@@ -86,8 +86,10 @@ CREATE TABLE IF NOT EXISTS snapshots (
     http_status   INTEGER,
     changed       INTEGER NOT NULL DEFAULT 1,  -- 직전 스냅샷 대비 변경 여부
     note          TEXT,
-    resources_indexed INTEGER NOT NULL DEFAULT 0  -- 자원 참조(snapshot_resources) 기록 여부.
+    resources_indexed INTEGER NOT NULL DEFAULT 0, -- 자원 참조(snapshot_resources) 기록 여부.
                                                   --   0 이면 저장공간 최적화의 백필 대상
+    css_externalized INTEGER NOT NULL DEFAULT 0   -- 인라인 <style> 의 CAS 추출 여부.
+                                                  --   0 이면 저장공간 최적화의 추출 대상
 );
 
 CREATE TABLE IF NOT EXISTS checks (
@@ -328,6 +330,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if cols and "resources_indexed" not in cols:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN resources_indexed INTEGER NOT NULL DEFAULT 0"
+        )
+    # 인라인 <style> 추출 여부 — 0 인 스냅샷은 저장공간 최적화가 추출한다
+    if cols and "css_externalized" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN css_externalized INTEGER NOT NULL DEFAULT 0"
         )
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
@@ -663,7 +670,7 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed"}
+     "note", "resources_indexed", "css_externalized"}
 )
 
 
@@ -898,6 +905,23 @@ def count_archive_logs(
     return row[0]
 
 
+def list_snapshot_archive_logs(
+    conn: sqlite3.Connection, page_id: int
+) -> list[sqlite3.Row]:
+    """페이지의 스냅샷 생성 실행 로그 (snapshot_id 가 있는 행만).
+
+    타임라인 화면이 스냅샷별 단계 소요·오류를 펼쳐 보이는 데 쓴다.
+    """
+    return conn.execute(
+        """
+        SELECT * FROM archive_logs
+        WHERE page_id = ? AND snapshot_id IS NOT NULL
+        ORDER BY id
+        """,
+        (page_id,),
+    ).fetchall()
+
+
 def list_log_domains(conn: sqlite3.Connection) -> list[str]:
     """로그에 등장한 도메인 목록 (대시보드 필터 드롭다운용)."""
     rows = conn.execute(
@@ -933,13 +957,13 @@ def count_pages(conn: sqlite3.Connection) -> int:
 
 
 def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """모든 스냅샷의 시각·디렉토리 위치 (id, taken_at, domain, slug, dir_name).
+    """모든 스냅샷의 시각·디렉토리 위치 (id, taken_at, site_id, domain, slug, dir_name).
 
-    현황 대시보드가 기간별 스냅샷 수와 디렉토리 용량을 집계하는 데 쓴다.
+    현황 대시보드의 기간별 집계와 아카이브 목록의 사이트별 용량 합산에 쓴다.
     """
     return conn.execute(
         """
-        SELECT s.id, s.taken_at, p.domain, p.slug, s.dir_name
+        SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         """
     ).fetchall()
@@ -1056,6 +1080,36 @@ def mark_snapshot_resources_indexed(
     """스냅샷의 자원 참조 기록 완료 표시 — 이후 백필 대상에서 제외된다."""
     conn.execute(
         "UPDATE snapshots SET resources_indexed = 1 WHERE id = ?", (snapshot_id,)
+    )
+
+
+def count_css_pending_snapshots(conn: sqlite3.Connection) -> int:
+    """인라인 <style> 추출이 아직 안 된 스냅샷 수 — 최적화 대상."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots WHERE css_externalized = 0"
+    ).fetchone()["c"]
+
+
+def list_css_pending_snapshots(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """인라인 <style> 추출 대상 스냅샷 (+ 디렉토리 위치) — 저장공간 최적화용.
+
+    final_url 은 상대 CSS 참조 절대화 기준으로 함께 내려준다.
+    """
+    return conn.execute(
+        """
+        SELECT s.id, p.domain, p.slug, s.dir_name, s.final_url
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.css_externalized = 0 ORDER BY s.id
+        """
+    ).fetchall()
+
+
+def mark_snapshot_css_externalized(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> None:
+    """스냅샷의 인라인 <style> 추출 완료 표시 — 이후 추출 대상에서 제외된다."""
+    conn.execute(
+        "UPDATE snapshots SET css_externalized = 1 WHERE id = ?", (snapshot_id,)
     )
 
 
@@ -1565,18 +1619,105 @@ def find_running_crawl(conn: sqlite3.Connection, start_url: str) -> sqlite3.Row 
     ).fetchone()
 
 
-def list_site_pages(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
-    """사이트 소속 페이지 목록 + 스냅샷 수·마지막 캡처 시각 (사이트 상세/삭제용)."""
-    return conn.execute(
-        """
+def list_site_pages(
+    conn: sqlite3.Connection,
+    site_id: int,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """사이트 소속 페이지 목록 + 스냅샷 수·마지막 캡처 시각 (사이트 상세/삭제용).
+
+    limit 을 주면 offset 부터 그만큼만 반환한다 (사이트 상세 페이징용).
+    """
+    sql = """
         SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
         FROM pages p LEFT JOIN snapshots s ON s.page_id = p.id
         WHERE p.site_id = ?
         GROUP BY p.id
         ORDER BY last_taken_at DESC NULLS LAST, p.url
+        """
+    params: list[object] = [site_id]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    return conn.execute(sql, params).fetchall()
+
+
+def site_page_totals(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row:
+    """사이트 소속 페이지·스냅샷 총수 (사이트 상세 헤더·페이징용)."""
+    return conn.execute(
+        """
+        SELECT COUNT(DISTINCT p.id) AS page_count, COUNT(s.id) AS snapshot_count
+        FROM pages p LEFT JOIN snapshots s ON s.page_id = p.id
+        WHERE p.site_id = ?
+        """,
+        (site_id,),
+    ).fetchone()
+
+
+def list_site_snapshot_dirs(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트 소속 스냅샷의 시각·디렉토리 위치 (page_id, taken_at, domain, slug, dir_name).
+
+    사이트 상세가 페이지별·사이트 전체 저장 용량 합산과 최신 스냅샷의
+    타이틀 조회에 쓴다.
+    """
+    return conn.execute(
+        """
+        SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE p.site_id = ?
         """,
         (site_id,),
     ).fetchall()
+
+
+def list_site_failed_logs(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트 소속 페이지 중 최근 실행이 실패인 로그 목록 (+ 페이지 url, 최신 순).
+
+    URL 별 최신 archive_logs 행이 status='error' 인 것만 — 이후 실행이
+    성공하면 최신 행이 바뀌어 목록에서 자연히 사라진다. 페이지 행이 생기기
+    전에 실패한 신규 URL(page_id NULL)은 소속 사이트를 알 수 없어 포함하지
+    않는다 (크롤 중 실패한 신규 URL 은 크롤 진행 화면이 보여준다).
+    """
+    return conn.execute(
+        """
+        SELECT al.*, p.url AS page_url
+        FROM archive_logs al
+        JOIN pages p ON p.id = al.page_id
+        JOIN (
+            SELECT al2.url AS url, MAX(al2.id) AS max_id
+            FROM archive_logs al2
+            JOIN pages p2 ON p2.id = al2.page_id
+            WHERE p2.site_id = ?
+            GROUP BY al2.url
+        ) last ON al.id = last.max_id
+        WHERE al.status = 'error'
+        ORDER BY al.started_at DESC, al.id DESC
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def get_site_failed_log(
+    conn: sqlite3.Connection, site_id: int, log_id: int
+) -> sqlite3.Row | None:
+    """사이트 소속 실패 로그 행 조회 (+ 페이지 url) — 재시도 검증용.
+
+    소속이 아니거나 실패 로그가 아니면 None.
+    """
+    return conn.execute(
+        """
+        SELECT al.*, p.url AS page_url
+        FROM archive_logs al JOIN pages p ON p.id = al.page_id
+        WHERE al.id = ? AND p.site_id = ? AND al.status = 'error'
+        """,
+        (log_id, site_id),
+    ).fetchone()
 
 
 def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:

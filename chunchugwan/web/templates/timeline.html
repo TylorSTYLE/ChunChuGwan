@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% from "_schedule_field.html" import interval_field, interval_field_js with context %}
+{% from "_snapshot_detail.html" import snapshot_detail with context %}
 {% block title %}{{ _("타임라인") }} — {{ page['url'] }}{% endblock %}
+{% block head %}
+<style>
+tr.steps-row { display: none; }
+tr.steps-row.open { display: table-row; }
+tr.steps-row > td { background: var(--bg-soft); padding: 10px 14px 14px; }
+.steps-table { max-width: 760px; }
+.steps-table th, .steps-table td { padding: 3px 10px; }
+</style>
+{% endblock %}
 {% block content %}
 {% if queued %}<div class="notice">{{ _("재아카이빙이 백그라운드에서 시작되었습니다. 잠시 후 새로고침하세요.") }}</div>{% endif %}
 {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
@@ -59,7 +69,7 @@
 {% else %}
 <table>
   <thead>
-    <tr><th>#</th><th>{{ _("캡처 시각") }}</th><th>{{ _("해시") }}</th><th>{{ _("상태") }}</th><th>HTTP</th><th></th></tr>
+    <tr><th>#</th><th>{{ _("캡처 시각") }}</th><th>{{ _("해시") }}</th><th>{{ _("상태") }}</th><th>HTTP</th><th class="num">{{ _("용량") }}</th><th></th></tr>
   </thead>
   <tbody>
   {% for it in items %}
@@ -69,7 +79,11 @@
       <td class="mono">{{ it.snap['content_hash'][:12] }}</td>
       <td><span class="badge {{ it.badge }}">{{ {'new': _('신규'), 'changed': _('변경'), 'same': _('동일')}[it.badge] }}</span></td>
       <td class="num">{{ it.snap['http_status'] or '-' }}</td>
+      <td class="num mono">{{ it.total_bytes|filesize if it.files else '-' }}</td>
       <td>
+        {% if it.files or it.steps %}
+        <button type="button" class="toggle" data-target="steps-{{ it.snap['id'] }}">{{ _("상세") }}</button>
+        {% endif %}
         {% if it.idx > 1 %}
         <a href="/diff/{{ page['id'] }}?from={{ it.idx - 1 }}&to={{ it.idx }}">{{ _("이전과 비교") }}</a>
         {% endif %}
@@ -81,6 +95,15 @@
         {% endif %}
       </td>
     </tr>
+    {% if it.files or it.steps %}
+    <tr class="steps-row" id="steps-{{ it.snap['id'] }}">
+      <td colspan="7">
+        {{ snapshot_detail(it.files, it.total_bytes, it.steps,
+                           error=it.log['error'] if it.log else none,
+                           snapshot_id=it.snap['id']) }}
+      </td>
+    </tr>
+    {% endif %}
   {% endfor %}
   </tbody>
 </table>
@@ -100,5 +123,13 @@
   </tbody>
 </table>
 {% endif %}
+<script>
+document.querySelectorAll('button.toggle').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.getElementById(btn.dataset.target).classList.toggle('open');
+    btn.classList.toggle('active');
+  });
+});
+</script>
 {% if can_archive %}{{ interval_field_js() }}{% endif %}
 {% endblock %}

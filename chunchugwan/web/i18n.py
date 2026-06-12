@@ -66,6 +66,7 @@ _EN: dict[str, str] = {
     "용량": "Size",
     "소요": "Duration",
     "출처": "Source",
+    "오류": "Error",
     "보기": "View",
     "삭제": "Delete",
     "저장": "Save",
@@ -342,13 +343,14 @@ _EN: dict[str, str] = {
     "저장공간 최적화": "Storage optimization",
     "대상 {n}개": "{n} pending",
     "대상 없음": "None pending",
-    "구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP + 문서 파일 공유 저장소 이전)로 변환하고, 자원 참조를 인덱스한 뒤 어떤 스냅샷도 참조하지 않는 공유 자원을 삭제합니다. 내용 보존이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축·인덱스됩니다.":
+    "구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP + 문서 파일 공유 저장소 이전)로 변환하고, 사이트 공통 인라인 스타일을 공유 자원으로 추출하고, 자원 참조를 인덱스한 뒤 어떤 스냅샷도 참조하지 않는 공유 자원을 삭제합니다. 내용 보존이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축·인덱스됩니다.":
         "Converts legacy snapshots to the compact storage form (shared-resource "
         "extraction + gzipped HTML + WebP screenshots + moving document files to "
-        "the shared store), indexes resource references, then deletes shared "
-        "resources no snapshot references. Content is preserved — snapshots keep "
-        "exactly the same information — and it is idempotent, so running it "
-        "multiple times is safe. New snapshots are compacted and indexed on save.",
+        "the shared store), extracts site-wide inline stylesheets as shared "
+        "resources, indexes resource references, then deletes shared resources "
+        "no snapshot references. Content is preserved — snapshots keep exactly "
+        "the same information — and it is idempotent, so running it multiple "
+        "times is safe. New snapshots are compacted and indexed on save.",
     "기존 스냅샷을 압축·인덱스하고 참조 없는 공유 자원을 정리합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?":
         "Compact and index existing snapshots, then clean up unreferenced shared "
         "resources? With many snapshots this can take a while.",
@@ -386,9 +388,10 @@ _EN: dict[str, str] = {
     "최적화할 항목이 없습니다 — 스냅샷이 모두 압축·인덱스 형태입니다.":
         "Nothing to optimize — all snapshots are already compacted and indexed.",
     "최적화 실패: {e}": "Optimization failed: {e}",
-    "최적화 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · 문서 {documents}개 이전 · 참조 백필 {indexed}개 · 고아 자원 {swept}개 정리 ({saved} 절약)":
+    "최적화 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · 문서 {documents}개 이전 · 공통 스타일 {styles}개 추출(스냅샷 {styled}개) · 참조 백필 {indexed}개 · 고아 자원 {swept}개 정리 ({saved} 절약)":
         "Optimization finished: converted {converted}/{total} · extracted "
         "{externalized} shared resources · moved {documents} documents · "
+        "extracted {styles} shared stylesheet(s) from {styled} snapshot(s) · "
         "backfilled {indexed} reference(s) · cleaned {swept} orphaned "
         "resource(s) (saved {saved})",
     "복원 실패: {e}": "Restore failed: {e}",
@@ -737,8 +740,14 @@ _EN: dict[str, str] = {
         "the same site. Click a site to see its pages and crawl runs.",
     "크롤 회차": "Crawl runs",
     "크롤 진행 중": "Crawling",
-    "페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개":
-        "{p} page(s) · {s} snapshot(s) · {c} crawl run(s)",
+    "페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개 · 용량 {size}":
+        "{p} page(s) · {s} snapshot(s) · {c} crawl run(s) · {size}",
+    "실패한 작업": "Failed runs",
+    "최근 실행이 실패로 끝난 페이지입니다. 재시도가 성공하면 목록에서 사라집니다.":
+        "Pages whose latest run ended in failure. A successful retry removes "
+        "them from this list.",
+    "action|재시도": "Retry",
+    "실패 기록 없음": "Failed run not found",
     "사이트 삭제": "Delete site",
     "페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
         "This deletes the entire site archive including {p} page(s) and {c} "
