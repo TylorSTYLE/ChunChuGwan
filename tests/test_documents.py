@@ -1,4 +1,6 @@
-"""documents.py 테스트 — URL 필터·파일명 정제·다운로드 한도 (로컬 서버, 외부 네트워크 없음)."""
+"""documents.py 테스트 — URL 필터·파일명 정제·다운로드 한도·문서 CAS
+(로컬 서버, 외부 네트워크 없음)."""
+import hashlib
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -171,6 +173,7 @@ def test_pipeline_archives_linked_documents(doc_server, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(config, "RULES_PATH", tmp_path / "rules.json")
     monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
 
     doc_url = f"{doc_server}/ok.pdf"
     bad_url = f"{doc_server}/missing.pdf"
@@ -194,11 +197,18 @@ def test_pipeline_archives_linked_documents(doc_server, tmp_path, monkeypatch):
     assert meta.documents is not None and len(meta.documents) == 1
     entry = meta.documents[0]
     assert entry["url"] == doc_url
-    saved = outcome.snapshot_dir / "files" / str(entry["file"])
-    assert saved.read_bytes() == _PDF_BYTES
 
-    # 실행 로그에 documents 단계가 기록된다
+    # 파일 본체는 스냅샷이 아니라 문서 CAS 에 저장된다
+    assert not (outcome.snapshot_dir / "files").exists()
+    name = documents.cas_name(str(entry["sha256"]), str(entry["file"]))
+    assert name is not None
+    assert documents.cas_path(name).read_bytes() == _PDF_BYTES
+
     with db.connect() as conn:
+        # 스냅샷의 문서 참조 행이 기록된다
+        row = db.get_snapshot_document(conn, outcome.snapshot_id, str(entry["file"]))
+        assert row is not None and row["sha256"] == entry["sha256"]
+        # 실행 로그에 documents 단계가 기록된다
         log = db.list_archive_logs(conn)[0]
     steps = [s["step"] for s in json.loads(log["steps"])]
     assert "documents" in steps
@@ -206,3 +216,106 @@ def test_pipeline_archives_linked_documents(doc_server, tmp_path, monkeypatch):
     # 내용이 같으면 unchanged — 문서를 다시 받지 않는다 (스냅샷도 없음)
     second = pipeline.archive_url("https://example.com/post")
     assert second.status == "unchanged" and second.documents == 0
+
+
+# ---- 문서 CAS ----
+
+def test_cas_name_validation():
+    sha = "ab" * 32
+    assert documents.cas_name(sha, "report-12345678.pdf") == sha + ".pdf"
+    assert documents.is_valid_cas_name(sha + ".pdf")
+    assert not documents.is_valid_cas_name(sha + ".html")    # 문서 확장자 아님
+    assert not documents.is_valid_cas_name(sha + ".pdf/../x")
+    assert not documents.is_valid_cas_name("zz" * 32 + ".pdf")  # hex 아님
+    assert documents.cas_name(sha, "x.exe") is None
+    assert documents.cas_name("짧은해시", "x.pdf") is None
+
+
+def test_ingest_into_cas_dedupes(tmp_path, monkeypatch):
+    """같은 내용은 한 번만 저장되고, 이전 후 임시 files 디렉토리는 정리된다."""
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
+    sha = hashlib.sha256(b"same-bytes").hexdigest()
+    for i in (1, 2):
+        files_dir = tmp_path / f"tmp{i}" / "files"
+        files_dir.mkdir(parents=True)
+        (files_dir / f"doc{i}-aaaaaaa{i}.pdf").write_bytes(b"same-bytes")
+        manifest = [{
+            "url": f"https://example.com/doc{i}.pdf",
+            "file": f"doc{i}-aaaaaaa{i}.pdf", "bytes": 10,
+            "sha256": sha, "content_type": "application/pdf",
+        }]
+        documents.ingest_into_cas(files_dir, manifest)
+        assert len(manifest) == 1
+        assert not files_dir.exists()
+    stored = list((tmp_path / "documents").glob("*/*"))
+    assert [p.name for p in stored] == [sha + ".pdf"]
+    assert stored[0].read_bytes() == b"same-bytes"
+
+
+def test_delete_cas_removes_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
+    sha = hashlib.sha256(b"bytes").hexdigest()
+    name = sha + ".pdf"
+    path = documents.cas_path(name)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"bytes")
+    documents.delete_cas([name, "../../etc/passwd", "없는이름.pdf"])
+    assert not path.exists()
+    assert not path.parent.exists()  # 빈 버킷 디렉토리도 정리
+
+
+def _legacy_snapshot(tmp_path, *, url="https://example.com/post", body=b"%PDF doc"):
+    """files/ 에 문서를 가진 구형 스냅샷 + DB 행 생성 → (snap_dir, snapshot_id)."""
+    from chunchugwan import db, storage
+
+    domain, slug = "example.com", storage.url_to_slug(url)
+    dir_name = "2026-06-01T00-00-00"
+    snap_dir = storage.page_dir(domain, slug) / dir_name
+    (snap_dir / "files").mkdir(parents=True)
+    (snap_dir / "files" / "report-12345678.pdf").write_bytes(body)
+    storage.write_meta(snap_dir, storage.SnapshotMeta(
+        url=url, final_url=url, taken_at="2026-06-01T00:00:00+00:00",
+        content_hash="h", http_status=200, title=None,
+        documents=[{
+            "url": "https://example.com/files/report.pdf",
+            "file": "report-12345678.pdf", "bytes": len(body),
+            "sha256": "1234", "content_type": "application/pdf",  # 오염된 해시
+        }],
+    ))
+    with db.connect() as conn:
+        page_id = db.get_or_create_page(conn, url, domain, slug)
+        snapshot_id = db.insert_snapshot(
+            conn, page_id, taken_at="2026-06-01T00:00:00+00:00",
+            dir_name=dir_name, content_hash="h", final_url=url,
+            http_status=200, changed=1,
+        )
+    return snap_dir, snapshot_id
+
+
+def test_compact_legacy_documents_moves_to_cas(tmp_path, monkeypatch):
+    """구형 files/ 문서가 CAS 로 이전되고 참조 행이 생긴다 (해시는 재계산)."""
+    from chunchugwan import db
+
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
+
+    body = b"%PDF legacy doc"
+    snap_dir, snapshot_id = _legacy_snapshot(tmp_path, body=body)
+    assert documents.has_legacy_documents(snap_dir)
+
+    stats = documents.compact_legacy_documents()
+    assert stats.moved == 1
+    assert stats.before_bytes == len(body) and stats.after_bytes == len(body)
+
+    sha = hashlib.sha256(body).hexdigest()
+    assert documents.cas_path(sha + ".pdf").read_bytes() == body
+    assert not (snap_dir / "files").exists()
+    assert not documents.has_legacy_documents(snap_dir)
+    with db.connect() as conn:
+        row = db.get_snapshot_document(conn, snapshot_id, "report-12345678.pdf")
+    assert row is not None and row["sha256"] == sha  # meta 의 오염 해시가 아니다
+
+    # 멱등 — 다시 실행해도 이전할 것이 없다
+    assert documents.compact_legacy_documents().moved == 0

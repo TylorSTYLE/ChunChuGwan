@@ -40,6 +40,18 @@ CREATE TABLE IF NOT EXISTS checks (
 CREATE INDEX IF NOT EXISTS idx_snapshots_page ON snapshots(page_id, taken_at);
 CREATE INDEX IF NOT EXISTS idx_checks_page ON checks(page_id, checked_at);
 
+CREATE TABLE IF NOT EXISTS snapshot_documents (
+    id           INTEGER PRIMARY KEY,
+    snapshot_id  INTEGER NOT NULL REFERENCES snapshots(id),
+    url          TEXT NOT NULL,          -- 문서 원본 URL
+    file         TEXT NOT NULL,          -- 정제된 파일명 (documents.document_filename)
+    bytes        INTEGER NOT NULL,
+    sha256       TEXT NOT NULL,          -- 문서 CAS 이름의 해시 부분 (documents.py)
+    content_type TEXT NOT NULL,
+    UNIQUE (snapshot_id, file)
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_documents_sha ON snapshot_documents(sha256);
+
 CREATE TABLE IF NOT EXISTS schedules (
     id               INTEGER PRIMARY KEY,
     page_id          INTEGER NOT NULL UNIQUE REFERENCES pages(id),
@@ -364,6 +376,9 @@ def delete_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> bool:
         "UPDATE crawl_pages SET snapshot_id = NULL WHERE snapshot_id = ?",
         (snapshot_id,),
     )
+    conn.execute(
+        "DELETE FROM snapshot_documents WHERE snapshot_id = ?", (snapshot_id,)
+    )
     conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
     if nxt is not None:
         changed = 1 if prev is None else int(prev["content_hash"] != nxt["content_hash"])
@@ -393,6 +408,13 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
     conn.execute(
         """
         UPDATE crawl_pages SET snapshot_id = NULL
+        WHERE snapshot_id IN (SELECT id FROM snapshots WHERE page_id = ?)
+        """,
+        (page_id,),
+    )
+    conn.execute(
+        """
+        DELETE FROM snapshot_documents
         WHERE snapshot_id IN (SELECT id FROM snapshots WHERE page_id = ?)
         """,
         (page_id,),
@@ -582,6 +604,128 @@ def list_recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sql
         """,
         (limit,),
     ).fetchall()
+
+
+# ---- 함께 저장된 문서 파일 (문서 CAS 참조) ----
+
+
+def insert_snapshot_documents(
+    conn: sqlite3.Connection, snapshot_id: int, manifest: list[dict]
+) -> None:
+    """스냅샷의 문서 참조 행들 삽입 (manifest: documents.download_documents 형식).
+
+    INSERT OR IGNORE — compact 재실행 등 같은 (snapshot_id, file) 재기록에 멱등.
+    """
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO snapshot_documents
+            (snapshot_id, url, file, bytes, sha256, content_type)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (snapshot_id, d["url"], d["file"], d["bytes"], d["sha256"],
+             d["content_type"])
+            for d in manifest
+        ],
+    )
+
+
+def get_snapshot_document(
+    conn: sqlite3.Connection, snapshot_id: int, file: str
+) -> sqlite3.Row | None:
+    """스냅샷의 문서 참조 행을 파일명으로 조회 (없으면 None) — 다운로드 라우트용."""
+    return conn.execute(
+        "SELECT * FROM snapshot_documents WHERE snapshot_id = ? AND file = ?",
+        (snapshot_id, file),
+    ).fetchone()
+
+
+def find_document(
+    conn: sqlite3.Connection, sha256: str, file: str
+) -> sqlite3.Row | None:
+    """(해시, 파일명) 조합이 기록된 문서 참조 행 조회 (없으면 None).
+
+    문서 목록 화면의 다운로드 라우트가 임의 (해시, 이름) 조합으로 CAS 파일을
+    노출하지 않도록, 실제 기록된 조합만 허용하는 검증에 쓴다.
+    """
+    return conn.execute(
+        "SELECT * FROM snapshot_documents WHERE sha256 = ? AND file = ? LIMIT 1",
+        (sha256, file),
+    ).fetchone()
+
+
+def list_snapshot_document_refs(
+    conn: sqlite3.Connection, snapshot_ids: list[int]
+) -> list[sqlite3.Row]:
+    """해당 스냅샷들이 참조하는 (sha256, file) 목록 (중복 제거) — 삭제 GC 용."""
+    if not snapshot_ids:
+        return []
+    marks = ", ".join("?" for _ in snapshot_ids)
+    return conn.execute(
+        f"SELECT DISTINCT sha256, file FROM snapshot_documents "
+        f"WHERE snapshot_id IN ({marks})",
+        snapshot_ids,
+    ).fetchall()
+
+
+def list_document_refs_by_shas(
+    conn: sqlite3.Connection, shas: list[str]
+) -> list[sqlite3.Row]:
+    """해당 해시들을 참조하는 (sha256, file) 목록 — 삭제 후 잔존 참조 확인용."""
+    if not shas:
+        return []
+    marks = ", ".join("?" for _ in shas)
+    return conn.execute(
+        f"SELECT DISTINCT sha256, file FROM snapshot_documents "
+        f"WHERE sha256 IN ({marks})",
+        shas,
+    ).fetchall()
+
+
+def list_document_groups(
+    conn: sqlite3.Connection, limit: int = 100, offset: int = 0
+) -> list[sqlite3.Row]:
+    """문서 목록 화면용 — 같은 내용(sha256)을 한 행으로 묶은 목록.
+
+    그룹별 참조 스냅샷/페이지 수와 최근 저장 시각을 집계하고, 표시용
+    파일명·출처는 가장 최근 참조 행의 값을 쓴다 (최근 저장 순)."""
+    return conn.execute(
+        """
+        SELECT g.sha256, g.snapshot_count, g.page_count, g.first_seen, g.last_seen,
+               d.file, d.url, d.bytes, d.content_type, d.snapshot_id,
+               s.page_id, p.url AS page_url
+        FROM (
+            SELECT d2.sha256 AS sha256, MAX(d2.id) AS doc_id,
+                   COUNT(*) AS snapshot_count,
+                   COUNT(DISTINCT s2.page_id) AS page_count,
+                   MIN(s2.taken_at) AS first_seen, MAX(s2.taken_at) AS last_seen
+            FROM snapshot_documents d2 JOIN snapshots s2 ON s2.id = d2.snapshot_id
+            GROUP BY d2.sha256
+        ) g
+        JOIN snapshot_documents d ON d.id = g.doc_id
+        JOIN snapshots s ON s.id = d.snapshot_id
+        JOIN pages p ON p.id = s.page_id
+        ORDER BY g.last_seen DESC, g.sha256
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    ).fetchall()
+
+
+def document_totals(conn: sqlite3.Connection) -> sqlite3.Row:
+    """문서 목록 화면 요약 — 고유 문서 수(groups)·저장 용량(unique_bytes)·
+    중복 제거로 절약된 용량(saved_bytes = 참조 수 - 1 만큼의 중복분)."""
+    return conn.execute(
+        """
+        SELECT COUNT(*) AS groups,
+               COALESCE(SUM(bytes), 0) AS unique_bytes,
+               COALESCE(SUM(bytes * (refs - 1)), 0) AS saved_bytes
+        FROM (
+            SELECT MAX(bytes) AS bytes, COUNT(*) AS refs
+            FROM snapshot_documents GROUP BY sha256
+        )
+        """
+    ).fetchone()
 
 
 # ---- 반복 아카이빙 스케줄 ----

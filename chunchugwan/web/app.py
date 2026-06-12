@@ -32,8 +32,8 @@ from fastapi.responses import (
 )
 
 from .. import (
-    auth, config, crawler, db, deletion, differ, pipeline, resources, scheduler,
-    storage,
+    auth, config, crawler, db, deletion, differ, documents, pipeline, resources,
+    scheduler, storage,
 )
 from . import api_routes, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -648,13 +648,25 @@ def snapshot_file(request: Request, snapshot_id: int, name: str):
     return FileResponse(path, media_type=media_type, headers=headers)
 
 
+def _document_response(path: Path, filename: str) -> FileResponse:
+    """문서 파일 응답 — 항상 첨부파일 다운로드 + 문서 컨텍스트 샌드박스."""
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=filename,  # Content-Disposition: attachment
+        headers={"Content-Security-Policy": "sandbox"},
+    )
+
+
 @app.get("/snapshot/{snapshot_id}/doc/{name}")
 def snapshot_document(request: Request, snapshot_id: int, name: str):
     """함께 저장된 문서 파일 서빙 — meta.json 의 documents 목록에 있는
     이름만 허용한다 (목록의 이름은 documents.py 가 정제해 생성한 값).
 
-    /resource/ 와 달리 인증 게이트를 그대로 거치며, 브라우저 안에서
-    렌더링되지 않도록 항상 첨부파일 다운로드로 내려준다.
+    파일 본체는 문서 CAS(snapshot_documents 행의 sha256)에서 찾고, compact
+    이전의 구형 스냅샷은 디렉토리의 files/ 에서 찾는다. /resource/ 와 달리
+    인증 게이트를 그대로 거치며, 브라우저 안에서 렌더링되지 않도록 항상
+    첨부파일 다운로드로 내려준다.
     """
     snap = _load_snapshot(request, snapshot_id)
     snap_dir = _snapshot_dir(snap)
@@ -662,17 +674,76 @@ def snapshot_document(request: Request, snapshot_id: int, name: str):
         meta = storage.read_meta(snap_dir)
     except OSError:
         raise HTTPException(404, t(request, "메타데이터 없음"))
-    if not any(d.get("file") == name for d in meta.documents or []):
+    entry = next(
+        (d for d in meta.documents or [] if d.get("file") == name), None
+    )
+    if entry is None:
         raise HTTPException(404, t(request, "허용되지 않은 파일"))
-    path = snap_dir / "files" / name
+    legacy = snap_dir / "files" / name
+    if legacy.is_file():
+        return _document_response(legacy, name)
+    with db.connect() as conn:
+        row = db.get_snapshot_document(conn, snapshot_id, name)
+    sha = row["sha256"] if row else str(entry.get("sha256") or "")
+    cas_name = documents.cas_name(sha, name)
+    if cas_name is not None:
+        path = documents.cas_path(cas_name)
+        if path.is_file():
+            return _document_response(path, name)
+    raise HTTPException(404, t(request, "파일 없음"))
+
+
+_DOCUMENTS_PER_PAGE = 100
+
+
+@app.get("/documents", response_class=HTMLResponse)
+def documents_view(request: Request, page: int = Query(1, ge=1)):
+    """아카이브된 페이지들의 문서 파일 통합 목록.
+
+    같은 내용(sha256)의 문서는 한 행으로 묶고 참조 스냅샷·페이지 수를
+    보여준다. compact 이전 구형 스냅샷(files/)의 문서는 아직 참조 행이
+    없으므로, 남아 있으면 압축 실행 안내를 띄운다.
+    """
+    offset = (page - 1) * _DOCUMENTS_PER_PAGE
+    with db.connect() as conn:
+        totals = db.document_totals(conn)
+        groups = db.list_document_groups(
+            conn, limit=_DOCUMENTS_PER_PAGE + 1, offset=offset
+        )
+    has_next = len(groups) > _DOCUMENTS_PER_PAGE
+    legacy_pending = any(
+        documents.has_legacy_documents(d) for d in resources.snapshot_dirs()
+    )
+    return templates.TemplateResponse(
+        request, "documents.html",
+        {
+            "groups": groups[:_DOCUMENTS_PER_PAGE],
+            "totals": totals,
+            "page": page,
+            "has_next": has_next,
+            "legacy_pending": legacy_pending,
+        },
+    )
+
+
+@app.get("/document/{sha256}/{name}")
+def document_download(request: Request, sha256: str, name: str):
+    """문서 CAS 파일 다운로드 — DB 에 기록된 (sha256, 파일명) 조합만 허용.
+
+    문서 목록 화면의 다운로드 링크용. 인증 게이트를 그대로 거치며 항상
+    첨부파일 다운로드로 내려준다 (snapshot_document 와 동일한 보안 성질).
+    """
+    cas_name = documents.cas_name(sha256, name)
+    if cas_name is None:
+        raise HTTPException(404, t(request, "허용되지 않은 파일"))
+    with db.connect() as conn:
+        row = db.find_document(conn, sha256, name)
+    if row is None:
+        raise HTTPException(404, t(request, "허용되지 않은 파일"))
+    path = documents.cas_path(cas_name)
     if not path.is_file():
         raise HTTPException(404, t(request, "파일 없음"))
-    return FileResponse(
-        path,
-        media_type="application/octet-stream",
-        filename=name,  # Content-Disposition: attachment
-        headers={"Content-Security-Policy": "sandbox"},
-    )
+    return _document_response(path, name)
 
 
 @app.get("/resource/{name}")

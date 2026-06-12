@@ -12,6 +12,7 @@ from chunchugwan import config, resources
 @pytest.fixture
 def cas_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
     monkeypatch.setattr(config, "RESOURCE_MIN_BYTES", 16)  # 테스트용 소형 임계값
     return tmp_path
 

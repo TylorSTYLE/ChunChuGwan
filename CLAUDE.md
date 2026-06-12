@@ -84,9 +84,11 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
    경로 — 샌드박스 문서의 하위 요청에는 SameSite 쿠키가 안 붙기 때문이며,
    sha256 콘텐츠 주소 이름 + 미디어 타입 화이트리스트(문서 타입 금지) +
    CSP sandbox 로만 서빙한다 (`resources.py` 보안 노트 참조). 함께 저장된
-   문서 파일(`files/`)은 CAS 가 아니라 스냅샷 안에 두고, 인증이 걸린
-   `/snapshot/{id}/doc/{name}` 에서 meta.json 의 documents 목록에 있는
-   이름만 항상 첨부파일 다운로드(렌더링 금지)로 서빙한다.
+   문서 파일은 별도의 문서 CAS(`documents/`, documents.py)에 두되 /resource/
+   로는 절대 합치지 않고, 인증이 걸린 라우트(`/snapshot/{id}/doc/{name}` —
+   meta.json documents 목록 검증, `/document/{sha256}/{name}` — snapshot_documents
+   행 검증)에서만 항상 첨부파일 다운로드(렌더링 금지)로 서빙한다. compact
+   이전 구형 스냅샷의 문서는 스냅샷 안 `files/` 에서 그대로 서빙된다.
 6. **인증 데이터 규칙.** 패스워드는 Argon2id 해시만, 세션·API 키는 토큰의
    SHA-256 만 저장 (세션은 서버사이드). 2FA(TOTP·패스키)는 패스워드 로그인에만 적용하고 SSO(OIDC)는
    IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origin 은
@@ -100,6 +102,9 @@ archive/
 ├── index.db
 ├── resources/                       # 스냅샷 간 공유 자원 CAS (resources.py)
 │   └── {sha256 앞 2자}/{sha256}{확장자}   # 이미지·폰트·CSS, 콘텐츠 주소라 불변
+├── documents/                       # 문서 파일 CAS (documents.py — 인증 라우트 전용)
+│   └── {sha256 앞 2자}/{sha256}{확장자}   # PDF·워드·한글 등, 같은 내용은 한 번만.
+│                                    #   참조(snapshot_documents)가 0 이 되면 삭제(GC)
 └── sites/
     └── {domain}/
         └── {slug}-{url_hash8}/
@@ -109,10 +114,10 @@ archive/
                 ├── raw.html.gz     # 렌더링 후 DOM 소스 (gzip)
                 ├── content.md      # 추출+정규화 텍스트
                 ├── screenshot.webp # 전체 페이지 (변환 실패 시 screenshot.png 유지)
-                ├── files/          # 페이지가 링크한 문서 파일 (PDF·워드·한글 등,
-                │                   #   documents.py — 문서 링크가 없으면 생기지 않음)
+                ├── files/          # (구형 스냅샷만) 문서 파일 — wccg compact 가
+                │                   #   문서 CAS 로 이전한다. 신규 스냅샷은 없음
                 └── meta.json       # url, final_url, 시각, 해시, http 정보,
-                                    #   documents 목록(files/ 서빙 화이트리스트)
+                                    #   documents 목록(문서 서빙 화이트리스트)
 ```
 
 `wccg compact` 이전의 구형 스냅샷(page.html / raw.html / screenshot.png)도
@@ -124,6 +129,10 @@ archive/
 - `pages` — 정규화된 URL 단위 (1 URL = 1 row)
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관
 - `checks` — 중복으로 저장 생략된 확인 기록
+- `snapshot_documents` — 스냅샷의 문서 파일 참조 (url·정제 파일명·bytes·
+  sha256·content_type). 파일 본체는 문서 CAS — 같은 sha256 은 한 번만
+  저장되고, 삭제 시 참조가 0 이 된 CAS 파일은 deletion.py 가 GC 한다.
+  대시보드 `/documents` 통합 목록의 데이터 소스
 - `archive_logs` — 아카이브 실행 로그 (성공/실패, 단계별 소요시간 JSON,
   출처 cli/web/schedule/api/crawl)
 - `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1개월, 다음 실행 시각,
@@ -169,10 +178,10 @@ archive/
 
 ## 대시보드 디자인 방향
 
-- 화면 12개 — 현황(`/`), 목록(`/archives` — 페이지·사이트 아카이브 통합),
-  새 아카이빙(`/archive/new`), 사이트 아카이브 진행(`/crawls/{id}`),
-  스케줄(`/schedules`), 타임라인, 스냅샷 뷰어, diff 뷰어, 로그, 시스템,
-  사용자, API 키.
+- 화면 13개 — 현황(`/`), 목록(`/archives` — 페이지·사이트 아카이브 통합),
+  문서(`/documents` — 문서 파일 통합 목록), 새 아카이빙(`/archive/new`),
+  사이트 아카이브 진행(`/crawls/{id}`), 스케줄(`/schedules`), 타임라인,
+  스냅샷 뷰어, diff 뷰어, 로그, 시스템, 사용자, API 키.
   화면별 라우트·권한·세부 동작은 `docs/DASHBOARD.md` 참조.
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.

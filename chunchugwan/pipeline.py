@@ -200,12 +200,15 @@ def _archive_url(
             # 저장이 확정된 뒤에만 문서 다운로드 — unchanged 면 받지 않는다
             # (주기적 재아카이빙에서 변경 없는 페이지의 문서를 매번 다시
             # 받는 낭비 방지). 다운로드 실패는 아카이빙을 막지 않는다.
+            # 받은 문서는 문서 CAS 로 이동 — 같은 내용은 스냅샷·페이지가
+            # 달라도 한 번만 저장된다 (참조는 snapshot_documents 행).
             doc_manifest: list[dict] = []
             if result.document_links:
                 doc_manifest, doc_failed = documents.download_documents(
                     result.document_links, tmp_dir / "files",
                     referer=result.final_url,
                 )
+                documents.ingest_into_cas(tmp_dir / "files", doc_manifest)
                 run.step(
                     "documents",
                     f"문서 링크 {len(result.document_links)}개 → "
@@ -242,6 +245,8 @@ def _archive_url(
                 content_hash=content_hash, final_url=result.final_url,
                 http_status=result.http_status, changed=changed,
             )
+            if doc_manifest:
+                db.insert_snapshot_documents(conn, snapshot_id, doc_manifest)
             status = "new" if prev is None else ("changed" if changed else "forced_same")
             run.step("store", f"스냅샷 저장 [{status}]: {snap_dir.name}")
             run.write(
