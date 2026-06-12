@@ -19,6 +19,7 @@ RESOURCES_DIR = ARCHIVE_ROOT / "resources"  # 스냅샷 간 공유 자원 CAS (r
 DOCUMENTS_DIR = ARCHIVE_ROOT / "documents"  # 문서 파일 CAS (documents.py — 인증 라우트 전용)
 
 PAGE_LOAD_TIMEOUT_MS = 30_000
+HTTPS_PROBE_TIMEOUT_SECONDS = 10  # http URL 등록 시 https 지원 확인(승격 프로브) 타임아웃
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 # ---- 저장 압축 (resources.py) ----

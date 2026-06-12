@@ -1,7 +1,7 @@
 """공용 픽스처."""
 import pytest
 
-from chunchugwan import netcheck
+from chunchugwan import netcheck, pipeline
 
 
 @pytest.fixture(autouse=True)
@@ -17,3 +17,14 @@ def _no_dns(monkeypatch):
     netcheck._cache.clear()
     yield
     netcheck._cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_https_probe(monkeypatch):
+    """테스트가 실제 https 승격 프로브(네트워크 요청)를 하지 않게 차단한다.
+
+    기본은 미지원(False) — 명시적 http URL 픽스처가 그대로 http 로
+    아카이빙되던 기존 동작을 유지한다. 승격 자체를 검증하는 테스트는
+    pipeline._https_supported 를 다시 monkeypatch 한다.
+    """
+    monkeypatch.setattr(pipeline, "_https_supported", lambda url: False)

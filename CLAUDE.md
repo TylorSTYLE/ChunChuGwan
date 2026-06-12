@@ -149,7 +149,11 @@ archive/
   (`wccg delete <url> --site`) — 소속 페이지·크롤 회차·크롤 스케줄 일괄
 - `pages` — 정규화된 URL 단위 (1 URL = 1 row). 사설 대역 페이지는
   `network_tag_id` 로 로컬 네트워크 태그를 참조 (crawls·crawl_schedules 도
-  같은 컬럼 보유 — 크롤 페이지·스케줄 재실행에 태그가 이어진다)
+  같은 컬럼 보유 — 크롤 페이지·스케줄 재실행에 태그가 이어진다).
+  명시적 http URL 은 신규 등록 시 https 지원(유효 인증서 + 응답 <400,
+  HSTS 의 리다이렉트 포함)을 확인해 https 로 승격한다
+  (`pipeline.upgrade_http_to_https` — 크롤·크롤 스케줄 등록도 동일,
+  기존 http 페이지는 히스토리 유지를 위해 그대로 둔다)
 - `network_tags` — 로컬 네트워크 태그 (id 는 GUID 자동 발급, 이름 유일,
   설명). 사설 IP 대역 아카이빙은 태그 지정이 필수, 루프백은 항상 금지
   (아키텍처 원칙 7 · netcheck.py). 참조 중인 태그는 삭제 거부

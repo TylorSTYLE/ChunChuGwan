@@ -158,6 +158,43 @@ def _resolve_network_tag(norm: str, host: str, requested: str | None) -> str | N
     )
 
 
+def _https_supported(http_url: str) -> bool:
+    """http URL 의 호스트가 같은 경로를 https 로도 서빙하는지 가벼운 확인.
+
+    유효한 인증서의 https 응답이 400 미만이면 지원으로 본다 — 리다이렉트
+    (301/302, HSTS 사이트의 일반적 응답)도 지원이다. 자체 서명 인증서
+    (사설 NAS 등)·연결 실패·4xx 는 미지원으로 보고 http 를 유지한다.
+    """
+    import httpx
+
+    https_url = "https://" + http_url.removeprefix("http://")
+    try:
+        resp = httpx.get(
+            https_url,
+            timeout=config.HTTPS_PROBE_TIMEOUT_SECONDS,
+            follow_redirects=False,
+            headers={"User-Agent": config.USER_AGENT},
+        )
+        return resp.status_code < 400
+    except Exception:
+        return False
+
+
+def upgrade_http_to_https(norm: str) -> str:
+    """명시적 http URL 의 https 승격 — 지원이 확인되면 https URL 반환.
+
+    스킴 생략 입력의 https 추정(normalize_url)과 짝을 이루는 반대 방향
+    확인이다: http:// 를 명시한 URL 도 같은 사이트가 https 를 서빙하면
+    https 로 아카이빙해 페이지 히스토리가 스킴으로 갈라지지 않게 한다.
+    https 가 아니거나 미지원이면 입력 그대로 반환.
+    """
+    if not norm.startswith("http://"):
+        return norm
+    if not _https_supported(norm):
+        return norm
+    return "https://" + norm.removeprefix("http://")
+
+
 def _resource_fallback(url: str) -> tuple[str, bytes] | None:
     """자원 인라인 실패 폴백 — 같은 URL 로 저장된 과거 캡처본(자원 CAS) 조회.
 
@@ -197,6 +234,20 @@ def _archive_url(
     network_tag_id = _resolve_network_tag(norm, domain, network_tag_id)
     if network_tag_id:
         run.step("netcheck", f"사설 대역 — 로컬 네트워크 태그 {network_tag_id}")
+
+    # 명시적 http URL 의 https 승격 — 신규 페이지에만. 이미 http 로 쌓인
+    # 페이지는 그대로 둔다 (재아카이빙마다 프로브하지 않고, 히스토리도
+    # 갈라지지 않는다). 게이트 통과 후에만 프로브한다 (SSRF 최소화).
+    if norm.startswith("http://"):
+        with db.connect() as conn:
+            existing = db.get_page(conn, norm)
+        if existing is None:
+            upgraded = upgrade_http_to_https(norm)
+            if upgraded != norm:
+                run.step("https", f"https 지원 확인 — 승격: {upgraded}")
+                norm = upgraded
+                slug = storage.url_to_slug(norm)
+                run.url = norm
 
     rules = config.load_domain_rules(domain)
     run.step("normalize", f"{norm} → {domain}/{slug}"
