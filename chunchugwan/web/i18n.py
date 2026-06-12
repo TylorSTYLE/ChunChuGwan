@@ -362,6 +362,9 @@ _EN: dict[str, str] = {
     # ---- API 키 (api_keys) ----
     "API 키": "API keys",
     "API 키 관리": "API key management",
+    "외부 소프트웨어가 /api/v1 REST API 에 접근할 때 쓰는 키를 발급·폐기합니다. 키마다 보기/아카이브 권한과 만료를 설정합니다.":
+        "Issue and revoke keys external software uses to access the /api/v1 REST "
+        "API. Each key gets view/archive permissions and an expiry.",
     "외부 소프트웨어가 Authorization: Bearer 또는 X-API-Key 헤더로 /api/v1 에 접근할 때 쓰는 키입니다. 보기=아카이브 데이터 조회, 아카이브=아카이빙 트리거. 키 원문은 발급 직후 한 번만 표시되며, 폐기하면 즉시 무효화됩니다. 모든 관리자가 공동으로 관리합니다.":
         "Keys for external software accessing /api/v1 with an Authorization: Bearer "
         "or X-API-Key header. View = read archived data, Archive = trigger archiving. "

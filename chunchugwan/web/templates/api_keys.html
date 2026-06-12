@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ _("API 키") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
+<p class="muted" style="font-size:12px; margin:0 0 4px">
+  <a href="/system">&larr; {{ _("시스템") }}</a>
+</p>
 <h2>{{ _("API 키 관리") }}</h2>
 {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
 {% if error %}<div class="error">{{ error }}</div>{% endif %}

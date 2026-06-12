@@ -133,6 +133,16 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
+    <h4>{{ _("API 키") }}</h4>
+    <p>
+      {{ _("외부 소프트웨어가 /api/v1 REST API 에 접근할 때 쓰는 키를 발급·폐기합니다. 키마다 보기/아카이브 권한과 만료를 설정합니다.") }}
+    </p>
+    <div class="actions">
+      <a href="/system/api-keys">{{ _("API 키 관리") }} &rarr;</a>
+    </div>
+  </div>
+
+  <div class="sys-card">
     <h4>{{ _("아카이브 가져오기") }}</h4>
     <form method="post" action="/system/import" enctype="multipart/form-data"
           style="display:flex; flex-direction:column; gap:10px; flex:1"
