@@ -190,10 +190,33 @@ def test_browser_icon_paths_404_on_first_run(fresh_client):
     assert res.status_code == 404
 
 
+def test_favicon_svg_public(client):
+    """파비콘은 인증 없이 서빙된다 (브라우저 자동 요청)."""
+    res = client.get("/favicon.svg", follow_redirects=False)
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("image/svg+xml")
+
+
+def test_favicon_svg_on_first_run(fresh_client):
+    """최초 구동 상태에서도 파비콘은 /setup 으로 보내지 않고 서빙한다."""
+    res = fresh_client.get("/favicon.svg", follow_redirects=False)
+    assert res.status_code == 200
+
+
 def test_login_page_public(client):
     res = client.get("/login")
     assert res.status_code == 200
     assert "로그인" in res.text
+
+
+def test_login_page_has_no_nav_but_keeps_controls(client):
+    """로그인 화면은 메뉴 없는 전용 레이아웃 — 언어·테마 전환만 남는다."""
+    res = client.get("/login")
+    assert 'href="/archives"' not in res.text
+    assert 'href="/schedules"' not in res.text
+    assert 'href="/logs"' not in res.text
+    assert 'id="theme-toggle"' in res.text
+    assert 'action="/lang"' in res.text
 
 
 def test_signup_then_authenticated(client):

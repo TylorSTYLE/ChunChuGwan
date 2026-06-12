@@ -1,0 +1,12 @@
+{# 춘추관 로고 — 조선 사고(史庫) 모티프: 기와지붕 아래 실록 서가, 우하단 낙관(인장).
+   잉크 부분은 currentColor 라 테마를 따라가고, 낙관은 --seal 변수(주칠 红). #}
+{% macro logo(size=20) -%}
+<svg class="logo" width="{{ size }}" height="{{ size }}" viewBox="0 0 64 64"
+     aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <path fill="currentColor" d="M32 6Q16 20 2 24L7 29Q20 25 32 15Q44 25 57 29L62 24Q48 20 32 6Z"/>
+  <rect fill="currentColor" x="14" y="34" width="36" height="6" rx="1.5"/>
+  <rect fill="currentColor" x="14" y="43" width="36" height="6" rx="1.5"/>
+  <rect fill="currentColor" x="14" y="52" width="26" height="6" rx="1.5"/>
+  <rect fill="var(--seal, #c2410c)" x="44" y="52" width="6" height="6" rx="1"/>
+</svg>
+{%- endmacro %}

@@ -80,10 +80,12 @@ _PUBLIC_PATHS = {
     "/login/passkey/options", "/login/passkey",
 }
 
-# 브라우저가 주소만 보고 자동 요청하는 아이콘 경로 — 라우트가 없으므로 404 가
-# 정답이다. /login·/setup 으로 리다이렉트하면 로그만 오염되므로 그대로 통과시킨다.
+# 브라우저가 주소만 보고 자동 요청하는 아이콘 경로 — /login·/setup 으로
+# 리다이렉트하면 로그만 오염되므로 그대로 통과시킨다. /favicon.svg 만 실제
+# 라우트가 있고(아래 favicon()), 나머지는 라우트가 없어 404 가 정답이다.
 _BROWSER_ICON_PATHS = {
-    "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png",
+    "/favicon.ico", "/favicon.svg",
+    "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png",
 }
 
 
@@ -221,6 +223,15 @@ def _active_snapshot() -> dict[str, str]:
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True}
+
+
+_FAVICON_PATH = Path(__file__).parent / "static" / "favicon.svg"
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def favicon() -> FileResponse:
+    """SVG 파비콘 (OS 라이트/다크 자동) — 인증 없이 서빙 (_BROWSER_ICON_PATHS)."""
+    return FileResponse(_FAVICON_PATH, media_type="image/svg+xml")
 
 
 @app.post("/lang")
