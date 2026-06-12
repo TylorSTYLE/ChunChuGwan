@@ -2,7 +2,7 @@ name: Docker
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -90,6 +90,7 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
             type=sha
             type=semver,pattern={{version}}
 
@@ -109,3 +110,113 @@ jobs:
 
       - name: 결과 확인
         run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
+
+  # 방금 푸시한 브랜치 이미지를 실제로 돌려 기동을 확인 (develop·main 푸시만)
+  smoke:
+    runs-on: ubuntu-latest
+    needs: merge
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
+    permissions:
+      packages: read
+    timeout-minutes: 10
+
+    steps:
+      - name: GHCR 로그인
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 이미지 태그 결정
+        run: echo "TAG=$IMAGE:${{ github.ref_name }}" >> "$GITHUB_ENV"
+
+      - name: CLI 스모크 (--version)
+        run: docker run --rm "$TAG" --version
+
+      - name: 대시보드 기동 스모크
+        run: |
+          # 0.0.0.0 바인딩 → 인증 강제, 관리자 자동 등록으로 부팅만 검증한다
+          docker run -d --name wccg-smoke \
+            -e WCCG_HOST=0.0.0.0 \
+            -e WCCG_ADMIN_EMAIL=smoke@example.com \
+            -e WCCG_ADMIN_PASSWORD=smoke-password-1234 \
+            -p 8765:8765 "$TAG" serve
+          ok=0
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8765/ || echo 000)
+            echo "try $i -> $code"
+            if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
+              echo "대시보드 응답 OK ($code)"; ok=1; break
+            fi
+            sleep 2
+          done
+          echo "--- 컨테이너 로그 ---"; docker logs wccg-smoke || true
+          docker rm -f wccg-smoke >/dev/null 2>&1 || true
+          [ "$ok" = "1" ] || { echo "::error::대시보드가 기동 응답하지 않음"; exit 1; }
+
+  # 스모크 통과한 develop 을 main 으로 올릴 릴리스 PR 을 만들고
+  # 변경 diff 로 release:* 라벨을 자동 부여 (사람이 검토 후 머지)
+  promote:
+    runs-on: ubuntu-latest
+    needs: smoke
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    permissions:
+      contents: read
+      pull-requests: write
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: bump 레벨 판정
+        id: bump
+        run: |
+          git fetch origin main develop --quiet
+          range="origin/main...origin/develop"
+          files=$(git diff --name-only $range)
+          if [ -z "$files" ]; then
+            echo "develop 가 main 과 동일 — 승격할 변경 없음"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # 1) 커밋 메시지에 호환 깨짐 신호가 있으면 major
+          if git log --format='%B' $range | grep -iE 'BREAKING|호환[[:space:]]*깨' >/dev/null; then
+            level=major
+          # 2) 코드(docs/tests/.md/.github 외)가 바뀌었으면 minor, 아니면 patch
+          #    grep -q 는 BSD/GNU 동작 차이가 있어 출력 캡처로 판정
+          elif [ -n "$(echo "$files" | grep -vE '^(docs/|tests/|\.github/)|\.md$' || true)" ]; then
+            level=minor
+          else
+            level=patch
+          fi
+          echo "변경 파일:"; echo "$files"
+          echo "판정 레벨: release:$level"
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+
+      - name: develop→main 릴리스 PR 생성·갱신 + 라벨
+        if: steps.bump.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          LEVEL: ${{ steps.bump.outputs.level }}
+        run: |
+          num=$(gh pr list --base main --head develop --state open --json number --jq '.[0].number')
+          if [ -z "$num" ]; then
+            body=$(printf '%s\n' \
+              '도커 `:develop` 이미지 빌드·스모크 통과 후 자동 생성된 릴리스 PR.' \
+              '' \
+              '머지하면 `release.yml` 이 `release:*` 라벨로 다음 버전을 결정해 태그·Release 를 등록한다.' \
+              '판정 레벨이 맞지 않으면 라벨을 직접 바꾼 뒤 머지할 것 (호환 깨짐=major / 기능=minor / 버그·문서·리팩터=patch).')
+            gh pr create --base main --head develop \
+              --title "릴리스: develop → main" \
+              --body "$body"
+            num=$(gh pr list --base main --head develop --state open --json number --jq '.[0].number')
+          fi
+          # 기존 release:* 라벨 정리 후 판정 라벨만 부여
+          for l in release:major release:minor release:patch; do
+            [ "$l" = "release:$LEVEL" ] || gh pr edit "$num" --remove-label "$l" 2>/dev/null || true
+          done
+          gh pr edit "$num" --add-label "release:$LEVEL"
+          echo "PR #$num → release:$LEVEL"

@@ -118,3 +118,12 @@ jobs:
             --title "v$NEXT" \
             --notes "$PR_TITLE ($PR_URL)" \
             --generate-notes
+
+      - name: develop 를 릴리스 커밋으로 동기화 (FF)
+        if: steps.bump.outputs.skip != 'true'
+        run: |
+          # 릴리스 후 main = develop + 버전 범프 커밋. develop 를 main 으로 FF 해
+          # 다음 사이클의 develop→main diff 가 버전 파일 되돌림으로 보이지 않게 한다.
+          # (develop→main 을 merge 커밋으로 머지하면 develop 가 main 의 조상이라 FF 됨)
+          git push origin HEAD:develop || \
+            echo "::warning::develop FF 동기화 실패 — develop 를 main 으로 수동 동기화 필요 (squash 머지 시 발생)"
