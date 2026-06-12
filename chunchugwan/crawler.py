@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Sequence
 from urllib.parse import quote, urlsplit
 
-from . import config, db, pipeline, scheduler, storage
+from . import capture, config, db, pipeline, scheduler, storage
 
 logger = logging.getLogger(__name__)
 
@@ -320,12 +320,14 @@ def process_next(
     claim: Callable[[str], bool] | None = None,
     release: Callable[[str], None] | None = None,
     archive_fn: Callable[..., pipeline.ArchiveOutcome] = pipeline.archive_url,
+    browser_session: "capture.BrowserSession | None" = None,
 ) -> CrawlStep | None:
     """기한이 된 크롤 페이지 하나를 처리. 처리할 것이 없으면 None.
 
     claim/release 는 대시보드의 진행 중 작업 레지스트리 연동 — claim 실패
     (수동 재아카이빙과 충돌) 시 클레임을 반납하고 다음 폴링에 맡긴다.
     archive_fn 은 테스트용 주입 지점 (기본 pipeline.archive_url).
+    browser_session 은 페이지 간 브라우저 재사용 (capture.BrowserSession).
     """
     now = _utcnow()
     with db.connect() as conn:
@@ -346,8 +348,12 @@ def process_next(
 
     try:
         try:
+            # browser_session 은 줄 때만 넘긴다 — archive_fn 주입(테스트)이
+            # 이 인자를 몰라도 동작하게.
+            extra = {"browser_session": browser_session} if browser_session else {}
             outcome = archive_fn(
-                url, source="crawl", link_rewriter=link_rewriter(item["crawl_id"])
+                url, source="crawl", link_rewriter=link_rewriter(item["crawl_id"]),
+                **extra,
             )
         finally:
             if release is not None:
@@ -498,19 +504,29 @@ def run_crawl(
     """크롤 하나를 완료/취소될 때까지 동기 실행 (CLI 용).
 
     페이지 간 간격·재시도 백오프 동안은 대기한다. 완료된 크롤 row 반환.
+    브라우저는 크롤 동안 재사용한다 (BrowserSession).
     """
-    while True:
-        with db.connect() as conn:
-            crawl = db.get_crawl(conn, crawl_id)
-        if crawl is None:
-            raise ValueError(f"크롤 없음: {crawl_id}")
-        if crawl["status"] != "running":
-            return crawl
-        step = process_next(crawl_id=crawl_id, archive_fn=archive_fn)
-        if step is not None and on_step is not None:
-            on_step(step)
-        if step is None:
-            time.sleep(1)
+    session = (
+        capture.BrowserSession() if archive_fn is pipeline.archive_url else None
+    )
+    try:
+        while True:
+            with db.connect() as conn:
+                crawl = db.get_crawl(conn, crawl_id)
+            if crawl is None:
+                raise ValueError(f"크롤 없음: {crawl_id}")
+            if crawl["status"] != "running":
+                return crawl
+            step = process_next(
+                crawl_id=crawl_id, archive_fn=archive_fn, browser_session=session
+            )
+            if step is not None and on_step is not None:
+                on_step(step)
+            if step is None:
+                time.sleep(1)
+    finally:
+        if session is not None:
+            session.close()
 
 
 def run_loop(
@@ -527,23 +543,30 @@ def run_loop(
     같은 프로세스에 크롤 스레드가 여럿이면(워커) 한 스레드만
     run_schedules=True 로 두면 된다 (중복 등록은 안 되지만 폴링 낭비).
     처리할 페이지가 있으면 즉시 다음으로 넘어가고 (간격은 next_page_at 이
-    강제한다), 없을 때만 poll_seconds 만큼 쉰다.
+    강제한다), 없을 때만 poll_seconds 만큼 쉰다. 브라우저는 페이지 간
+    재사용하고, 큐가 비면 내려서 메모리 점유를 피한다.
     """
     logger.info("크롤러 시작 (폴링 %ds)", poll_seconds)
-    while not stop.is_set():
-        step = None
-        try:
-            if run_schedules:
-                for fired in run_due_schedules():
-                    if fired.status == "started":
-                        logger.info(
-                            "크롤 스케줄 실행: %s → #%d", fired.start_url, fired.crawl_id
-                        )
-            step = process_next(claim=claim, release=release)
-        except Exception:
-            logger.exception("크롤러 폴링 실패")
-        if step is not None and step.crawl_done:
-            logger.info("크롤 완료: #%d", step.crawl_id)
-        if step is None and stop.wait(poll_seconds):
-            break
+    with capture.BrowserSession() as session:
+        while not stop.is_set():
+            step = None
+            try:
+                if run_schedules:
+                    for fired in run_due_schedules():
+                        if fired.status == "started":
+                            logger.info(
+                                "크롤 스케줄 실행: %s → #%d",
+                                fired.start_url, fired.crawl_id,
+                            )
+                step = process_next(
+                    claim=claim, release=release, browser_session=session
+                )
+            except Exception:
+                logger.exception("크롤러 폴링 실패")
+            if step is not None and step.crawl_done:
+                logger.info("크롤 완료: #%d", step.crawl_id)
+            if step is None:
+                session.close()  # 다음 캡처에서 재기동 — 유휴 중 점유 방지
+                if stop.wait(poll_seconds):
+                    break
     logger.info("크롤러 종료")

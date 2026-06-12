@@ -106,6 +106,7 @@ def archive_url(
     force: bool = False,
     source: str = "cli",
     link_rewriter: capture.LinkRewriter | None = None,
+    browser_session: capture.BrowserSession | None = None,
 ) -> ArchiveOutcome:
     """URL 아카이빙 전체 흐름.
 
@@ -113,11 +114,12 @@ def archive_url(
     해시가 직전 스냅샷과 같으면 checks 기록만 남긴다 (force 시 예외).
     source 는 실행 주체('cli' | 'web' | 'schedule' | 'api' | 'crawl') —
     archive_logs 에 기록된다. link_rewriter 는 사이트 전체 아카이브용
-    page.html 앵커 재작성 (capture 참조).
+    page.html 앵커 재작성, browser_session 은 크롤러의 브라우저 재사용
+    (둘 다 capture 참조).
     """
     run = _RunLog(url, source)
     try:
-        return _archive_url(url, force, run, link_rewriter)
+        return _archive_url(url, force, run, link_rewriter, browser_session)
     except Exception as e:
         _log_failure(run, e)
         raise
@@ -128,6 +130,7 @@ def _archive_url(
     force: bool,
     run: _RunLog,
     link_rewriter: capture.LinkRewriter | None = None,
+    browser_session: capture.BrowserSession | None = None,
 ) -> ArchiveOutcome:
     norm = storage.normalize_url(url)
     domain = urlsplit(norm).hostname or ""
@@ -146,6 +149,7 @@ def _archive_url(
                 norm, tmp_dir,
                 remove_selectors=tuple(rules.get("remove_selectors") or ()),
                 link_rewriter=link_rewriter,
+                session=browser_session,
             )
         except capture.CaptureError as e:
             # HTTP 전용 사이트(443 닫힘 등)일 수 있으므로 http 로 한 번 더 시도한다:
@@ -164,6 +168,7 @@ def _archive_url(
                 norm, tmp_dir,
                 remove_selectors=tuple(rules.get("remove_selectors") or ()),
                 link_rewriter=link_rewriter,
+                session=browser_session,
             )
         run.step(
             "capture",

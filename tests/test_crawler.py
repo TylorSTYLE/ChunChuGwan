@@ -210,6 +210,20 @@ def test_run_loop_schedule_polling_toggle(archive_env, monkeypatch):
     assert called == [1]
 
 
+def test_process_next_passes_browser_session_only_when_given(archive_env):
+    """browser_session 은 줄 때만 archive_fn 에 전달 — 기존 주입 fn 호환."""
+    crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    seen = {}
+
+    def fake(url, source, link_rewriter, browser_session=None):
+        seen["session"] = browser_session
+        return fake_outcome(url)
+
+    sentinel = object()  # BrowserSession 대용 — process_next 는 전달만 한다
+    step = crawler.process_next(archive_fn=fake, browser_session=sentinel)
+    assert step is not None and seen["session"] is sentinel
+
+
 def test_process_next_respects_max_pages_and_depth(archive_env):
     row, _ = crawler.start_crawl(
         "https://example.com/docs/", max_pages=2, max_depth=1, delay_seconds=1
