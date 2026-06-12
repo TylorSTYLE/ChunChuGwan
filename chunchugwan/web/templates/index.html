@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
 {% block title %}{{ _("목록") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <style>
@@ -38,13 +39,16 @@
   </thead>
   <tbody>
   {% for it in items %}
-    <tr data-url="{{ (it['site_key'] ~ ' ' ~ (it['title'] or ''))|lower }}">
+    <tr data-url="{{ (it['site_key'] ~ ' ' ~ (it['title'] or '') ~ ' ' ~ (it['network_tags'] | map(attribute='name') | join(' ')))|lower }}">
       <td>
         {% if it['site_id'] %}
         <a href="/sites/{{ it['site_id'] }}" class="mono">{{ it['site_key'] }}</a>
         {% else %}
         <span class="mono">{{ it['site_key'] }}</span>
         {% endif %}
+        {% for tag in it['network_tags'] %}
+        {{ network_tag_badge(tag['name'], tag['description'], tag['id']) }}
+        {% endfor %}
         {% if it['title'] %}
         <div class="muted site-title" title="{{ it['title'] }}">{{ it['title'] }}</div>
         {% endif %}

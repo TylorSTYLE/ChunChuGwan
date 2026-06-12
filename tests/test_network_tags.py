@@ -342,7 +342,9 @@ def test_post_archive_public_unaffected(client, monkeypatch):
     assert res.headers["location"].startswith("/archives?queued=")
 
 
-# ---- 타임라인 표시 ----
+# ---- 목록·상세 화면 표시 ----
+# 같은 IP 대역의 다른 사설 네트워크를 구분할 수 있도록 아카이브 목록·사이트
+# 상세·크롤·타임라인·스냅샷 화면 모두 태그 이름을 뱃지로 보여준다.
 
 
 def test_timeline_shows_tag_badge(client, monkeypatch):
@@ -353,6 +355,97 @@ def test_timeline_shows_tag_badge(client, monkeypatch):
         page = db.get_page(conn, outcome.url)
     res = client.get(f"/page/{page['id']}")
     assert "집 NAS" in res.text
+
+
+def test_archives_list_shows_tag_badge(client, monkeypatch):
+    tag_id = _make_tag()
+    _fake_capture(monkeypatch)
+    pipeline.archive_url("http://192.168.0.10/wiki", network_tag_id=tag_id)
+    res = client.get("/archives")
+    assert "집 NAS" in res.text
+
+
+def test_archives_list_shows_crawl_only_tag(client):
+    """페이지가 아직 없어도 크롤이 참조하는 태그가 사이트 행에 보인다."""
+    tag_id = _make_tag()
+    crawler.start_crawl("http://192.168.0.11/docs/", network_tag_id=tag_id)
+    res = client.get("/archives")
+    assert "집 NAS" in res.text
+
+
+def test_site_view_shows_tag_badges(client, monkeypatch):
+    tag_id = _make_tag()
+    _fake_capture(monkeypatch)
+    outcome = pipeline.archive_url("http://192.168.0.10/wiki", network_tag_id=tag_id)
+    crawler.start_crawl("http://192.168.0.10/docs/", network_tag_id=tag_id)
+    with db.connect() as conn:
+        page = db.get_page(conn, outcome.url)
+    res = client.get(f"/sites/{page['site_id']}")
+    assert "집 NAS" in res.text
+
+
+def test_crawl_view_shows_tag_badge(client):
+    tag_id = _make_tag()
+    crawl, _ = crawler.start_crawl("http://192.168.0.10/docs/", network_tag_id=tag_id)
+    res = client.get(f"/crawls/{crawl['id']}")
+    assert "집 NAS" in res.text
+
+
+def test_snapshot_view_shows_tag_badge(client, monkeypatch):
+    tag_id = _make_tag()
+    _fake_capture(monkeypatch)
+    outcome = pipeline.archive_url("http://192.168.0.10/wiki", network_tag_id=tag_id)
+    with db.connect() as conn:
+        page = db.get_page(conn, outcome.url)
+        snaps = db.list_snapshots(conn, page["id"])
+    res = client.get(f"/snapshot/{snaps[0]['id']}")
+    assert "집 NAS" in res.text
+
+
+def test_schedules_view_shows_tag_badges(client, monkeypatch):
+    """페이지 스케줄·크롤 스케줄 행 모두 태그 뱃지가 보인다."""
+    tag_id = _make_tag()
+    _fake_capture(monkeypatch)
+    outcome = pipeline.archive_url("http://192.168.0.10/wiki", network_tag_id=tag_id)
+    crawler.set_crawl_schedule(
+        "http://192.168.0.10/docs/", 86400, network_tag_id=tag_id
+    )
+    with db.connect() as conn:
+        page = db.get_page(conn, outcome.url)
+        db.upsert_schedule(conn, page["id"], 86400, "2026-06-14T00:00:00+00:00")
+    res = client.get("/schedules")
+    assert res.text.count("집 NAS") >= 2
+
+
+def test_logs_view_shows_tag_badge(client, monkeypatch):
+    tag_id = _make_tag()
+    _fake_capture(monkeypatch)
+    pipeline.archive_url("http://192.168.0.10/wiki", network_tag_id=tag_id)
+    res = client.get("/logs")
+    assert "집 NAS" in res.text
+
+
+def test_dashboard_shows_tag_badge(client, monkeypatch):
+    """현황 화면의 최근 아카이브·최근 로그 양쪽에 태그 뱃지가 보인다."""
+    tag_id = _make_tag()
+    _fake_capture(monkeypatch)
+    pipeline.archive_url("http://192.168.0.10/wiki", network_tag_id=tag_id)
+    res = client.get("/")
+    assert res.text.count("집 NAS") >= 2
+
+
+def test_public_views_show_no_tag_badge(client, monkeypatch):
+    """공인 주소 아카이브에는 어떤 화면에도 태그 뱃지가 없다."""
+    _make_tag()
+    _fake_capture(monkeypatch)
+    outcome = pipeline.archive_url("https://example.com/post")
+    with db.connect() as conn:
+        page = db.get_page(conn, outcome.url)
+    assert "집 NAS" not in client.get("/archives").text
+    assert "집 NAS" not in client.get(f"/sites/{page['site_id']}").text
+    assert "집 NAS" not in client.get(f"/page/{page['id']}").text
+    assert "집 NAS" not in client.get("/").text
+    assert "집 NAS" not in client.get("/logs").text
 
 
 # ---- REST API ----

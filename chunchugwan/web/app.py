@@ -321,6 +321,14 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
         sites = db.list_sites_overview(conn)
         running = [c for c in db.list_crawls(conn) if c["status"] == "running"]
         snap_dirs = db.list_snapshot_dirs(conn)
+        tag_rows = db.list_site_network_tags(conn)
+    # 사이트별 로컬 네트워크 태그 — 같은 IP 대역의 다른 사설 네트워크 구분용
+    site_tags: dict[int, list[dict]] = {}
+    for row in tag_rows:
+        site_tags.setdefault(row["site_id"], []).append(
+            {"id": row["id"], "name": row["name"],
+             "description": row["description"]}
+        )
     # 사이트별 저장 용량 — 스냅샷은 불변이므로 디렉토리 용량을 그대로 합산
     site_bytes: dict[int, int] = {}
     site_snaps: dict[int, list] = {}
@@ -338,6 +346,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
             "crawl_count": s["crawl_count"], "schedule_count": s["schedule_count"],
             "bytes": site_bytes.get(s["id"], 0),
             "title": titles.get(s["id"]),
+            "network_tags": site_tags.get(s["id"], []),
             "activity_at": s["last_activity_at"] or None,
             "crawling": s["running_crawl_count"] > 0,
             "active": s["site_key"] in active_keys or s["running_crawl_count"] > 0,
@@ -351,6 +360,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
             "site_id": None, "site_key": key,
             "page_count": 0, "snapshot_count": 0, "crawl_count": 0,
             "schedule_count": 0, "bytes": 0, "title": None,
+            "network_tags": [],
             "activity_at": t, "crawling": False,
             "active": True,
         }
@@ -414,6 +424,7 @@ def site_view(
         schedules = db.list_site_schedules(conn, site_id)
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
         certificates = db.list_site_certificates(conn, site_id)
+        site_network_tags = db.list_site_network_tags(conn, site_id)
         failed_logs = db.list_site_failed_logs(conn, site_id)
         # 크롤 실패는 페이지 행이 없는 신규 URL 까지 포함 — 실패한 작업
         # 목록(archive_logs 기반)에 이미 있는 URL 은 겹치지 않게 뺀다
@@ -472,6 +483,7 @@ def site_view(
         {
             "site": site, "pages": pages, "crawls": crawls,
             "site_title": _site_title(snap_dirs),
+            "network_tags": site_network_tags,
             "failed_logs": failed_logs,
             "failed_crawl_pages": failed_crawl_pages,
             "schedule_labels": schedule_labels,
@@ -858,6 +870,10 @@ def _snapshot_dir(snap) -> Path:
 @app.get("/snapshot/{snapshot_id}", response_class=HTMLResponse)
 def snapshot_view(request: Request, snapshot_id: int):
     snap = _load_snapshot(request, snapshot_id)
+    network_tag = None
+    if snap["network_tag_id"]:
+        with db.connect() as conn:
+            network_tag = db.get_network_tag(conn, snap["network_tag_id"])
     title = None
     documents: list[dict] = []
     try:
@@ -870,6 +886,7 @@ def snapshot_view(request: Request, snapshot_id: int):
         request, "snapshot.html",
         {
             "snap": snap,
+            "network_tag": network_tag,
             "title": title,
             "documents": documents,
             "page_html_url": f"/snapshot/{snapshot_id}/file/page.html",
@@ -1603,10 +1620,15 @@ def crawl_view(
         counts = db.crawl_page_counts(conn, crawl_id)
         pages = db.list_crawl_pages(conn, crawl_id, status=status_filter or None)
         backoff = crawler.retry_backoff(conn)
+        network_tag = (
+            db.get_network_tag(conn, crawl["network_tag_id"])
+            if crawl["network_tag_id"] else None
+        )
     return templates.TemplateResponse(
         request, "crawl.html",
         {
             "crawl": crawl, "counts": counts, "pages": pages, "merged": merged,
+            "network_tag": network_tag,
             "status_filter": status_filter, "notice": notice,
             "retry_backoff_labels": [
                 i18n.interval_label(request, s) for s in backoff

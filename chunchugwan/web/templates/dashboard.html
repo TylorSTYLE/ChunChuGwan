@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
 {% block title %}{{ _("현황") }} — {{ _("춘추관") }}{% endblock %}
 {% block head %}
 <style>
@@ -76,7 +77,9 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
         {% elif s['changed'] %}<span class="badge changed">{{ _("변경") }}</span>
         {% else %}<span class="badge same">{{ _("동일") }}</span>{% endif %}
       </td>
-      <td class="url-cell"><a href="/page/{{ s['page_id'] }}" title="{{ s['page_url'] }}">{{ s['page_url'] }}</a></td>
+      <td class="url-cell">
+        {%- if s['network_tag_name'] %}{{ network_tag_badge(s['network_tag_name'], s['network_tag_description'], s['network_tag_id']) }} {% endif -%}
+        <a href="/page/{{ s['page_id'] }}" title="{{ s['page_url'] }}">{{ s['page_url'] }}</a></td>
       <td class="num mono">{{ sizes.get(s['id'])|filesize }}</td>
       <td><a href="/snapshot/{{ s['id'] }}">{{ _("보기") }}</a></td>
     </tr>
@@ -99,6 +102,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
       <td class="mono">{{ log['started_at'] | ts }}</td>
       <td><span class="badge {{ badge_class[log['status']] }}">{{ status_label[log['status']] }}</span></td>
       <td class="url-cell">
+        {% if log['network_tag_name'] %}{{ network_tag_badge(log['network_tag_name'], log['network_tag_description'], log['network_tag_id']) }}{% endif %}
         {% if log['page_id'] %}
         <a href="/page/{{ log['page_id'] }}" title="{{ log['url'] }}">{{ log['url'] }}</a>
         {% else %}

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
 {% from "_schedule_field.html" import interval_field, interval_field_js with context %}
 {% block title %}{{ _("스케줄") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
@@ -30,8 +31,9 @@
   <tbody>
   {% for it in items %}
     {% set s = it['row'] %}
-    <tr data-url="{{ s['url']|lower }}">
-      <td><a href="/page/{{ s['page_id'] }}">{{ s['url'] }}</a></td>
+    <tr data-url="{{ (s['url'] ~ ' ' ~ (s['network_tag_name'] or ''))|lower }}">
+      <td><a href="/page/{{ s['page_id'] }}">{{ s['url'] }}</a>
+        {%- if s['network_tag_name'] %} {{ network_tag_badge(s['network_tag_name'], s['network_tag_description'], s['network_tag_id']) }}{% endif %}</td>
       <td class="mono">{{ it['label'] }}</td>
       <td class="mono">{{ s['next_run_at'] | ts }}</td>
       <td class="mono">{{ s['last_run_at'] | ts }}</td>
@@ -80,8 +82,9 @@
   <tbody>
   {% for it in crawl_items %}
     {% set s = it['row'] %}
-    <tr data-url="{{ s['start_url']|lower }}">
-      <td class="mono">{{ s['start_url'] }}</td>
+    <tr data-url="{{ (s['start_url'] ~ ' ' ~ (s['network_tag_name'] or ''))|lower }}">
+      <td class="mono">{{ s['start_url'] }}
+        {%- if s['network_tag_name'] %} {{ network_tag_badge(s['network_tag_name'], s['network_tag_description'], s['network_tag_id']) }}{% endif %}</td>
       <td class="mono">{{ s['max_pages'] }} · {{ s['max_depth'] }} · {{ s['delay_seconds'] }}s</td>
       <td class="mono">{{ it['label'] }}</td>
       <td class="mono">{{ s['next_run_at'] | ts }}</td>
