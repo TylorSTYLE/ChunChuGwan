@@ -23,6 +23,20 @@
            placeholder="{{ _('https:// 생략 가능') }}">
     <span class="hint">{{ _("트래킹 파라미터(utm_* 등)는 자동으로 제거된 정규화 URL 로 저장됩니다.") }}</span>
   </label>
+  <label>{{ _("로컬 네트워크 태그") }}
+    {% if network_tags %}
+    <select name="network_tag">
+      <option value="">{{ _("선택 안 함 (공개 주소)") }}</option>
+      {% for tag in network_tags %}
+      <option value="{{ tag.id }}">{{ tag.name }}{% if tag.description %} — {{ tag.description }}{% endif %}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <span class="hint">
+      {{ _("사설 IP 대역(로컬 네트워크) 주소는 태그를 선택해야 아카이빙할 수 있습니다. 루프백 주소는 아카이빙할 수 없습니다.") }}
+      {% if not network_tags %}{{ _("등록된 로컬 네트워크 태그가 없습니다 — 시스템 화면에서 먼저 추가하세요.") }}{% endif %}
+    </span>
+  </label>
   <label class="check">
     <input type="checkbox" name="site" id="site-checkbox" value="on">
     {{ _("사이트 전체 아카이브") }}

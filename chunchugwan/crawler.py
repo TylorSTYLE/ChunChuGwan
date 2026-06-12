@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Sequence
 from urllib.parse import quote, urlsplit
 
-from . import capture, config, db, pipeline, scheduler, storage
+from . import capture, config, db, netcheck, pipeline, scheduler, storage
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +170,29 @@ def _resolve_options(
     return max_pages, max_depth, delay_seconds
 
 
+def _check_network_tag(
+    conn: sqlite3.Connection, host: str, network_tag_id: str | None
+) -> str | None:
+    """크롤·크롤 스케줄의 네트워크 게이트 (netcheck — pipeline 과 같은 정책).
+
+    루프백은 ValueError. 사설 대역은 등록된 태그 id 필수, 공인이면 태그 무시.
+    """
+    kind = netcheck.classify_host(host)
+    if kind == netcheck.LOOPBACK:
+        raise ValueError(f"루프백 주소는 아카이빙할 수 없습니다: {host}")
+    if kind != netcheck.PRIVATE:
+        return None
+    if not network_tag_id:
+        raise ValueError(
+            "로컬 네트워크(사설 IP) 사이트는 로컬 네트워크 태그를 지정해야 "
+            "아카이빙할 수 있습니다 — 시스템 화면에서 태그를 만들고 "
+            "새 아카이빙 화면에서 선택하세요"
+        )
+    if db.get_network_tag(conn, network_tag_id) is None:
+        raise ValueError(f"등록되지 않은 로컬 네트워크 태그: {network_tag_id}")
+    return network_tag_id
+
+
 def start_crawl(
     url: str,
     *,
@@ -177,6 +200,7 @@ def start_crawl(
     max_depth: int | None = None,
     delay_seconds: int | None = None,
     source: str = "web",
+    network_tag_id: str | None = None,
 ) -> tuple[sqlite3.Row, bool]:
     """크롤을 등록하고(시작 URL 을 큐에 넣고) (크롤 row, 병합 여부)를 반환.
 
@@ -189,10 +213,15 @@ def start_crawl(
     실행은 등록과 분리되어 있다 — serve 의 크롤러 스레드 또는
     run_crawl/process_next 가 큐를 소비한다. 옵션이 None 이면 시스템 설정의
     기본값(crawl_defaults)을 쓴다. 옵션 범위 위반은 ValueError.
+    network_tag_id 는 사설 대역(로컬 네트워크) 사이트일 때 필수 — 크롤이
+    아카이빙하는 모든 페이지에 적용된다 (루프백은 항상 ValueError).
     """
     norm = storage.normalize_url(url)
     scope_host, scope_path = scope_of(norm)
     with db.connect() as conn:
+        network_tag_id = _check_network_tag(
+            conn, urlsplit(norm).hostname or "", network_tag_id
+        )
         max_pages, max_depth, delay_seconds = _resolve_options(
             conn, max_pages, max_depth, delay_seconds
         )
@@ -204,6 +233,7 @@ def start_crawl(
             start_url=norm, scope_host=scope_host, scope_path=scope_path,
             max_pages=max_pages, max_depth=max_depth,
             delay_seconds=delay_seconds, source=source,
+            network_tag_id=network_tag_id,
         )
         db.insert_crawl_page(conn, crawl_id, norm, 0)
         return db.get_crawl(conn, crawl_id), False
@@ -348,9 +378,11 @@ def process_next(
 
     try:
         try:
-            # browser_session 은 줄 때만 넘긴다 — archive_fn 주입(테스트)이
-            # 이 인자를 몰라도 동작하게.
+            # browser_session·network_tag_id 는 줄 때만 넘긴다 — archive_fn
+            # 주입(테스트)이 이 인자를 몰라도 동작하게.
             extra = {"browser_session": browser_session} if browser_session else {}
+            if item["network_tag_id"]:
+                extra["network_tag_id"] = item["network_tag_id"]
             outcome = archive_fn(
                 url, source="crawl", link_rewriter=link_rewriter(item["crawl_id"]),
                 **extra,
@@ -383,19 +415,24 @@ def set_crawl_schedule(
     max_pages: int | None = None,
     max_depth: int | None = None,
     delay_seconds: int | None = None,
+    network_tag_id: str | None = None,
 ) -> sqlite3.Row:
     """시작 URL 에 주기적 사이트 아카이브를 등록/변경하고 스케줄 row 반환.
 
     주기 규칙은 페이지 스케줄과 동일(1시간~1개월, 1일 단위 주기는 실행 시각
     지정 가능). 다음 실행은 지금 + 주기 — 보통 등록과 함께 첫 크롤을 따로
     시작하므로 즉시 실행하지 않는다. 옵션이 None 이면 시스템 설정 기본값.
-    주기·옵션 범위 위반은 ValueError.
+    주기·옵션 범위 위반은 ValueError. network_tag_id 는 사설 대역 사이트일
+    때 필수 — 주기 실행으로 만드는 크롤에 그대로 적용된다.
     """
     scheduler.validate_interval(interval_seconds)
     if run_at:
         scheduler.validate_run_at(run_at, interval_seconds)
     norm = storage.normalize_url(url)
     with db.connect() as conn:
+        network_tag_id = _check_network_tag(
+            conn, urlsplit(norm).hostname or "", network_tag_id
+        )
         max_pages, max_depth, delay_seconds = _resolve_options(
             conn, max_pages, max_depth, delay_seconds
         )
@@ -406,7 +443,7 @@ def set_crawl_schedule(
             conn, norm,
             max_pages=max_pages, max_depth=max_depth, delay_seconds=delay_seconds,
             interval_seconds=interval_seconds, next_run_at=next_run,
-            run_at_time=run_at,
+            run_at_time=run_at, network_tag_id=network_tag_id,
         )
         return db.get_crawl_schedule(conn, norm)
 
@@ -481,6 +518,7 @@ def run_due_schedules(*, source: str = "schedule") -> list[ScheduleStep]:
                 url,
                 max_pages=sched["max_pages"], max_depth=sched["max_depth"],
                 delay_seconds=sched["delay_seconds"], source=source,
+                network_tag_id=sched["network_tag_id"],
             )
             if merged:
                 # 미루기 검사 직후 다른 경로가 같은 크롤을 등록한 드문 경우 —

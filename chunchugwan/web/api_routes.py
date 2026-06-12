@@ -13,11 +13,12 @@
 from __future__ import annotations
 
 import sqlite3
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from .. import auth, config, db, storage
+from .. import auth, config, db, netcheck, storage
 
 # 스냅샷 파일 응답에서 안내하는 논리 파일 이름 (서빙은 app.snapshot_file 공용)
 _SNAPSHOT_FILE_NAMES = ("page.html", "screenshot", "content.md")
@@ -173,6 +174,20 @@ def api_archive(request: Request, payload: ArchiveRequest, background: Backgroun
         norm = storage.normalize_url(payload.url)
     except ValueError as e:
         raise HTTPException(400, f"잘못된 URL: {e}")
+    # 네트워크 게이트 — 루프백 금지. 사설 대역은 웹 UI 에서 로컬 네트워크
+    # 태그를 지정해 먼저 아카이빙한 페이지만 허용한다 (pipeline 이 재검증).
+    kind = netcheck.classify_host(urlsplit(norm).hostname or "")
+    if kind == netcheck.LOOPBACK:
+        raise HTTPException(400, "루프백 주소는 아카이빙할 수 없습니다")
+    if kind == netcheck.PRIVATE:
+        with db.connect() as conn:
+            page = db.get_page(conn, norm)
+        if page is None or not page["network_tag_id"]:
+            raise HTTPException(
+                400,
+                "로컬 네트워크(사설 IP) 주소는 로컬 네트워크 태그가 필요합니다 — "
+                "대시보드의 새 아카이빙 화면에서 태그를 지정해 먼저 아카이빙하세요",
+            )
     from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
 
     queued = webapp._queue_archive(background, norm, force=payload.force, source="api")

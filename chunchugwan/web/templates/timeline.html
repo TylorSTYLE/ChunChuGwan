@@ -19,7 +19,11 @@
   </form>
   {% endif %}
 </div>
-<p class="muted mono" style="margin-top:0">{{ page['domain'] }} / {{ page['slug'] }}</p>
+<p class="muted mono" style="margin-top:0">{{ page['domain'] }} / {{ page['slug'] }}
+  {% if network_tag %}
+  <span class="badge changed" title="{{ _('로컬 네트워크 태그') }}{% if network_tag['description'] %} — {{ network_tag['description'] }}{% endif %} (ID: {{ network_tag['id'] }})">{{ network_tag['name'] }}</span>
+  {% endif %}
+</p>
 
 <div class="toolbar" style="margin-bottom:12px">
   <span class="muted">{{ _("자동 재아카이빙") }}</span>

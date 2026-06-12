@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Iterator
@@ -27,11 +28,19 @@ def invalidate_schema_cache() -> None:
         _schema_ready.clear()
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS network_tags (
+    id          TEXT PRIMARY KEY,       -- GUID (uuid4) — 생성 시 자동 발급
+    name        TEXT NOT NULL UNIQUE,   -- 표시 이름 (예: '집 NAS')
+    description TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS pages (
     id          INTEGER PRIMARY KEY,
     url         TEXT NOT NULL UNIQUE,   -- 정규화된 URL
     domain      TEXT NOT NULL,
     slug        TEXT NOT NULL,          -- 디렉토리명 {slug}-{hash8}
+    network_tag_id TEXT REFERENCES network_tags(id),  -- 사설 대역 페이지의 로컬 네트워크 태그
     created_at  TEXT NOT NULL           -- ISO 8601 UTC
 );
 
@@ -90,6 +99,7 @@ CREATE TABLE IF NOT EXISTS crawls (
     max_depth      INTEGER NOT NULL,
     delay_seconds  INTEGER NOT NULL,   -- 페이지 간 최소 간격 (대상 서버 부담 방지)
     source         TEXT NOT NULL DEFAULT 'web',      -- 'web' | 'cli'
+    network_tag_id TEXT REFERENCES network_tags(id), -- 사설 대역 크롤의 로컬 네트워크 태그
     created_at     TEXT NOT NULL,
     finished_at    TEXT,
     next_page_at   TEXT NOT NULL       -- 다음 페이지 처리 가능 시각 (ISO 8601 UTC)
@@ -121,6 +131,7 @@ CREATE TABLE IF NOT EXISTS crawl_schedules (
     next_run_at      TEXT NOT NULL,         -- ISO 8601 UTC
     last_run_at      TEXT,
     run_at_time      TEXT,                  -- 'HH:MM' 서버 로컬 시간 (1일 단위 주기 전용)
+    network_tag_id   TEXT REFERENCES network_tags(id),  -- 사설 대역 사이트의 로컬 네트워크 태그
     created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_crawl_schedules_next ON crawl_schedules(next_run_at);
@@ -259,6 +270,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(schedules)")}
     if cols and "run_at_time" not in cols:
         conn.execute("ALTER TABLE schedules ADD COLUMN run_at_time TEXT")
+    # 로컬 네트워크 태그 — network_tags 테이블은 SCHEMA(executescript)가 먼저 만든다
+    for table in ("pages", "crawls", "crawl_schedules"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if cols and "network_tag_id" not in cols:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN network_tag_id TEXT REFERENCES network_tags(id)"
+            )
 
 
 @contextmanager
@@ -339,14 +357,35 @@ def list_checks(conn: sqlite3.Connection, page_id: int, limit: int = 20) -> list
     ).fetchall()
 
 
-def get_or_create_page(conn: sqlite3.Connection, url: str, domain: str, slug: str) -> int:
-    """정규화 URL로 page row를 찾거나 생성하고 id 반환."""
-    row = conn.execute("SELECT id FROM pages WHERE url = ?", (url,)).fetchone()
+def get_or_create_page(
+    conn: sqlite3.Connection,
+    url: str,
+    domain: str,
+    slug: str,
+    network_tag_id: str | None = None,
+) -> int:
+    """정규화 URL로 page row를 찾거나 생성하고 id 반환.
+
+    network_tag_id 를 주면 기존 페이지의 태그도 갱신한다 — 태그 없이
+    만들어진 사설 대역 페이지를 새 아카이빙 폼에서 태그를 골라 다시
+    제출하는 것이 태그 지정/변경 경로다.
+    """
+    row = conn.execute(
+        "SELECT id, network_tag_id FROM pages WHERE url = ?", (url,)
+    ).fetchone()
     if row is not None:
+        if network_tag_id is not None and row["network_tag_id"] != network_tag_id:
+            conn.execute(
+                "UPDATE pages SET network_tag_id = ? WHERE id = ?",
+                (network_tag_id, row["id"]),
+            )
         return row["id"]
     cur = conn.execute(
-        "INSERT INTO pages (url, domain, slug, created_at) VALUES (?, ?, ?, ?)",
-        (url, domain, slug, _utcnow()),
+        """
+        INSERT INTO pages (url, domain, slug, network_tag_id, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (url, domain, slug, network_tag_id, _utcnow()),
     )
     return cur.lastrowid
 
@@ -869,6 +908,7 @@ def insert_crawl(
     max_depth: int,
     delay_seconds: int,
     source: str,
+    network_tag_id: str | None = None,
 ) -> int:
     """크롤 row 생성 후 id 반환. next_page_at 은 지금 — 즉시 시작 가능."""
     now = _utcnow()
@@ -876,11 +916,11 @@ def insert_crawl(
         """
         INSERT INTO crawls
             (start_url, scope_host, scope_path, max_pages, max_depth,
-             delay_seconds, source, created_at, next_page_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             delay_seconds, source, network_tag_id, created_at, next_page_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (start_url, scope_host, scope_path, max_pages, max_depth,
-         delay_seconds, source, now, now),
+         delay_seconds, source, network_tag_id, now, now),
     )
     return cur.lastrowid
 
@@ -966,7 +1006,7 @@ def claim_due_crawl_page(
     """
     sql = """
         SELECT cp.*, c.scope_host, c.scope_path, c.max_pages, c.max_depth,
-               c.delay_seconds
+               c.delay_seconds, c.network_tag_id
         FROM crawl_pages cp JOIN crawls c ON c.id = cp.crawl_id
         WHERE c.status = 'running' AND c.next_page_at <= ?
           AND cp.status = 'pending'
@@ -1185,24 +1225,26 @@ def upsert_crawl_schedule(
     interval_seconds: int,
     next_run_at: str,
     run_at_time: str | None = None,
+    network_tag_id: str | None = None,
 ) -> None:
     """시작 URL 의 크롤 스케줄 등록 (이미 있으면 옵션·주기·다음 실행 시각 교체)."""
     conn.execute(
         """
         INSERT INTO crawl_schedules
             (start_url, max_pages, max_depth, delay_seconds,
-             interval_seconds, next_run_at, run_at_time, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             interval_seconds, next_run_at, run_at_time, network_tag_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(start_url) DO UPDATE SET
             max_pages = excluded.max_pages,
             max_depth = excluded.max_depth,
             delay_seconds = excluded.delay_seconds,
             interval_seconds = excluded.interval_seconds,
             next_run_at = excluded.next_run_at,
-            run_at_time = excluded.run_at_time
+            run_at_time = excluded.run_at_time,
+            network_tag_id = excluded.network_tag_id
         """,
         (start_url, max_pages, max_depth, delay_seconds,
-         interval_seconds, next_run_at, run_at_time, _utcnow()),
+         interval_seconds, next_run_at, run_at_time, network_tag_id, _utcnow()),
     )
 
 
@@ -1497,6 +1539,77 @@ def delete_invite(conn: sqlite3.Connection, invite_id: int) -> bool:
 def delete_expired_invites(conn: sqlite3.Connection) -> None:
     """만료 초대 일괄 삭제 (기회적 정리용)."""
     conn.execute("DELETE FROM invites WHERE expires_at <= ?", (_utcnow(),))
+
+
+# ---- 로컬 네트워크 태그 ----
+# 사설 IP 대역(로컬 네트워크)을 구분하는 태그. 사설 대역 URL 은 태그를
+# 지정해야 아카이빙할 수 있다 (게이트는 pipeline·crawler — netcheck 참조).
+# id 는 GUID(uuid4) — 이름을 바꿔도 페이지·크롤의 참조가 유지된다.
+
+
+def list_network_tags(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """로컬 네트워크 태그 목록 (이름순) + 참조 수(페이지·크롤·크롤 스케줄)."""
+    return conn.execute(
+        """
+        SELECT nt.*,
+               (SELECT COUNT(*) FROM pages p WHERE p.network_tag_id = nt.id)
+                   AS page_count,
+               (SELECT COUNT(*) FROM crawls c WHERE c.network_tag_id = nt.id)
+                 + (SELECT COUNT(*) FROM crawl_schedules cs
+                    WHERE cs.network_tag_id = nt.id) AS crawl_count
+        FROM network_tags nt ORDER BY nt.name
+        """
+    ).fetchall()
+
+
+def get_network_tag(conn: sqlite3.Connection, tag_id: str) -> sqlite3.Row | None:
+    """태그 id(GUID)로 조회 (없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM network_tags WHERE id = ?", (tag_id,)
+    ).fetchone()
+
+
+def get_network_tag_by_name(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    """태그 이름으로 조회 (없으면 None) — 중복 이름 사전 검사용."""
+    return conn.execute(
+        "SELECT * FROM network_tags WHERE name = ?", (name,)
+    ).fetchone()
+
+
+def create_network_tag(
+    conn: sqlite3.Connection, name: str, description: str = ""
+) -> sqlite3.Row:
+    """로컬 네트워크 태그 생성 (id 는 GUID 자동 발급) 후 row 반환.
+
+    이름 중복은 UNIQUE 제약으로 IntegrityError — 호출부가 사전 검사한다.
+    """
+    tag_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO network_tags (id, name, description, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (tag_id, name, description, _utcnow()),
+    )
+    return get_network_tag(conn, tag_id)
+
+
+def count_network_tag_refs(conn: sqlite3.Connection, tag_id: str) -> int:
+    """태그를 참조하는 행 수 (pages + crawls + crawl_schedules) — 삭제 가드용."""
+    return conn.execute(
+        """
+        SELECT (SELECT COUNT(*) FROM pages WHERE network_tag_id = ?)
+             + (SELECT COUNT(*) FROM crawls WHERE network_tag_id = ?)
+             + (SELECT COUNT(*) FROM crawl_schedules WHERE network_tag_id = ?) AS c
+        """,
+        (tag_id, tag_id, tag_id),
+    ).fetchone()["c"]
+
+
+def delete_network_tag(conn: sqlite3.Connection, tag_id: str) -> bool:
+    """태그 삭제. 없었으면 False. 참조 중 삭제는 호출부가 막는다 (count_network_tag_refs)."""
+    cur = conn.execute("DELETE FROM network_tags WHERE id = ?", (tag_id,))
+    return cur.rowcount > 0
 
 
 # ---- 설정 (key-value) ----

@@ -33,8 +33,8 @@ from fastapi.responses import (
 )
 
 from .. import (
-    auth, config, crawler, db, deletion, differ, documents, pipeline, resources,
-    scheduler, storage,
+    auth, config, crawler, db, deletion, differ, documents, netcheck, pipeline,
+    resources, scheduler, storage,
 )
 from . import api_routes, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -463,6 +463,10 @@ def timeline(
         snaps = db.list_snapshots(conn, page_id)
         checks = db.list_checks(conn, page_id)
         schedule = db.get_schedule(conn, page_id)
+        network_tag = (
+            db.get_network_tag(conn, page["network_tag_id"])
+            if page["network_tag_id"] else None
+        )
 
     items = []
     for i, s in enumerate(snaps, 1):
@@ -474,6 +478,7 @@ def timeline(
         {
             "page": page, "items": items, "checks": checks, "queued": queued,
             "notice": notice, "error": error,
+            "network_tag": network_tag,
             "schedule": schedule,
             "schedule_label": (
                 i18n.schedule_label(
@@ -1003,6 +1008,7 @@ def _run_archive(
     interval_seconds: int | None = None,
     run_at: str | None = None,
     source: str = "web",
+    network_tag_id: str | None = None,
 ) -> None:
     """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다 (source 포함).
 
@@ -1010,7 +1016,9 @@ def _run_archive(
     신규 URL 은 아카이빙이 끝나야 pages 행이 생기므로 등록을 여기서 한다.
     """
     try:
-        outcome = pipeline.archive_url(url, force=force, source=source)
+        # network_tag_id 는 줄 때만 넘긴다 (사설 대역 — 폼에서 선택)
+        extra = {"network_tag_id": network_tag_id} if network_tag_id else {}
+        outcome = pipeline.archive_url(url, force=force, source=source, **extra)
         logger.info("아카이빙 완료: %s [%s]", url, outcome.status)
     except Exception:
         logger.exception("아카이빙 실패: %s", url)
@@ -1031,6 +1039,7 @@ def _queue_archive(
     interval_seconds: int | None = None,
     run_at: str | None = None,
     source: str = "web",
+    network_tag_id: str | None = None,
 ) -> bool:
     """진행 목록 등록 후 백그라운드 작업 추가. 이미 진행 중이면 무시(False).
 
@@ -1038,7 +1047,9 @@ def _queue_archive(
     """
     if not _register_job(url):
         return False
-    background.add_task(_run_archive, url, force, interval_seconds, run_at, source)
+    background.add_task(
+        _run_archive, url, force, interval_seconds, run_at, source, network_tag_id
+    )
     return True
 
 
@@ -1064,10 +1075,12 @@ def archive_new_form(request: Request, error: str = "", url: str = ""):
     _require_archiver(request)
     with db.connect() as conn:
         defaults = crawler.crawl_defaults(conn)
+        network_tags = db.list_network_tags(conn)
     return templates.TemplateResponse(
         request, "archive_new.html",
         {
             "error": error, "url": url, "interval_options": _SCHEDULE_OPTIONS,
+            "network_tags": network_tags,
             "crawl_defaults": {
                 "max_pages": defaults["max_pages"],
                 "max_depth": defaults["max_depth"],
@@ -1083,9 +1096,33 @@ def archive_new_form(request: Request, error: str = "", url: str = ""):
     )
 
 
+def _network_gate(request: Request, norm: str, tag_id: str | None) -> str | None:
+    """네트워크 게이트의 동기(폼) 검증 — 사용자에게 폼 오류로 바로 보여준다.
+
+    공인 주소면 태그 무시(None 반환). 위반은 번역된 메시지의 ValueError.
+    실제 강제는 pipeline/crawler 가 한 번 더 한다 (쓰기는 코어 모듈 원칙).
+    """
+    kind = netcheck.classify_host(urlsplit(norm).hostname or "")
+    if kind == netcheck.LOOPBACK:
+        raise ValueError(t(request, "루프백 주소는 아카이빙할 수 없습니다"))
+    if kind != netcheck.PRIVATE:
+        return None
+    if not tag_id:
+        raise ValueError(t(
+            request,
+            "로컬 네트워크(사설 IP) 주소는 로컬 네트워크 태그를 선택해야 "
+            "아카이빙할 수 있습니다 — 태그는 시스템 화면에서 관리합니다",
+        ))
+    with db.connect() as conn:
+        if db.get_network_tag(conn, tag_id) is None:
+            raise ValueError(t(request, "알 수 없는 로컬 네트워크 태그입니다"))
+    return tag_id
+
+
 def _archive_site(
     request: Request, url: str, max_pages: str, max_depth: str, delay: str,
     interval_seconds: int | None = None, run_at: str | None = None,
+    network_tag_id: str | None = None,
 ) -> RedirectResponse:
     """사이트 전체 아카이브 등록 — 크롤을 만들고 진행 화면으로 보낸다.
 
@@ -1101,10 +1138,13 @@ def _archive_site(
             "max_depth": int(max_depth) if max_depth else None,
             "delay_seconds": int(delay) if delay else None,
         }
-        crawl, merged = crawler.start_crawl(url, **options, source="web")
+        crawl, merged = crawler.start_crawl(
+            url, **options, source="web", network_tag_id=network_tag_id
+        )
         if interval_seconds:
             crawler.set_crawl_schedule(
-                url, interval_seconds, run_at=run_at, **options
+                url, interval_seconds, run_at=run_at, **options,
+                network_tag_id=network_tag_id,
             )
     except ValueError as exc:
         params = urlencode(
@@ -1128,11 +1168,13 @@ def archive_new(
     custom_value: str = Form(""),
     custom_unit: str = Form("h"),
     run_at: str = Form(""),
+    network_tag: str = Form(""),
 ):
     """새 URL 아카이빙. 검증은 동기로, 캡처·주기 등록(interval>0)은 백그라운드로.
 
     site 체크 시 사이트 전체 아카이브(크롤) 등록으로 분기한다 — 주기를
     선택했으면 같은 옵션의 크롤 스케줄(주기적 재크롤)도 함께 등록된다.
+    network_tag 는 로컬 네트워크(사설 IP) 대상일 때 필수 (루프백은 거부).
     """
     _require_archiver(request)
     try:
@@ -1141,8 +1183,8 @@ def archive_new(
             scheduler.validate_interval(seconds)
             if run_at:
                 scheduler.validate_run_at(run_at, seconds)
-        if not site:
-            norm = storage.normalize_url(url)
+        norm = storage.normalize_url(url)
+        tag_id = _network_gate(request, norm, network_tag.strip() or None)
     except ValueError as exc:
         params = urlencode(
             {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
@@ -1153,10 +1195,12 @@ def archive_new(
             request, url, crawl_max_pages, crawl_max_depth, crawl_delay,
             interval_seconds=seconds or None,
             run_at=(run_at or None) if seconds else None,
+            network_tag_id=tag_id,
         )
     _queue_archive(
         background, norm,
         interval_seconds=seconds or None, run_at=(run_at or None) if seconds else None,
+        network_tag_id=tag_id,
     )
     return RedirectResponse(f"/archives?queued={quote(norm, safe='')}", status_code=303)
 

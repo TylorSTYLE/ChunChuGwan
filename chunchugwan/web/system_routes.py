@@ -57,6 +57,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         signup_default_role = db.signup_default_role(conn)
         crawl_defaults = crawler.crawl_defaults(conn)
         crawl_backoff = crawler.retry_backoff(conn)
+        network_tags = db.list_network_tags(conn)
     return templates.TemplateResponse(
         request, "system.html",
         {
@@ -68,6 +69,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "crawl_defaults": crawl_defaults,
             "crawl_retry_backoff": ", ".join(str(v) for v in crawl_backoff),
             "crawl_max_attempts": len(crawl_backoff) + 1,
+            "network_tags": network_tags,
             "crawl_limits": {
                 "max_pages": config.CRAWL_MAX_PAGES_LIMIT,
                 "max_depth": config.CRAWL_MAX_DEPTH_LIMIT,
@@ -201,6 +203,66 @@ def system_crawl_settings(
             conn, db.CRAWL_RETRY_BACKOFF_KEY, ",".join(str(v) for v in backoff)
         )
     return _system_redirect(notice=t(request, "사이트 아카이브 설정을 저장했습니다."))
+
+
+# ---- 로컬 네트워크 태그 ----
+# 사설 IP 대역(로컬 네트워크) 아카이빙을 허용하는 태그. id 는 GUID 자동
+# 발급, 표시 이름·설명은 문자열. 태그가 없으면 사설 대역은 아카이빙 불가
+# (게이트는 pipeline·crawler — netcheck 참조). 루프백은 태그와 무관하게 금지.
+
+MAX_NETWORK_TAG_NAME_LENGTH = 60
+MAX_NETWORK_TAG_DESC_LENGTH = 200
+
+
+@router.post("/network-tags")
+def network_tags_create(
+    request: Request, name: str = Form(...), description: str = Form("")
+):
+    """로컬 네트워크 태그 추가 — id(GUID)는 자동 발급된다."""
+    name = name.strip()
+    description = description.strip()
+    if not name:
+        return _system_redirect(error=t(request, "태그 이름을 입력하세요."))
+    if len(name) > MAX_NETWORK_TAG_NAME_LENGTH:
+        return _system_redirect(
+            error=t(request, "태그 이름은 {n}자 이하여야 합니다.",
+                    n=MAX_NETWORK_TAG_NAME_LENGTH)
+        )
+    if len(description) > MAX_NETWORK_TAG_DESC_LENGTH:
+        return _system_redirect(
+            error=t(request, "태그 설명은 {n}자 이하여야 합니다.",
+                    n=MAX_NETWORK_TAG_DESC_LENGTH)
+        )
+    with db.connect() as conn:
+        if db.get_network_tag_by_name(conn, name) is not None:
+            return _system_redirect(
+                error=t(request, "이미 있는 태그 이름입니다: {name}", name=name)
+            )
+        db.create_network_tag(conn, name, description)
+    return _system_redirect(
+        notice=t(request, "로컬 네트워크 태그 '{name}'을(를) 추가했습니다.", name=name)
+    )
+
+
+@router.post("/network-tags/{tag_id}/delete")
+def network_tags_delete(request: Request, tag_id: str):
+    """로컬 네트워크 태그 삭제 — 페이지·크롤·크롤 스케줄이 참조 중이면 거부."""
+    with db.connect() as conn:
+        tag = db.get_network_tag(conn, tag_id)
+        if tag is None:
+            raise HTTPException(404, t(request, "로컬 네트워크 태그 없음"))
+        refs = db.count_network_tag_refs(conn, tag_id)
+        if refs:
+            return _system_redirect(
+                error=t(request,
+                        "'{name}' 태그는 사용 중이라 삭제할 수 없습니다 (참조 {n}개).",
+                        name=tag["name"], n=refs)
+            )
+        db.delete_network_tag(conn, tag_id)
+    return _system_redirect(
+        notice=t(request, "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.",
+                 name=tag["name"])
+    )
 
 
 @router.post("/restore")
