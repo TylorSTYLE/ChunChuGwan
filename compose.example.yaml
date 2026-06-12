@@ -6,20 +6,28 @@
 # 환경변수 전체 목록은 README "인증 > 환경변수" 절 참조.
 services:
   dashboard:
-    build: .
+    image: ghcr.io/tylorstyle/chunchugwan:latest   # GitHub Actions 가 main 푸시마다 게시 (amd64/arm64)
+    # build: .                      # 로컬 소스에서 직접 빌드하려면 image: 줄 대신 사용
     command: serve
     environment:
       WCCG_HOST: "0.0.0.0"          # 컨테이너 내부 바인딩. 외부 노출은 아래 127.0.0.1 매핑이 차단.
+      TZ: "Asia/Seoul"              # 1일 주기 스케줄의 실행 시각(HH:MM)이 서버 로컬 시간 기준 — 미설정 시 UTC
       # --- 선택 설정: 필요한 항목만 주석 해제 ---
       # WCCG_ADMIN_EMAIL: "admin@example.com"        # 최초 구동 시 관리자 자동 등록
       # WCCG_ADMIN_PASSWORD: "change-me"             # (8자 이상, 최초 구동 후 제거 권장)
       # WCCG_PUBLIC_URL: "https://archive.example.com"  # 리버스 프록시로 외부 노출 시
+      # WCCG_SESSION_TTL_DAYS: "14"                  # 세션 수명 (일)
+      # WCCG_SCHEDULER: "off"                        # serve 내장 스케줄러 끄기 (cron 에서 schedule run 사용 시)
       # WCCG_OIDC_ISSUER: "https://auth.example.com/application/o/chunchugwan"
       # WCCG_OIDC_CLIENT_ID: ""
       # WCCG_OIDC_CLIENT_SECRET: ""
-      # WCCG_SMTP_HOST: "smtp.example.com"           # 초대 메일 발송용
-      # WCCG_SMTP_USER: ""
+      # WCCG_SMTP_HOST: "smtp.example.com"           # 초대 메일 발송용 — 미설정 시 초대 링크를 화면에 표시
+      # WCCG_SMTP_PORT: "587"
+      # WCCG_SMTP_USER: ""                           # 없으면 SMTP 인증 생략
       # WCCG_SMTP_PASSWORD: ""
+      # WCCG_SMTP_FROM: ""                           # 발신자 주소 (기본: WCCG_SMTP_USER)
+      # WCCG_SMTP_TLS: "starttls"                    # starttls | ssl | off
+      # WCCG_INVITE_TTL_DAYS: "7"                    # 초대 링크 수명 (일)
     ports:
       - "127.0.0.1:8765:8765"       # localhost 전용 원칙 유지. 외부 노출은 리버스 프록시를 앞단에 둘 것.
     volumes:
@@ -29,8 +37,11 @@ services:
     restart: unless-stopped
 
   cli:
-    build: .
+    image: ghcr.io/tylorstyle/chunchugwan:latest
+    # build: .                      # 로컬 소스에서 직접 빌드하려면 image: 줄 대신 사용
     profiles: ["cli"]               # `docker compose up` 시 기동되지 않음
+    environment:
+      TZ: "Asia/Seoul"              # schedule add --at 등 시각 계산을 대시보드와 동일 기준으로
     volumes:
       - ./archive:/data/archive
     shm_size: 1gb
