@@ -272,6 +272,39 @@ def favicon() -> FileResponse:
     return FileResponse(_FAVICON_PATH, media_type="image/svg+xml")
 
 
+def _snapshot_dir_size(domain: str, slug: str, dir_name: str) -> int:
+    """스냅샷 디렉토리의 파일 용량 합 (바이트). 디렉토리가 없으면 0."""
+    snap_dir = storage.page_dir(domain, slug) / dir_name
+    return sum(f["bytes"] for f in storage.snapshot_files(snap_dir))
+
+
+def _snapshot_title(domain: str, slug: str, dir_name: str) -> str | None:
+    """스냅샷 meta.json 의 title (없거나 읽기 실패 시 None)."""
+    path = storage.page_dir(domain, slug) / dir_name / "meta.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("title") or None
+    except (OSError, ValueError):
+        return None
+
+
+# 사이트 타이틀 탐색 시 거슬러 올라가는 최신 스냅샷 수 한도
+_TITLE_LOOKBACK = 5
+
+
+def _site_title(snap_rows) -> str | None:
+    """사이트 스냅샷 중 최신 것부터 meta.json title 을 찾는다 (현재 타이틀).
+
+    오류 페이지 캡처 등 title 없는 스냅샷이 끼어도 직전 제목으로 폴백하되,
+    파일 IO 를 한정하기 위해 _TITLE_LOOKBACK 개까지만 본다.
+    """
+    recent = sorted(snap_rows, key=lambda r: r["taken_at"], reverse=True)
+    for row in recent[:_TITLE_LOOKBACK]:
+        title = _snapshot_title(row["domain"], row["slug"], row["dir_name"])
+        if title:
+            return title
+    return None
+
+
 @app.get("/archives", response_class=HTMLResponse)
 def index(request: Request, queued: str = "", error: str = "", notice: str = ""):
     """아카이브 목록 — 사이트(서브도메인) 단위 한 테이블.
@@ -284,12 +317,24 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
     with db.connect() as conn:
         sites = db.list_sites_overview(conn)
         running = [c for c in db.list_crawls(conn) if c["status"] == "running"]
+        snap_dirs = db.list_snapshot_dirs(conn)
+    # 사이트별 저장 용량 — 스냅샷은 불변이므로 디렉토리 용량을 그대로 합산
+    site_bytes: dict[int, int] = {}
+    site_snaps: dict[int, list] = {}
+    for row in snap_dirs:
+        site_bytes[row["site_id"]] = site_bytes.get(row["site_id"], 0) + (
+            _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
+        )
+        site_snaps.setdefault(row["site_id"], []).append(row)
+    titles = {sid: _site_title(rows) for sid, rows in site_snaps.items()}
     active_keys = {storage.site_key(u) for u in active}
     items: list[dict] = [
         {
             "site_id": s["id"], "site_key": s["site_key"],
             "page_count": s["page_count"], "snapshot_count": s["snapshot_count"],
             "crawl_count": s["crawl_count"], "schedule_count": s["schedule_count"],
+            "bytes": site_bytes.get(s["id"], 0),
+            "title": titles.get(s["id"]),
             "activity_at": s["last_activity_at"] or None,
             "crawling": s["running_crawl_count"] > 0,
             "active": s["site_key"] in active_keys or s["running_crawl_count"] > 0,
@@ -302,7 +347,8 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
         {
             "site_id": None, "site_key": key,
             "page_count": 0, "snapshot_count": 0, "crawl_count": 0,
-            "schedule_count": 0, "activity_at": t, "crawling": False,
+            "schedule_count": 0, "bytes": 0, "title": None,
+            "activity_at": t, "crawling": False,
             "active": True,
         }
         for u, t in sorted(active.items())
@@ -327,9 +373,19 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
     )
 
 
+# 사이트 상세의 페이지 목록 페이징 단위
+_SITE_PAGES_PER_PAGE = 100
+
+
 @app.get("/sites/{site_id}", response_class=HTMLResponse)
-def site_view(request: Request, site_id: int, error: str = "", notice: str = ""):
-    """사이트 상세 — 소속 페이지 목록 + 크롤 회차 목록 + 스케줄.
+def site_view(
+    request: Request,
+    site_id: int,
+    error: str = "",
+    notice: str = "",
+    page: int = Query(1, ge=1),
+):
+    """사이트 상세 — 소속 페이지 목록(페이징) + 크롤 회차 목록 + 스케줄.
 
     사이트는 서브도메인 단위 그릇이고, 크롤 회차는 그 사이트를 특정 시점에
     돌았던 실행 기록이다 — 회차 상세(/crawls/{id})는 그대로 유지된다.
@@ -339,11 +395,19 @@ def site_view(request: Request, site_id: int, error: str = "", notice: str = "")
         site = db.get_site(conn, site_id)
         if site is None:
             raise HTTPException(404, t(request, "사이트 없음"))
-        pages = db.list_site_pages(conn, site_id)
+        totals = db.site_page_totals(conn, site_id)
+        total_pages = max(1, -(-totals["page_count"] // _SITE_PAGES_PER_PAGE))  # ceil
+        page = min(page, total_pages)
+        pages = db.list_site_pages(
+            conn, site_id,
+            limit=_SITE_PAGES_PER_PAGE, offset=(page - 1) * _SITE_PAGES_PER_PAGE,
+        )
+        snap_dirs = db.list_site_snapshot_dirs(conn, site_id)
         crawls = db.list_site_crawls(conn, site_id)
         schedules = db.list_site_schedules(conn, site_id)
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
         certificates = db.list_site_certificates(conn, site_id)
+        failed_logs = db.list_site_failed_logs(conn, site_id)
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
         for s in schedules
@@ -368,25 +432,62 @@ def site_view(request: Request, site_id: int, error: str = "", notice: str = "")
         }
         for c in certificates
     ]
-    snapshot_total = sum(p["snapshot_count"] for p in pages)
+    # 페이지별·사이트 전체 저장 용량 — 스냅샷 디렉토리 용량 합산
+    page_bytes: dict[int, int] = {}
+    for row in snap_dirs:
+        page_bytes[row["page_id"]] = page_bytes.get(row["page_id"], 0) + (
+            _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
+        )
     running_crawls = [
         {"id": c["id"],
          "counts": {"done": c["done_count"], "failed": c["failed_count"],
                     "waiting": c["pending_count"]}}
         for c in crawls if c["status"] == "running"
     ]
+
+    def _page_url(n: int) -> str:
+        return f"/sites/{site_id}" + (f"?page={n}" if n > 1 else "")
+
     return templates.TemplateResponse(
         request, "site.html",
         {
             "site": site, "pages": pages, "crawls": crawls,
+            "site_title": _site_title(snap_dirs),
+            "failed_logs": failed_logs,
             "schedule_labels": schedule_labels,
             "crawl_schedules": crawl_schedule_labels,
-            "snapshot_total": snapshot_total,
+            "page_count": totals["page_count"],
+            "snapshot_total": totals["snapshot_count"],
+            "page_bytes": page_bytes,
+            "site_bytes": sum(page_bytes.values()),
+            "page_num": page, "total_pages": total_pages,
+            "prev_url": _page_url(page - 1) if page > 1 else None,
+            "next_url": _page_url(page + 1) if page < total_pages else None,
             "certificates": cert_rows,
             "active": active, "running_crawls": running_crawls,
             "error": error, "notice": notice,
         },
     )
+
+
+@app.post("/sites/{site_id}/failed/{log_id}/retry")
+def site_failed_retry(
+    request: Request, site_id: int, log_id: int, background: BackgroundTasks
+):
+    """실패한 작업 재시도 — 해당 페이지를 백그라운드로 재아카이빙. admin/archiver 전용.
+
+    성공하면 그 URL 의 최신 로그가 성공으로 바뀌어 실패 목록에서 사라진다.
+    """
+    _require_archiver(request)
+    with db.connect() as conn:
+        log = db.get_site_failed_log(conn, site_id, log_id)
+    if log is None:
+        raise HTTPException(404, t(request, "실패 기록 없음"))
+    if _queue_archive(background, log["page_url"]):
+        params = {"notice": t(request, "아카이빙이 백그라운드에서 시작되었습니다")}
+    else:
+        params = {"error": t(request, _BUSY_MSG)}
+    return RedirectResponse(f"/sites/{site_id}?{urlencode(params)}", status_code=303)
 
 
 @app.get("/sites/{site_id}/certificates/{cert_id}.pem")
@@ -483,8 +584,7 @@ def dashboard(request: Request):
     period_bytes = {k: 0 for k in starts}
     total_bytes = 0
     for row in snap_dirs:
-        snap_dir = storage.page_dir(row["domain"], row["slug"]) / row["dir_name"]
-        size = sum(f["bytes"] for f in storage.snapshot_files(snap_dir))
+        size = _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
         sizes[row["id"]] = size
         total_bytes += size
         for key, start in starts.items():
@@ -562,11 +662,29 @@ def timeline(
             if page["network_tag_id"] else None
         )
         site = db.get_site(conn, page["site_id"]) if page["site_id"] else None
+        snap_logs = db.list_snapshot_archive_logs(conn, page_id)
 
+    log_by_snap = {row["snapshot_id"]: row for row in snap_logs}
     items = []
     for i, s in enumerate(snaps, 1):
         badge = "new" if i == 1 else _BADGES[s["changed"]]
-        items.append({"idx": i, "snap": s, "badge": badge})
+        # 상세 펼침용 — (불변) 스냅샷 디렉토리의 파일 목록 + 실행 로그의 단계
+        files = storage.snapshot_files(
+            storage.page_dir(page["domain"], page["slug"]) / s["dir_name"]
+        )
+        log = log_by_snap.get(s["id"])
+        steps: list = []
+        if log is not None and log["steps"]:
+            try:
+                steps = json.loads(log["steps"])
+            except ValueError:
+                steps = []
+        items.append({
+            "idx": i, "snap": s, "badge": badge,
+            "files": files,
+            "total_bytes": sum(f["bytes"] for f in files) if files else None,
+            "steps": steps, "log": log,
+        })
     items.reverse()  # 최신 먼저
     return templates.TemplateResponse(
         request, "timeline.html",

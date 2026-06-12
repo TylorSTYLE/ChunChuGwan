@@ -92,6 +92,131 @@ def test_index(client):
     assert 'href="/archive/new"' in res.text  # 헤더 메뉴
 
 
+def _fixture_total_bytes() -> int:
+    """fixture 스냅샷 전체의 파일 용량 합 — 사이트 용량 표시 기대값."""
+    with db.connect() as conn:
+        rows = db.list_snapshot_dirs(conn)
+    return sum(
+        f["bytes"]
+        for r in rows
+        for f in storage.snapshot_files(
+            storage.page_dir(r["domain"], r["slug"]) / r["dir_name"]
+        )
+    )
+
+
+def test_index_shows_site_size(client):
+    from chunchugwan.web.templating import filesize
+
+    res = client.get("/archives")
+    assert res.status_code == 200
+    assert filesize(_fixture_total_bytes()) in res.text
+
+
+def test_site_shows_page_size_and_total(client):
+    from chunchugwan.web.templating import filesize
+
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert res.status_code == 200
+    # 헤더의 사이트 합계 + 페이지 행 용량 (페이지가 1개라 같은 값이 두 번)
+    assert res.text.count(filesize(_fixture_total_bytes())) >= 2
+
+
+def test_site_pages_pagination(client, monkeypatch):
+    monkeypatch.setattr(web_app, "_SITE_PAGES_PER_PAGE", 1)
+    url2 = "https://example.com/second"
+    with db.connect() as conn:
+        db.get_or_create_page(conn, url2, "example.com", storage.url_to_slug(url2))
+        site = db.get_site_by_key(conn, "example.com")
+    page1 = client.get(f"/sites/{site['id']}")
+    page2 = client.get(f"/sites/{site['id']}?page=2")
+    assert "1/2 페이지" in page1.text
+    assert "2/2 페이지" in page2.text
+    # 스냅샷 있는 기존 페이지가 먼저(NULLS LAST), 새 페이지는 2페이지에
+    assert "https://example.com/post" in page1.text
+    assert url2 not in page1.text
+    assert url2 in page2.text
+    assert "https://example.com/post</a>" not in page2.text
+    # 범위를 넘는 페이지 번호는 마지막 페이지로 보정
+    assert url2 in client.get(f"/sites/{site['id']}?page=99").text
+
+
+def test_index_and_site_show_title(client):
+    """목록·사이트 상세에 사이트 타이틀(최신 스냅샷 meta.json title) 표시.
+
+    fixture 의 최신 스냅샷에는 meta.json 이 없으므로 직전 스냅샷의
+    타이틀로 폴백하는 것도 함께 검증한다.
+    """
+    assert "픽스처 글" in client.get("/archives").text
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert "픽스처 글" in client.get(f"/sites/{site['id']}").text
+
+
+def _insert_log(status: str, *, started_at: str, error: str | None = None) -> int:
+    """fixture 페이지(1)의 아카이브 로그 한 행 삽입 (실패 목록 테스트용)."""
+    with db.connect() as conn:
+        return db.insert_archive_log(
+            conn, url="https://example.com/post", domain="example.com",
+            page_id=1, source="web", status=status,
+            started_at=started_at, duration_ms=100, error=error,
+        )
+
+
+def test_site_failed_jobs_listed(client):
+    """최근 실행이 실패인 페이지는 실패한 작업 목록에 보인다."""
+    log_id = _insert_log(
+        "error", started_at="2026-06-03T00:00:00+00:00", error="TimeoutError: 캡처 실패"
+    )
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert "실패한 작업" in res.text
+    assert "TimeoutError: 캡처 실패" in res.text
+    assert f"/sites/{site['id']}/failed/{log_id}/retry" in res.text
+
+
+def test_site_failed_jobs_cleared_after_success(client):
+    """실패 이후 성공 실행이 생기면 (재시도 성공) 실패 목록에서 사라진다."""
+    _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
+    _insert_log("changed", started_at="2026-06-04T00:00:00+00:00")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert "실패한 작업" not in res.text
+    assert "boom" not in res.text
+
+
+def test_site_failed_retry_queues_archive(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": calls.append(url),
+    )
+    log_id = _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.post(
+        f"/sites/{site['id']}/failed/{log_id}/retry", follow_redirects=False
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith(f"/sites/{site['id']}?notice=")
+    assert calls == ["https://example.com/post"]
+
+
+def test_site_failed_retry_unknown_log(client):
+    """없는 로그·실패가 아닌 로그·다른 사이트의 로그는 404."""
+    ok_id = _insert_log("changed", started_at="2026-06-04T00:00:00+00:00")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert client.post(f"/sites/{site['id']}/failed/999/retry").status_code == 404
+    assert client.post(f"/sites/{site['id']}/failed/{ok_id}/retry").status_code == 404
+    err_id = _insert_log("error", started_at="2026-06-05T00:00:00+00:00", error="x")
+    assert client.post(f"/sites/999/failed/{err_id}/retry").status_code == 404
+
+
 def test_root_serves_dashboard(client):
     """첫 페이지(/)는 현황 화면이고, 목록은 /archives 에 있다."""
     res = client.get("/")
@@ -109,6 +234,24 @@ def test_timeline(client):
 
 def test_timeline_404(client):
     assert client.get("/page/999").status_code == 404
+
+
+def test_timeline_detail_shows_files_and_steps(client):
+    """타임라인의 상세 펼침 — 스냅샷 파일 목록 + 실행 로그의 단계 소요."""
+    with db.connect() as conn:
+        db.insert_archive_log(
+            conn, url="https://example.com/post", domain="example.com",
+            page_id=1, snapshot_id=2, source="web", status="changed",
+            started_at="2026-06-02T00:00:00+00:00", duration_ms=1500,
+            steps='[{"step": "capture", "ms": 900, "detail": "fixture-step"}]',
+        )
+    res = client.get("/page/1")
+    assert res.status_code == 200
+    assert "상세" in res.text            # 펼침 버튼
+    assert "content.md" in res.text      # 파일 목록
+    assert "fixture-step" in res.text    # 로그의 단계 내용
+    # 스냅샷 행에 용량 컬럼이 보인다
+    assert "용량" in res.text
 
 
 def test_snapshot_view_sandboxed_iframe(client):
