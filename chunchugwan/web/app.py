@@ -31,7 +31,8 @@ from fastapi.responses import (
 from .. import (
     auth, config, db, deletion, differ, pipeline, resources, scheduler, storage,
 )
-from . import auth_routes, permissions, system_routes
+from . import auth_routes, i18n, permissions, system_routes
+from .i18n import t
 from .templating import templates
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ app.include_router(system_routes.router)
 # 라우트 핸들러가 pending_totp 세션을 직접 요구한다.
 # /invite/{token} 은 초대받은 본인의 가입 페이지 — 토큰 자체가 자격 증명이다.
 _PUBLIC_PATHS = {
-    "/healthz", "/login", "/login/totp", "/signup",
+    "/healthz", "/login", "/login/totp", "/signup", "/lang",
     "/login/passkey/options", "/login/passkey",
 }
 
@@ -100,11 +101,12 @@ async def auth_gate(request: Request, call_next):
     """
     request.state.user = None
     request.state.session = None
+    request.state.locale = i18n.resolve_locale(request)
 
     if request.method == "POST":
         origin = request.headers.get("origin") or request.headers.get("referer")
         if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
-            return PlainTextResponse("CSRF 검증 실패", status_code=403)
+            return PlainTextResponse(t(request, "CSRF 검증 실패"), status_code=403)
 
     if config.AUTH_ENABLED:
         path = request.url.path
@@ -121,7 +123,7 @@ async def auth_gate(request: Request, call_next):
                         request.state.user = db.get_user_by_id(conn, sess["user_id"])
 
         if first_run:
-            if path not in ("/setup", "/healthz") and path not in _BROWSER_ICON_PATHS:
+            if path not in ("/setup", "/healthz", "/lang") and path not in _BROWSER_ICON_PATHS:
                 return RedirectResponse("/setup", status_code=302)
         else:
             # 차단된 계정 — 로그아웃 외 모든 접근 거부 (세션은 차단 시점에
@@ -132,7 +134,7 @@ async def auth_gate(request: Request, call_next):
                 and path != "/logout"
             ):
                 return PlainTextResponse(
-                    "차단된 계정입니다. 관리자에게 문의하세요.", status_code=403
+                    t(request, "차단된 계정입니다. 관리자에게 문의하세요."), status_code=403
                 )
             # /resource/ 는 인증 예외 — 샌드박스된 page.html(불투명 출처)의
             # 하위 자원 요청에는 SameSite 쿠키가 붙지 않아 세션 인증이
@@ -212,6 +214,18 @@ def healthz() -> dict:
     return {"ok": True}
 
 
+@app.post("/lang")
+def set_language(lang: str = Form(...), next_path: str = Form("/", alias="next")):
+    """표시 언어 선택 — 쿠키에 저장하고 보던 화면으로 복귀."""
+    if lang not in i18n.SUPPORTED_LOCALES:
+        raise HTTPException(400, f"unsupported language: {lang!r}")
+    res = RedirectResponse(auth_routes.safe_next(next_path), status_code=303)
+    res.set_cookie(
+        i18n.LANG_COOKIE, lang, max_age=i18n.LANG_COOKIE_MAX_AGE, samesite="lax",
+    )
+    return res
+
+
 @app.get("/archives", response_class=HTMLResponse)
 def index(request: Request, queued: str = "", error: str = "", notice: str = ""):
     active = _active_snapshot()
@@ -219,7 +233,8 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
         pages = db.list_pages(conn)
         schedules = db.list_schedules(conn)
     schedule_labels = {
-        s["page_id"]: scheduler.format_interval(s["interval_seconds"]) for s in schedules
+        s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
+        for s in schedules
     }
     # 아직 pages 행이 없는 신규 URL 진행 건은 별도 행으로 보여준다
     known = {p["url"] for p in pages}
@@ -328,7 +343,7 @@ def timeline(
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
         if page is None:
-            raise HTTPException(404, "페이지 없음")
+            raise HTTPException(404, t(request, "페이지 없음"))
         snaps = db.list_snapshots(conn, page_id)
         checks = db.list_checks(conn, page_id)
         schedule = db.get_schedule(conn, page_id)
@@ -345,7 +360,8 @@ def timeline(
             "notice": notice, "error": error,
             "schedule": schedule,
             "schedule_label": (
-                scheduler.format_interval(schedule["interval_seconds"]) if schedule else ""
+                i18n.interval_label(request, schedule["interval_seconds"])
+                if schedule else ""
             ),
             "interval_options": _SCHEDULE_OPTIONS,
         },
@@ -369,11 +385,11 @@ def schedule_set(
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
     if page is None:
-        raise HTTPException(404, "페이지 없음")
+        raise HTTPException(404, t(request, "페이지 없음"))
     try:
         scheduler.set_schedule(page["url"], interval)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, t(request, str(e)))
     return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
 
 
@@ -386,7 +402,7 @@ def schedule_delete(
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
     if page is None:
-        raise HTTPException(404, "페이지 없음")
+        raise HTTPException(404, t(request, "페이지 없음"))
     scheduler.remove_schedule(page["url"])
     return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
 
@@ -397,7 +413,7 @@ def schedules_view(request: Request):
     with db.connect() as conn:
         rows = db.list_schedules(conn)
     items = [
-        {"row": s, "label": scheduler.format_interval(s["interval_seconds"])}
+        {"row": s, "label": i18n.interval_label(request, s["interval_seconds"])}
         for s in rows
     ]
     return templates.TemplateResponse(
@@ -406,11 +422,11 @@ def schedules_view(request: Request):
     )
 
 
-def _load_snapshot(snapshot_id: int):
+def _load_snapshot(request: Request, snapshot_id: int):
     with db.connect() as conn:
         snap = db.get_snapshot(conn, snapshot_id)
     if snap is None:
-        raise HTTPException(404, "스냅샷 없음")
+        raise HTTPException(404, t(request, "스냅샷 없음", ctx="one"))
     return snap
 
 
@@ -420,10 +436,13 @@ def _snapshot_dir(snap) -> Path:
 
 @app.get("/snapshot/{snapshot_id}", response_class=HTMLResponse)
 def snapshot_view(request: Request, snapshot_id: int):
-    snap = _load_snapshot(snapshot_id)
+    snap = _load_snapshot(request, snapshot_id)
     title = None
+    documents: list[dict] = []
     try:
-        title = storage.read_meta(_snapshot_dir(snap)).title
+        meta = storage.read_meta(_snapshot_dir(snap))
+        title = meta.title
+        documents = meta.documents or []
     except OSError:
         pass
     return templates.TemplateResponse(
@@ -431,6 +450,7 @@ def snapshot_view(request: Request, snapshot_id: int):
         {
             "snap": snap,
             "title": title,
+            "documents": documents,
             "page_html_url": f"/snapshot/{snapshot_id}/file/page.html",
             "screenshot_url": f"/snapshot/{snapshot_id}/file/screenshot",
             "content_url": f"/snapshot/{snapshot_id}/file/content.md",
@@ -439,18 +459,18 @@ def snapshot_view(request: Request, snapshot_id: int):
 
 
 @app.get("/snapshot/{snapshot_id}/file/{name}")
-def snapshot_file(snapshot_id: int, name: str):
+def snapshot_file(request: Request, snapshot_id: int, name: str):
     candidates = _ALLOWED_FILES.get(name)
     if candidates is None:
-        raise HTTPException(404, "허용되지 않은 파일")
-    snap = _load_snapshot(snapshot_id)
+        raise HTTPException(404, t(request, "허용되지 않은 파일"))
+    snap = _load_snapshot(request, snapshot_id)
     snap_dir = _snapshot_dir(snap)
     for filename, media_type in candidates:
         path = snap_dir / filename
         if path.is_file():
             break
     else:
-        raise HTTPException(404, "파일 없음")
+        raise HTTPException(404, t(request, "파일 없음"))
     headers = {}
     if filename.endswith(".gz"):
         headers["Content-Encoding"] = "gzip"
@@ -460,8 +480,35 @@ def snapshot_file(snapshot_id: int, name: str):
     return FileResponse(path, media_type=media_type, headers=headers)
 
 
+@app.get("/snapshot/{snapshot_id}/doc/{name}")
+def snapshot_document(request: Request, snapshot_id: int, name: str):
+    """함께 저장된 문서 파일 서빙 — meta.json 의 documents 목록에 있는
+    이름만 허용한다 (목록의 이름은 documents.py 가 정제해 생성한 값).
+
+    /resource/ 와 달리 인증 게이트를 그대로 거치며, 브라우저 안에서
+    렌더링되지 않도록 항상 첨부파일 다운로드로 내려준다.
+    """
+    snap = _load_snapshot(request, snapshot_id)
+    snap_dir = _snapshot_dir(snap)
+    try:
+        meta = storage.read_meta(snap_dir)
+    except OSError:
+        raise HTTPException(404, t(request, "메타데이터 없음"))
+    if not any(d.get("file") == name for d in meta.documents or []):
+        raise HTTPException(404, t(request, "허용되지 않은 파일"))
+    path = snap_dir / "files" / name
+    if not path.is_file():
+        raise HTTPException(404, t(request, "파일 없음"))
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=name,  # Content-Disposition: attachment
+        headers={"Content-Security-Policy": "sandbox"},
+    )
+
+
 @app.get("/resource/{name}")
-def resource_file(name: str):
+def resource_file(request: Request, name: str):
     """page.html 이 참조하는 스냅샷 간 공유 자원(CAS) 서빙.
 
     인증 게이트 예외 경로 (auth_gate 참조). 콘텐츠 주소라 불변이므로
@@ -469,10 +516,10 @@ def resource_file(name: str):
     문서 컨텍스트를 샌드박스한다.
     """
     if not resources.is_valid_name(name):
-        raise HTTPException(404, "잘못된 자원 이름")
+        raise HTTPException(404, t(request, "잘못된 자원 이름"))
     path = resources.resource_path(name)
     if not path.is_file():
-        raise HTTPException(404, "자원 없음")
+        raise HTTPException(404, t(request, "자원 없음"))
     return FileResponse(
         path,
         media_type=resources.EXT_MEDIA_TYPES[Path(name).suffix],
@@ -484,7 +531,7 @@ def resource_file(name: str):
 
 
 def _collapse_equal(
-    rows: list[tuple[str, str, str]], context: int = 3
+    request: Request, rows: list[tuple[str, str, str]], context: int = 3
 ) -> list[tuple[str, str, str]]:
     """긴 equal 구간을 ('skip', 'N줄 동일', '') 행으로 접는다."""
     out: list[tuple[str, str, str]] = []
@@ -502,7 +549,7 @@ def _collapse_equal(
         tail = context if j < len(rows) else 0  # 문서 끝이면 아래 문맥 불필요
         if len(run) > head + tail + 1:
             out.extend(run[:head])
-            out.append(("skip", f"{len(run) - head - tail}줄 동일", ""))
+            out.append(("skip", t(request, "{n}줄 동일", n=len(run) - head - tail), ""))
             if tail:
                 out.extend(run[-tail:])
         else:
@@ -511,22 +558,30 @@ def _collapse_equal(
     return out
 
 
-def _resolve_diff_pair(page_id: int, from_idx: int | None, to_idx: int | None):
+def _resolve_diff_pair(
+    request: Request, page_id: int, from_idx: int | None, to_idx: int | None
+):
     """diff 대상 페이지/스냅샷 쌍을 검증해 반환."""
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
         if page is None:
-            raise HTTPException(404, "페이지 없음")
+            raise HTTPException(404, t(request, "페이지 없음"))
         snaps = db.list_snapshots(conn, page_id)
     if len(snaps) < 2:
-        raise HTTPException(400, f"비교하려면 스냅샷이 2개 이상 필요합니다 (현재 {len(snaps)}개)")
+        raise HTTPException(
+            400, t(request, "비교하려면 스냅샷이 2개 이상 필요합니다 (현재 {n}개)", n=len(snaps))
+        )
 
     if to_idx is None:
         to_idx = len(snaps)
     if from_idx is None:
         from_idx = to_idx - 1
     if not (1 <= from_idx < to_idx <= len(snaps)):
-        raise HTTPException(400, f"잘못된 범위: from={from_idx} to={to_idx} (1 ~ {len(snaps)})")
+        raise HTTPException(
+            400,
+            t(request, "잘못된 범위: from={f} to={t} (1 ~ {n})",
+              f=from_idx, t=to_idx, n=len(snaps)),
+        )
     return page, snaps, from_idx, to_idx, snaps[from_idx - 1], snaps[to_idx - 1]
 
 
@@ -546,13 +601,13 @@ def diff_view(
     to_idx: int | None = Query(None, alias="to"),
 ):
     page, snaps, from_idx, to_idx, old_snap, new_snap = _resolve_diff_pair(
-        page_id, from_idx, to_idx
+        request, page_id, from_idx, to_idx
     )
     texts = []
     for snap in (old_snap, new_snap):
         path = storage.page_dir(page["domain"], page["slug"]) / snap["dir_name"] / "content.md"
         if not path.is_file():
-            raise HTTPException(404, f"content.md 없음: {snap['dir_name']}")
+            raise HTTPException(404, t(request, "content.md 없음: {d}", d=snap["dir_name"]))
         texts.append(path.read_text(encoding="utf-8"))
 
     d = differ.diff_text(texts[0], texts[1])
@@ -570,7 +625,7 @@ def diff_view(
         {
             "page": page,
             "d": d,
-            "rows": _collapse_equal(d.rows),
+            "rows": _collapse_equal(request, d.rows),
             "from_idx": from_idx, "to_idx": to_idx, "total": len(snaps),
             "old_snap": old_snap, "new_snap": new_snap,
             "old_shot": f"/snapshot/{old_snap['id']}/file/screenshot",
@@ -583,15 +638,18 @@ def diff_view(
 
 @app.get("/diff/{page_id}/shotdiff")
 def shotdiff(
+    request: Request,
     page_id: int,
     from_idx: int | None = Query(None, alias="from"),
     to_idx: int | None = Query(None, alias="to"),
 ):
     """픽셀 diff 하이라이트 이미지 (캐시에서 서빙)."""
-    page, _snaps, _f, _t, old_snap, new_snap = _resolve_diff_pair(page_id, from_idx, to_idx)
+    page, _snaps, _f, _t, old_snap, new_snap = _resolve_diff_pair(
+        request, page_id, from_idx, to_idx
+    )
     old_shot_path, new_shot_path = _screenshot_paths(page, old_snap, new_snap)
     if old_shot_path is None or new_shot_path is None:
-        raise HTTPException(404, "스크린샷 없음")
+        raise HTTPException(404, t(request, "스크린샷 없음"))
     _ratio, out_png = differ.cached_screenshot_diff(
         old_shot_path, new_shot_path, f"shotdiff-{old_snap['id']}-{new_snap['id']}"
     )
@@ -738,13 +796,13 @@ def _queue_archive(
 def _require_archiver(request: Request) -> None:
     """아카이빙 권한 가드 (admin/archiver). 보기 전용·차단 계정은 403."""
     if not permissions.can_archive(request.state.user):
-        raise HTTPException(403, "아카이빙 권한이 없습니다")
+        raise HTTPException(403, t(request, "아카이빙 권한이 없습니다"))
 
 
 def _require_deleter(request: Request) -> None:
     """삭제 권한 가드 (admin/archiver). 보기 전용·차단 계정은 403."""
     if not permissions.can_delete(request.state.user):
-        raise HTTPException(403, "삭제 권한이 없습니다")
+        raise HTTPException(403, t(request, "삭제 권한이 없습니다"))
 
 
 @app.get("/archive/new", response_class=HTMLResponse)
@@ -771,7 +829,9 @@ def archive_new(
         if interval:
             scheduler.validate_interval(interval)
     except ValueError as exc:
-        params = urlencode({"error": f"아카이빙 실패: {exc}", "url": url})
+        params = urlencode(
+            {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
+        )
         return RedirectResponse(f"/archive/new?{params}", status_code=303)
     _queue_archive(background, norm, interval_seconds=interval or None)
     return RedirectResponse(f"/archives?queued={quote(norm, safe='')}", status_code=303)
@@ -788,7 +848,7 @@ def rearchive(
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
     if page is None:
-        raise HTTPException(404, "페이지 없음")
+        raise HTTPException(404, t(request, "페이지 없음"))
     _queue_archive(background, page["url"], force=force)
     return RedirectResponse(url=f"/page/{page_id}?queued=1", status_code=303)
 
@@ -803,14 +863,15 @@ def page_delete(request: Request, page_id: int):
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
     if page is None:
-        raise HTTPException(404, "페이지 없음")
+        raise HTTPException(404, t(request, "페이지 없음"))
     # 진행 중인 아카이빙과 경합하면 삭제 직후 스냅샷이 다시 생긴다 — 거부
     if page["url"] in _active_snapshot():
         return RedirectResponse(
-            f"/archives?error={quote(_BUSY_MSG, safe='')}", status_code=303
+            f"/archives?error={quote(t(request, _BUSY_MSG), safe='')}", status_code=303
         )
     result = deletion.delete_page(page_id)
-    msg = f"삭제됨: {result.url} (스냅샷 {result.snapshots_deleted}개)"
+    msg = t(request, "삭제됨: {url} (스냅샷 {n}개)",
+            url=result.url, n=result.snapshots_deleted)
     return RedirectResponse(
         f"/archives?notice={quote(msg, safe='')}", status_code=303
     )
@@ -823,15 +884,15 @@ def snapshot_delete(request: Request, snapshot_id: int):
     다음 스냅샷의 changed 재계산(신/구 비교 보정)은 deletion → db 계층이 한다.
     """
     _require_deleter(request)
-    snap = _load_snapshot(snapshot_id)
+    snap = _load_snapshot(request, snapshot_id)
     # 진행 중이면 파이프라인이 '직전 스냅샷'을 읽는 중일 수 있다 — 거부
     if snap["page_url"] in _active_snapshot():
         return RedirectResponse(
-            f"/page/{snap['page_id']}?error={quote(_BUSY_MSG, safe='')}",
+            f"/page/{snap['page_id']}?error={quote(t(request, _BUSY_MSG), safe='')}",
             status_code=303,
         )
     deletion.delete_snapshot(snapshot_id)
-    msg = f"스냅샷 삭제됨: {snap['taken_at']}"
+    msg = t(request, "스냅샷 삭제됨: {t}", t=snap["taken_at"])
     return RedirectResponse(
         f"/page/{snap['page_id']}?notice={quote(msg, safe='')}", status_code=303
     )

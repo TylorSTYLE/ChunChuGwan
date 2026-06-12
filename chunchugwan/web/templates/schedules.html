@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}스케줄 — 춘추관{% endblock %}
+{% block title %}{{ _("스케줄") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <style>
 /* URL 컬럼이 내용 길이대로 과점하지 않도록 폭 제한 — 긴 URL 은 줄바꿈 */
@@ -8,19 +8,19 @@
 #schedules td:not(:first-child) { white-space: nowrap; }
 </style>
 <div class="toolbar">
-  <h2 style="margin:0">자동 재아카이빙</h2>
-  <span class="muted">주기 최소 1시간 ~ 최대 1주일</span>
+  <h2 style="margin:0">{{ _("자동 재아카이빙") }}</h2>
+  <span class="muted">{{ _("주기 최소 1시간 ~ 최대 1주일") }}</span>
   <span class="spacer"></span>
-  <input type="text" id="q" placeholder="URL 필터…" autocomplete="off">
+  <input type="text" id="q" placeholder="{{ _('URL 필터…') }}" autocomplete="off">
 </div>
 
 {% if not items %}
-<p class="muted">등록된 자동 재아카이빙이 없습니다. 페이지 타임라인에서 주기를 설정하세요.</p>
+<p class="muted">{{ _("등록된 자동 재아카이빙이 없습니다. 페이지 타임라인에서 주기를 설정하세요.") }}</p>
 {% else %}
 <table id="schedules">
   <thead>
     <tr>
-      <th>URL</th><th>주기</th><th>다음 실행</th><th>마지막 실행</th>
+      <th>URL</th><th>{{ _("주기") }}</th><th>{{ _("다음 실행") }}</th><th>{{ _("마지막 실행") }}</th>
       {% if can_archive %}<th></th>{% endif %}
     </tr>
   </thead>
@@ -30,8 +30,8 @@
     <tr data-url="{{ s['url']|lower }}">
       <td><a href="/page/{{ s['page_id'] }}">{{ s['url'] }}</a></td>
       <td class="mono">{{ it['label'] }}</td>
-      <td class="mono">{{ s['next_run_at'] }}</td>
-      <td class="mono">{{ s['last_run_at'] or '-' }}</td>
+      <td class="mono">{{ s['next_run_at'] | ts }}</td>
+      <td class="mono">{{ s['last_run_at'] | ts }}</td>
       {% if can_archive %}
       <td>
         <form class="inline" method="post" action="/page/{{ s['page_id'] }}/schedule"
@@ -39,15 +39,15 @@
           <input type="hidden" name="next" value="/schedules">
           <select name="interval">
             {% for v, label in interval_options %}
-            <option value="{{ v }}" {% if s['interval_seconds'] == v %}selected{% endif %}>{{ label }}</option>
+            <option value="{{ v }}" {% if s['interval_seconds'] == v %}selected{% endif %}>{{ _(label) }}</option>
             {% endfor %}
           </select>
-          <button type="submit">주기 변경</button>
+          <button type="submit">{{ _("주기 변경") }}</button>
         </form>
         <form class="inline" method="post" action="/page/{{ s['page_id'] }}/schedule/delete"
-              onsubmit="return confirm('{{ s['url'] }}\n\n자동 재아카이빙을 해제합니다. 저장된 스냅샷은 그대로 남습니다.')">
+              onsubmit="return confirm({{ (s['url'] ~ '\n\n' ~ _('자동 재아카이빙을 해제합니다. 저장된 스냅샷은 그대로 남습니다.'))|tojson }})">
           <input type="hidden" name="next" value="/schedules">
-          <button type="submit" class="danger">해제</button>
+          <button type="submit" class="danger">{{ _("해제") }}</button>
         </form>
       </td>
       {% endif %}

@@ -12,11 +12,11 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urldefrag, urljoin
 
-from . import config
+from . import config, documents
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,20 @@ _APPLY_INLINE_JS = """
 }
 """
 
+# 문서 링크 후보 수집 — href/src/data 프로퍼티는 브라우저가 절대 URL 로
+# 해석해 주므로 상대 경로 걱정이 없다. 확장자 필터는 Python 쪽에서 한다.
+_DOC_LINK_JS = """
+() => {
+  const urls = [];
+  const push = (u) => { if (u) urls.push(u); };
+  document.querySelectorAll("a[href]").forEach((a) => push(a.href));
+  document.querySelectorAll("embed[src]").forEach((e) => push(e.src));
+  document.querySelectorAll("object[data]").forEach((o) => push(o.data));
+  document.querySelectorAll("iframe[src]").forEach((f) => push(f.src));
+  return urls;
+}
+"""
+
 # 도메인 룰의 셀렉터에 걸리는 노드를 제거한 HTML 생성. 잘못된 셀렉터는 무시.
 # 라이브 DOM 대신 raw_html 문자열을 DOMParser 로 파싱해 작업한다 —
 # 저장 산출물(page.html)을 오염시키지 않고, _inline_resources 이후의
@@ -146,6 +160,8 @@ class CaptureResult:
     title: str | None
     raw_html: str
     content_html: str  # raw_html 에서 도메인 룰 셀렉터를 제거한 추출용 HTML (룰 없으면 raw와 동일)
+    # 페이지가 링크한 문서 파일 URL (절대 URL, fragment 제거·중복 제거)
+    document_links: list[str] = field(default_factory=list)
 
 
 def capture(
@@ -182,6 +198,7 @@ def capture(
 
                 raw_html = page.content()
                 (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
+                document_links = _collect_document_links(page)
 
                 # 추출용 content_html 은 인라인 전의 raw_html 기준으로 만든다 —
                 # 인라인 후 DOM 에는 base64 데이터가 섞여 extract 가 느려진다.
@@ -203,6 +220,7 @@ def capture(
                     title=page.title() or None,
                     raw_html=raw_html,
                     content_html=content_html,
+                    document_links=document_links,
                 )
             finally:
                 browser.close()
@@ -210,6 +228,22 @@ def capture(
         if any(marker in str(e) for marker in _CONNECT_ERROR_MARKERS):
             raise CaptureConnectError(f"{url} 캡처 실패: {e}") from e
         raise CaptureError(f"{url} 캡처 실패: {e}") from e
+
+
+def _collect_document_links(page) -> list[str]:
+    """DOM 에서 문서 파일(PDF·워드·한글 등) 링크를 수집 (중복 제거, 순서 보존).
+
+    수집 실패가 캡처 자체를 막아서는 안 되므로 실패 시 빈 목록을 반환한다.
+    """
+    try:
+        urls: list[str] = page.evaluate(_DOC_LINK_JS)
+    except Exception as e:
+        logger.warning("문서 링크 수집 실패, 건너뜀: %s", e)
+        return []
+    # fragment(#page=2 등)만 다른 링크는 같은 문서 — 제거 후 중복 제거
+    return list(dict.fromkeys(
+        urldefrag(u).url for u in urls if documents.is_document_url(u)
+    ))
 
 
 def _inline_resources(page, raw_html: str) -> str:

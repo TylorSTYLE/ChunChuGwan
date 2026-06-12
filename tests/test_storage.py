@@ -106,3 +106,53 @@ def test_slug_includes_route_fragment():
     assert a != b
     assert a.startswith("w-index-do-dong-")
     assert "/" not in a and len(a) <= 49
+
+
+# ---- 스냅샷 메타/finalize (문서 파일 포함) ----
+
+def _meta(**overrides) -> storage.SnapshotMeta:
+    base = dict(
+        url="https://example.com/", final_url="https://example.com/",
+        taken_at="2026-06-11T00:00:00+00:00", content_hash="ab" * 32,
+        http_status=200, title="제목",
+    )
+    base.update(overrides)
+    return storage.SnapshotMeta(**base)
+
+
+def test_meta_roundtrip_with_documents(tmp_path):
+    docs = [{"url": "https://example.com/r.pdf", "file": "r-12345678.pdf",
+             "bytes": 10, "sha256": "cd" * 32, "content_type": "application/pdf"}]
+    storage.write_meta(tmp_path, _meta(documents=docs))
+    assert storage.read_meta(tmp_path).documents == docs
+
+
+def test_meta_reads_legacy_without_documents(tmp_path):
+    """documents 필드가 없는 구형 meta.json 도 읽힌다 (기본 None)."""
+    storage.write_meta(tmp_path, _meta())
+    raw = (tmp_path / "meta.json").read_text(encoding="utf-8")
+    import json
+    data = json.loads(raw)
+    del data["documents"]
+    (tmp_path / "meta.json").write_text(json.dumps(data), encoding="utf-8")
+    assert storage.read_meta(tmp_path).documents is None
+
+
+def test_finalize_snapshot_moves_files_dir(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from chunchugwan import config
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+
+    tmp_dir = tmp_path / "capture"
+    (tmp_dir / "files").mkdir(parents=True)
+    (tmp_dir / "raw.html").write_text("<html></html>", encoding="utf-8")
+    (tmp_dir / "files" / "r-12345678.pdf").write_bytes(b"%PDF-1.4")
+
+    snap_dir = storage.finalize_snapshot(
+        tmp_dir, "example.com", "root-deadbeef", _meta(), "본문",
+        datetime(2026, 6, 11, tzinfo=timezone.utc),
+    )
+    assert (snap_dir / "files" / "r-12345678.pdf").read_bytes() == b"%PDF-1.4"
+
+    names = [f["name"] for f in storage.snapshot_files(snap_dir)]
+    assert "files/r-12345678.pdf" in names  # 용량 집계/로그 목록에 포함된다

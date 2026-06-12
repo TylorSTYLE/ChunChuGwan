@@ -18,30 +18,30 @@ tr.d-skip td { text-align: center; color: var(--muted); background: var(--bg-sof
 <div class="toolbar">
   <h2 style="margin:0">{{ page['url'] }}</h2>
   <span class="spacer"></span>
-  <a href="/page/{{ page['id'] }}">타임라인으로</a>
+  <a href="/page/{{ page['id'] }}">{{ _("타임라인으로") }}</a>
 </div>
 
 <form class="toolbar" method="get" action="/diff/{{ page['id'] }}">
   <label>from <input type="number" name="from" value="{{ from_idx }}" min="1" max="{{ total }}" style="width:64px"></label>
   <label>to <input type="number" name="to" value="{{ to_idx }}" min="1" max="{{ total }}" style="width:64px"></label>
-  <button type="submit">비교</button>
+  <button type="submit">{{ _("비교") }}</button>
   <span class="muted mono">
-    {{ from_idx }}: {{ old_snap['taken_at'] }} → {{ to_idx }}: {{ new_snap['taken_at'] }}
+    {{ from_idx }}: {{ old_snap['taken_at'] | ts }} → {{ to_idx }}: {{ new_snap['taken_at'] | ts }}
   </span>
 </form>
 
 {% if d.identical %}
-<p><span class="badge same">동일</span> 두 스냅샷의 정규화 텍스트가 같습니다.</p>
+<p><span class="badge same">{{ _("동일") }}</span> {{ _("두 스냅샷의 정규화 텍스트가 같습니다.") }}</p>
 {% else %}
 <p>
-  <span class="badge changed">변경</span>
-  <span class="mono" style="color:var(--green)">+{{ d.added }}줄</span>
-  <span class="mono" style="color:var(--amber)">-{{ d.removed }}줄</span>
+  <span class="badge changed">{{ _("변경") }}</span>
+  <span class="mono" style="color:var(--green)">{{ _("+{n}줄", n=d.added) }}</span>
+  <span class="mono" style="color:var(--amber)">{{ _("-{n}줄", n=d.removed) }}</span>
 </p>
 
-<h3>텍스트 비교</h3>
+<h3>{{ _("텍스트 비교") }}</h3>
 <table class="diff">
-  <thead><tr><th>#{{ from_idx }} (이전)</th><th>#{{ to_idx }} (이후)</th></tr></thead>
+  <thead><tr><th>#{{ from_idx }} ({{ _("이전", ctx="diff") }})</th><th>#{{ to_idx }} ({{ _("이후", ctx="diff") }})</th></tr></thead>
   <tbody>
   {% for tag, left, right in rows %}
     {% if tag == 'skip' %}
@@ -54,22 +54,22 @@ tr.d-skip td { text-align: center; color: var(--muted); background: var(--bg-sof
 </table>
 {% endif %}
 
-<h3>스크린샷 비교</h3>
+<h3>{{ _("스크린샷 비교") }}</h3>
 {% if shot_ratio is not none %}
-<p class="mono muted">변경 픽셀 {{ '%.2f%%'|format(shot_ratio * 100) }}</p>
+<p class="mono muted">{{ _("변경 픽셀") }} {{ '%.2f%%'|format(shot_ratio * 100) }}</p>
 {% endif %}
 <div class="toolbar">
-  <button type="button" id="btn-old" class="active">이전 (#{{ from_idx }})</button>
-  <button type="button" id="btn-new">이후 (#{{ to_idx }})</button>
+  <button type="button" id="btn-old" class="active">{{ _("이전", ctx="diff") }} (#{{ from_idx }})</button>
+  <button type="button" id="btn-new">{{ _("이후", ctx="diff") }} (#{{ to_idx }})</button>
   {% if shot_ratio is not none %}
-  <button type="button" id="btn-pix">픽셀 diff</button>
+  <button type="button" id="btn-pix">{{ _("픽셀 diff") }}</button>
   {% endif %}
 </div>
 <div class="shots">
-  <img id="shot-old" class="show" src="{{ old_shot }}" alt="이전 스크린샷">
-  <img id="shot-new" src="{{ new_shot }}" alt="이후 스크린샷">
+  <img id="shot-old" class="show" src="{{ old_shot }}" alt="{{ _('이전 스크린샷') }}">
+  <img id="shot-new" src="{{ new_shot }}" alt="{{ _('이후 스크린샷') }}">
   {% if shot_ratio is not none %}
-  <img id="shot-pix" src="{{ shotdiff_url }}" alt="픽셀 diff 하이라이트">
+  <img id="shot-pix" src="{{ shotdiff_url }}" alt="{{ _('픽셀 diff 하이라이트') }}">
   {% endif %}
 </div>
 

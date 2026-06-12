@@ -17,6 +17,7 @@ from fastapi.responses import (
 )
 
 from .. import auth, config, db, oidc
+from .i18n import t
 from .templating import templates
 
 logger = logging.getLogger(__name__)
@@ -76,11 +77,12 @@ def setup(request: Request, email: str = Form(...), password: str = Form(...)):
             user_id = db.create_first_admin(conn, email, auth.hash_password(password))
             if user_id is None:
                 # 관리자가 이미 등록됨 — 이 API 로는 더 이상 계정을 만들 수 없다
-                raise HTTPException(403, "이미 관리자가 등록되어 있습니다")
+                raise HTTPException(403, t(request, "이미 관리자가 등록되어 있습니다"))
             token = auth.issue_session(conn, user_id)
         return _login_redirect(token, "/")
     return templates.TemplateResponse(
-        request, "setup.html", {"error": error, "email": email}, status_code=400
+        request, "setup.html", {"error": t(request, error), "email": email},
+        status_code=400,
     )
 
 
@@ -112,14 +114,16 @@ def login(
         if not ok:
             return templates.TemplateResponse(
                 request, "login.html",
-                {"next": safe_next(next), "error": "이메일 또는 패스워드가 올바르지 않습니다.",
+                {"next": safe_next(next),
+                 "error": t(request, "이메일 또는 패스워드가 올바르지 않습니다."),
                  "email": email, "oidc_enabled": config.oidc_enabled()},
                 status_code=401,
             )
         if user["role"] == "blocked":
             return templates.TemplateResponse(
                 request, "login.html",
-                {"next": safe_next(next), "error": "차단된 계정입니다. 관리자에게 문의하세요.",
+                {"next": safe_next(next),
+                 "error": t(request, "차단된 계정입니다. 관리자에게 문의하세요."),
                  "email": email, "oidc_enabled": config.oidc_enabled()},
                 status_code=403,
             )
@@ -189,7 +193,7 @@ def totp_login(request: Request, code: str = Form(...), next: str = Form("/")):
         )
         if not window:
             ctx = _second_factor_ctx(conn, sess["user_id"], next)
-            ctx["error"] = "코드가 올바르지 않습니다."
+            ctx["error"] = t(request, "코드가 올바르지 않습니다.")
             return templates.TemplateResponse(
                 request, "totp.html", ctx, status_code=401
             )
@@ -205,11 +209,11 @@ def passkey_login_options(request: Request):
     """패스키 2단계 인증 옵션 발급 (pending 세션 전용)."""
     sess = _pending_session(request)
     if sess is None:
-        raise HTTPException(401, "패스워드 인증이 필요합니다")
+        raise HTTPException(401, t(request, "패스워드 인증이 필요합니다"))
     with db.connect() as conn:
         creds = db.list_passkeys(conn, sess["user_id"])
         if not creds:
-            raise HTTPException(400, "등록된 패스키가 없습니다")
+            raise HTTPException(400, t(request, "등록된 패스키가 없습니다"))
         options_json, challenge = auth.passkey_authentication_options(
             [c["credential_id"] for c in creds]
         )
@@ -222,23 +226,23 @@ async def passkey_login(request: Request):
     """패스키 2단계 인증 응답 검증 → 세션 활성화."""
     sess = _pending_session(request)
     if sess is None:
-        raise HTTPException(401, "패스워드 인증이 필요합니다")
+        raise HTTPException(401, t(request, "패스워드 인증이 필요합니다"))
     body = await request.json()
     credential = body.get("credential")
     if not isinstance(credential, dict):
-        raise HTTPException(400, "credential 누락")
+        raise HTTPException(400, t(request, "credential 누락"))
     with db.connect() as conn:
         challenge = db.consume_session_challenge(conn, sess["token_hash"])
         if challenge is None:
-            raise HTTPException(400, "진행 중인 인증이 없습니다 — 다시 시도하세요")
+            raise HTTPException(400, t(request, "진행 중인 인증이 없습니다 — 다시 시도하세요"))
         cred = db.get_passkey(conn, sess["user_id"], str(credential.get("id", "")))
         if cred is None:
-            raise HTTPException(401, "등록되지 않은 패스키입니다")
+            raise HTTPException(401, t(request, "등록되지 않은 패스키입니다"))
         new_count = auth.verify_passkey_authentication(
             credential, challenge, cred["public_key"], cred["sign_count"]
         )
         if new_count is None:
-            raise HTTPException(401, "패스키 인증에 실패했습니다")
+            raise HTTPException(401, t(request, "패스키 인증에 실패했습니다"))
         db.touch_passkey(conn, cred["id"], new_count)
         db.activate_session(
             conn, sess["token_hash"], ttl_seconds=config.SESSION_TTL_DAYS * 86400
@@ -277,7 +281,7 @@ def totp_confirm(request: Request, code: str = Form(...)):
         window = pending and auth.verify_totp(pending, code, None)
         if not window:
             ctx = {"enabled": False, "has_password": True,
-                   "error": "코드가 올바르지 않습니다. QR을 다시 스캔 후 시도하세요.",
+                   "error": t(request, "코드가 올바르지 않습니다. QR을 다시 스캔 후 시도하세요."),
                    "secret": pending,
                    "qr": pending and auth.qr_data_uri(
                        auth.totp_provisioning_uri(pending, user["email"]))}
@@ -299,7 +303,8 @@ def totp_disable(request: Request, password: str = Form(...)):
             return templates.TemplateResponse(
                 request, "totp_setup.html",
                 {"enabled": True, "has_password": True,
-                 "error": "패스워드가 올바르지 않습니다.", "qr": None, "secret": None},
+                 "error": t(request, "패스워드가 올바르지 않습니다."),
+                 "qr": None, "secret": None},
                 status_code=401,
             )
         db.disable_totp(conn, user["id"])
@@ -331,7 +336,7 @@ def passkey_register_options(request: Request):
     """패스키 등록 옵션 발급. 이미 등록된 자격증명은 제외 목록으로 전달."""
     user = request.state.user
     if user["password_hash"] is None:
-        raise HTTPException(400, "SSO 전용 계정은 패스키를 등록할 수 없습니다")
+        raise HTTPException(400, t(request, "SSO 전용 계정은 패스키를 등록할 수 없습니다"))
     with db.connect() as conn:
         creds = db.list_passkeys(conn, user["id"])
         options_json, challenge = auth.passkey_registration_options(
@@ -348,25 +353,25 @@ async def passkey_register(request: Request):
     """패스키 등록 응답 검증 → 저장."""
     user = request.state.user
     if user["password_hash"] is None:
-        raise HTTPException(400, "SSO 전용 계정은 패스키를 등록할 수 없습니다")
+        raise HTTPException(400, t(request, "SSO 전용 계정은 패스키를 등록할 수 없습니다"))
     body = await request.json()
     credential = body.get("credential")
     if not isinstance(credential, dict):
-        raise HTTPException(400, "credential 누락")
-    name = (str(body.get("name") or "").strip() or "패스키")[:64]
+        raise HTTPException(400, t(request, "credential 누락"))
+    name = (str(body.get("name") or "").strip() or t(request, "패스키"))[:64]
     with db.connect() as conn:
         challenge = db.consume_session_challenge(
             conn, request.state.session["token_hash"]
         )
         if challenge is None:
-            raise HTTPException(400, "진행 중인 등록이 없습니다 — 다시 시도하세요")
+            raise HTTPException(400, t(request, "진행 중인 등록이 없습니다 — 다시 시도하세요"))
         verified = auth.verify_passkey_registration(credential, challenge)
         if verified is None:
-            raise HTTPException(400, "패스키 등록 검증에 실패했습니다")
+            raise HTTPException(400, t(request, "패스키 등록 검증에 실패했습니다"))
         try:
             db.create_passkey(conn, user["id"], name=name, **verified)
         except sqlite3.IntegrityError:
-            raise HTTPException(400, "이미 등록된 패스키입니다")
+            raise HTTPException(400, t(request, "이미 등록된 패스키입니다"))
     return {"ok": True}
 
 
@@ -379,12 +384,12 @@ def passkey_delete(request: Request, passkey_id: int, password: str = Form(...))
             user["password_hash"], password
         ):
             ctx = _passkey_setup_ctx(conn, user)
-            ctx["error"] = "패스워드가 올바르지 않습니다."
+            ctx["error"] = t(request, "패스워드가 올바르지 않습니다.")
             return templates.TemplateResponse(
                 request, "passkey_setup.html", ctx, status_code=401
             )
         if not db.delete_passkey(conn, user["id"], passkey_id):
-            raise HTTPException(404, "패스키 없음")
+            raise HTTPException(404, t(request, "패스키 없음"))
     return RedirectResponse(url="/settings/passkey", status_code=303)
 
 
@@ -416,6 +421,8 @@ def account_page(request: Request, ok: str | None = None):
         "name": "사용자 이름을 변경했습니다.",
         "password": "패스워드를 변경했습니다. 다른 기기의 세션은 로그아웃되었습니다.",
     }.get(ok or "")
+    if notice:
+        notice = t(request, notice)
     return templates.TemplateResponse(
         request, "account.html", _account_ctx(user, notice=notice)
     )
@@ -428,7 +435,7 @@ def change_display_name(request: Request, display_name: str = Form("")):
     if name is not None:
         error = auth.validate_display_name(name)
         if error is not None:
-            ctx = _account_ctx(user, error=error)
+            ctx = _account_ctx(user, error=t(request, error))
             ctx["display_name"] = display_name
             return templates.TemplateResponse(
                 request, "account.html", ctx, status_code=400
@@ -460,7 +467,7 @@ def change_password(
         status = 400
     if error is not None:
         return templates.TemplateResponse(
-            request, "account.html", _account_ctx(user, error=error),
+            request, "account.html", _account_ctx(user, error=t(request, error)),
             status_code=status,
         )
     with db.connect() as conn:
@@ -484,20 +491,20 @@ def delete_account(
     if user["role"] == "admin":
         return templates.TemplateResponse(
             request, "account.html",
-            _account_ctx(user, error="관리자 계정은 삭제할 수 없습니다."),
+            _account_ctx(user, error=t(request, "관리자 계정은 삭제할 수 없습니다.")),
             status_code=403,
         )
     if user["password_hash"] is not None:
         if not auth.verify_password(user["password_hash"], password):
             return templates.TemplateResponse(
                 request, "account.html",
-                _account_ctx(user, error="패스워드가 올바르지 않습니다."),
+                _account_ctx(user, error=t(request, "패스워드가 올바르지 않습니다.")),
                 status_code=401,
             )
     elif confirm.strip().lower() != user["email"].lower():
         return templates.TemplateResponse(
             request, "account.html",
-            _account_ctx(user, error="확인 이메일이 일치하지 않습니다."),
+            _account_ctx(user, error=t(request, "확인 이메일이 일치하지 않습니다.")),
             status_code=400,
         )
     with db.connect() as conn:
@@ -510,14 +517,14 @@ def delete_account(
 # ---- OIDC (Authentik) SSO ----
 
 
-def _require_oidc() -> None:
+def _require_oidc(request: Request) -> None:
     if not config.oidc_enabled():
-        raise HTTPException(404, "OIDC 가 설정되지 않았습니다")
+        raise HTTPException(404, t(request, "OIDC 가 설정되지 않았습니다"))
 
 
 @router.get("/auth/oidc/login")
-def oidc_login(next: str | None = None):
-    _require_oidc()
+def oidc_login(request: Request, next: str | None = None):
+    _require_oidc(request)
     state = secrets.token_urlsafe(16)
     nonce = secrets.token_urlsafe(16)
     with db.connect() as conn:
@@ -525,7 +532,7 @@ def oidc_login(next: str | None = None):
     return RedirectResponse(url=oidc.build_authorize_url(state, nonce), status_code=302)
 
 
-def _link_oidc_user(conn: sqlite3.Connection, claims: dict) -> int:
+def _link_oidc_user(request: Request, conn: sqlite3.Connection, claims: dict) -> int:
     """OIDC 클레임을 로컬 계정에 연결하고 user_id 반환.
 
     ① (provider, sub) 기존 연결 → 그 계정.
@@ -539,13 +546,15 @@ def _link_oidc_user(conn: sqlite3.Connection, claims: dict) -> int:
 
     email = (claims.get("email") or "").strip()
     if not email:
-        raise HTTPException(400, "OIDC 응답에 이메일 클레임이 없습니다")
+        raise HTTPException(400, t(request, "OIDC 응답에 이메일 클레임이 없습니다"))
 
     existing = db.get_user_by_email(conn, email)
     if existing is not None:
         if not claims.get("email_verified"):
             # 미검증 이메일로 기존 계정을 탈취하는 것을 차단
-            raise HTTPException(403, "IdP 가 검증하지 않은 이메일이라 기존 계정에 연결할 수 없습니다")
+            raise HTTPException(
+                403, t(request, "IdP 가 검증하지 않은 이메일이라 기존 계정에 연결할 수 없습니다")
+            )
         db.create_identity(conn, existing["id"], config.OIDC_PROVIDER, sub)
         return existing["id"]
 
@@ -556,30 +565,31 @@ def _link_oidc_user(conn: sqlite3.Connection, claims: dict) -> int:
 
 @router.get("/auth/oidc/callback")
 def oidc_callback(
-    code: str | None = None, state: str | None = None, error: str | None = None
+    request: Request,
+    code: str | None = None, state: str | None = None, error: str | None = None,
 ):
-    _require_oidc()
+    _require_oidc(request)
     if error:
-        raise HTTPException(400, f"IdP 오류: {error}")
+        raise HTTPException(400, t(request, "IdP 오류: {e}", e=error))
     if not code or not state:
-        raise HTTPException(400, "code/state 누락")
+        raise HTTPException(400, t(request, "code/state 누락"))
 
     with db.connect() as conn:
         st = db.consume_oidc_state(conn, state, config.OIDC_STATE_TTL_SECONDS)
     if st is None:
-        raise HTTPException(400, "state 불일치 또는 만료 — 로그인을 다시 시도하세요")
+        raise HTTPException(400, t(request, "state 불일치 또는 만료 — 로그인을 다시 시도하세요"))
 
     try:
         tokens = oidc.exchange_code(code)
         claims = oidc.validate_id_token(tokens["id_token"], st["nonce"])
     except (httpx.HTTPError, jwt.PyJWTError, ValueError, KeyError) as e:
         logger.warning("OIDC 콜백 검증 실패: %s", e)
-        raise HTTPException(400, "OIDC 토큰 검증 실패")
+        raise HTTPException(400, t(request, "OIDC 토큰 검증 실패"))
 
     with db.connect() as conn:
-        user_id = _link_oidc_user(conn, claims)
+        user_id = _link_oidc_user(request, conn, claims)
         if db.get_user_by_id(conn, user_id)["role"] == "blocked":
-            raise HTTPException(403, "차단된 계정입니다. 관리자에게 문의하세요.")
+            raise HTTPException(403, t(request, "차단된 계정입니다. 관리자에게 문의하세요."))
         # SSO 는 IdP 의 2FA 를 신뢰 — 바로 active 세션
         token = auth.issue_session(conn, user_id)
     return _login_redirect(token, st["redirect_to"])
@@ -608,7 +618,8 @@ def signup(request: Request, email: str = Form(...), password: str = Form(...)):
         if error is None:
             return _login_redirect(token, "/")
     return templates.TemplateResponse(
-        request, "signup.html", {"error": error, "email": email}, status_code=400
+        request, "signup.html", {"error": t(request, error), "email": email},
+        status_code=400,
     )
 
 
@@ -656,7 +667,7 @@ def invite_accept(request: Request, token: str, password: str = Form(...)):
         if error is not None:
             return templates.TemplateResponse(
                 request, "invite.html",
-                _invite_ctx(invite, token, error=error), status_code=400,
+                _invite_ctx(invite, token, error=t(request, error)), status_code=400,
             )
         user_id = db.create_user(
             conn, invite["email"], auth.hash_password(password), role=invite["role"]
