@@ -616,15 +616,16 @@ def dashboard(request: Request):
         recent_snaps = db.list_recent_snapshots(conn, limit=10)
         recent_logs = db.list_archive_logs(conn, limit=10)
 
-    # 스냅샷은 불변이므로 디렉토리 용량을 그대로 합산한다
+    # 총 용량은 스냅샷 파일 합이 아니라 실제 저장공간 (DB·자원/문서 CAS 포함)
+    total_bytes = sum(storage.archive_disk_usage().values())
+
+    # 스냅샷은 불변이므로 디렉토리 용량을 그대로 합산한다 (트렌드·최근 목록용)
     sizes: dict[int, int] = {}
     counts = {k: 0 for k in starts}
     period_bytes = {k: 0 for k in starts}
-    total_bytes = 0
     for row in snap_dirs:
         size = _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
         sizes[row["id"]] = size
-        total_bytes += size
         for key, start in starts.items():
             if row["taken_at"] >= start:
                 counts[key] += 1

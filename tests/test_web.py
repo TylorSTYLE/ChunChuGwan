@@ -835,14 +835,25 @@ def test_dashboard_period_counts(client):
     assert f'id="stat-recent">{expected_recent}</div>' in res.text
 
 
-def test_dashboard_total_bytes_sums_snapshot_files(client):
-    # fixture 스냅샷 2개의 파일(content.md, page.html, screenshot.png) 합계
-    expected = 0
-    for dir_name in ("2026-06-01T00-00-00", "2026-06-02T00-00-00"):
-        snap_dir = storage.page_dir(
-            "example.com", storage.url_to_slug("https://example.com/post")
-        ) / dir_name
-        expected += sum(f["bytes"] for f in storage.snapshot_files(snap_dir))
+def test_dashboard_total_bytes_is_actual_storage(client):
+    # 총 용량 = 실제 저장공간 — 스냅샷 파일 합이 아니라 DB·자원/문서 CAS 포함
+    expected = config.DB_PATH.stat().st_size + sum(
+        p.stat().st_size
+        for root in (config.SITES_DIR, config.RESOURCES_DIR, config.DOCUMENTS_DIR)
+        if root.is_dir()
+        for p in root.rglob("*")
+        if p.is_file()
+    )
+    # 스냅샷 파일 합산만으로는 도달할 수 없는 값인지 (회귀 가드)
+    snap_only = sum(
+        sum(f["bytes"] for f in storage.snapshot_files(
+            storage.page_dir(
+                "example.com", storage.url_to_slug("https://example.com/post")
+            ) / dir_name
+        ))
+        for dir_name in ("2026-06-01T00-00-00", "2026-06-02T00-00-00")
+    )
+    assert expected > snap_only
     res = client.get("/dashboard")
     assert f'id="stat-bytes">{web_app.templates.env.filters["filesize"](expected)}</div>' in res.text
 

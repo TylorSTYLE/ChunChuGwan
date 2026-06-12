@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
 from .. import __version__, auth, backup as backup_mod
-from .. import config, crawler, db, mailer, optimize, resources
+from .. import config, crawler, db, mailer, optimize, resources, storage
 from . import permissions
 from .i18n import t
 from .templating import filesize, templates
@@ -40,13 +40,6 @@ def _require_admin(request: Request) -> None:
 router = APIRouter(prefix="/system", dependencies=[Depends(_require_admin)])
 
 
-def _dir_bytes(root: Path) -> int:
-    """디렉토리 전체 용량 (없으면 0)."""
-    if not root.is_dir():
-        return 0
-    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
-
-
 @router.get("", response_class=HTMLResponse)
 def system_view(request: Request, notice: str = "", error: str = ""):
     with db.connect() as conn:
@@ -59,6 +52,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         crawl_defaults = crawler.crawl_defaults(conn)
         crawl_backoff = crawler.retry_backoff(conn)
         network_tags = db.list_network_tags(conn)
+    usage = storage.archive_disk_usage()
     return templates.TemplateResponse(
         request, "system.html",
         {
@@ -79,10 +73,10 @@ def system_view(request: Request, notice: str = "", error: str = ""):
                 "max_delay": config.CRAWL_MAX_DELAY_SECONDS,
             },
             "archive_root": str(config.ARCHIVE_ROOT),
-            "db_bytes": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
-            "sites_bytes": _dir_bytes(config.SITES_DIR),
-            "resources_bytes": _dir_bytes(config.RESOURCES_DIR),
-            "documents_bytes": _dir_bytes(config.DOCUMENTS_DIR),
+            "db_bytes": usage["db"],
+            "sites_bytes": usage["sites"],
+            "resources_bytes": usage["resources"],
+            "documents_bytes": usage["documents"],
             "optimize_pending": sum(optimize.pending_counts()),
             "notice": notice, "error": error,
         },
