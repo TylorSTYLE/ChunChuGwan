@@ -25,12 +25,14 @@ logger = logging.getLogger(__name__)
 # 페이지 컨텍스트에서 스타일시트/이미지/폰트를 data URI로 치환.
 # {failed, inlined} 반환 — failed 는 실패 자원 {kind, url, raw?} 목록으로,
 # 페이지 컨텍스트 fetch() 는 CORS 에 막힐 수 있으므로(<img> 렌더링과 달리)
-# Python 쪽 폴백이 재시도한다. inlined 는 성공 자원의 {url, sha256} 목록 —
+# Python 쪽 폴백이 재시도한다. fetch 에는 자원별 타임아웃(AbortSignal)을
+# 걸어 응답 없는 호스트가 인라인 단계 전체를 매달지 못하게 한다.
+# inlined 는 성공 자원의 {url, sha256} 목록 —
 # CAS 추출 후 snapshot_resources 에 원본 URL 을 기록하는 근거다. sha256 은
 # crypto.subtle(보안 컨텍스트)로 계산하고, http 페이지처럼 없는 환경에서는
 # expose_function 으로 노출된 Python 바인딩(_sha256_of_base64)으로 폴백한다.
 _INLINE_JS = """
-async () => {
+async (timeoutMs) => {
   const failed = [];
   const inlined = [];
   const shaHex = async (blob, dataUrl) => {
@@ -47,7 +49,9 @@ async () => {
     return null;
   };
   const toDataUrl = async (url) => {
-    const res = await fetch(url, { credentials: "omit" });
+    const res = await fetch(url, {
+      credentials: "omit", signal: AbortSignal.timeout(timeoutMs),
+    });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const blob = await res.blob();
     const dataUrl = await new Promise((resolve, reject) => {
@@ -85,7 +89,9 @@ async () => {
   };
   for (const link of Array.from(document.querySelectorAll('link[rel="stylesheet"][href]'))) {
     try {
-      const res = await fetch(link.href, { credentials: "omit" });
+      const res = await fetch(link.href, {
+        credentials: "omit", signal: AbortSignal.timeout(timeoutMs),
+      });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const style = document.createElement("style");
       style.textContent = await inlineFonts(await res.text(), link.href);
@@ -416,9 +422,21 @@ def _capture_in_browser(
                 # 네비게이션이 시작조차 못함(연결 불가) — load 재시도 무의미
                 raise CaptureConnectError(f"{url} 캡처 실패: {e}") from e
             logger.warning("networkidle 미도달, load 기준으로 재시도: %s", url)
-            response = page.goto(
-                url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS
-            )
+            try:
+                response = page.goto(
+                    url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS
+                )
+            except PlaywrightTimeoutError:
+                # 응답 없는 하위 자원(죽은 외부 이미지 등)은 load 를 영영
+                # 막는다 — DOM 은 이미 파싱됐으므로 매달린 로드를 끊고
+                # 현재 상태로 진행한다 (http_status 는 알 수 없으므로 None).
+                # window.stop() 없이는 스크린샷의 fonts.ready 대기도 매달린다
+                logger.warning("load 미도달, 현재 DOM 으로 진행: %s", url)
+                try:
+                    page.evaluate("window.stop()")
+                except Exception as stop_err:
+                    logger.warning("window.stop() 실패, 그대로 진행: %s", stop_err)
+                response = None
 
         raw_html = page.content()
         (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
@@ -535,7 +553,7 @@ def _inline_resources(
     """
     resource_urls: dict[str, str] = {}
     try:
-        result: dict = page.evaluate(_INLINE_JS)
+        result: dict = page.evaluate(_INLINE_JS, config.PAGE_LOAD_TIMEOUT_MS)
         failed: list[dict] = result["failed"]
         resource_urls = {
             i["sha256"]: i["url"] for i in result["inlined"] if i.get("sha256")
