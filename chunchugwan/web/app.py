@@ -839,6 +839,8 @@ def snapshot_view(request: Request, snapshot_id: int):
             "page_html_url": f"/snapshot/{snapshot_id}/file/page.html",
             "screenshot_url": f"/snapshot/{snapshot_id}/file/screenshot",
             "content_url": f"/snapshot/{snapshot_id}/file/content.md",
+            # 문서 스냅샷(URL 자체가 파일 다운로드)은 스크린샷이 없다 — 탭 숨김
+            "has_screenshot": storage.find_screenshot(_snapshot_dir(snap)) is not None,
         },
     )
 

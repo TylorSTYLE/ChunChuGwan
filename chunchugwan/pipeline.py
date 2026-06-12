@@ -261,10 +261,13 @@ def _archive_url(
         resource_fallback=_resource_fallback,
     )
     insecure_tls = False
+    is_download = False  # 탐색이 파일 다운로드로 전환 — 문서 아카이빙으로 분기
     tmp_dir = Path(tempfile.mkdtemp(prefix="wccg-"))
     try:
         try:
             result = capture.capture(norm, tmp_dir, **capture_kwargs)
+        except capture.CaptureDownloadError:
+            is_download = True
         except capture.CaptureError as e:
             result = None
             if norm.startswith("https://") and capture.is_cert_error(e):
@@ -281,9 +284,11 @@ def _archive_url(
                         norm, tmp_dir, insecure_tls=True, **capture_kwargs
                     )
                     insecure_tls = True
+                except capture.CaptureDownloadError:
+                    is_download, insecure_tls = True, True
                 except capture.CaptureError:
                     pass  # http 폴백 판단은 원래 오류 기준으로 이어간다
-            if result is None:
+            if result is None and not is_download:
                 # HTTP 전용 사이트(443 닫힘 등)일 수 있으므로 http 로 한 번 더
                 # 시도한다: 스킴 생략 입력에 https 를 추정 보완한 경우는 모든
                 # 캡처 실패에서, 명시적 https 는 서버 연결 자체가 안 된 실패에
@@ -300,7 +305,16 @@ def _archive_url(
                 norm = "http://" + norm.removeprefix("https://")
                 slug = storage.url_to_slug(norm)
                 run.url = norm
-                result = capture.capture(norm, tmp_dir, **capture_kwargs)
+                try:
+                    result = capture.capture(norm, tmp_dir, **capture_kwargs)
+                except capture.CaptureDownloadError:
+                    is_download = True
+        if is_download:
+            run.step("capture", "탐색이 파일 다운로드로 전환 — 문서 파일로 아카이빙")
+            return _archive_document_url(
+                norm, domain, slug, force, run, tmp_dir,
+                network_tag_id=network_tag_id, verify=not insecure_tls,
+            )
         run.step(
             "capture",
             f"http {result.http_status or '-'} · 최종 URL {result.final_url} · "
@@ -447,3 +461,180 @@ def _archive_url(
             )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _document_content_text(url: str, entry: dict) -> str:
+    """문서 스냅샷의 content.md — 비교/해시 기준이 되는 문서 메타데이터 텍스트.
+
+    파일 내용 sha256 을 포함하므로 같은 파일이면 unchanged 로 저장이
+    생략되고, 파일이 바뀌면 diff 에 해시·크기 변화가 드러난다.
+    """
+    return "\n".join([
+        f"문서 파일: {entry['file']}",
+        f"원본 URL: {url}",
+        f"형식: {entry['content_type']}",
+        f"크기: {entry['bytes']} bytes",
+        f"SHA-256: {entry['sha256']}",
+    ])
+
+
+def _write_document_page_html(tmp_dir: Path, entry: dict) -> None:
+    """문서 스냅샷의 page.html — 뷰어 렌더링 탭에 보일 정적 안내 문서.
+
+    스크립트 없는 정적 HTML 이다. 파일 본체 다운로드는 스냅샷 화면의
+    첨부 문서 링크(인증 라우트)가 담당하므로 여기서는 링크를 걸지 않는다
+    (샌드박스 iframe 의 하위 요청에는 인증 쿠키가 붙지 않는다).
+    """
+    import html
+
+    rows = "".join(
+        f"<tr><th>{html.escape(k)}</th><td>{html.escape(str(v))}</td></tr>"
+        for k, v in (
+            ("파일명", entry["file"]),
+            ("형식", entry["content_type"]),
+            ("크기", f"{entry['bytes']} bytes"),
+            ("SHA-256", entry["sha256"]),
+        )
+    )
+    (tmp_dir / "page.html").write_text(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+        f"<title>{html.escape(str(entry['file']))}</title></head>"
+        "<body style=\"font-family:sans-serif\"><p>문서 파일 스냅샷 — "
+        "파일은 스냅샷 화면의 첨부 문서에서 내려받을 수 있습니다.</p>"
+        f"<table>{rows}</table></body></html>",
+        encoding="utf-8",
+    )
+
+
+def _archive_document_url(
+    norm: str,
+    domain: str,
+    slug: str,
+    force: bool,
+    run: _RunLog,
+    tmp_dir: Path,
+    *,
+    network_tag_id: str | None,
+    verify: bool,
+) -> ArchiveOutcome:
+    """URL 자체가 파일 다운로드인 경우의 아카이빙 — 문서 스냅샷.
+
+    탐색이 다운로드로 전환된 URL(capture.CaptureDownloadError)을
+    documents.download_direct 로 내려받아 문서 CAS 에 저장하고, 문서
+    메타데이터 텍스트를 content.md 로 갖는 스냅샷을 만든다 (raw.html·
+    스크린샷은 없다 — 페이지가 아니므로). 같은 파일이면 직전 스냅샷과
+    해시가 같아 저장이 생략된다. verify=False 는 자체 서명 https 를 검증
+    무시로 시도한 경우다.
+    """
+    import httpx
+
+    try:
+        dl = documents.download_direct(norm, tmp_dir / "files", verify=verify)
+    except (ValueError, httpx.HTTPError) as e:
+        raise capture.CaptureError(f"{norm} 문서 다운로드 실패: {e}") from e
+    entry = dl.entry
+    run.step(
+        "download",
+        f"http {dl.http_status} · {entry['file']} · {entry['bytes']} bytes",
+    )
+
+    cert_info = (
+        certs.fetch_certificate_info(norm) if norm.startswith("https://") else None
+    )
+    # 리다이렉트가 네트워크 게이트를 우회하지 못하게 최종 URL 호스트도 판정
+    # (페이지 캡처 흐름과 동일 — 위반 시 아카이브에는 아무것도 남지 않는다)
+    final_host = urlsplit(dl.final_url).hostname or ""
+    if final_host and final_host != domain:
+        final_kind = netcheck.classify_host(final_host)
+        if final_kind == netcheck.LOOPBACK:
+            raise ValueError(
+                f"최종 URL 이 루프백 주소입니다 — 저장 중단: {dl.final_url}"
+            )
+        if final_kind == netcheck.PRIVATE and network_tag_id is None:
+            raise ValueError(
+                "최종 URL 이 로컬 네트워크(사설 IP) 주소입니다 — 로컬 네트워크 "
+                f"태그 없이 저장할 수 없습니다: {dl.final_url}"
+            )
+
+    text = _document_content_text(norm, entry)
+    content_hash = storage.content_sha256(text)
+    run.step("hash", f"문서 메타데이터 {len(text)}자 · sha256 {content_hash[:12]}")
+
+    with db.connect() as conn:
+        page_id = db.get_or_create_page(
+            conn, norm, domain, slug, network_tag_id=network_tag_id
+        )
+        if cert_info:
+            site_id = db.get_or_create_site(conn, storage.site_key(norm))
+            created = db.upsert_site_certificate(
+                conn, site_id, cert_info, verified=verify
+            )
+            run.step(
+                "certificate",
+                ("새 인증서 버전 기록" if created else "기존 인증서 버전 확인")
+                + f" — {cert_info['fingerprint'][:12]} · "
+                  f"만료 {cert_info['not_after']}",
+            )
+        prev = db.last_snapshot(conn, page_id)
+
+        if prev and prev["content_hash"] == content_hash and not force:
+            db.insert_check(conn, page_id, content_hash)
+            run.step("decide", f"직전 스냅샷({prev['taken_at']})과 동일 — 저장 생략")
+            run.write(
+                conn, status="unchanged", page_id=page_id,
+                content_hash=content_hash, http_status=dl.http_status,
+            )
+            return ArchiveOutcome(
+                status="unchanged", url=norm, content_hash=content_hash,
+                snapshot_dir=None, taken_at=None,
+                last_taken_at=prev["taken_at"],
+                http_status=dl.http_status, title=str(entry["file"]),
+                snapshot_id=prev["id"],
+            )
+
+        manifest = [entry]
+        documents.ingest_into_cas(tmp_dir / "files", manifest)
+        if not manifest:
+            # download_direct 가 화이트리스트 확장자를 보장하므로 정상적으로는
+            # 도달하지 않는다 — 존재하지 않는 문서를 참조하는 스냅샷 방지
+            raise capture.CaptureError(f"{norm} 문서 CAS 저장 실패")
+        _write_document_page_html(tmp_dir, entry)
+        stats = resources.compact_snapshot_dir(tmp_dir, dl.final_url)
+        run.step("compress", f"{stats.before_bytes // 1024}KB → {stats.after_bytes // 1024}KB")
+
+        taken_at = datetime.now(timezone.utc)
+        meta = storage.SnapshotMeta(
+            url=norm,
+            final_url=dl.final_url,
+            taken_at=taken_at.isoformat(timespec="seconds"),
+            content_hash=content_hash,
+            http_status=dl.http_status,
+            title=str(entry["file"]),
+            documents=manifest,
+        )
+        snap_dir = storage.finalize_snapshot(
+            tmp_dir, domain, slug, meta, text, taken_at
+        )
+        changed = 1 if prev is None else int(prev["content_hash"] != content_hash)
+        snapshot_id = db.insert_snapshot(
+            conn, page_id,
+            taken_at=meta.taken_at, dir_name=snap_dir.name,
+            content_hash=content_hash, final_url=dl.final_url,
+            http_status=dl.http_status, changed=changed,
+            resources_indexed=1,  # 공유 자원 없음 — 백필 불필요
+            css_externalized=1,   # 인라인 <style> 없음
+        )
+        db.insert_snapshot_documents(conn, snapshot_id, manifest)
+        status = "new" if prev is None else ("changed" if changed else "forced_same")
+        run.step("store", f"문서 스냅샷 저장 [{status}]: {snap_dir.name}")
+        run.write(
+            conn, status=status, page_id=page_id, snapshot_id=snapshot_id,
+            content_hash=content_hash, http_status=dl.http_status,
+        )
+        return ArchiveOutcome(
+            status=status, url=norm, content_hash=content_hash,
+            snapshot_dir=snap_dir, taken_at=meta.taken_at,
+            last_taken_at=prev["taken_at"] if prev else None,
+            http_status=dl.http_status, title=str(entry["file"]),
+            documents=1, snapshot_id=snapshot_id,
+        )

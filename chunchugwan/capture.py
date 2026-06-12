@@ -375,6 +375,8 @@ def _capture_once(
             finally:
                 browser.close()
     except PlaywrightError as e:
+        if _DOWNLOAD_MARKER in str(e):
+            raise CaptureDownloadError(f"{url} 은 파일 다운로드 URL: {e}") from e
         if any(marker in str(e) for marker in _CONNECT_ERROR_MARKERS):
             raise CaptureConnectError(f"{url} 캡처 실패: {e}") from e
         raise CaptureError(f"{url} 캡처 실패: {e}") from e
@@ -667,6 +669,11 @@ def is_cert_error(exc: Exception) -> bool:
     return any(marker in str(exc) for marker in _CERT_ERROR_MARKERS)
 
 
+# 탐색이 페이지 로드 대신 파일 다운로드로 전환됐을 때의 Playwright 오류 문구 —
+# URL 이 문서 파일 직접 링크(download.php 등)라는 뜻이다
+_DOWNLOAD_MARKER = "Download is starting"
+
+
 # 서버 연결 단계에서 나는 chromium 네트워크 오류 (DNS 실패는 스킴과 무관하므로 제외)
 _CONNECT_ERROR_MARKERS = (
     "net::ERR_CONNECTION_",
@@ -700,3 +707,10 @@ class CaptureError(RuntimeError):
 
 class CaptureConnectError(CaptureError):
     """서버 연결 자체가 안 된 실패 (443 닫힘·SSL 오류 등) — https→http 폴백 판단용."""
+
+
+class CaptureDownloadError(CaptureError):
+    """탐색이 파일 다운로드로 전환된 실패 — URL 이 페이지가 아니라 파일.
+
+    pipeline 이 문서 아카이빙(documents.download_direct)으로 전환하는 신호다.
+    """
