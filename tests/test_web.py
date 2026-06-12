@@ -91,10 +91,17 @@ def test_timeline_404(client):
 
 
 def test_snapshot_view_sandboxed_iframe(client):
+    """렌더링 iframe 의 허용 토큰은 allow-top-navigation-by-user-activation 하나뿐.
+
+    사이트 전체 아카이브의 재작성된 링크(target="_top")가 사용자 클릭으로만
+    다음 스냅샷 뷰어로 이동하기 위한 것 — 스크립트 실행은 여전히 금지다.
+    """
+    import re
+
     res = client.get("/snapshot/1")
     assert res.status_code == 200
-    assert 'sandbox=""' in res.text
-    assert 'sandbox="allow' not in res.text  # iframe에 allow-* 토큰 금지
+    tokens = set(re.findall(r'sandbox="([^"]*)"', res.text))
+    assert tokens == {"allow-top-navigation-by-user-activation", ""}
 
 
 def test_theme_toggle_present(client):
@@ -150,7 +157,9 @@ def test_snapshot_file_whitelist(client):
     assert ok.status_code == 200 and "첫 줄" in ok.text
     page = client.get("/snapshot/1/file/page.html")
     assert page.status_code == 200
-    assert page.headers["content-security-policy"] == "sandbox"
+    assert page.headers["content-security-policy"] == (
+        "sandbox allow-top-navigation-by-user-activation"
+    )
     assert client.get("/snapshot/1/file/meta.json").status_code == 404
     assert client.get("/snapshot/1/file/..%2F..%2Findex.db").status_code == 404
 
@@ -765,7 +774,9 @@ def test_snapshot_file_serves_compressed_forms(client):
     page = client.get("/snapshot/1/file/page.html")
     assert page.status_code == 200
     assert "본문" in page.text  # Content-Encoding: gzip — 클라이언트가 풀어준다
-    assert page.headers["content-security-policy"] == "sandbox"
+    assert page.headers["content-security-policy"] == (
+        "sandbox allow-top-navigation-by-user-activation"
+    )
 
     shot = client.get("/snapshot/1/file/screenshot")
     assert shot.status_code == 200

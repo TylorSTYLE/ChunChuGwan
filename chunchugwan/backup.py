@@ -275,8 +275,11 @@ def _wipe_archive_data(conn: sqlite3.Connection) -> None:
     인증 테이블은 유지한다. archive_logs 는 실행 기록이므로 행은 남기되,
     삭제될 행을 가리키는 FK 만 비워 제약 위반을 막는다.
     schedules 는 페이지에 종속이므로 (id 가 사라진다) 함께 비운다.
+    크롤(crawls/crawl_pages)도 사라질 스냅샷을 가리키므로 함께 비운다.
     """
     conn.execute("UPDATE archive_logs SET page_id = NULL, snapshot_id = NULL")
+    conn.execute("DELETE FROM crawl_pages")
+    conn.execute("DELETE FROM crawls")
     conn.execute("DELETE FROM schedules")
     conn.execute("DELETE FROM checks")
     conn.execute("DELETE FROM snapshots")

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ _("사이트 아카이브") }} — {{ _("춘추관") }}{% endblock %}
+{% block content %}
+<h2>{{ _("사이트 아카이브") }}</h2>
+
+{% if not crawls %}
+<p class="muted">{{ _("아직 사이트 전체 아카이브가 없습니다.") }}
+  {% if can_archive %}{{ _("새 아카이빙에서 '사이트 전체 아카이브'를 선택해 시작하세요.") }}{% endif %}
+</p>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>{{ _("시작 URL") }}</th>
+      <th>{{ _("범위") }}</th>
+      <th>{{ _("상태") }}</th>
+      <th style="text-align:right">{{ _("완료") }}</th>
+      <th style="text-align:right">{{ _("실패") }}</th>
+      <th style="text-align:right">{{ _("대기") }}</th>
+      <th>{{ _("등록 시각") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for c in crawls %}
+    <tr>
+      <td><a href="/crawls/{{ c['id'] }}" class="mono">{{ c['start_url'] }}</a></td>
+      <td class="mono muted">{{ c['scope_host'] }}{{ c['scope_path'] }}</td>
+      <td>
+        {% if c['status'] == 'running' %}<span class="badge running">{{ _("진행 중") }}</span>
+        {% elif c['status'] == 'done' %}<span class="badge new">{{ _("완료됨") }}</span>
+        {% else %}<span class="badge same">{{ _("취소됨") }}</span>{% endif %}
+      </td>
+      <td class="mono" style="text-align:right">{{ c['done_count'] }}</td>
+      <td class="mono" style="text-align:right">{{ c['failed_count'] or '-' }}</td>
+      <td class="mono" style="text-align:right">{{ c['pending_count'] or '-' }}</td>
+      <td>{{ c['created_at'] | ts }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

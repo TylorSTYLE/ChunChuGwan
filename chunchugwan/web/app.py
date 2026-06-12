@@ -2,9 +2,12 @@
 
 보안 원칙 (CLAUDE.md 5번):
 - 바인딩은 127.0.0.1 고정
-- 스냅샷 HTML 렌더링은 templates/snapshot.html 의
-  <iframe sandbox="">  (allow-* 토큰 전부 없음 = 스크립트/폼/팝업 차단) 안에서만
-- page.html 직접 응답에도 CSP `sandbox` 헤더를 붙여 직접 열어도
+- 스냅샷 HTML 렌더링은 templates/snapshot.html 의 샌드박스 iframe 안에서만.
+  허용 토큰은 allow-top-navigation-by-user-activation 하나 — 사용자가
+  링크를 직접 클릭했을 때만 뷰어 전체의 이동을 허용한다 (사이트 전체
+  아카이브의 재작성된 링크가 다음 스냅샷으로 가는 통로). 스크립트/폼/팝업은
+  여전히 차단 — allow-scripts 절대 추가 금지.
+- page.html 직접 응답에도 같은 CSP `sandbox` 헤더를 붙여 직접 열어도
   대시보드 컨텍스트에서 스크립트가 실행되지 않게 한다
 - 스냅샷 파일 서빙 시 경로는 DB에 기록된 dir_name 으로만 조립.
   사용자 입력 경로를 직접 파일시스템에 매핑하지 말 것.
@@ -29,7 +32,8 @@ from fastapi.responses import (
 )
 
 from .. import (
-    auth, config, db, deletion, differ, pipeline, resources, scheduler, storage,
+    auth, config, crawler, db, deletion, differ, pipeline, resources, scheduler,
+    storage,
 )
 from . import api_routes, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -40,29 +44,40 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """서버 구동 동안 스케줄러 폴링 스레드 운영 (WCCG_SCHEDULER=off 면 비활성).
+    """서버 구동 동안 스케줄러·크롤러 폴링 스레드 운영 (WCCG_SCHEDULER=off 면 비활성).
 
     진행 중 작업 레지스트리(claim/release)를 같이 써서 수동 재아카이빙과
-    같은 URL 이 동시에 돌지 않게 한다.
+    같은 URL 이 동시에 돌지 않게 한다. 크롤러는 사이트 전체 아카이브 큐
+    (crawl_pages)를 소비한다 — 페이지 간 간격이 짧아 별도 폴링 주기를 쓴다.
     """
     stop = threading.Event()
-    thread: threading.Thread | None = None
+    threads: list[threading.Thread] = []
     if config.SCHEDULER_ENABLED:
-        thread = threading.Thread(
-            target=scheduler.run_loop,
-            args=(stop,),
-            kwargs={
-                "poll_seconds": config.SCHEDULER_POLL_SECONDS,
-                "claim": _register_job,
-                "release": _unregister_job,
-            },
-            name="wccg-scheduler",
-            daemon=True,
-        )
-        thread.start()
+        threads = [
+            threading.Thread(
+                target=scheduler.run_loop,
+                args=(stop,),
+                kwargs={
+                    "poll_seconds": config.SCHEDULER_POLL_SECONDS,
+                    "claim": _register_job,
+                    "release": _unregister_job,
+                },
+                name="wccg-scheduler",
+                daemon=True,
+            ),
+            threading.Thread(
+                target=crawler.run_loop,
+                args=(stop,),
+                kwargs={"claim": _register_job, "release": _unregister_job},
+                name="wccg-crawler",
+                daemon=True,
+            ),
+        ]
+        for thread in threads:
+            thread.start()
     yield
     stop.set()
-    if thread is not None:
+    for thread in threads:
         thread.join(timeout=5)
 
 
@@ -560,8 +575,14 @@ def snapshot_file(request: Request, snapshot_id: int, name: str):
     if filename.endswith(".gz"):
         headers["Content-Encoding"] = "gzip"
     if name == "page.html":
-        # 직접 열어도 아카이빙된 JS가 실행되지 않도록 문서 자체를 샌드박스
-        headers["Content-Security-Policy"] = "sandbox"
+        # 직접 열어도 아카이빙된 JS가 실행되지 않도록 문서 자체를 샌드박스.
+        # allow-top-navigation-by-user-activation 은 사용자가 링크를 직접
+        # 클릭했을 때만 뷰어 전체의 이동을 허용한다 — 사이트 전체 아카이브의
+        # 재작성된 링크(target="_top")가 다음 스냅샷 뷰어로 가는 통로이며,
+        # 스크립트 실행은 여전히 차단된다 (allow-scripts 절대 추가 금지).
+        headers["Content-Security-Policy"] = (
+            "sandbox allow-top-navigation-by-user-activation"
+        )
     return FileResponse(path, media_type=media_type, headers=headers)
 
 
@@ -900,12 +921,51 @@ def _require_deleter(request: Request) -> None:
 
 @app.get("/archive/new", response_class=HTMLResponse)
 def archive_new_form(request: Request, error: str = "", url: str = ""):
-    """새 아카이빙 등록 화면 — URL 입력 + 자동 재아카이빙 주기 선택."""
+    """새 아카이빙 등록 화면 — URL 입력 + 자동 재아카이빙 주기 선택.
+
+    사이트 전체 아카이브 옵션(체크 시 크롤 옵션 노출)도 이 화면에서 받는다.
+    """
     _require_archiver(request)
     return templates.TemplateResponse(
         request, "archive_new.html",
-        {"error": error, "url": url, "interval_options": _SCHEDULE_OPTIONS},
+        {
+            "error": error, "url": url, "interval_options": _SCHEDULE_OPTIONS,
+            "crawl_defaults": {
+                "max_pages": config.CRAWL_DEFAULT_MAX_PAGES,
+                "max_depth": config.CRAWL_DEFAULT_MAX_DEPTH,
+                "delay": config.CRAWL_DEFAULT_DELAY_SECONDS,
+            },
+            "crawl_limits": {
+                "max_pages": config.CRAWL_MAX_PAGES_LIMIT,
+                "max_depth": config.CRAWL_MAX_DEPTH_LIMIT,
+                "min_delay": config.CRAWL_MIN_DELAY_SECONDS,
+                "max_delay": config.CRAWL_MAX_DELAY_SECONDS,
+            },
+        },
     )
+
+
+def _archive_site(
+    request: Request, url: str, max_pages: str, max_depth: str, delay: str
+) -> RedirectResponse:
+    """사이트 전체 아카이브 등록 — 크롤을 만들고 진행 화면으로 보낸다.
+
+    실행은 크롤러 폴링 스레드가 큐를 소비하며 진행한다 (등록과 분리).
+    """
+    try:
+        crawl = crawler.start_crawl(
+            url,
+            max_pages=int(max_pages or config.CRAWL_DEFAULT_MAX_PAGES),
+            max_depth=int(max_depth or config.CRAWL_DEFAULT_MAX_DEPTH),
+            delay_seconds=int(delay or config.CRAWL_DEFAULT_DELAY_SECONDS),
+            source="web",
+        )
+    except ValueError as exc:
+        params = urlencode(
+            {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
+        )
+        return RedirectResponse(f"/archive/new?{params}", status_code=303)
+    return RedirectResponse(f"/crawls/{crawl['id']}", status_code=303)
 
 
 @app.post("/archive")
@@ -913,13 +973,23 @@ def archive_new(
     request: Request,
     background: BackgroundTasks,
     url: str = Form(...),
+    site: str = Form(""),
+    crawl_max_pages: str = Form(""),
+    crawl_max_depth: str = Form(""),
+    crawl_delay: str = Form(""),
     interval: str = Form("0"),
     custom_value: str = Form(""),
     custom_unit: str = Form("h"),
     run_at: str = Form(""),
 ):
-    """새 URL 아카이빙. 검증은 동기로, 캡처·주기 등록(interval>0)은 백그라운드로."""
+    """새 URL 아카이빙. 검증은 동기로, 캡처·주기 등록(interval>0)은 백그라운드로.
+
+    site 체크 시 사이트 전체 아카이브(크롤) 등록으로 분기한다 — 이때
+    자동 재아카이빙 주기는 페이지 단위 기능이므로 무시된다.
+    """
     _require_archiver(request)
+    if site:
+        return _archive_site(request, url, crawl_max_pages, crawl_max_depth, crawl_delay)
     try:
         norm = storage.normalize_url(url)
         seconds = _interval_from_form(interval, custom_value, custom_unit)
@@ -997,4 +1067,94 @@ def snapshot_delete(request: Request, snapshot_id: int):
     msg = t(request, "스냅샷 삭제됨: {t}", t=snap["taken_at"])
     return RedirectResponse(
         f"/page/{snap['page_id']}?notice={quote(msg, safe='')}", status_code=303
+    )
+
+
+# ---- 사이트 전체 아카이브 (크롤) ----
+
+
+def _load_crawl(request: Request, crawl_id: int):
+    with db.connect() as conn:
+        crawl = db.get_crawl(conn, crawl_id)
+    if crawl is None:
+        raise HTTPException(404, t(request, "크롤 없음"))
+    return crawl
+
+
+@app.get("/crawls", response_class=HTMLResponse)
+def crawls_view(request: Request):
+    """사이트 전체 아카이브 목록 — 크롤별 진행 현황."""
+    with db.connect() as conn:
+        crawls = db.list_crawls(conn)
+    return templates.TemplateResponse(request, "crawls.html", {"crawls": crawls})
+
+
+@app.get("/crawls/{crawl_id}", response_class=HTMLResponse)
+def crawl_view(request: Request, crawl_id: int):
+    """크롤 진행 화면 — 상태별 집계와 페이지 목록, 취소·재시도."""
+    crawl = _load_crawl(request, crawl_id)
+    with db.connect() as conn:
+        counts = db.crawl_page_counts(conn, crawl_id)
+        pages = db.list_crawl_pages(conn, crawl_id)
+    return templates.TemplateResponse(
+        request, "crawl.html",
+        {"crawl": crawl, "counts": counts, "pages": pages},
+    )
+
+
+@app.get("/crawls/{crawl_id}/status")
+def crawl_status(request: Request, crawl_id: int) -> dict:
+    """크롤 진행 상태 JSON (진행 화면 자동 갱신 폴링용)."""
+    crawl = _load_crawl(request, crawl_id)
+    with db.connect() as conn:
+        counts = db.crawl_page_counts(conn, crawl_id)
+    return {"status": crawl["status"], "counts": counts}
+
+
+@app.post("/crawls/{crawl_id}/cancel")
+def crawl_cancel(request: Request, crawl_id: int):
+    """크롤 취소 — 처리 중인 페이지만 마치고 멈춘다. admin/archiver 전용."""
+    _require_archiver(request)
+    _load_crawl(request, crawl_id)
+    with db.connect() as conn:
+        db.cancel_crawl(conn, crawl_id)
+    return RedirectResponse(f"/crawls/{crawl_id}", status_code=303)
+
+
+@app.post("/crawls/{crawl_id}/retry")
+def crawl_retry(request: Request, crawl_id: int):
+    """실패한 페이지 일괄 재시도 (크롤이 닫혔으면 다시 연다). admin/archiver 전용."""
+    _require_archiver(request)
+    _load_crawl(request, crawl_id)
+    with db.connect() as conn:
+        db.retry_failed_crawl_pages(conn, crawl_id)
+    return RedirectResponse(f"/crawls/{crawl_id}", status_code=303)
+
+
+@app.get("/crawl/{crawl_id}/goto")
+def crawl_goto(request: Request, crawl_id: int, url: str):
+    """아카이브 내 링크 리졸버 — 재작성된 page.html 앵커의 목적지.
+
+    같은 크롤 세트에서 확인된 스냅샷 → 해당 URL 의 최신 스냅샷 순으로
+    찾아 리다이렉트하고, 없으면 원본 링크를 안내하는 화면을 보여준다
+    (라이브 사이트로 조용히 새지 않는다).
+    """
+    crawl = _load_crawl(request, crawl_id)
+    try:
+        norm = storage.normalize_url(url)
+    except ValueError:
+        raise HTTPException(400, t(request, "잘못된 URL"))
+    with db.connect() as conn:
+        snapshot_id = db.find_crawl_snapshot(conn, crawl_id, norm)
+        if snapshot_id is None:
+            page = db.get_page(conn, norm)
+            if page is not None:
+                last = db.last_snapshot(conn, page["id"])
+                snapshot_id = last["id"] if last else None
+    if snapshot_id is not None:
+        return RedirectResponse(f"/snapshot/{snapshot_id}", status_code=302)
+    return templates.TemplateResponse(
+        request, "crawl_goto_missing.html",
+        {"crawl": crawl, "url": norm},
+        status_code=404,
     )
