@@ -1,4 +1,7 @@
 """db.py 쿼리 함수 테스트. 임시 디렉토리에 격리된 DB 사용."""
+import os
+import sqlite3
+
 import pytest
 
 from chunchugwan import config, db
@@ -61,3 +64,35 @@ def test_list_pages_counts(conn):
     assert pages["https://example.com/x"]["snapshot_count"] == 1
     assert pages["https://example.com/y"]["snapshot_count"] == 0
     assert pages["https://example.com/y"]["last_taken_at"] is None
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root 는 권한 검사를 우회한다")
+def test_connect_unwritable_dir_friendly_error(tmp_path, monkeypatch):
+    """아카이브 디렉토리에 쓰기 권한이 없으면 원인을 알려주는 메시지로 실패한다."""
+    root = tmp_path / "archive"
+    (root / "sites").mkdir(parents=True)  # sites 가 있으면 ensure_dirs 는 통과
+    root.chmod(0o555)
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", root)
+    monkeypatch.setattr(config, "SITES_DIR", root / "sites")
+    monkeypatch.setattr(config, "DB_PATH", root / "index.db")
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="쓰기 권한"):
+            with db.connect():
+                pass
+    finally:
+        root.chmod(0o755)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root 는 권한 검사를 우회한다")
+def test_ensure_dirs_unwritable_dir_friendly_error(tmp_path, monkeypatch):
+    """sites 디렉토리 생성이 막혀도 원인을 알려주는 메시지로 실패한다."""
+    root = tmp_path / "archive"
+    root.mkdir()
+    root.chmod(0o555)
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", root)
+    monkeypatch.setattr(config, "SITES_DIR", root / "sites")
+    try:
+        with pytest.raises(PermissionError, match="쓰기 권한"):
+            config.ensure_dirs()
+    finally:
+        root.chmod(0o755)
