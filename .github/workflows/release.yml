@@ -47,7 +47,7 @@ jobs:
 
       - name: 체크아웃
         if: steps.bump.outputs.skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
