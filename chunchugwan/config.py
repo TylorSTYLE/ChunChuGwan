@@ -19,7 +19,7 @@ RESOURCES_DIR = ARCHIVE_ROOT / "resources"  # 스냅샷 간 공유 자원 CAS (r
 DOCUMENTS_DIR = ARCHIVE_ROOT / "documents"  # 문서 파일 CAS (documents.py — 인증 라우트 전용)
 
 PAGE_LOAD_TIMEOUT_MS = 30_000
-USER_AGENT = "Mozilla/5.0 (compatible; ChunChuGwan/0.1)"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 # ---- 저장 압축 (resources.py) ----
 SCREENSHOT_WEBP_QUALITY = 85    # 스크린샷 PNG → WebP 변환 품질 (손실 압축)
