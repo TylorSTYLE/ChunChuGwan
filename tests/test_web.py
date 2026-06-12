@@ -894,3 +894,20 @@ def test_resource_route(client):
     assert client.get("/resource/..%2Findex.db").status_code == 404
     assert client.get(f"/resource/{'a' * 64}.html").status_code == 404  # 문서 타입 금지
     assert client.get(f"/resource/{'a' * 64}.png").status_code == 404   # 없는 자원
+
+
+def test_resource_route_serves_gzipped_css(client, monkeypatch):
+    from chunchugwan import config, resources
+
+    monkeypatch.setattr(config, "RESOURCE_MIN_BYTES", 16)
+    css = "body { color: #abc; margin: 0; }"
+    out, names = resources.externalize_style_blocks(f"<style>{css}</style>")
+    assert len(names) == 1
+
+    # gzip 저장된 CSS 는 Content-Encoding 으로 서빙 (httpx 가 투명 해제)
+    res = client.get(f"/resource/{names[0]}")
+    assert res.status_code == 200
+    assert res.text == css
+    assert res.headers.get("content-encoding") == "gzip"
+    assert res.headers["content-type"].startswith("text/css")
+    assert res.headers["content-security-policy"] == "sandbox"

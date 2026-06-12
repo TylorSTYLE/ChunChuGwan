@@ -542,22 +542,24 @@ def _fmt_mb(n: int) -> str:
 @main.command()
 @click.option("--yes", is_flag=True, help="확인 없이 진행")
 def compact(yes: bool) -> None:
-    """저장공간 최적화 — 압축 변환 + 자원 참조 백필 + 고아 자원 정리.
+    """저장공간 최적화 — 압축 변환 + 인라인 스타일 추출 + 자원 참조 백필 + 고아 자원 정리.
 
     구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP
-    + 문서 CAS 이전)로 변환하고, 자원 참조(snapshot_resources)가 없는
-    스냅샷을 스캔해 인덱스한 뒤, 어떤 스냅샷도 참조하지 않는 공유 자원을
-    삭제한다. 내용 보존이라 스냅샷이 담는 정보는 그대로다 (불변 원칙의
-    유일한 예외). 멱등 — 여러 번 실행해도 안전하다.
+    + 문서 CAS 이전)로 변환하고, 큰 인라인 <style>(사이트 공통 CSS)을 공유
+    자원으로 추출하고, 자원 참조(snapshot_resources)가 없는 스냅샷을 스캔해
+    인덱스한 뒤, 어떤 스냅샷도 참조하지 않는 공유 자원을 삭제한다. 내용
+    보존이라 스냅샷이 담는 정보는 그대로다 (불변 원칙의 유일한 예외).
+    멱등 — 여러 번 실행해도 안전하다.
     """
-    compactable, unindexed = optimize.pending_counts()
-    if compactable == 0 and unindexed == 0:
+    compactable, css_pending, unindexed = optimize.pending_counts()
+    if compactable == 0 and css_pending == 0 and unindexed == 0:
         click.echo("최적화할 항목이 없습니다 — 스냅샷이 모두 압축·인덱스 형태입니다.")
         return
     if not yes:
         click.confirm(
             f"스냅샷 {compactable}개를 압축 저장 형태(page.html.gz·"
             "raw.html.gz·screenshot.webp + 공유 자원 + 문서 CAS)로 변환하고, "
+            f"{css_pending}개 스냅샷의 인라인 스타일을 공유 자원으로 추출하고, "
             f"{unindexed}개의 자원 참조를 인덱스한 뒤 참조 없는 공유 자원을 "
             "정리합니다. 계속할까요?",
             abort=True,
@@ -571,6 +573,11 @@ def compact(yes: bool) -> None:
         f"문서 {c.documents}개 이전 · "
         f"{_fmt_mb(c.before_bytes)} → {_fmt_mb(c.after_bytes)} "
         f"({_fmt_mb(c.saved_bytes)} 절약)"
+    )
+    click.echo(
+        f"인라인 스타일 추출: 스냅샷 {result.styles_snapshots}개에서 "
+        f"공유 스타일 {result.styles_extracted}개 "
+        f"({_fmt_mb(result.styles_saved_bytes)} 절약)"
     )
     click.echo(f"자원 참조 백필: 스냅샷 {result.indexed}개")
     if result.sweep_skipped:

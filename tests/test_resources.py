@@ -58,6 +58,119 @@ def test_externalize_strips_base_tag(cas_env):
     assert "<base" not in out  # base href 가 /resource/ 참조를 깨지 않게 제거
 
 
+# ---- 인라인 <style> 추출 ----
+
+_CSS = "body { color: #fff; background: #000; }"  # 16바이트 임계값 이상
+
+
+def _css_name(css: str = _CSS) -> str:
+    return hashlib.sha256(css.encode()).hexdigest() + ".css"
+
+
+def test_externalize_style_block(cas_env):
+    html = f"<html><head><style>{_CSS}</style></head><body>본문</body></html>"
+    out, names = resources.externalize_style_blocks(html)
+    assert names == [_css_name()]
+    assert f'<link rel="stylesheet" href="/resource/{names[0]}">' in out
+    assert "<style" not in out
+    # 본체는 gzip 저장 (이름은 원문 sha256) — /resource/ 가 Content-Encoding 으로 서빙
+    stored = resources.resource_path(names[0]).read_bytes()
+    assert gzip.decompress(stored) == _CSS.encode()
+    assert resources.is_gzipped(resources.resource_path(names[0]))
+
+
+def test_externalize_style_keeps_small(cas_env):
+    html = "<style>p{}</style>"  # 임계값 미만
+    out, names = resources.externalize_style_blocks(html)
+    assert names == [] and out == html
+
+
+def test_externalize_style_preserves_media(cas_env):
+    html = f'<style media="print" data-x="1">{_CSS}</style>'
+    out, names = resources.externalize_style_blocks(html)
+    assert f'<link rel="stylesheet" href="/resource/{names[0]}" media="print">' in out
+
+
+def test_externalize_style_skips_relative_refs_without_base(cas_env):
+    # base_url 없이는 상대 url()/@import 의 해석 기준(<style>=문서,
+    # 외부 .css=/resource/)이 달라지므로 인라인을 유지한다
+    for ref in ("url(../bg.png)", "url('img/a.png')", '@import "common.css";'):
+        html = f"<style>{_CSS} .x {{ {ref} }}</style>"
+        out, names = resources.externalize_style_blocks(html)
+        assert names == [] and out == html, ref
+    # 위치 무관 참조(절대 URL·data:·#·/resource/)만 있으면 추출된다
+    safe = (
+        f"{_CSS} .y {{ background: url(https://cdn.example/a.png) "
+        f"url(data:image/png;base64,AAAA) url(/resource/{'a' * 64}.png) url(#f) }}"
+    )
+    out, names = resources.externalize_style_blocks(f"<style>{safe}</style>")
+    assert len(names) == 1 and "<style" not in out
+
+
+def test_externalize_style_absolutizes_with_base(cas_env):
+    # final_url 이 주어지면 상대 참조를 원래 해석(페이지 기준)으로 절대화 후 추출
+    css = f"{_CSS} .x {{ background: url(../image/bg.png) }} @import 'common.css';"
+    out, names = resources.externalize_style_blocks(
+        f"<style>{css}</style>", "https://example.com/sub/page.html"
+    )
+    assert len(names) == 1 and "<style" not in out
+    stored = gzip.decompress(resources.resource_path(names[0]).read_bytes()).decode()
+    assert "url(https://example.com/image/bg.png)" in stored
+    assert "@import 'https://example.com/sub/common.css'" in stored
+    # 같은 페이지의 다음 스냅샷도 같은 절대화 결과 → 같은 CAS 이름 (공유)
+    again, names2 = resources.externalize_style_blocks(
+        f"<style>{css}</style>", "https://example.com/sub/page.html"
+    )
+    assert names2 == names
+
+
+def test_externalize_style_honors_base_tag(cas_env):
+    # 문서에 <base href> 가 있으면 상대 참조는 그 기준으로 해석된다
+    css = f"{_CSS} .x {{ background: url(img/a.png) }}"
+    html = f'<base href="https://cdn.example/assets/"><style>{css}</style>'
+    out, names = resources.externalize_style_blocks(html, "https://example.com/")
+    stored = gzip.decompress(resources.resource_path(names[0]).read_bytes()).decode()
+    assert "url(https://cdn.example/assets/img/a.png)" in stored
+    assert "<base" not in out  # 치환 후 <base> 제거 (externalize_data_uris 와 동일)
+
+
+def test_externalize_style_skips_svg(cas_env):
+    svg_css = _CSS + "/* svg */"
+    html = f"<svg><style>{svg_css}</style></svg><style>{_CSS}</style>"
+    out, names = resources.externalize_style_blocks(html)
+    assert names == [_css_name()]  # <svg> 안의 블록은 그대로
+    assert svg_css in out and out.count("<style") == 1
+
+
+def test_externalize_style_dedups_and_strips_base(cas_env):
+    html = (
+        '<base href="https://evil.example/">'
+        f"<style>{_CSS}</style><style>{_CSS}</style>"
+    )
+    out, names = resources.externalize_style_blocks(html)
+    assert len(names) == 1  # 같은 내용은 한 번만 저장
+    assert out.count(f"/resource/{names[0]}") == 2
+    assert "<base" not in out
+
+
+def test_compact_extracts_style_blocks(cas_env, tmp_path):
+    # 폰트 data URI 가 든 <style> — data URI 추출 후 /resource/ 참조가 되어
+    # 위치 무관 형태로 바뀌므로 스타일 블록도 추출된다
+    font = _data_uri(b"F" * 100, "font/woff2")
+    css = f"{_CSS} @font-face {{ src: url({font}); }}"
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    (snap / "page.html").write_text(
+        f"<html><style>{css}</style>본문</html>", encoding="utf-8"
+    )
+    stats = resources.compact_snapshot_dir(snap)
+    assert stats.externalized == 2  # 폰트 + 스타일
+    page = gzip.decompress((snap / "page.html.gz").read_bytes()).decode("utf-8")
+    assert "<style" not in page and '<link rel="stylesheet"' in page
+    assert len(stats.resource_names) == 2
+    assert {n[64:] for n in stats.resource_names} == {".woff2", ".css"}
+
+
 def test_valid_name():
     h = "a" * 64
     assert resources.is_valid_name(h + ".png")

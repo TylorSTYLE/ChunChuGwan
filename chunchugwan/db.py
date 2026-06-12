@@ -86,8 +86,10 @@ CREATE TABLE IF NOT EXISTS snapshots (
     http_status   INTEGER,
     changed       INTEGER NOT NULL DEFAULT 1,  -- 직전 스냅샷 대비 변경 여부
     note          TEXT,
-    resources_indexed INTEGER NOT NULL DEFAULT 0  -- 자원 참조(snapshot_resources) 기록 여부.
+    resources_indexed INTEGER NOT NULL DEFAULT 0, -- 자원 참조(snapshot_resources) 기록 여부.
                                                   --   0 이면 저장공간 최적화의 백필 대상
+    css_externalized INTEGER NOT NULL DEFAULT 0   -- 인라인 <style> 의 CAS 추출 여부.
+                                                  --   0 이면 저장공간 최적화의 추출 대상
 );
 
 CREATE TABLE IF NOT EXISTS checks (
@@ -328,6 +330,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if cols and "resources_indexed" not in cols:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN resources_indexed INTEGER NOT NULL DEFAULT 0"
+        )
+    # 인라인 <style> 추출 여부 — 0 인 스냅샷은 저장공간 최적화가 추출한다
+    if cols and "css_externalized" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN css_externalized INTEGER NOT NULL DEFAULT 0"
         )
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
@@ -663,7 +670,7 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed"}
+     "note", "resources_indexed", "css_externalized"}
 )
 
 
@@ -1056,6 +1063,36 @@ def mark_snapshot_resources_indexed(
     """스냅샷의 자원 참조 기록 완료 표시 — 이후 백필 대상에서 제외된다."""
     conn.execute(
         "UPDATE snapshots SET resources_indexed = 1 WHERE id = ?", (snapshot_id,)
+    )
+
+
+def count_css_pending_snapshots(conn: sqlite3.Connection) -> int:
+    """인라인 <style> 추출이 아직 안 된 스냅샷 수 — 최적화 대상."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots WHERE css_externalized = 0"
+    ).fetchone()["c"]
+
+
+def list_css_pending_snapshots(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """인라인 <style> 추출 대상 스냅샷 (+ 디렉토리 위치) — 저장공간 최적화용.
+
+    final_url 은 상대 CSS 참조 절대화 기준으로 함께 내려준다.
+    """
+    return conn.execute(
+        """
+        SELECT s.id, p.domain, p.slug, s.dir_name, s.final_url
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.css_externalized = 0 ORDER BY s.id
+        """
+    ).fetchall()
+
+
+def mark_snapshot_css_externalized(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> None:
+    """스냅샷의 인라인 <style> 추출 완료 표시 — 이후 추출 대상에서 제외된다."""
+    conn.execute(
+        "UPDATE snapshots SET css_externalized = 1 WHERE id = ?", (snapshot_id,)
     )
 
 

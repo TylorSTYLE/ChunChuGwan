@@ -861,13 +861,18 @@ def resource_file(request: Request, name: str):
     path = resources.resource_path(name)
     if not path.is_file():
         raise HTTPException(404, t(request, "자원 없음"))
+    headers = {
+        "Content-Security-Policy": "sandbox",
+        "Cache-Control": "public, max-age=31536000, immutable",
+    }
+    # CSS 는 gzip 으로 저장된다 (resources._store_css). 구형 아카이브의
+    # 비압축 .css 와 공존하므로 매직 바이트로 판별한다.
+    if name.endswith(".css") and resources.is_gzipped(path):
+        headers["Content-Encoding"] = "gzip"
     return FileResponse(
         path,
         media_type=resources.EXT_MEDIA_TYPES[Path(name).suffix],
-        headers={
-            "Content-Security-Policy": "sandbox",
-            "Cache-Control": "public, max-age=31536000, immutable",
-        },
+        headers=headers,
     )
 
 
