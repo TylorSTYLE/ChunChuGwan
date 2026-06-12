@@ -146,6 +146,39 @@ def test_capture_cors_blocked_image_inlined_via_fallback(cross_origin_url, tmp_p
     assert "missing.png" in page_html
 
 
+def test_capture_retries_with_http2_disabled(monkeypatch, tmp_path):
+    """net::ERR_HTTP2_* 실패는 HTTP/2 를 끄고 한 번 더 시도한다 (구형 IIS 등)."""
+    calls = []
+
+    def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
+                  browser_args=()):
+        calls.append(browser_args)
+        if not browser_args:
+            raise capture.CaptureError(
+                f"{url} 캡처 실패: Page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at {url}"
+            )
+        return "재시도 성공"
+
+    monkeypatch.setattr(capture, "_capture_once", fake_once)
+    assert capture.capture("https://example.com/", tmp_path) == "재시도 성공"
+    assert calls == [(), ("--disable-http2",)]
+
+
+def test_capture_does_not_retry_other_errors(monkeypatch, tmp_path):
+    """HTTP/2 와 무관한 실패는 그대로 던진다 (불필요한 재시도 금지)."""
+    calls = []
+
+    def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
+                  browser_args=()):
+        calls.append(browser_args)
+        raise capture.CaptureError(f"{url} 캡처 실패: net::ERR_NAME_NOT_RESOLVED")
+
+    monkeypatch.setattr(capture, "_capture_once", fake_once)
+    with pytest.raises(capture.CaptureError):
+        capture.capture("https://example.com/", tmp_path)
+    assert calls == [()]
+
+
 def test_capture_connect_error_on_closed_port(tmp_path):
     # 아무도 리슨하지 않는 포트 → ERR_CONNECTION_REFUSED → CaptureConnectError
     import socket

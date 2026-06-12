@@ -213,14 +213,38 @@ def capture(
     content_html 에서만 해당 노드를 제거한다.
     link_rewriter 가 있으면(사이트 전체 아카이브) page.html 의 앵커를
     반환된 매핑대로 재작성한다 — raw.html/content_html 은 원본 유지.
+
+    일부 서버(구형 IIS 등)는 HTTP/2 구현이 깨져 chromium 만
+    net::ERR_HTTP2_* 로 실패한다 (curl 등은 정상) — 이 경우 HTTP/2 를
+    끄고(HTTP/1.1) 한 번 더 시도한다.
     """
+    try:
+        return _capture_once(url, out_dir, remove_selectors, link_rewriter)
+    except CaptureError as e:
+        if "ERR_HTTP2" not in str(e):
+            raise
+        logger.warning("HTTP/2 프로토콜 오류 — HTTP/1.1 로 재시도: %s", url)
+        return _capture_once(
+            url, out_dir, remove_selectors, link_rewriter,
+            browser_args=("--disable-http2",),
+        )
+
+
+def _capture_once(
+    url: str,
+    out_dir: Path,
+    remove_selectors: tuple[str, ...] = (),
+    link_rewriter: LinkRewriter | None = None,
+    browser_args: tuple[str, ...] = (),
+) -> CaptureResult:
+    """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=True, args=list(browser_args))
             try:
                 context = browser.new_context(user_agent=config.USER_AGENT)
                 page = context.new_page()
