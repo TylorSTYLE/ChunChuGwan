@@ -200,8 +200,9 @@ _EN: dict[str, str] = {
     "텍스트": "Text",
     "전체 페이지 스크린샷": "Full-page screenshot",
     "첨부 문서 ({n})": "Attached documents ({n})",
-    "원본 URL": "Source URL",
-    "크기": "Size",
+    "순번": "No.",
+    "문서명": "Document name",
+    "형식": "Format",
     "메타데이터 없음": "Metadata not found",
     # ---- diff 뷰어 ----
     "비교": "Compare",

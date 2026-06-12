@@ -160,6 +160,11 @@ def test_snapshot_view_lists_documents(client):
     assert res.status_code == 200
     assert "첨부 문서" in res.text
     assert "/snapshot/1/doc/report-12345678.pdf" in res.text
+    # 순번 / 문서명 / 용량 / 형식 컬럼
+    for header in ("순번", "문서명", "용량", "형식"):
+        assert header in res.text
+    assert "16 B" in res.text  # 용량
+    assert "PDF" in res.text  # 형식 (확장자 대문자)
     # 문서가 없는 스냅샷(meta 없음)에는 섹션 자체가 안 보인다
     res2 = client.get("/snapshot/2")
     assert res2.status_code == 200
