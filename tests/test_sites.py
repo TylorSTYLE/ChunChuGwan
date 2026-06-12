@@ -191,3 +191,72 @@ def test_delete_site_missing_returns_none(archive_env):
     with db.connect():
         pass
     assert deletion.delete_site(12345) is None
+
+
+def test_migration_from_pre_site_schema(archive_env):
+    """사이트 도입 전 스키마의 기존 DB 가 깨지지 않고 열린다 (회귀).
+
+    구버전 DB 에서는 pages/crawls 에 site_id 가 없다 — SCHEMA 의
+    CREATE TABLE IF NOT EXISTS 는 건너뛰므로, site_id 인덱스를 SCHEMA 에
+    두면 _migrate 의 ALTER 전에 'no such column' 으로 죽는다 (PR #70 직후
+    실배포에서 발생). 인덱스는 _migrate 가 컬럼 추가 후 만들어야 한다.
+    """
+    import sqlite3 as sqlite3_mod
+
+    config.ensure_dirs()
+    raw = sqlite3_mod.connect(config.DB_PATH)
+    raw.executescript(
+        """
+        CREATE TABLE pages (
+            id INTEGER PRIMARY KEY, url TEXT NOT NULL UNIQUE,
+            domain TEXT NOT NULL, slug TEXT NOT NULL,
+            network_tag_id TEXT, created_at TEXT NOT NULL
+        );
+        CREATE TABLE snapshots (
+            id INTEGER PRIMARY KEY, page_id INTEGER NOT NULL,
+            taken_at TEXT NOT NULL, dir_name TEXT NOT NULL,
+            content_hash TEXT NOT NULL, final_url TEXT NOT NULL,
+            http_status INTEGER, changed INTEGER NOT NULL DEFAULT 1, note TEXT
+        );
+        CREATE TABLE crawls (
+            id INTEGER PRIMARY KEY, start_url TEXT NOT NULL,
+            scope_host TEXT NOT NULL, scope_path TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running', max_pages INTEGER NOT NULL,
+            max_depth INTEGER NOT NULL, delay_seconds INTEGER NOT NULL,
+            source TEXT NOT NULL DEFAULT 'web', network_tag_id TEXT,
+            created_at TEXT NOT NULL, finished_at TEXT, next_page_at TEXT NOT NULL
+        );
+        CREATE TABLE crawl_schedules (
+            id INTEGER PRIMARY KEY, start_url TEXT NOT NULL UNIQUE,
+            max_pages INTEGER NOT NULL, max_depth INTEGER NOT NULL,
+            delay_seconds INTEGER NOT NULL, interval_seconds INTEGER NOT NULL,
+            next_run_at TEXT NOT NULL, last_run_at TEXT, run_at_time TEXT,
+            network_tag_id TEXT, created_at TEXT NOT NULL
+        );
+        INSERT INTO pages (url, domain, slug, created_at)
+        VALUES ('https://www.example.com/a', 'www.example.com', 'a-12345678',
+                '2026-01-01T00:00:00+00:00');
+        INSERT INTO crawls (start_url, scope_host, scope_path, max_pages,
+                            max_depth, delay_seconds, created_at, next_page_at)
+        VALUES ('https://example.com/', 'example.com', '/', 10, 2, 5,
+                '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00');
+        """
+    )
+    raw.commit()
+    raw.close()
+    db.invalidate_schema_cache()
+
+    # 구버전 DB 를 처음 여는 순간 — 스키마 보장 + 마이그레이션 + 백필
+    with db.connect() as conn:
+        page = db.get_page(conn, "https://www.example.com/a")
+        site = db.get_site(conn, page["site_id"])
+        assert site["site_key"] == "example.com"
+        crawl = db.get_crawl(conn, 1)
+        assert crawl["site_id"] == site["id"]
+        # site_id 인덱스가 _migrate 에서 만들어졌다
+        indexes = {
+            r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+        }
+        assert {"idx_pages_site", "idx_crawls_site"} <= indexes

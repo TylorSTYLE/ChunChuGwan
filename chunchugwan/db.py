@@ -72,7 +72,6 @@ CREATE TABLE IF NOT EXISTS pages (
     network_tag_id TEXT REFERENCES network_tags(id),  -- 사설 대역 페이지의 로컬 네트워크 태그
     created_at  TEXT NOT NULL           -- ISO 8601 UTC
 );
-CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id);
 
 CREATE TABLE IF NOT EXISTS snapshots (
     id            INTEGER PRIMARY KEY,
@@ -148,7 +147,6 @@ CREATE TABLE IF NOT EXISTS crawls (
     next_page_at   TEXT NOT NULL       -- 다음 페이지 처리 가능 시각 (ISO 8601 UTC)
 );
 CREATE INDEX IF NOT EXISTS idx_crawls_status ON crawls(status, next_page_at);
-CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id);
 
 CREATE TABLE IF NOT EXISTS crawl_pages (
     id              INTEGER PRIMARY KEY,
@@ -335,6 +333,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN site_id INTEGER REFERENCES sites(id)"
             )
+    # site_id 인덱스는 SCHEMA(executescript)가 아니라 여기서 만든다 —
+    # 구버전 DB 에서는 컬럼이 위 ALTER 로 생기므로, SCHEMA 의 인덱스 문이
+    # 먼저 실행되면 'no such column: site_id' 로 죽는다
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id)")
     _backfill_sites(conn)
 
 
