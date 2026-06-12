@@ -286,6 +286,7 @@ def capture(
     link_rewriter: LinkRewriter | None = None,
     session: BrowserSession | None = None,
     resource_fallback: ResourceFallback | None = None,
+    insecure_tls: bool = False,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
 
@@ -302,7 +303,8 @@ def capture(
     """
     try:
         return _capture_once(url, out_dir, remove_selectors, link_rewriter,
-                             session=session, resource_fallback=resource_fallback)
+                             session=session, resource_fallback=resource_fallback,
+                             insecure_tls=insecure_tls)
     except CaptureError as e:
         if "ERR_HTTP2" not in str(e):
             raise
@@ -311,6 +313,7 @@ def capture(
             url, out_dir, remove_selectors, link_rewriter,
             browser_args=("--disable-http2",),
             resource_fallback=resource_fallback,
+            insecure_tls=insecure_tls,
         )
 
 
@@ -322,6 +325,7 @@ def _capture_once(
     browser_args: tuple[str, ...] = (),
     session: BrowserSession | None = None,
     resource_fallback: ResourceFallback | None = None,
+    insecure_tls: bool = False,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
     from playwright.sync_api import Error as PlaywrightError
@@ -331,14 +335,14 @@ def _capture_once(
         if session is not None and not browser_args:
             return _capture_in_browser(
                 session.browser(), url, out_dir, remove_selectors, link_rewriter,
-                resource_fallback,
+                resource_fallback, insecure_tls,
             )
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=list(browser_args))
             try:
                 return _capture_in_browser(
                     browser, url, out_dir, remove_selectors, link_rewriter,
-                    resource_fallback,
+                    resource_fallback, insecure_tls,
                 )
             finally:
                 browser.close()
@@ -355,11 +359,20 @@ def _capture_in_browser(
     remove_selectors: tuple[str, ...],
     link_rewriter: LinkRewriter | None,
     resource_fallback: ResourceFallback | None = None,
+    insecure_tls: bool = False,
 ) -> CaptureResult:
-    """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다."""
+    """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다.
+
+    insecure_tls 는 인증서 검증을 무시한다 — 자체 서명 인증서로 https 만
+    서빙하는 사이트(사설 NAS 등)의 재시도 경로(pipeline)에서만 켠다.
+    컨텍스트 옵션이라 페이지의 하위 자원 요청·context.request 폴백에도
+    적용된다.
+    """
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-    context = browser.new_context(user_agent=config.USER_AGENT)
+    context = browser.new_context(
+        user_agent=config.USER_AGENT, ignore_https_errors=insecure_tls
+    )
     try:
         page = context.new_page()
         page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
@@ -607,6 +620,18 @@ def _absolutize_css_urls(css_text: str, base_url: str) -> str:
         return f"url({urljoin(base_url, ref)})"
 
     return _CSS_URL_RE.sub(repl, css_text)
+
+
+# TLS 인증서/SSL 단계의 실패 — 검증 무시(insecure_tls) 재시도 판단용
+_CERT_ERROR_MARKERS = ("net::ERR_CERT_", "net::ERR_SSL_")
+
+
+def is_cert_error(exc: Exception) -> bool:
+    """캡처 실패가 인증서/SSL 단계인지 — 자체 서명 인증서 등.
+
+    pipeline 이 검증 무시로 https 를 한 번 더 시도할지 판단하는 데 쓴다.
+    """
+    return any(marker in str(exc) for marker in _CERT_ERROR_MARKERS)
 
 
 # 서버 연결 단계에서 나는 chromium 네트워크 오류 (DNS 실패는 스킴과 무관하므로 제외)

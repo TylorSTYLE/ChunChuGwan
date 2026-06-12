@@ -254,36 +254,53 @@ def _archive_url(
              + (" (도메인 룰 적용)" if rules else ""))
 
     # 해시가 같으면 스냅샷 디렉토리를 만들지 않도록 임시 디렉토리에 먼저 캡처
+    capture_kwargs = dict(
+        remove_selectors=tuple(rules.get("remove_selectors") or ()),
+        link_rewriter=link_rewriter,
+        session=browser_session,
+        resource_fallback=_resource_fallback,
+    )
+    insecure_tls = False
     tmp_dir = Path(tempfile.mkdtemp(prefix="wccg-"))
     try:
         try:
-            result = capture.capture(
-                norm, tmp_dir,
-                remove_selectors=tuple(rules.get("remove_selectors") or ()),
-                link_rewriter=link_rewriter,
-                session=browser_session,
-                resource_fallback=_resource_fallback,
-            )
+            result = capture.capture(norm, tmp_dir, **capture_kwargs)
         except capture.CaptureError as e:
-            # HTTP 전용 사이트(443 닫힘 등)일 수 있으므로 http 로 한 번 더 시도한다:
-            # 스킴 생략 입력에 https 를 추정 보완한 경우는 모든 캡처 실패에서,
-            # 명시적 https 는 서버 연결 자체가 안 된 실패에 한해서만.
-            retriable = storage.scheme_inferred(url) or isinstance(
-                e, capture.CaptureConnectError
-            )
-            if not (retriable and norm.startswith("https://")):
-                raise
-            run.step("capture", f"https 캡처 실패 — http 로 재시도: {str(e).splitlines()[0]}")
-            norm = "http://" + norm.removeprefix("https://")
-            slug = storage.url_to_slug(norm)
-            run.url = norm
-            result = capture.capture(
-                norm, tmp_dir,
-                remove_selectors=tuple(rules.get("remove_selectors") or ()),
-                link_rewriter=link_rewriter,
-                session=browser_session,
-                resource_fallback=_resource_fallback,
-            )
+            result = None
+            if norm.startswith("https://") and capture.is_cert_error(e):
+                # 자체 서명 인증서 등으로 https 만 서빙하는 사이트(사설 NAS 등)
+                # 대비 — 검증을 무시하고 https 로 한 번 더 시도한다. 시도와
+                # 결과는 실행 로그 단계에 남는다.
+                run.step(
+                    "capture",
+                    f"인증서 검증 실패 — 검증 무시로 https 재시도: "
+                    f"{str(e).splitlines()[0]}",
+                )
+                try:
+                    result = capture.capture(
+                        norm, tmp_dir, insecure_tls=True, **capture_kwargs
+                    )
+                    insecure_tls = True
+                except capture.CaptureError:
+                    pass  # http 폴백 판단은 원래 오류 기준으로 이어간다
+            if result is None:
+                # HTTP 전용 사이트(443 닫힘 등)일 수 있으므로 http 로 한 번 더
+                # 시도한다: 스킴 생략 입력에 https 를 추정 보완한 경우는 모든
+                # 캡처 실패에서, 명시적 https 는 서버 연결 자체가 안 된 실패에
+                # 한해서만.
+                retriable = storage.scheme_inferred(url) or isinstance(
+                    e, capture.CaptureConnectError
+                )
+                if not (retriable and norm.startswith("https://")):
+                    raise
+                run.step(
+                    "capture",
+                    f"https 캡처 실패 — http 로 재시도: {str(e).splitlines()[0]}",
+                )
+                norm = "http://" + norm.removeprefix("https://")
+                slug = storage.url_to_slug(norm)
+                run.url = norm
+                result = capture.capture(norm, tmp_dir, **capture_kwargs)
         run.step(
             "capture",
             f"http {result.http_status or '-'} · 최종 URL {result.final_url} · "
@@ -342,6 +359,7 @@ def _archive_url(
                 doc_manifest, doc_failed = documents.download_documents(
                     result.document_links, tmp_dir / "files",
                     referer=result.final_url,
+                    verify=not insecure_tls,  # 자체 서명 사이트의 문서도 받는다
                 )
                 documents.ingest_into_cas(tmp_dir / "files", doc_manifest)
                 run.step(

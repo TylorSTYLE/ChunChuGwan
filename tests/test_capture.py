@@ -199,7 +199,8 @@ def test_capture_retries_with_http2_disabled(monkeypatch, tmp_path):
     calls = []
 
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
-                  browser_args=(), session=None, resource_fallback=None):
+                  browser_args=(), session=None, resource_fallback=None,
+                  insecure_tls=False):
         calls.append(browser_args)
         if not browser_args:
             raise capture.CaptureError(
@@ -217,7 +218,8 @@ def test_capture_does_not_retry_other_errors(monkeypatch, tmp_path):
     calls = []
 
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
-                  browser_args=(), session=None, resource_fallback=None):
+                  browser_args=(), session=None, resource_fallback=None,
+                  insecure_tls=False):
         calls.append(browser_args)
         raise capture.CaptureError(f"{url} 캡처 실패: net::ERR_NAME_NOT_RESOLVED")
 
@@ -256,3 +258,50 @@ def test_capture_connect_error_on_closed_port(tmp_path):
         port = s.getsockname()[1]
     with pytest.raises(capture.CaptureConnectError):
         capture.capture(f"https://127.0.0.1:{port}/", tmp_path)
+
+
+@pytest.fixture
+def self_signed_site(tmp_path):
+    """자체 서명 인증서로 https 만 서빙하는 사이트 (사설 NAS 재현)."""
+    import ssl
+    from pathlib import Path
+
+    site = tmp_path / "ssl-site"
+    site.mkdir()
+    (site / "index.html").write_text(
+        '<html><head><meta charset="utf-8"></head>'
+        "<body><p>자체 서명 본문</p></body></html>", encoding="utf-8"
+    )
+    fixtures = Path(__file__).parent / "fixtures"
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(
+        fixtures / "selfsigned-cert.pem", fixtures / "selfsigned-key.pem"
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"https://127.0.0.1:{server.server_address[1]}/index.html"
+    server.shutdown()
+    thread.join(timeout=5)
+
+
+def test_capture_self_signed_rejected_by_default(self_signed_site, tmp_path):
+    """기본은 인증서 검증 — 자체 서명은 인증서 오류로 실패한다."""
+    out = tmp_path / "out-default"
+    out.mkdir()
+    with pytest.raises(capture.CaptureConnectError) as exc:
+        capture.capture(self_signed_site, out)
+    assert capture.is_cert_error(exc.value)
+
+
+def test_capture_self_signed_with_insecure_tls(self_signed_site, tmp_path):
+    """insecure_tls=True 면 검증을 무시하고 https 캡처가 성공한다."""
+    out = tmp_path / "out-insecure"
+    out.mkdir()
+    result = capture.capture(self_signed_site, out, insecure_tls=True)
+    assert result.http_status == 200
+    assert "자체 서명 본문" in result.raw_html
+    assert (out / "page.html").is_file()
