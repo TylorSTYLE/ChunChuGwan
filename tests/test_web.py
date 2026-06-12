@@ -42,6 +42,21 @@ def client(tmp_path, monkeypatch):
             )
         db.insert_check(conn, page_id, storage.content_sha256(contents[1]))
 
+    # 첫 스냅샷에는 함께 저장된 문서 파일 + documents 목록을 가진 meta.json
+    snap1_dir = storage.page_dir(domain, slug) / dir_names[0]
+    (snap1_dir / "files").mkdir()
+    (snap1_dir / "files" / "report-12345678.pdf").write_bytes(b"%PDF-1.4 fixture")
+    (snap1_dir / "files" / "unlisted.pdf").write_bytes(b"%PDF-1.4 manifest-bayuk")
+    storage.write_meta(snap1_dir, storage.SnapshotMeta(
+        url=url, final_url=url, taken_at="2026-06-01T00:00:00+00:00",
+        content_hash=storage.content_sha256(contents[0]), http_status=200,
+        title="픽스처 글", documents=[{
+            "url": "https://example.com/files/report.pdf",
+            "file": "report-12345678.pdf", "bytes": 16,
+            "sha256": "ab" * 32, "content_type": "application/pdf",
+        }],
+    ))
+
     web_app._active_jobs.clear()  # 다른 테스트의 진행 목록 잔재 제거
     yield TestClient(web_app.app)
     web_app._active_jobs.clear()
@@ -138,6 +153,35 @@ def test_snapshot_file_whitelist(client):
     assert page.headers["content-security-policy"] == "sandbox"
     assert client.get("/snapshot/1/file/meta.json").status_code == 404
     assert client.get("/snapshot/1/file/..%2F..%2Findex.db").status_code == 404
+
+
+def test_snapshot_view_lists_documents(client):
+    res = client.get("/snapshot/1")
+    assert res.status_code == 200
+    assert "첨부 문서" in res.text
+    assert "/snapshot/1/doc/report-12345678.pdf" in res.text
+    # 문서가 없는 스냅샷(meta 없음)에는 섹션 자체가 안 보인다
+    res2 = client.get("/snapshot/2")
+    assert res2.status_code == 200
+    assert "첨부 문서" not in res2.text
+
+
+def test_snapshot_document_download(client):
+    res = client.get("/snapshot/1/doc/report-12345678.pdf")
+    assert res.status_code == 200
+    assert res.content == b"%PDF-1.4 fixture"
+    # 브라우저 안에서 렌더링되지 않도록 항상 첨부파일 다운로드
+    assert res.headers["content-type"].startswith("application/octet-stream")
+    assert "attachment" in res.headers["content-disposition"]
+    assert res.headers["content-security-policy"] == "sandbox"
+
+
+def test_snapshot_document_rejects_unlisted_names(client):
+    """meta.json 의 documents 목록에 없는 이름은 파일이 있어도 404."""
+    assert client.get("/snapshot/1/doc/unlisted.pdf").status_code == 404
+    assert client.get("/snapshot/1/doc/..%2Fmeta.json").status_code == 404
+    # meta.json 자체가 없는 스냅샷도 404
+    assert client.get("/snapshot/2/doc/report-12345678.pdf").status_code == 404
 
 
 def test_diff_default_latest_two(client):

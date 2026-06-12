@@ -26,6 +26,9 @@ class SnapshotMeta:
     content_hash: str   # 정규화 텍스트 SHA-256
     http_status: int | None
     title: str | None
+    # 함께 저장된 문서 파일 목록 [{url, file, bytes, sha256, content_type}].
+    # files/ 하위 파일은 이 목록에 있는 이름만 서빙된다 (구형 meta 는 None).
+    documents: list[dict] | None = None
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -187,7 +190,8 @@ def find_screenshot(snapshot_dir: Path) -> Path | None:
 def snapshot_files(snapshot_dir: Path) -> list[dict[str, object]]:
     """스냅샷 디렉토리의 파일 목록과 크기.
 
-    SNAPSHOT_FILES 순서로 존재하는 파일만 [{name, bytes}] 로 반환한다.
+    SNAPSHOT_FILES 순서로 존재하는 파일만 [{name, bytes}] 로 반환하고,
+    함께 저장된 문서가 있으면 'files/{이름}' 항목을 뒤에 붙인다.
     디렉토리가 없으면 빈 목록 (로그는 남아 있는데 파일이 지워진 경우 대비).
     """
     out: list[dict[str, object]] = []
@@ -195,6 +199,11 @@ def snapshot_files(snapshot_dir: Path) -> list[dict[str, object]]:
         path = snapshot_dir / name
         if path.is_file():
             out.append({"name": name, "bytes": path.stat().st_size})
+    files_dir = snapshot_dir / "files"
+    if files_dir.is_dir():
+        for path in sorted(files_dir.iterdir()):
+            if path.is_file():
+                out.append({"name": f"files/{path.name}", "bytes": path.stat().st_size})
     return out
 
 
@@ -257,6 +266,9 @@ def finalize_snapshot(
         src = tmp_dir / name
         if src.exists():
             shutil.move(str(src), snap_dir / name)
+    files_src = tmp_dir / "files"  # 함께 저장된 문서 파일 (documents.py)
+    if files_src.is_dir():
+        shutil.move(str(files_src), snap_dir / "files")
     (snap_dir / "content.md").write_text(normalized_text, encoding="utf-8")
     write_meta(snap_dir, meta)
     return snap_dir
