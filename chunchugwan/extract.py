@@ -31,6 +31,12 @@ _RELATIVE_TIME_PATTERNS = (
 # 광고/추천 위젯에서 흔한 단독 줄 (도메인별 룰은 M5)
 _AD_LINE = re.compile(r"^(?:광고|AD|Advertisement|Sponsored(?:\s+Content)?|스폰서드?)$", re.I)
 
+# trafilatura 의 OVERALL_DISCARD 규칙은 class/id 부분문자열만으로 노드를 버리는데,
+# 이 토큰들은 게시판 목록의 작성자·날짜·조회수 셀(post-meta-text, list_author 등)이나
+# 기사 바이라인 같은 실제 콘텐츠까지 지운다. 추출 전에 해당 부분문자열을 치환해
+# 무력화한다 — nav/footer/widget/sidebar 등 나머지 보일러플레이트 탐지는 그대로 동작.
+_GREEDY_DISCARD = re.compile(r"meta|byline|author|timestamp", re.I)
+
 
 def extract_text(raw_html: str, url: str) -> str:
     """raw.html 에서 본문 텍스트(markdown)를 추출. 실패 시 <body> 텍스트 폴백.
@@ -39,23 +45,33 @@ def extract_text(raw_html: str, url: str) -> str:
     게시판/목록형 페이지에서는 본문(글 제목)이 전부 <a> 안이라 통째로
     사라진다. 추출 전에 <a> 를 <span> 으로 바꿔 link-density 필터를
     우회한다 — nav/footer 등 본문 영역 탐지는 그대로 동작한다.
+    class/id 기반 과잉 제거 토큰도 함께 무력화한다 (_GREEDY_DISCARD 참조).
     """
     text = trafilatura.extract(
-        _detag_links(raw_html), output_format="markdown", url=url
+        _prepare_html(raw_html), output_format="markdown", url=url
     )
     if text:
         return text
     return _body_text_fallback(raw_html)
 
 
-def _detag_links(raw_html: str) -> str:
-    """<a> 태그를 <span> 으로 치환한 HTML 반환. 파싱 실패 시 원본 그대로."""
+def _prepare_html(raw_html: str) -> str:
+    """trafilatura 추출 전처리 HTML 반환. 파싱 실패 시 원본 그대로.
+
+    - <a> → <span> 치환 (link-density 필터 우회)
+    - class/id 의 _GREEDY_DISCARD 토큰 치환 (작성자·날짜 셀 보존)
+    """
     try:
         tree = lxml_html.fromstring(raw_html)
     except Exception:
         return raw_html
     for a in tree.iter("a"):
         a.tag = "span"
+    for attr in ("class", "id"):
+        for el in tree.xpath(f"//*[@{attr}]"):
+            val = el.get(attr)
+            if val and _GREEDY_DISCARD.search(val):
+                el.set(attr, _GREEDY_DISCARD.sub("x", val))
     return lxml_html.tostring(tree, encoding="unicode")
 
 

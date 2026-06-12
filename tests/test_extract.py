@@ -7,6 +7,7 @@ from chunchugwan import extract
 
 FIXTURE = Path(__file__).parent / "fixtures" / "article.html"
 BOARD_FIXTURE = Path(__file__).parent / "fixtures" / "board_list.html"
+BOARD_META_FIXTURE = Path(__file__).parent / "fixtures" / "board_list_meta.html"
 
 
 @pytest.fixture
@@ -35,10 +36,34 @@ def test_extract_text_keeps_link_titles_on_board_list():
     assert "Apple, 서비스 전반에 걸쳐 여러 혁신적인 기능과 지능 경험 공개" in text
 
 
-def test_detag_links_converts_anchors():
-    out = extract._detag_links('<html><body><p><a href="/x">제목 링크</a> 본문</p></body></html>')
+def test_extract_text_keeps_meta_classed_cells_on_board_list():
+    """class 에 meta/author 등이 들어간 작성자·날짜·조회수 셀이 잘리지 않는다.
+
+    trafilatura 의 OVERALL_DISCARD 가 class 부분문자열(meta 등)만으로 노드를
+    버리는 회귀 — fixture 는 실제 게시판 목록의 행 구조(post-meta-text,
+    mobile-meta 클래스)를 그대로 가져온 것으로, 무력화 없이 추출하면
+    제목만 남고 작성자·날짜·조회수가 전부 사라진다.
+    """
+    html = BOARD_META_FIXTURE.read_text(encoding="utf-8")
+    text = extract.extract_text(html, "https://damoang.net/new")
+    assert "오픈AI 요금 대폭 인하 검토…앤트로픽과 기업시장 경쟁" in text  # 제목
+    assert "아름다운별" in text  # 작성자
+    assert "2.1k" in text       # 조회수
+
+
+def test_prepare_html_converts_anchors():
+    out = extract._prepare_html('<html><body><p><a href="/x">제목 링크</a> 본문</p></body></html>')
     assert "<a" not in out
     assert "제목 링크" in out
+
+
+def test_prepare_html_neutralizes_greedy_discard_tokens():
+    out = extract._prepare_html(
+        '<html><body><div class="post-meta-text" id="entry-author">아무개</div></body></html>'
+    )
+    assert "meta" not in out
+    assert "author" not in out
+    assert "아무개" in out
 
 
 def test_extract_text_fallback_when_trafilatura_fails(monkeypatch):
