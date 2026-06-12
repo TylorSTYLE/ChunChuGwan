@@ -36,10 +36,39 @@ def make_snapshot(url: str) -> tuple[int, int]:
     return page_id, snap_id
 
 
-def test_crawls_list_empty(client):
-    res = client.get("/crawls")
+def test_crawls_redirects_to_archives(client):
+    """구 /crawls 목록은 통합 아카이브 목록(/archives)으로 리다이렉트한다."""
+    res = client.get("/crawls", follow_redirects=False)
+    assert res.status_code == 301
+    assert res.headers["location"] == "/archives"
+
+
+def test_archives_lists_crawl_with_pages(client):
+    """통합 목록에 크롤 행이 페이지 행과 함께 보인다 — 유형 구분·상태 뱃지 포함."""
+    make_snapshot("https://example.com/post")
+    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    res = client.get("/archives")
     assert res.status_code == 200
-    assert "아직 사이트 전체 아카이브가 없습니다." in res.text
+    # 페이지 행과 크롤 행이 한 화면에
+    assert 'href="/page/1"' in res.text
+    assert f'href="/crawls/{crawl["id"]}"' in res.text
+    assert "https://example.com/docs/" in res.text
+    assert "example.com/docs/" in res.text  # 범위 표기
+    # 유형 필터용 행 구분과 진행 중 상태 뱃지
+    assert 'data-kind="site"' in res.text
+    assert 'data-kind="page"' in res.text
+    assert "진행 중" in res.text
+
+
+def test_archives_shows_finished_crawl_status(client):
+    """끝난 크롤은 폴링 없이 상태 뱃지(취소됨)로 보인다."""
+    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    with db.connect() as conn:
+        db.cancel_crawl(conn, crawl["id"])
+    res = client.get("/archives")
+    assert "취소됨" in res.text
+    # 진행 중 크롤이 없으면 폴링 목록도 비어 있다
+    assert "const runningCrawls = []" in res.text
 
 
 def test_archive_form_has_site_option(client):

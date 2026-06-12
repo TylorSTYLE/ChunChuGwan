@@ -276,27 +276,69 @@ def set_language(lang: str = Form(...), next_path: str = Form("/", alias="next")
 
 @app.get("/archives", response_class=HTMLResponse)
 def index(request: Request, queued: str = "", error: str = "", notice: str = ""):
+    """통합 아카이브 목록 — 페이지 아카이브와 사이트 아카이브(크롤)를 한 테이블로.
+
+    진행 중 항목(아카이빙 중 페이지·진행 중 크롤)을 맨 위에, 나머지는 마지막
+    활동 시각 내림차순으로 합쳐 보여준다. 유형 구분은 행의 kind 로 한다.
+    """
     active = _active_snapshot()
     with db.connect() as conn:
         pages = db.list_pages(conn)
         schedules = db.list_schedules(conn)
+        crawls = db.list_crawls(conn)
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
         for s in schedules
     }
-    # 아직 pages 행이 없는 신규 URL 진행 건은 별도 행으로 보여준다
+    # 아직 pages 행이 없는 신규 URL 진행 건은 page_id 없는 행으로 보여준다
     known = {p["url"] for p in pages}
-    pending_new = [
-        {"url": u, "domain": urlsplit(u).hostname or "", "started_at": t}
+    items: list[dict] = [
+        {
+            "kind": "page", "page_id": None, "url": u,
+            "domain": urlsplit(u).hostname or "", "snapshot_count": None,
+            "schedule": None, "activity_at": t, "active": True,
+        }
         for u, t in sorted(active.items())
         if u not in known
+    ]
+    items += [
+        {
+            "kind": "page", "page_id": p["id"], "url": p["url"],
+            "domain": p["domain"], "snapshot_count": p["snapshot_count"],
+            "schedule": schedule_labels.get(p["id"]),
+            "activity_at": p["last_taken_at"], "active": p["url"] in active,
+        }
+        for p in pages
+    ]
+    items += [
+        {
+            "kind": "site", "crawl_id": c["id"], "url": c["start_url"],
+            "domain": c["scope_host"] + c["scope_path"], "status": c["status"],
+            "done": c["done_count"], "failed": c["failed_count"],
+            "waiting": c["pending_count"], "total": c["total_count"],
+            "activity_at": c["finished_at"] or c["created_at"],
+            "active": c["status"] == "running",
+        }
+        for c in crawls
+    ]
+    # 안정 정렬 3단계: URL → 최근 활동 내림차순 → 진행 중 먼저
+    items.sort(key=lambda i: i["url"])
+    items.sort(key=lambda i: i["activity_at"] or "", reverse=True)
+    items.sort(key=lambda i: not i["active"])
+    # 진행 중 크롤 폴링용 — 카운트가 바뀌면 화면을 새로 그린다
+    running_crawls = [
+        {"id": i["crawl_id"],
+         "counts": {"done": i["done"], "failed": i["failed"], "waiting": i["waiting"]}}
+        for i in items
+        if i["kind"] == "site" and i["status"] == "running"
     ]
     return templates.TemplateResponse(
         request, "index.html",
         {
-            "pages": pages, "queued": queued, "error": error, "notice": notice,
-            "active_urls": set(active), "active_list": sorted(active),
-            "pending_new": pending_new, "schedule_labels": schedule_labels,
+            "items": items, "queued": queued, "error": error, "notice": notice,
+            "active_list": sorted(active), "running_crawls": running_crawls,
+            "page_count": sum(1 for i in items if i["kind"] == "page"),
+            "site_count": len(crawls),
         },
     )
 
@@ -1094,12 +1136,10 @@ def _load_crawl(request: Request, crawl_id: int):
     return crawl
 
 
-@app.get("/crawls", response_class=HTMLResponse)
-def crawls_view(request: Request):
-    """사이트 전체 아카이브 목록 — 크롤별 진행 현황."""
-    with db.connect() as conn:
-        crawls = db.list_crawls(conn)
-    return templates.TemplateResponse(request, "crawls.html", {"crawls": crawls})
+@app.get("/crawls")
+def crawls_view():
+    """구 사이트 아카이브 목록 — 통합 아카이브 목록으로 이동했다."""
+    return RedirectResponse("/archives", status_code=301)
 
 
 @app.get("/crawls/{crawl_id}", response_class=HTMLResponse)
