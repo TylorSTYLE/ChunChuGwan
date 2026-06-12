@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
 from .. import auth, backup as backup_mod
-from .. import config, crawler, db, mailer, resources
+from .. import config, crawler, db, mailer, optimize, resources
 from . import permissions
 from .i18n import t
 from .templating import filesize, templates
@@ -81,7 +81,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "sites_bytes": _dir_bytes(config.SITES_DIR),
             "resources_bytes": _dir_bytes(config.RESOURCES_DIR),
             "documents_bytes": _dir_bytes(config.DOCUMENTS_DIR),
-            "compactable": resources.compactable_count(),
+            "optimize_pending": sum(optimize.pending_counts()),
             "notice": notice, "error": error,
         },
     )
@@ -127,32 +127,32 @@ def _system_redirect(*, notice: str = "", error: str = "") -> RedirectResponse:
 
 @router.post("/compact")
 def system_compact(request: Request):
-    """저장 공간 압축 — 구형 스냅샷을 압축 저장 형태로 변환 (CLI compact 와 동일).
+    """저장공간 최적화 — 압축 변환 + 자원 참조 백필 + 고아 자원 정리.
 
-    내용 보존 변환이고 멱등이라 여러 번 실행해도 안전하다. 변환은 동기로
-    실행된다 — 스냅샷이 아주 많으면 응답까지 시간이 걸릴 수 있다.
-    압축 대상이 없으면 실행 없이 안내만 한다 (화면의 버튼도 비활성화).
+    CLI ``wccg compact`` 와 동일한 단일 진입점(optimize.run). 내용 보존이고
+    멱등이라 여러 번 실행해도 안전하다. 동기로 실행된다 — 스냅샷이 아주
+    많으면 응답까지 시간이 걸릴 수 있다. 대상이 없으면 실행 없이 안내만
+    한다 (화면의 버튼도 비활성화).
     """
-    dirs = resources.snapshot_dirs()
-    if not dirs:
-        return _system_redirect(notice=t(request, "압축할 스냅샷이 없습니다."))
-    if not any(resources.needs_compaction(d) for d in dirs):
+    if sum(optimize.pending_counts()) == 0:
         return _system_redirect(
-            notice=t(request, "스냅샷 {n}개 모두 이미 압축 형태입니다.", n=len(dirs))
+            notice=t(request, "최적화할 항목이 없습니다 — 스냅샷이 모두 압축·인덱스 형태입니다.")
         )
     try:
-        result = resources.compact_all()
+        result = optimize.run()
     except OSError as e:
-        return _system_redirect(error=t(request, "압축 실패: {e}", e=e))
+        return _system_redirect(error=t(request, "최적화 실패: {e}", e=e))
+    c = result.compact
     return _system_redirect(
         notice=t(
             request,
-            "압축 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · "
-            "문서 {documents}개 이전 · {before} → {after} ({saved} 절약)",
-            converted=result.converted, total=result.total,
-            externalized=result.externalized, documents=result.documents,
-            before=filesize(result.before_bytes), after=filesize(result.after_bytes),
-            saved=filesize(result.saved_bytes),
+            "최적화 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · "
+            "문서 {documents}개 이전 · 참조 백필 {indexed}개 · 고아 자원 {swept}개 정리 "
+            "({saved} 절약)",
+            converted=c.converted, total=c.total,
+            externalized=c.externalized, documents=c.documents,
+            indexed=result.indexed, swept=result.swept,
+            saved=filesize(c.saved_bytes + result.swept_bytes),
         )
     )
 

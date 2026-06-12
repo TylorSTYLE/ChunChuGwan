@@ -238,7 +238,7 @@ def test_documents_list_page(client):
     assert f"/document/{GUIDE_SHA}/guide-aabbccdd.pdf" in res.text
     assert "https://example.com/post" in res.text  # 출처 페이지 링크
     # 구형(files/) 문서가 남아 있어 압축 안내가 보인다
-    assert "저장 공간 압축" in res.text
+    assert "저장공간 최적화" in res.text
     # 헤더 메뉴에도 문서 링크가 있다
     assert 'href="/documents"' in client.get("/").text
 

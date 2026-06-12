@@ -328,6 +328,7 @@ def _archive_url(
                 taken_at=meta.taken_at, dir_name=snap_dir.name,
                 content_hash=content_hash, final_url=result.final_url,
                 http_status=result.http_status, changed=changed,
+                resources_indexed=1,  # 참조는 바로 아래에서 기록 — 백필 불필요
             )
             if doc_manifest:
                 db.insert_snapshot_documents(conn, snapshot_id, doc_manifest)

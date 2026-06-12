@@ -13,7 +13,8 @@ from . import backup as backup_mod
 from . import capture as capture_mod
 from . import worker as worker_mod
 from . import (
-    config, crawler, db, deletion, differ, pipeline, resources, scheduler, storage,
+    config, crawler, db, deletion, differ, optimize, pipeline, resources,
+    scheduler, storage,
 )
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
@@ -539,36 +540,43 @@ def _fmt_mb(n: int) -> str:
 @main.command()
 @click.option("--yes", is_flag=True, help="확인 없이 진행")
 def compact(yes: bool) -> None:
-    """기존 스냅샷 저장 공간 압축 — 공유 자원 추출 + HTML gzip + 스크린샷 WebP
-    + 문서 파일의 문서 CAS 이전(중복 제거).
+    """저장공간 최적화 — 압축 변환 + 자원 참조 백필 + 고아 자원 정리.
 
-    내용 보존 변환이라 스냅샷이 담는 정보는 그대로다 (불변 원칙의 유일한 예외).
-    새 스냅샷은 저장 시점에 같은 형태로 압축되므로 한 번만 실행하면 된다.
+    구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP
+    + 문서 CAS 이전)로 변환하고, 자원 참조(snapshot_resources)가 없는
+    스냅샷을 스캔해 인덱스한 뒤, 어떤 스냅샷도 참조하지 않는 공유 자원을
+    삭제한다. 내용 보존이라 스냅샷이 담는 정보는 그대로다 (불변 원칙의
+    유일한 예외). 멱등 — 여러 번 실행해도 안전하다.
     """
-    dirs = resources.snapshot_dirs()
-    if not dirs:
-        click.echo("압축할 스냅샷이 없습니다.")
-        return
-    targets = sum(1 for d in dirs if resources.needs_compaction(d))
-    if targets == 0:
-        click.echo(f"스냅샷 {len(dirs)}개 모두 이미 압축 형태입니다.")
+    compactable, unindexed = optimize.pending_counts()
+    if compactable == 0 and unindexed == 0:
+        click.echo("최적화할 항목이 없습니다 — 스냅샷이 모두 압축·인덱스 형태입니다.")
         return
     if not yes:
         click.confirm(
-            f"스냅샷 {targets}개의 파일을 압축 저장 형태(page.html.gz·"
-            "raw.html.gz·screenshot.webp + 공유 자원 + 문서 CAS)로 "
-            "변환합니다. 계속할까요?",
+            f"스냅샷 {compactable}개를 압축 저장 형태(page.html.gz·"
+            "raw.html.gz·screenshot.webp + 공유 자원 + 문서 CAS)로 변환하고, "
+            f"{unindexed}개의 자원 참조를 인덱스한 뒤 참조 없는 공유 자원을 "
+            "정리합니다. 계속할까요?",
             abort=True,
         )
 
-    result = resources.compact_all()
+    result = optimize.run()
+    c = result.compact
     click.echo(
-        f"변환 {result.converted}/{result.total}개 · "
-        f"공유 자원 {result.externalized}개 추출 · "
-        f"문서 {result.documents}개 이전 · "
-        f"{_fmt_mb(result.before_bytes)} → {_fmt_mb(result.after_bytes)} "
-        f"({_fmt_mb(result.saved_bytes)} 절약)"
+        f"변환 {c.converted}/{c.total}개 · "
+        f"공유 자원 {c.externalized}개 추출 · "
+        f"문서 {c.documents}개 이전 · "
+        f"{_fmt_mb(c.before_bytes)} → {_fmt_mb(c.after_bytes)} "
+        f"({_fmt_mb(c.saved_bytes)} 절약)"
     )
+    click.echo(f"자원 참조 백필: 스냅샷 {result.indexed}개")
+    if result.sweep_skipped:
+        click.echo("고아 자원 정리는 건너뛰었습니다 — 참조 미기록 스냅샷이 남아 있습니다.")
+    else:
+        click.echo(
+            f"고아 자원 정리: {result.swept}개 삭제 ({_fmt_mb(result.swept_bytes)})"
+        )
 
 
 def _counts_label(manifest: dict) -> str:

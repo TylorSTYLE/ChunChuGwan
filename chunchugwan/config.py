@@ -24,6 +24,9 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 # ---- 저장 압축 (resources.py) ----
 SCREENSHOT_WEBP_QUALITY = 85    # 스크린샷 PNG → WebP 변환 품질 (손실 압축)
 RESOURCE_MIN_BYTES = 4096       # 이보다 작은 data URI 자원은 추출하지 않고 인라인 유지
+# 고아 자원 정리(optimize.py sweep)에서 최근 생성·갱신 파일을 건너뛰는 유예(초) —
+# 자원 파일 저장과 스냅샷 커밋 사이에 있는 진행 중 캡처와의 경합 방지
+RESOURCE_ORPHAN_GRACE_SECONDS = 3600
 
 # ---- 링크된 문서 파일 아카이빙 (documents.py) ----
 # 페이지가 링크한 문서(PDF·워드·한글 등)를 문서 CAS(documents/)에 저장하고

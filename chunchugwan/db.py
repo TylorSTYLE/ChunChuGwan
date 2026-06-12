@@ -62,7 +62,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
     final_url     TEXT NOT NULL,        -- 리다이렉트 후 최종 URL
     http_status   INTEGER,
     changed       INTEGER NOT NULL DEFAULT 1,  -- 직전 스냅샷 대비 변경 여부
-    note          TEXT
+    note          TEXT,
+    resources_indexed INTEGER NOT NULL DEFAULT 0  -- 자원 참조(snapshot_resources) 기록 여부.
+                                                  --   0 이면 저장공간 최적화의 백필 대상
 );
 
 CREATE TABLE IF NOT EXISTS checks (
@@ -299,6 +301,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN network_tag_id TEXT REFERENCES network_tags(id)"
             )
+    # 자원 참조 인덱스 여부 — 0 인 스냅샷은 저장공간 최적화가 백필한다
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
+    if cols and "resources_indexed" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN resources_indexed INTEGER NOT NULL DEFAULT 0"
+        )
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -554,7 +562,8 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 
 _SNAPSHOT_COLUMNS = frozenset(
-    {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed", "note"}
+    {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
+     "note", "resources_indexed"}
 )
 
 
@@ -921,6 +930,41 @@ def list_resource_refs_by_names(
             names,
         )
     ]
+
+
+def count_unindexed_snapshots(conn: sqlite3.Connection) -> int:
+    """자원 참조가 아직 기록되지 않은 스냅샷 수 — 최적화 백필 대상."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots WHERE resources_indexed = 0"
+    ).fetchone()["c"]
+
+
+def list_unindexed_snapshots(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """자원 참조 백필 대상 스냅샷 (+ 디렉토리 위치) — 저장공간 최적화용."""
+    return conn.execute(
+        """
+        SELECT s.id, p.domain, p.slug, s.dir_name
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.resources_indexed = 0 ORDER BY s.id
+        """
+    ).fetchall()
+
+
+def mark_snapshot_resources_indexed(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> None:
+    """스냅샷의 자원 참조 기록 완료 표시 — 이후 백필 대상에서 제외된다."""
+    conn.execute(
+        "UPDATE snapshots SET resources_indexed = 1 WHERE id = ?", (snapshot_id,)
+    )
+
+
+def list_all_resource_names(conn: sqlite3.Connection) -> set[str]:
+    """참조 중인 자원 CAS 이름 전체 — 고아 자원 정리(sweep)의 기준."""
+    return {
+        r["name"]
+        for r in conn.execute("SELECT DISTINCT name FROM snapshot_resources")
+    }
 
 
 # ---- 함께 저장된 문서 파일 (문서 CAS 참조) ----
