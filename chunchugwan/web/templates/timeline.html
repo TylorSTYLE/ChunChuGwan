@@ -1,63 +1,63 @@
 {% extends "base.html" %}
-{% block title %}타임라인 — {{ page['url'] }}{% endblock %}
+{% block title %}{{ _("타임라인") }} — {{ page['url'] }}{% endblock %}
 {% block content %}
-{% if queued %}<div class="notice">재아카이빙이 백그라운드에서 시작되었습니다. 잠시 후 새로고침하세요.</div>{% endif %}
+{% if queued %}<div class="notice">{{ _("재아카이빙이 백그라운드에서 시작되었습니다. 잠시 후 새로고침하세요.") }}</div>{% endif %}
 {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
 <div class="toolbar">
   <h2 style="margin:0">{{ page['url'] }}</h2>
   <span class="spacer"></span>
-  <a href="/logs?page_id={{ page['id'] }}">로그</a>
+  <a href="/logs?page_id={{ page['id'] }}">{{ _("로그") }}</a>
   {% if can_archive %}
   <form class="inline" method="post" action="/page/{{ page['id'] }}/rearchive" style="display:flex; gap:6px; align-items:center">
-    <label class="muted" title="콘텐츠가 동일해도 새 스냅샷을 저장합니다" style="display:flex; gap:4px; align-items:center">
-      <input type="checkbox" name="force" value="1"> 강제
+    <label class="muted" title="{{ _('콘텐츠가 동일해도 새 스냅샷을 저장합니다') }}" style="display:flex; gap:4px; align-items:center">
+      <input type="checkbox" name="force" value="1"> {{ _("강제") }}
     </label>
-    <button type="submit">재아카이빙</button>
+    <button type="submit">{{ _("재아카이빙") }}</button>
   </form>
   {% endif %}
 </div>
 <p class="muted mono" style="margin-top:0">{{ page['domain'] }} / {{ page['slug'] }}</p>
 
 <div class="toolbar" style="margin-bottom:12px">
-  <span class="muted">자동 재아카이빙</span>
+  <span class="muted">{{ _("자동 재아카이빙") }}</span>
   {% if schedule %}
-  <span><strong>{{ schedule_label }}</strong> 주기 · 다음 실행 <span class="mono">{{ schedule['next_run_at'] | ts }}</span>
-    {%- if schedule['last_run_at'] %} · 마지막 실행 <span class="mono">{{ schedule['last_run_at'] | ts }}</span>{% endif %}</span>
+  <span>{{ _("주기") }} <strong>{{ schedule_label }}</strong> · {{ _("다음 실행") }} <span class="mono">{{ schedule['next_run_at'] | ts }}</span>
+    {%- if schedule['last_run_at'] %} · {{ _("마지막 실행") }} <span class="mono">{{ schedule['last_run_at'] | ts }}</span>{% endif %}</span>
   {% else %}
-  <span class="muted">미설정 (최소 1시간 ~ 최대 1개월)</span>
+  <span class="muted">{{ _("미설정 (최소 1시간 ~ 최대 1개월)") }}</span>
   {% endif %}
   {% if can_archive %}
   <form class="inline" method="post" action="/page/{{ page['id'] }}/schedule" style="display:flex; gap:6px">
     <select name="interval">
       {% for v, label in interval_options %}
-      <option value="{{ v }}" {% if schedule and schedule['interval_seconds'] == v %}selected{% endif %}>{{ label }}</option>
+      <option value="{{ v }}" {% if schedule and schedule['interval_seconds'] == v %}selected{% endif %}>{{ _(label) }}</option>
       {% endfor %}
     </select>
-    <button type="submit">{{ '주기 변경' if schedule else '주기 설정' }}</button>
+    <button type="submit">{{ _('주기 변경') if schedule else _('주기 설정') }}</button>
   </form>
   {% if schedule %}
   <form class="inline" method="post" action="/page/{{ page['id'] }}/schedule/next-run"
         style="display:flex; gap:6px">
     <input type="hidden" name="tz_offset" class="tz-offset" value="0">
     <input type="datetime-local" name="next_run" required class="next-run-input"
-           data-utc="{{ schedule['next_run_at'] }}" title="브라우저 로컬 시간 기준">
-    <button type="submit">다음 실행 변경</button>
+           data-utc="{{ schedule['next_run_at'] }}" title="{{ _('브라우저 로컬 시간 기준') }}">
+    <button type="submit">{{ _("다음 실행 변경") }}</button>
   </form>
   <form class="inline" method="post" action="/page/{{ page['id'] }}/schedule/delete">
-    <button type="submit">해제</button>
+    <button type="submit">{{ _("해제") }}</button>
   </form>
   {% endif %}
   {% endif %}
 </div>
 
 {% if not items %}
-<p class="muted">스냅샷이 없습니다.</p>
+<p class="muted">{{ _("스냅샷이 없습니다.") }}</p>
 {% else %}
 <table>
   <thead>
-    <tr><th>#</th><th>캡처 시각</th><th>해시</th><th>상태</th><th>HTTP</th><th></th></tr>
+    <tr><th>#</th><th>{{ _("캡처 시각") }}</th><th>{{ _("해시") }}</th><th>{{ _("상태") }}</th><th>HTTP</th><th></th></tr>
   </thead>
   <tbody>
   {% for it in items %}
@@ -65,16 +65,16 @@
       <td class="num">{{ it.idx }}</td>
       <td class="mono"><a href="/snapshot/{{ it.snap['id'] }}">{{ it.snap['taken_at'] | ts }}</a></td>
       <td class="mono">{{ it.snap['content_hash'][:12] }}</td>
-      <td><span class="badge {{ it.badge }}">{{ {'new': '신규', 'changed': '변경', 'same': '동일'}[it.badge] }}</span></td>
+      <td><span class="badge {{ it.badge }}">{{ {'new': _('신규'), 'changed': _('변경'), 'same': _('동일')}[it.badge] }}</span></td>
       <td class="num">{{ it.snap['http_status'] or '-' }}</td>
       <td>
         {% if it.idx > 1 %}
-        <a href="/diff/{{ page['id'] }}?from={{ it.idx - 1 }}&to={{ it.idx }}">이전과 비교</a>
+        <a href="/diff/{{ page['id'] }}?from={{ it.idx - 1 }}&to={{ it.idx }}">{{ _("이전과 비교") }}</a>
         {% endif %}
         {% if can_delete %}
         <form class="inline" method="post" action="/snapshot/{{ it.snap['id'] }}/delete"
-              onsubmit="return confirm('스냅샷 {{ it.snap['taken_at'] }} 을 삭제합니다. 되돌릴 수 없으며, 다음 스냅샷의 변경 표시는 자동으로 보정됩니다.')">
-          <button type="submit" class="danger">삭제</button>
+              onsubmit="return confirm({{ _('스냅샷 {t} 을 삭제합니다. 되돌릴 수 없으며, 다음 스냅샷의 변경 표시는 자동으로 보정됩니다.', t=it.snap['taken_at'])|tojson }})">
+          <button type="submit" class="danger">{{ _("삭제") }}</button>
         </form>
         {% endif %}
       </td>
@@ -85,14 +85,14 @@
 {% endif %}
 
 {% if checks %}
-<h3>변경 없음 확인 기록 (최근 {{ checks|length }}건)</h3>
+<h3>{{ _("변경 없음 확인 기록 (최근 {n}건)", n=checks|length) }}</h3>
 <table style="max-width:520px">
   <tbody>
   {% for c in checks %}
     <tr>
       <td class="mono">{{ c['checked_at'] | ts }}</td>
       <td class="mono muted">{{ c['content_hash'][:12] }}</td>
-      <td><span class="badge same">동일</span></td>
+      <td><span class="badge same">{{ _("동일") }}</span></td>
     </tr>
   {% endfor %}
   </tbody>

@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}목록 — 춘추관{% endblock %}
+{% block title %}{{ _("목록") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <style>
 /* URL 컬럼이 내용 길이대로 과점하지 않도록 폭 제한 — 긴 URL 은 줄바꿈 */
 #pages th:first-child { width: 35%; }
 </style>
 {% if queued %}
-<div class="notice">아카이빙이 백그라운드에서 시작되었습니다: <span class="mono">{{ queued }}</span> — 완료되면 목록이 자동 갱신됩니다.</div>
+<div class="notice">{{ _("아카이빙이 백그라운드에서 시작되었습니다") }}: <span class="mono">{{ queued }}</span> — {{ _("완료되면 목록이 자동 갱신됩니다.") }}</div>
 {% endif %}
 {% if error %}
 <div class="error">{{ error }}</div>
@@ -16,18 +16,18 @@
 {% endif %}
 
 <div class="toolbar">
-  <h2 style="margin:0">아카이브 목록</h2>
+  <h2 style="margin:0">{{ _("아카이브 목록") }}</h2>
   <span class="spacer"></span>
-  <input type="text" id="q" placeholder="URL 필터…" autocomplete="off">
+  <input type="text" id="q" placeholder="{{ _('URL 필터…') }}" autocomplete="off">
 </div>
 
 {% if not pages and not pending_new %}
-<p class="muted">아카이브된 페이지가 없습니다.
-  {% if can_archive %}<a href="/archive/new">새 아카이빙</a> 메뉴나 {% endif %}<span class="mono">wccg add &lt;url&gt;</span> 로 시작하세요.</p>
+<p class="muted">{{ _("아카이브된 페이지가 없습니다.") }}
+  {{ _("시작하려면") }} {% if can_archive %}<a href="/archive/new">{{ _("새 아카이빙") }}</a> {{ _("메뉴나") }} {% endif %}<span class="mono">wccg add &lt;url&gt;</span> {{ _("명령을 사용하세요.") }}</p>
 {% else %}
 <table id="pages">
   <thead>
-    <tr><th>URL</th><th>도메인</th><th>스냅샷</th><th>마지막 캡처</th><th>자동</th><th></th></tr>
+    <tr><th>URL</th><th>{{ _("도메인") }}</th><th>{{ _("스냅샷") }}</th><th>{{ _("마지막 캡처") }}</th><th>{{ _("자동") }}</th><th></th></tr>
   </thead>
   <tbody>
   {% for j in pending_new %}
@@ -35,9 +35,9 @@
       <td><span class="mono">{{ j['url'] }}</span></td>
       <td class="mono">{{ j['domain'] }}</td>
       <td class="num">-</td>
-      <td class="mono">{{ j['started_at'] | ts }} 시작</td>
+      <td class="mono">{{ j['started_at'] | ts }} {{ _("시작") }}</td>
       <td class="muted">-</td>
-      <td><span class="badge running">아카이빙 중</span></td>
+      <td><span class="badge running">{{ _("아카이빙 중") }}</span></td>
     </tr>
   {% endfor %}
   {% for p in pages %}
@@ -55,17 +55,17 @@
       </td>
       <td>
         {% if p['url'] in active_urls %}
-        <span class="badge running">아카이빙 중</span>
+        <span class="badge running">{{ _("아카이빙 중") }}</span>
         {% else %}
         {% if can_archive %}
         <form class="inline" method="post" action="/page/{{ p['id'] }}/rearchive">
-          <button type="submit">재아카이빙</button>
+          <button type="submit">{{ _("재아카이빙") }}</button>
         </form>
         {% endif %}
         {% if can_delete %}
         <form class="inline" method="post" action="/page/{{ p['id'] }}/delete"
-              onsubmit="return confirm('{{ p['url'] }}\n\n스냅샷 {{ p['snapshot_count'] }}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.')">
-          <button type="submit" class="danger">삭제</button>
+              onsubmit="return confirm({{ (p['url'] ~ '\n\n' ~ _('스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', n=p['snapshot_count']))|tojson }})">
+          <button type="submit" class="danger">{{ _("삭제") }}</button>
         </form>
         {% endif %}
         {% endif %}

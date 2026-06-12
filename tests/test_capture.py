@@ -16,6 +16,9 @@ INDEX_HTML = """<!doctype html>
   <article><h1>본문 제목</h1><p>본문 내용입니다.</p></article>
   <div class="ad">광고 위젯 문구</div>
   <img src="img.png" alt="그림">
+  <a href="report.pdf">보고서 (PDF)</a>
+  <a href="report.pdf#page=2">보고서 2쪽</a>
+  <a href="other.html">다른 글</a>
 </body></html>
 """
 
@@ -37,6 +40,7 @@ def site_url(tmp_path):
     (site / "style.css").write_text(STYLE_CSS, encoding="utf-8")
     Image.new("RGB", (4, 4), (255, 0, 0)).save(site / "img.png")
     (site / "font.woff2").write_bytes(b"\x00fake-font-bytes")
+    (site / "report.pdf").write_bytes(b"%PDF-1.4 fixture")
 
     server = ThreadingHTTPServer(
         ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
@@ -74,6 +78,11 @@ def test_capture_artifacts_and_inlining(site_url, tmp_path):
     # content_html 은 인라인 전 raw_html 기준 — base64 데이터가 섞이면 안 된다
     assert "data:image" not in result.content_html
     assert "url(data:" not in result.content_html
+
+    # 문서 링크 수집 — 절대 URL 로 수집되고, fragment 만 다른 링크는
+    # 같은 문서로 합쳐지며, HTML 등 비문서 링크는 제외된다
+    base = site_url.rsplit("/", 1)[0]
+    assert result.document_links == [f"{base}/report.pdf"]
 
 
 def test_capture_without_rules_keeps_content(site_url, tmp_path):

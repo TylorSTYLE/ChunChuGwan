@@ -44,6 +44,8 @@ def add(url: str, force: bool) -> None:
         f"  hash {outcome.content_hash[:12]}  http {outcome.http_status}  "
         f"title {outcome.title or '-'}"
     )
+    if outcome.documents:
+        click.echo(f"  첨부 문서 {outcome.documents}개 저장 (files/)")
 
 
 @main.command("list")
