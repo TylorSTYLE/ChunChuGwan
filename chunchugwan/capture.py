@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 from urllib.parse import urldefrag, urljoin
 
-from . import config, documents
+from . import config, documents, trackers
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +161,34 @@ _REWRITE_LINKS_JS = """
     document.querySelectorAll("base").forEach((b) => b.remove());
   }
   return rewritten;
+}
+"""
+
+# live DOM에서 CSS 셀렉터에 걸리는 노드를 제거. 잘못된 셀렉터는 무시.
+_REMOVE_FROM_LIVE_DOM_JS = """
+(selectors) => {
+  let removed = 0;
+  for (const sel of selectors) {
+    try {
+      document.querySelectorAll(sel).forEach(el => { el.remove(); removed += 1; });
+    } catch (e) { /* 잘못된 셀렉터 무시 */ }
+  }
+  return removed;
+}
+"""
+
+# live DOM에서 src 없는 <script>와 <noscript> 중 텍스트가 패턴에 일치하는 것을 제거.
+_REMOVE_INLINE_TRACKERS_JS = """
+(patterns) => {
+  const regexps = patterns.map(p => new RegExp(p));
+  let removed = 0;
+  document.querySelectorAll('script:not([src]), noscript').forEach(el => {
+    if (regexps.some(re => re.test(el.textContent))) {
+      el.remove();
+      removed += 1;
+    }
+  });
+  return removed;
 }
 """
 
@@ -353,6 +381,11 @@ def _capture_in_browser(
             )
             logger.info("도메인 룰로 노드 %d개 제거: %s", removed, url)
 
+        n_ext, n_inline = _remove_trackers(page)
+        if n_ext + n_inline:
+            logger.info("추적기 제거 (page.html): 외부 %d · 인라인/noscript %d: %s",
+                        n_ext, n_inline, page.url)
+
         if link_rewriter is not None:
             _rewrite_links(page, link_rewriter, page_links)
 
@@ -510,6 +543,23 @@ _CONNECT_ERROR_MARKERS = (
     "net::ERR_TIMED_OUT",
     "net::ERR_ADDRESS_UNREACHABLE",
 )
+
+
+def _remove_trackers(page) -> tuple[int, int]:
+    """page.html 저장 전 live DOM 에서 추적기 스크립트·픽셀 제거.
+
+    실패해도 캡처 자체는 계속된다. (외부 제거 수, 인라인/noscript 제거 수) 반환.
+    """
+    n_ext = n_inline = 0
+    try:
+        n_ext = page.evaluate(_REMOVE_FROM_LIVE_DOM_JS, list(trackers.EXTERNAL_SELECTORS))
+    except Exception as e:
+        logger.warning("외부 추적기 제거 실패: %s", e)
+    try:
+        n_inline = page.evaluate(_REMOVE_INLINE_TRACKERS_JS, list(trackers.INLINE_PATTERNS))
+    except Exception as e:
+        logger.warning("인라인 추적기 제거 실패: %s", e)
+    return n_ext, n_inline
 
 
 class CaptureError(RuntimeError):
