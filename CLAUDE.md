@@ -127,7 +127,8 @@ archive/
                 │                   #   작은 자원(<4KB)은 data URI 인라인 유지
                 ├── raw.html.gz     # 렌더링 후 DOM 소스 (gzip)
                 ├── content.md      # 추출+정규화 텍스트
-                ├── screenshot.webp # 전체 페이지 (변환 실패 시 screenshot.png 유지)
+                ├── screenshot.webp # 전체 페이지 (WebP 한도 초과·역효과면
+                │                   #   screenshot.png 유지 + .keep 마커 — 카운트 제외)
                 ├── files/          # (구형 스냅샷만) 문서 파일 — wccg compact 가
                 │                   #   문서 CAS 로 이전한다. 신규 스냅샷은 없음
                 └── meta.json       # url, final_url, 시각, 해시, http 정보,

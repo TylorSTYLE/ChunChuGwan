@@ -254,7 +254,8 @@ archive/
     │                       #   작은 자원(<4KB)은 data URI 인라인 유지
     ├── raw.html.gz         # 렌더링 후 DOM 소스 (gzip)
     ├── content.md          # 추출+정규화 텍스트 (해시/diff 기준)
-    ├── screenshot.webp     # 전체 페이지 (WebP 변환 실패 시 screenshot.png 유지)
+    ├── screenshot.webp     # 전체 페이지 (WebP 한도 초과·용량 역효과면
+    │                       #   screenshot.png 유지 + screenshot.png.keep 마커)
     └── meta.json           # url, final_url, 시각, 해시, http 정보,
                             #   documents 목록 (문서 CAS 참조 — 출처 URL·해시)
 ```

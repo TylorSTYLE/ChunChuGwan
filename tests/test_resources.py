@@ -6,7 +6,7 @@ import hashlib
 import pytest
 from PIL import Image
 
-from chunchugwan import config, resources
+from chunchugwan import config, resources, storage
 
 
 @pytest.fixture
@@ -114,6 +114,16 @@ def test_needs_compaction_and_count(cas_env, monkeypatch, tmp_path):
     assert not resources.needs_compaction(compacted)
     assert resources.compactable_count() == 1  # 구형 산출물이 남은 스냅샷만
 
+    # WebP 변환을 안 하기로 확정한 PNG(마커 보유)는 대상으로 세지 않는다
+    kept = base / "2026-06-03T00-00-00"
+    kept.mkdir()
+    (kept / "meta.json").write_text("{}", encoding="utf-8")
+    (kept / "screenshot.png").write_bytes(b"\x89PNG huge")
+    assert resources.needs_compaction(kept)
+    (kept / storage.WEBP_SKIP_MARKER).touch()
+    assert not resources.needs_compaction(kept)
+    assert resources.compactable_count() == 1
+
 
 def test_compact_keeps_png_when_conversion_fails(cas_env, tmp_path):
     snap = tmp_path / "snap"
@@ -123,3 +133,28 @@ def test_compact_keeps_png_when_conversion_fails(cas_env, tmp_path):
     assert (snap / "screenshot.png").is_file()      # 폴백: 원본 유지
     assert not (snap / "screenshot.webp").exists()
     assert stats.before_bytes == stats.after_bytes == 0
+    # 마커가 남아 압축 대상에서 빠지고, 재실행에도 변환을 재시도하지 않는다
+    assert (snap / storage.WEBP_SKIP_MARKER).is_file()
+    assert not resources.needs_compaction(snap)
+
+
+def test_compact_keeps_png_when_webp_larger(cas_env, tmp_path, monkeypatch):
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    png = snap / "screenshot.png"
+    Image.new("RGB", (8, 8), (200, 0, 0)).save(png)
+    png_bytes = png.read_bytes()
+
+    orig_save = Image.Image.save
+    def bloated_save(self, fp, format=None, **kw):  # WebP 가 원본보다 커지는 상황 재현
+        orig_save(self, fp, format, **kw)
+        if format == "WEBP":
+            fp.write_bytes(fp.read_bytes() + b"\0" * 4096)
+    monkeypatch.setattr(Image.Image, "save", bloated_save)
+
+    stats = resources.compact_snapshot_dir(snap)
+    assert png.read_bytes() == png_bytes            # 원본 유지
+    assert not (snap / "screenshot.webp").exists()  # 커진 변환본은 버린다
+    assert stats.before_bytes == stats.after_bytes == 0
+    assert (snap / storage.WEBP_SKIP_MARKER).is_file()
+    assert not resources.needs_compaction(snap)
