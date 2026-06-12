@@ -390,7 +390,7 @@ def _archive_url(
 
             # 저장이 확정된 뒤에만 압축 변환 — unchanged 면 CAS 에 자원을
             # 남기지 않고 임시 디렉토리째 버려진다
-            stats = resources.compact_snapshot_dir(tmp_dir)
+            stats = resources.compact_snapshot_dir(tmp_dir, result.final_url)
             run.step(
                 "compress",
                 f"자원 {stats.externalized}개 추출 · "
@@ -417,6 +417,7 @@ def _archive_url(
                 content_hash=content_hash, final_url=result.final_url,
                 http_status=result.http_status, changed=changed,
                 resources_indexed=1,  # 참조는 바로 아래에서 기록 — 백필 불필요
+                css_externalized=1,   # compact_snapshot_dir 가 위에서 추출 완료
             )
             if doc_manifest:
                 db.insert_snapshot_documents(conn, snapshot_id, doc_manifest)
