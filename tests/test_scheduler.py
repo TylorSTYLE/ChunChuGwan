@@ -1,4 +1,6 @@
 """스케줄러(주기적 재아카이빙) 테스트. 캡처 없이 pipeline 을 모킹해 검증."""
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from click.testing import CliRunner
 
@@ -40,13 +42,16 @@ def _schedule_row():
 
 @pytest.mark.parametrize(
     "text,expected",
-    [("1h", 3600), ("90m", 5400), ("6H", 21600), (" 3d ", 259200), ("1w", 604800)],
+    [
+        ("1h", 3600), ("90m", 5400), ("6H", 21600), (" 3d ", 259200),
+        ("1w", 604800), ("2w", 1209600), ("1mo", 2592000), ("1MO", 2592000),
+    ],
 )
 def test_parse_interval(text, expected):
     assert scheduler.parse_interval(text) == expected
 
 
-@pytest.mark.parametrize("text", ["30m", "2w", "8d", "0h", "abc", "1x", ""])
+@pytest.mark.parametrize("text", ["30m", "2mo", "31d", "5w", "0h", "abc", "1x", ""])
 def test_parse_interval_invalid(text):
     with pytest.raises(ValueError):
         scheduler.parse_interval(text)
@@ -57,6 +62,7 @@ def test_format_interval():
     assert scheduler.format_interval(5400) == "1시간 30분"
     assert scheduler.format_interval(90000) == "1일 1시간"
     assert scheduler.format_interval(604800) == "1주"
+    assert scheduler.format_interval(2592000) == "1개월"
 
 
 def test_format_schedule():
@@ -154,7 +160,7 @@ def test_set_schedule_rejects_out_of_range(archive_env):
     with pytest.raises(ValueError):
         scheduler.set_schedule(archive_env, 60)
     with pytest.raises(ValueError):
-        scheduler.set_schedule(archive_env, 8 * 86400)
+        scheduler.set_schedule(archive_env, 31 * 86400)
 
 
 def test_remove_schedule(archive_env):
@@ -162,6 +168,50 @@ def test_remove_schedule(archive_env):
     assert scheduler.remove_schedule(archive_env) is True
     assert scheduler.remove_schedule(archive_env) is False
     assert scheduler.remove_schedule("https://example.com/missing") is False
+
+
+# ---- 다음 실행 시각 변경 ----
+
+
+def test_set_next_run(archive_env):
+    scheduler.set_schedule(archive_env, 3600)
+    target = datetime(2099, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    row = scheduler.set_next_run(archive_env, target)
+    assert row["next_run_at"] == "2099-01-02T03:04:05+00:00"
+    assert row["interval_seconds"] == 3600  # 주기는 그대로
+
+
+def test_set_next_run_naive_is_utc_and_other_tz_converted(archive_env):
+    scheduler.set_schedule(archive_env, 3600)
+    row = scheduler.set_next_run(archive_env, datetime(2099, 1, 1, 12, 0, 0))
+    assert row["next_run_at"] == "2099-01-01T12:00:00+00:00"
+
+    kst = timezone(timedelta(hours=9))
+    row = scheduler.set_next_run(
+        archive_env, datetime(2099, 1, 1, 12, 0, 0, tzinfo=kst)
+    )
+    assert row["next_run_at"] == "2099-01-01T03:00:00+00:00"
+
+
+def test_set_next_run_past_makes_due(archive_env, monkeypatch):
+    """과거 시각으로 바꾸면 다음 폴링에서 즉시 실행된다."""
+    monkeypatch.setattr(
+        pipeline, "archive_url", lambda url, force=False, source="cli": _outcome()
+    )
+    scheduler.set_schedule(archive_env, 3600)
+    scheduler.set_next_run(
+        archive_env, datetime(2000, 1, 1, tzinfo=timezone.utc)
+    )
+    results = scheduler.run_due()
+    assert [(r.url, r.status) for r in results] == [(URL, "changed")]
+
+
+def test_set_next_run_without_schedule(archive_env):
+    target = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="등록된 스케줄이 없는"):
+        scheduler.set_next_run(archive_env, target)  # 페이지는 있지만 스케줄 없음
+    with pytest.raises(ValueError, match="등록된 스케줄이 없는"):
+        scheduler.set_next_run("https://example.com/missing", target)
 
 
 # ---- 실행 ----
@@ -259,6 +309,39 @@ def test_cli_schedule_add_list_remove(archive_env):
     result = runner.invoke(cli.main, ["schedule", "remove", archive_env])
     assert result.exit_code == 0
     result = runner.invoke(cli.main, ["schedule", "remove", archive_env])
+    assert result.exit_code != 0
+    assert "등록된 스케줄이 없는" in result.output
+
+
+def test_cli_schedule_next(archive_env):
+    runner = CliRunner()
+    runner.invoke(cli.main, ["schedule", "add", archive_env, "--every", "12h"])
+
+    result = runner.invoke(
+        cli.main, ["schedule", "next", archive_env, "2099-01-02T03:04:05+00:00"]
+    )
+    assert result.exit_code == 0
+    assert "2099-01-02T03:04:05+00:00" in result.output
+    assert _schedule_row()["next_run_at"] == "2099-01-02T03:04:05+00:00"
+
+    # 타임존 없는 입력은 로컬 시간으로 해석돼 UTC 로 저장된다
+    result = runner.invoke(
+        cli.main, ["schedule", "next", archive_env, "2099-06-01T09:00"]
+    )
+    assert result.exit_code == 0
+    expected = datetime(2099, 6, 1, 9, 0).astimezone(timezone.utc)
+    assert _schedule_row()["next_run_at"] == expected.isoformat(timespec="seconds")
+
+
+def test_cli_schedule_next_errors(archive_env):
+    runner = CliRunner()
+    result = runner.invoke(cli.main, ["schedule", "next", archive_env, "not-a-date"])
+    assert result.exit_code != 0
+    assert "잘못된 시각 형식" in result.output
+
+    result = runner.invoke(
+        cli.main, ["schedule", "next", archive_env, "2099-01-01T00:00"]
+    )
     assert result.exit_code != 0
     assert "등록된 스케줄이 없는" in result.output
 

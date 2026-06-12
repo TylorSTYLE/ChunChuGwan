@@ -25,10 +25,10 @@ DEFAULT_LOCALE = "ko"
 SUPPORTED_LOCALES = ("ko", "en")
 LOCALE_NAMES = {"ko": "한국어", "en": "English"}
 
-# 주기 표기 단위 (큰 단위부터). 미등록 로케일은 한국어 단위로 폴백.
+# 주기 표기 단위 (큰 단위부터, 개월 = 30일). 미등록 로케일은 한국어 단위로 폴백.
 _INTERVAL_UNITS: dict[str, tuple[tuple[int, str], ...]] = {
-    "ko": ((7 * 86400, "주"), (86400, "일"), (3600, "시간"), (60, "분")),
-    "en": ((7 * 86400, "w"), (86400, "d"), (3600, "h"), (60, "m")),
+    "ko": ((30 * 86400, "개월"), (7 * 86400, "주"), (86400, "일"), (3600, "시간"), (60, "분")),
+    "en": ((30 * 86400, "mo"), (7 * 86400, "w"), (86400, "d"), (3600, "h"), (60, "m")),
 }
 
 _EN: dict[str, str] = {
@@ -132,7 +132,7 @@ _EN: dict[str, str] = {
     "주기": "Interval",
     "다음 실행": "Next run",
     "마지막 실행": "Last run",
-    "미설정 (최소 1시간 ~ 최대 1주일)": "Not set (1 hour to 1 week)",
+    "미설정 (최소 1시간 ~ 최대 1개월)": "Not set (1 hour to 1 month)",
     "주기 변경": "Change interval",
     "주기 설정": "Set interval",
     "해제": "Remove",
@@ -144,17 +144,19 @@ _EN: dict[str, str] = {
         "change status is recalculated automatically.",
     "변경 없음 확인 기록 (최근 {n}건)": "No-change checks (last {n})",
     # ---- 스케줄 (schedules) ----
-    "주기 최소 1시간 ~ 최대 1주일": "Interval from 1 hour to 1 week",
-    "주기 최소 1시간 ~ 최대 1주일 · 1일 단위 주기는 실행 시각 지정 가능":
-        "Interval from 1 hour to 1 week · daily+ intervals can run at a set time",
+    "주기 최소 1시간 ~ 최대 1개월 · 1일 단위 주기는 실행 시각 지정 가능":
+        "Interval from 1 hour to 1 month · daily+ intervals can run at a set time",
     "등록된 자동 재아카이빙이 없습니다. 페이지 타임라인에서 주기를 설정하세요.":
         "No auto re-archiving registered. Set an interval on a page's timeline.",
     "자동 재아카이빙을 해제합니다. 저장된 스냅샷은 그대로 남습니다.":
         "This removes auto re-archiving. Saved snapshots are kept.",
-    "반복 주기는 1시간(1h) 이상 1주일(1w) 이하여야 합니다":
-        "The interval must be between 1 hour (1h) and 1 week (1w)",
-    "실행 시각은 1일 단위 주기(1일~1주일)에서만 지정할 수 있습니다":
-        "A run time can only be set for daily intervals (1 day to 1 week)",
+    "반복 주기는 1시간(1h) 이상 1개월(1mo) 이하여야 합니다":
+        "The interval must be between 1 hour (1h) and 1 month (1mo)",
+    "다음 실행 변경": "Change next run",
+    "브라우저 로컬 시간 기준": "In your browser's local time",
+    "잘못된 시각 형식: {v}": "Invalid time format: {v}",
+    "실행 시각은 1일 단위 주기(1일~1개월)에서만 지정할 수 있습니다":
+        "A run time can only be set for daily intervals (1 day to 1 month)",
     "직접 입력 주기는 숫자여야 합니다": "Custom interval must be a number",
     "직접 입력 주기는 1 이상이어야 합니다": "Custom interval must be 1 or greater",
     "직접 입력…": "Custom…",
@@ -174,9 +176,9 @@ _EN: dict[str, str] = {
     "주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다. 타임라인 화면에서 언제든 변경/해제할 수 있습니다.":
         "If you pick an interval, auto re-archiving is registered once the archive "
         "completes. You can change or remove it anytime on the timeline.",
-    "주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다. 직접 입력은 1시간~1주일 범위, 1일 단위 주기는 실행 시각(서버 시간)도 지정할 수 있습니다. 타임라인 화면에서 언제든 변경/해제할 수 있습니다.":
+    "주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다. 직접 입력은 1시간~1개월 범위, 1일 단위 주기는 실행 시각(서버 시간)도 지정할 수 있습니다. 타임라인 화면에서 언제든 변경/해제할 수 있습니다.":
         "If you pick an interval, auto re-archiving is registered once the archive "
-        "completes. Custom intervals range from 1 hour to 1 week; daily+ intervals "
+        "completes. Custom intervals range from 1 hour to 1 month; daily+ intervals "
         "can also run at a set time (server time). You can change or remove it "
         "anytime on the timeline.",
     "아카이빙 시작": "Start archiving",
@@ -187,6 +189,7 @@ _EN: dict[str, str] = {
     "1일": "1 day",
     "3일": "3 days",
     "1주일": "1 week",
+    "1개월": "1 month",
     "7일": "7 days",
     "30일": "30 days",
     # ---- 스냅샷 뷰어 (snapshot) ----

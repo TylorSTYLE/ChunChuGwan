@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import tarfile
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -185,14 +186,14 @@ def delete(url: str, snapshot_idx: int | None, yes: bool) -> None:
 
 @main.group()
 def schedule() -> None:
-    """주기적 자동 재아카이빙 관리 (최소 1시간 ~ 최대 1주일)."""
+    """주기적 자동 재아카이빙 관리 (최소 1시간 ~ 최대 1개월)."""
 
 
 @schedule.command("add")
 @click.argument("url")
 @click.option(
     "--every", required=True,
-    help="반복 주기 — 1h ~ 1w (예: 1h, 90m, 12h, 3d, 1w)",
+    help="반복 주기 — 1h ~ 1mo (예: 1h, 90m, 12h, 3d, 1w, 1mo)",
 )
 @click.option(
     "--at", "at_time", default=None,
@@ -226,6 +227,30 @@ def schedule_list() -> None:
             f"{label:<14}  "
             f"{r['next_run_at']:<25}  {r['last_run_at'] or '-':<25}  {r['url']}"
         )
+
+
+@schedule.command("next")
+@click.argument("url")
+@click.argument("when")
+def schedule_next(url: str, when: str) -> None:
+    """URL 스케줄의 다음 실행 시각을 변경한다.
+
+    WHEN 은 ISO 형식 (예: 2026-06-12T09:00). 타임존이 없으면 로컬 시간으로
+    해석한다. 과거 시각을 주면 다음 폴링에서 즉시 실행된다.
+    """
+    try:
+        dt = datetime.fromisoformat(when)
+    except ValueError:
+        raise click.ClickException(
+            f"잘못된 시각 형식: {when!r} (예: 2026-06-12T09:00)"
+        )
+    if dt.tzinfo is None:
+        dt = dt.astimezone()  # 로컬 타임존 부여
+    try:
+        row = scheduler.set_next_run(url, dt)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    click.echo(f"다음 실행 변경: {row['url']} — {row['next_run_at']}")
 
 
 @schedule.command("remove")

@@ -89,6 +89,12 @@ def test_viewer_cannot_manage_schedule(client):
     """주기적 재아카이빙 설정/해제도 아카이빙 트리거 — viewer 는 403."""
     _login(client, "viewer@test.co")
     assert client.post("/page/1/schedule", data={"interval": 3600}).status_code == 403
+    assert (
+        client.post(
+            "/page/1/schedule/next-run", data={"next_run": "2099-01-01T00:00"}
+        ).status_code
+        == 403
+    )
     assert client.post("/page/1/schedule/delete").status_code == 403
 
 
@@ -98,6 +104,7 @@ def test_viewer_sees_schedules_readonly(client):
     res = client.get("/schedules")
     assert res.status_code == 200
     assert "주기 변경" not in res.text
+    assert "/schedule/next-run" not in res.text
     assert "/schedule/delete" not in res.text
 
 
@@ -105,6 +112,12 @@ def test_archiver_can_manage_schedule(client):
     _login(client, "archiver@test.co")
     # 없는 페이지 — 권한 통과 후 404
     assert client.post("/page/999/schedule", data={"interval": 3600}).status_code == 404
+    assert (
+        client.post(
+            "/page/999/schedule/next-run", data={"next_run": "2099-01-01T00:00"}
+        ).status_code
+        == 404
+    )
     assert client.post("/page/999/schedule/delete").status_code == 404
 
 

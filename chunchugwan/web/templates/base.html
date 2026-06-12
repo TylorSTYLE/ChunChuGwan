@@ -80,7 +80,7 @@ td.num { text-align: right; color: var(--muted); }
                  animation: badge-pulse 1.4s ease-in-out infinite; }
 @keyframes badge-pulse { 50% { opacity: .45; } }
 button, select, input[type=number], input[type=text], input[type=url],
-input[type=email], input[type=password] {
+input[type=email], input[type=password], input[type=datetime-local] {
   font: inherit; font-size: 13px; padding: 3px 10px;
   border: 1px solid var(--border); border-radius: 4px; background: var(--surface);
   color: var(--fg);
@@ -213,6 +213,20 @@ button.danger:hover { background: var(--red-hover); }
     apply();
   });
   apply();
+})();
+/* 스케줄 다음 실행 폼 — datetime-local 입력을 브라우저 로컬 시각으로 프리필하고,
+   서버가 UTC 로 환산할 수 있게 tz_offset(분)을 채운다 */
+(function () {
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  document.querySelectorAll("input.next-run-input[data-utc]").forEach(function (el) {
+    var d = new Date(el.dataset.utc);
+    if (isNaN(d)) return;
+    el.value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+      + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  });
+  document.querySelectorAll("input.tz-offset").forEach(function (el) {
+    el.value = new Date().getTimezoneOffset();
+  });
 })();
 </script>
 </body>

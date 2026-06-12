@@ -329,10 +329,10 @@ def dashboard(request: Request):
     )
 
 
-# 대시보드 주기 선택지 (초 단위 — 1시간 ~ 1주일)
+# 대시보드 주기 선택지 (초 단위 — 1시간 ~ 1개월)
 _SCHEDULE_OPTIONS = [
     (3600, "1시간"), (3 * 3600, "3시간"), (6 * 3600, "6시간"), (12 * 3600, "12시간"),
-    (86400, "1일"), (3 * 86400, "3일"), (7 * 86400, "1주일"),
+    (86400, "1일"), (3 * 86400, "3일"), (7 * 86400, "1주일"), (30 * 86400, "1개월"),
 ]
 
 # 직접 입력 단위 (분/시간/일 — 주는 7일로 입력)
@@ -407,7 +407,7 @@ def schedule_set(
     run_at: str = Form(""),
     next_path: str = Form("", alias="next"),
 ):
-    """페이지 반복 주기 등록/변경. 주기는 1시간 ~ 1주일, 직접 입력·실행 시각 지원."""
+    """페이지 반복 주기 등록/변경. 주기는 1시간 ~ 1개월, 직접 입력·실행 시각 지원."""
     _require_archiver(request)
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
@@ -416,6 +416,38 @@ def schedule_set(
     try:
         seconds = _interval_from_form(interval, custom_value, custom_unit)
         scheduler.set_schedule(page["url"], seconds, run_at=run_at or None)
+    except ValueError as e:
+        raise HTTPException(400, t(request, str(e)))
+    return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
+
+
+@app.post("/page/{page_id}/schedule/next-run")
+def schedule_next_run(
+    request: Request,
+    page_id: int,
+    next_run: str = Form(...),
+    tz_offset: int = Form(0),
+    next_path: str = Form("", alias="next"),
+):
+    """스케줄의 다음 실행 시각 변경.
+
+    next_run 은 datetime-local 값(타임존 없는 브라우저 로컬 시각),
+    tz_offset 은 JS getTimezoneOffset() 분 단위 (UTC = 로컬 + offset).
+    JS 미동작 등으로 tz_offset 이 0 이면 UTC 로 해석된다.
+    """
+    _require_archiver(request)
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, t(request, "페이지 없음"))
+    try:
+        dt = datetime.fromisoformat(next_run)
+    except ValueError:
+        raise HTTPException(400, t(request, "잘못된 시각 형식: {v}", v=next_run))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc) + timedelta(minutes=tz_offset)
+    try:
+        scheduler.set_next_run(page["url"], dt)
     except ValueError as e:
         raise HTTPException(400, t(request, str(e)))
     return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
