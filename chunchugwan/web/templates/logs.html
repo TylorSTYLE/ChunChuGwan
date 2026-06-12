@@ -72,6 +72,11 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
       <button type="button" class="preset" data-days="30">30일</button>
       <button type="button" class="preset" data-days="">전체</button>
     </span>
+    <select name="limit" aria-label="표시 줄 수">
+      {% for n in limits %}
+      <option value="{{ n }}" {% if n == limit %}selected{% endif %}>{{ n }}줄</option>
+      {% endfor %}
+    </select>
     <button type="submit">필터</button>
   </form>
 </div>
