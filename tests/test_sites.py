@@ -191,3 +191,37 @@ def test_delete_site_missing_returns_none(archive_env):
     with db.connect():
         pass
     assert deletion.delete_site(12345) is None
+
+
+def test_migrate_from_pre_site_schema(archive_env):
+    """사이트 도입 전 DB 업그레이드 — 스키마 보장이 예외 없이 통과해야 한다.
+
+    회귀 방지: SCHEMA 의 CREATE INDEX 가 _migrate 의 ALTER TABLE 보다 먼저
+    실행되므로, 마이그레이션으로 추가되는 컬럼의 인덱스가 SCHEMA 에 있으면
+    기존 DB 에서 'no such column: site_id' 로 깨진다.
+    """
+    import sqlite3
+
+    with db.connect() as conn:
+        _add_page(conn, "https://example.com/a")
+    # 구버전 DB 흉내 — 사이트 도입에서 추가된 인덱스·컬럼을 제거
+    raw = sqlite3.connect(config.DB_PATH)
+    raw.execute("DROP INDEX IF EXISTS idx_pages_site")
+    raw.execute("DROP INDEX IF EXISTS idx_crawls_site")
+    for table in ("pages", "crawls", "crawl_schedules"):
+        raw.execute(f"ALTER TABLE {table} DROP COLUMN site_id")
+    raw.execute("ALTER TABLE snapshots DROP COLUMN resources_indexed")
+    raw.execute("DELETE FROM sites")
+    raw.commit()
+    raw.close()
+
+    db.invalidate_schema_cache()
+    with db.connect() as conn:  # 스키마 보장 + 마이그레이션 재실행
+        page = db.get_page(conn, "https://example.com/a")
+        assert page["site_id"] is not None  # 컬럼 복원 + 사이트 백필
+        site = db.get_site(conn, page["site_id"])
+        assert site["site_key"] == "example.com"
+        indexes = {
+            r["name"] for r in conn.execute("PRAGMA index_list(pages)")
+        }
+        assert "idx_pages_site" in indexes

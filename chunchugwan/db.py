@@ -72,7 +72,9 @@ CREATE TABLE IF NOT EXISTS pages (
     network_tag_id TEXT REFERENCES network_tags(id),  -- 사설 대역 페이지의 로컬 네트워크 태그
     created_at  TEXT NOT NULL           -- ISO 8601 UTC
 );
-CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id);
+-- 주의: 마이그레이션으로 추가되는 컬럼(site_id 등)의 인덱스는 SCHEMA 가
+-- 아니라 _migrate 에서 만든다 — executescript(SCHEMA)가 _migrate 보다 먼저
+-- 실행되므로, 기존 테이블에 아직 없는 컬럼을 참조하면 스키마 보장이 깨진다.
 
 CREATE TABLE IF NOT EXISTS snapshots (
     id            INTEGER PRIMARY KEY,
@@ -148,7 +150,6 @@ CREATE TABLE IF NOT EXISTS crawls (
     next_page_at   TEXT NOT NULL       -- 다음 페이지 처리 가능 시각 (ISO 8601 UTC)
 );
 CREATE INDEX IF NOT EXISTS idx_crawls_status ON crawls(status, next_page_at);
-CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id);
 
 CREATE TABLE IF NOT EXISTS crawl_pages (
     id              INTEGER PRIMARY KEY,
@@ -335,6 +336,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN site_id INTEGER REFERENCES sites(id)"
             )
+    # site_id 인덱스는 컬럼 추가 후에만 만들 수 있다 (SCHEMA 주의 주석 참조)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id)")
     _backfill_sites(conn)
 
 
