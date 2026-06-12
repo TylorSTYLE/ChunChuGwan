@@ -35,7 +35,7 @@ RESOURCE_ORPHAN_GRACE_SECONDS = 3600
 DOCUMENT_EXTENSIONS = (
     ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
     ".hwp", ".hwpx", ".odt", ".odp", ".ods", ".rtf",
-    ".pages", ".key", ".numbers", ".epub",
+    ".pages", ".key", ".numbers", ".epub", ".zip",
 )
 DOCUMENT_MAX_COUNT = 20                     # 스냅샷당 문서 수 한도
 DOCUMENT_MAX_BYTES = 50 * 1024 * 1024       # 문서 1개 크기 한도 (50MB)

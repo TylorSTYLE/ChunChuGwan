@@ -96,7 +96,8 @@ class _DocHandler(BaseHTTPRequestHandler):
             "/login.pdf": ("text/html; charset=utf-8", b"<html>login</html>", 200),
             "/big.pdf": ("application/pdf", b"x" * 4096, 200),
             "/missing.pdf": ("application/pdf", b"", 404),
-            "/blob": ("application/zip", b"PK-not-a-document", 200),
+            "/blob": ("application/x-msdownload", b"MZ-not-a-document", 200),
+            "/bundle.zip": ("application/zip", b"PK\x03\x04fake-zip", 200),
         }
         if self.path not in routes:
             self.send_error(404)
@@ -231,7 +232,13 @@ def test_direct_filename_content_type_fallback():
 
 def test_direct_filename_undecidable():
     url = "https://example.com/download?id=3"
-    assert documents.direct_filename(url, url, None, "application/zip") is None
+    assert documents.direct_filename(url, url, None, "application/x-msdownload") is None
+
+
+def test_direct_filename_zip_content_type_fallback():
+    url = "https://example.com/download?id=3"
+    name = documents.direct_filename(url, url, None, "application/zip")
+    assert name.startswith("document-") and name.endswith(".zip")
 
 
 # ---- download_direct (로컬 HTTP 서버) ----
@@ -257,6 +264,14 @@ def test_download_direct_undecidable_extension(doc_server, tmp_path):
     with pytest.raises(ValueError, match="화이트리스트"):
         documents.download_direct(f"{doc_server}/blob", tmp_path / "files")
     assert list((tmp_path / "files").iterdir()) == []
+
+
+def test_download_direct_zip(doc_server, tmp_path):
+    dl = documents.download_direct(f"{doc_server}/bundle.zip", tmp_path / "files")
+    entry = dl.entry
+    assert str(entry["file"]).startswith("bundle-")
+    assert str(entry["file"]).endswith(".zip")
+    assert entry["content_type"] == "application/zip"
 
 
 # ---- 파이프라인 통합 (캡처는 가짜, 문서 다운로드는 로컬 서버) ----
