@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}새 아카이빙 — 춘추관{% endblock %}
+{% block title %}{{ _("새 아카이빙") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <style>
 .archive-form { max-width: 520px; display: flex; flex-direction: column; gap: 14px; }
@@ -11,23 +11,22 @@
 <div class="error">{{ error }}</div>
 {% endif %}
 
-<h2>새 아카이빙</h2>
+<h2>{{ _("새 아카이빙") }}</h2>
 <form class="archive-form" method="post" action="/archive">
   <label>URL
     <input type="text" name="url" value="{{ url }}" required autocomplete="off" autofocus
-           placeholder="https:// 생략 가능">
-    <span class="hint">트래킹 파라미터(utm_* 등)는 자동으로 제거된 정규화 URL 로 저장됩니다.</span>
+           placeholder="{{ _('https:// 생략 가능') }}">
+    <span class="hint">{{ _("트래킹 파라미터(utm_* 등)는 자동으로 제거된 정규화 URL 로 저장됩니다.") }}</span>
   </label>
-  <label>자동 재아카이빙 주기
+  <label>{{ _("자동 재아카이빙 주기") }}
     <select name="interval">
-      <option value="0">사용 안 함 (1회만 아카이빙)</option>
+      <option value="0">{{ _("사용 안 함 (1회만 아카이빙)") }}</option>
       {% for seconds, label in interval_options %}
-      <option value="{{ seconds }}">{{ label }}마다</option>
+      <option value="{{ seconds }}">{{ _("{label}마다", label=_(label)) }}</option>
       {% endfor %}
     </select>
-    <span class="hint">주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다.
-      타임라인 화면에서 언제든 변경/해제할 수 있습니다.</span>
+    <span class="hint">{{ _("주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다. 타임라인 화면에서 언제든 변경/해제할 수 있습니다.") }}</span>
   </label>
-  <button type="submit">아카이빙 시작</button>
+  <button type="submit">{{ _("아카이빙 시작") }}</button>
 </form>
 {% endblock %}

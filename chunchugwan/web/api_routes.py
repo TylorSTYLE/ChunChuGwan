@@ -152,7 +152,7 @@ def api_snapshot_file(request: Request, snapshot_id: int, name: str):
     _require_view(request)
     from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
 
-    return webapp.snapshot_file(snapshot_id, name)
+    return webapp.snapshot_file(request, snapshot_id, name)
 
 
 class ArchiveRequest(BaseModel):

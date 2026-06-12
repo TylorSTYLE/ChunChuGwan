@@ -24,6 +24,17 @@ USER_AGENT = "Mozilla/5.0 (compatible; ChunChuGwan/0.1)"
 SCREENSHOT_WEBP_QUALITY = 85    # 스크린샷 PNG → WebP 변환 품질 (손실 압축)
 RESOURCE_MIN_BYTES = 4096       # 이보다 작은 data URI 자원은 추출하지 않고 인라인 유지
 
+# ---- 링크된 문서 파일 아카이빙 (documents.py) ----
+# 페이지가 링크한 문서(PDF·워드·한글 등)를 스냅샷 files/ 에 함께 저장한다.
+DOCUMENT_EXTENSIONS = (
+    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
+    ".hwp", ".hwpx", ".odt", ".odp", ".ods", ".rtf",
+    ".pages", ".key", ".numbers", ".epub",
+)
+DOCUMENT_MAX_COUNT = 20                     # 스냅샷당 문서 수 한도
+DOCUMENT_MAX_BYTES = 50 * 1024 * 1024       # 문서 1개 크기 한도 (50MB)
+DOCUMENT_FETCH_TIMEOUT_SECONDS = 30
+
 # URL 정규화 시 제거할 트래킹 파라미터 prefix
 TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")
 

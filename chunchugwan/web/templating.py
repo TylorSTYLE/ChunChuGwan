@@ -23,6 +23,19 @@ def _auth_context(request: Request) -> dict:
     }
 
 
+def _i18n_context(request: Request) -> dict:
+    """요청 로케일의 번역 함수(`_`)와 언어 선택 UI 데이터를 모든 템플릿에 주입."""
+    from . import i18n
+
+    locale = getattr(request.state, "locale", i18n.DEFAULT_LOCALE)
+    return {
+        "_": i18n.gettext_for(locale),
+        "locale": locale,
+        "locales": i18n.SUPPORTED_LOCALES,
+        "locale_names": i18n.LOCALE_NAMES,
+    }
+
+
 def filesize(num: int | float | None) -> str:
     """바이트 수를 사람이 읽는 단위로 (예: 532 B, 1.4 KB, 2.0 MB)."""
     if num is None:
@@ -61,7 +74,7 @@ def ts(value: str | None, fmt: str = "datetime") -> Markup | str:
 
 templates = Jinja2Templates(
     directory=Path(__file__).parent / "templates",
-    context_processors=[_auth_context],
+    context_processors=[_auth_context, _i18n_context],
 )
 templates.env.filters["filesize"] = filesize
 templates.env.filters["ts"] = ts

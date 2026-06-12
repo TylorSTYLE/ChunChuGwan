@@ -24,6 +24,7 @@ from starlette.background import BackgroundTask
 from .. import auth, backup as backup_mod
 from .. import config, db, mailer, resources
 from . import permissions
+from .i18n import t
 from .templating import filesize, templates
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 def _require_admin(request: Request) -> None:
     """관리자 게이트. 로그인 자체는 미들웨어가 보장한다."""
     if not permissions.system_allowed(request.state.user):
-        raise HTTPException(403, "관리자만 접근할 수 있습니다")
+        raise HTTPException(403, t(request, "관리자만 접근할 수 있습니다"))
 
 
 router = APIRouter(prefix="/system", dependencies=[Depends(_require_admin)])
@@ -105,7 +106,7 @@ def _system_redirect(*, notice: str = "", error: str = "") -> RedirectResponse:
 
 
 @router.post("/compact")
-def system_compact():
+def system_compact(request: Request):
     """저장 공간 압축 — 구형 스냅샷을 압축 저장 형태로 변환 (CLI compact 와 동일).
 
     내용 보존 변환이고 멱등이라 여러 번 실행해도 안전하다. 변환은 동기로
@@ -114,25 +115,30 @@ def system_compact():
     """
     dirs = resources.snapshot_dirs()
     if not dirs:
-        return _system_redirect(notice="압축할 스냅샷이 없습니다.")
+        return _system_redirect(notice=t(request, "압축할 스냅샷이 없습니다."))
     if not any(resources.needs_compaction(d) for d in dirs):
         return _system_redirect(
-            notice=f"스냅샷 {len(dirs)}개 모두 이미 압축 형태입니다."
+            notice=t(request, "스냅샷 {n}개 모두 이미 압축 형태입니다.", n=len(dirs))
         )
     try:
         result = resources.compact_all()
     except OSError as e:
-        return _system_redirect(error=f"압축 실패: {e}")
+        return _system_redirect(error=t(request, "압축 실패: {e}", e=e))
     return _system_redirect(
-        notice=f"압축 완료: 변환 {result.converted}/{result.total}개 · "
-               f"공유 자원 {result.externalized}개 추출 · "
-               f"{filesize(result.before_bytes)} → {filesize(result.after_bytes)} "
-               f"({filesize(result.saved_bytes)} 절약)"
+        notice=t(
+            request,
+            "압축 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · "
+            "{before} → {after} ({saved} 절약)",
+            converted=result.converted, total=result.total,
+            externalized=result.externalized,
+            before=filesize(result.before_bytes), after=filesize(result.after_bytes),
+            saved=filesize(result.saved_bytes),
+        )
     )
 
 
 @router.post("/restore")
-def system_restore(file: UploadFile = File(...)):
+def system_restore(request: Request, file: UploadFile = File(...)):
     """전체 백업 업로드로 복원 — 현재 데이터(인증 포함)를 백업 시점으로 교체.
 
     복원되면 세션 테이블도 백업 시점으로 돌아가므로 현재 로그인은 무효가
@@ -142,13 +148,16 @@ def system_restore(file: UploadFile = File(...)):
     try:
         manifest = backup_mod.restore_backup(tmp)
     except (ValueError, tarfile.TarError, OSError) as e:
-        return _system_redirect(error=f"복원 실패: {e}")
+        return _system_redirect(error=t(request, "복원 실패: {e}", e=e))
     finally:
         tmp.unlink(missing_ok=True)
     c = manifest.get("counts", {})
     return _system_redirect(
-        notice=f"복원 완료 (백업: {manifest.get('created_at', '?')}, "
-               f"페이지 {c.get('pages', '?')}개, 스냅샷 {c.get('snapshots', '?')}개)"
+        notice=t(
+            request, "복원 완료 (백업: {created_at}, 페이지 {pages}개, 스냅샷 {snapshots}개)",
+            created_at=manifest.get("created_at", "?"),
+            pages=c.get("pages", "?"), snapshots=c.get("snapshots", "?"),
+        )
     )
 
 
@@ -188,18 +197,21 @@ def _users_redirect(*, notice: str = "", error: str = "") -> RedirectResponse:
 def users_set_role(request: Request, user_id: int, role: str = Form(...)):
     """사용자 권한 변경. 최초 관리자는 변경 불가, 차단 시 세션 즉시 무효화."""
     if role not in db.ROLES:
-        raise HTTPException(400, f"알 수 없는 역할: {role!r}")
+        raise HTTPException(400, t(request, "알 수 없는 역할: {role}", role=repr(role)))
     with db.connect() as conn:
         target = db.get_user_by_id(conn, user_id)
         if target is None:
-            raise HTTPException(404, "사용자 없음")
+            raise HTTPException(404, t(request, "사용자 없음"))
         if target["is_founder"]:
-            return _users_redirect(error="최초 관리자의 권한은 변경할 수 없습니다.")
+            return _users_redirect(
+                error=t(request, "최초 관리자의 권한은 변경할 수 없습니다.")
+            )
         db.set_role(conn, user_id, role)
         if role == "blocked":
             db.delete_user_sessions(conn, user_id)
     return _users_redirect(
-        notice=f"{target['email']} 권한을 '{db.ROLE_LABELS[role]}'(으)로 변경했습니다."
+        notice=t(request, "{email} 권한을 '{label}'(으)로 변경했습니다.",
+                 email=target["email"], label=t(request, db.ROLE_LABELS[role]))
     )
 
 
@@ -210,15 +222,19 @@ def users_set_name(request: Request, user_id: int, display_name: str = Form(""))
     if name is not None:
         error = auth.validate_display_name(name)
         if error is not None:
-            return _users_redirect(error=error)
+            return _users_redirect(error=t(request, error))
     with db.connect() as conn:
         target = db.get_user_by_id(conn, user_id)
         if target is None:
-            raise HTTPException(404, "사용자 없음")
+            raise HTTPException(404, t(request, "사용자 없음"))
         db.set_display_name(conn, user_id, name)
     return _users_redirect(
-        notice=f"{target['email']} 이름을 "
-               + (f"'{name}'(으)로 변경했습니다." if name else "제거했습니다.")
+        notice=(
+            t(request, "{email} 이름을 '{name}'(으)로 변경했습니다.",
+              email=target["email"], name=name)
+            if name
+            else t(request, "{email} 이름을 제거했습니다.", email=target["email"])
+        )
     )
 
 
@@ -228,9 +244,11 @@ def users_force_logout(request: Request, user_id: int):
     with db.connect() as conn:
         target = db.get_user_by_id(conn, user_id)
         if target is None:
-            raise HTTPException(404, "사용자 없음")
+            raise HTTPException(404, t(request, "사용자 없음"))
         db.delete_user_sessions(conn, user_id)
-    return _users_redirect(notice=f"{target['email']} 의 모든 세션을 로그아웃했습니다.")
+    return _users_redirect(
+        notice=t(request, "{email} 의 모든 세션을 로그아웃했습니다.", email=target["email"])
+    )
 
 
 def _invite_link(request: Request, token: str) -> str:
@@ -248,13 +266,15 @@ def users_invite(request: Request, email: str = Form(...), role: str = Form("vie
     email = email.strip()
     error = auth.validate_email(email)
     if error is not None:
-        return _users_redirect(error=error)
+        return _users_redirect(error=t(request, error))
     if role not in db.INVITABLE_ROLES:
-        raise HTTPException(400, f"초대할 수 없는 역할: {role!r}")
+        raise HTTPException(400, t(request, "초대할 수 없는 역할: {role}", role=repr(role)))
     token = secrets.token_urlsafe(32)
     with db.connect() as conn:
         if db.get_user_by_email(conn, email) is not None:
-            return _users_redirect(error=f"{email} 은 이미 가입된 이메일입니다.")
+            return _users_redirect(
+                error=t(request, "{email} 은 이미 가입된 이메일입니다.", email=email)
+            )
         db.create_invite(
             conn, email, auth.hash_token(token), role,
             invited_by=request.state.user["id"] if request.state.user else None,
@@ -262,28 +282,35 @@ def users_invite(request: Request, email: str = Form(...), role: str = Form("vie
         )
     link = _invite_link(request, token)
     if config.mail_enabled():
-        inviter = request.state.user["email"] if request.state.user else "관리자"
+        inviter = (
+            request.state.user["email"] if request.state.user
+            else t(request, "관리자")
+        )
         try:
             mailer.send_invite(email, link, inviter, db.ROLE_LABELS[role])
         except (smtplib.SMTPException, OSError) as e:
             logger.warning("초대 메일 발송 실패 (%s): %s", email, e)
             return _users_redirect(
-                error=f"{email} 초대를 만들었지만 메일 발송에 실패했습니다 — "
-                      f"링크를 직접 전달하세요: {link}"
+                error=t(request,
+                        "{email} 초대를 만들었지만 메일 발송에 실패했습니다 — "
+                        "링크를 직접 전달하세요: {link}", email=email, link=link)
             )
-        return _users_redirect(notice=f"{email} 에게 초대 메일을 보냈습니다.")
+        return _users_redirect(
+            notice=t(request, "{email} 에게 초대 메일을 보냈습니다.", email=email)
+        )
     return _users_redirect(
-        notice=f"{email} 초대 링크 (메일 미설정 — 직접 전달하세요): {link}"
+        notice=t(request, "{email} 초대 링크 (메일 미설정 — 직접 전달하세요): {link}",
+                 email=email, link=link)
     )
 
 
 @router.post("/users/invite/{invite_id}/delete")
-def users_invite_delete(invite_id: int):
+def users_invite_delete(request: Request, invite_id: int):
     """초대 취소 — 링크가 즉시 무효화된다."""
     with db.connect() as conn:
         if not db.delete_invite(conn, invite_id):
-            raise HTTPException(404, "초대 없음")
-    return _users_redirect(notice="초대를 취소했습니다.")
+            raise HTTPException(404, t(request, "초대 없음"))
+    return _users_redirect(notice=t(request, "초대를 취소했습니다."))
 
 
 # ---- API 키 ----
@@ -333,17 +360,18 @@ def _api_keys_redirect(
     return RedirectResponse(f"/system/api-keys?{query}", status_code=303)
 
 
-def _api_key_ttl(expiry: str, custom_days: int) -> int | None:
-    """만료 선택지를 ttl 초로 변환 (None=영구). 잘못된 입력은 ValueError."""
+def _api_key_ttl(request: Request, expiry: str, custom_days: int) -> int | None:
+    """만료 선택지를 ttl 초로 변환 (None=영구). 잘못된 입력은 ValueError(번역됨)."""
     if expiry in _EXPIRY_TTL_SECONDS:
         return _EXPIRY_TTL_SECONDS[expiry]
     if expiry == "custom":
         if not (1 <= custom_days <= MAX_API_KEY_CUSTOM_DAYS):
-            raise ValueError(
-                f"사용자 지정 만료는 1 ~ {MAX_API_KEY_CUSTOM_DAYS}일 사이여야 합니다."
-            )
+            raise ValueError(t(
+                request, "사용자 지정 만료는 1 ~ {n}일 사이여야 합니다.",
+                n=MAX_API_KEY_CUSTOM_DAYS,
+            ))
         return custom_days * 86400
-    raise ValueError(f"알 수 없는 만료 선택: {expiry!r}")
+    raise ValueError(t(request, "알 수 없는 만료 선택: {expiry}", expiry=repr(expiry)))
 
 
 @router.post("/api-keys")
@@ -359,11 +387,11 @@ def api_keys_create(
     name = name.strip()
     name_error = auth.validate_api_key_name(name)
     if name_error is not None:
-        return _api_keys_redirect(error=name_error)
+        return _api_keys_redirect(error=t(request, name_error))
     if not (can_view or can_archive):
-        return _api_keys_redirect(error="권한을 하나 이상 선택하세요.")
+        return _api_keys_redirect(error=t(request, "권한을 하나 이상 선택하세요."))
     try:
-        ttl_seconds = _api_key_ttl(expiry, custom_days)
+        ttl_seconds = _api_key_ttl(request, expiry, custom_days)
     except ValueError as e:
         return _api_keys_redirect(error=str(e))
     with db.connect() as conn:
@@ -374,35 +402,42 @@ def api_keys_create(
             ttl_seconds=ttl_seconds,
         )
     return _api_keys_redirect(
-        notice=f"'{name}' 키를 발급했습니다 — 아래 키를 지금 복사하세요. "
-               "다시 표시되지 않습니다.",
+        notice=t(request,
+                 "'{name}' 키를 발급했습니다 — 아래 키를 지금 복사하세요. 다시 표시되지 않습니다.",
+                 name=name),
         new_key=token,
     )
 
 
 @router.post("/api-keys/{key_id}/delete")
-def api_keys_delete(key_id: int):
+def api_keys_delete(request: Request, key_id: int):
     """API 키 폐기 — 즉시 무효화된다."""
     with db.connect() as conn:
         if not db.delete_api_key(conn, key_id):
-            raise HTTPException(404, "API 키 없음")
-    return _api_keys_redirect(notice="키를 폐기했습니다.")
+            raise HTTPException(404, t(request, "API 키 없음"))
+    return _api_keys_redirect(notice=t(request, "키를 폐기했습니다."))
 
 
 @router.post("/import")
-def system_import(file: UploadFile = File(...), mode: str = Form("merge")):
+def system_import(
+    request: Request, file: UploadFile = File(...), mode: str = Form("merge")
+):
     """내보낸 아카이브 데이터 업로드로 가져오기 (인증 데이터는 건드리지 않음)."""
     if mode not in ("merge", "overwrite"):
-        raise HTTPException(400, f"알 수 없는 모드: {mode!r}")
+        raise HTTPException(400, t(request, "알 수 없는 모드: {mode}", mode=repr(mode)))
     tmp = _save_upload(file)
     try:
         result = backup_mod.import_archive(tmp, mode=mode)
     except (ValueError, tarfile.TarError, OSError) as e:
-        return _system_redirect(error=f"가져오기 실패: {e}")
+        return _system_redirect(error=t(request, "가져오기 실패: {e}", e=e))
     finally:
         tmp.unlink(missing_ok=True)
     return _system_redirect(
-        notice=f"가져오기 완료 [{mode}]: 페이지 +{result.pages_added}, "
-               f"스냅샷 +{result.snapshots_added} (스킵 {result.snapshots_skipped}), "
-               f"확인 기록 +{result.checks_added}"
+        notice=t(
+            request,
+            "가져오기 완료 [{mode}]: 페이지 +{pages}, 스냅샷 +{snapshots} "
+            "(스킵 {skipped}), 확인 기록 +{checks}",
+            mode=mode, pages=result.pages_added, snapshots=result.snapshots_added,
+            skipped=result.snapshots_skipped, checks=result.checks_added,
+        )
     )

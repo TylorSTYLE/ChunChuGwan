@@ -1,80 +1,80 @@
 {% extends "base.html" %}
-{% block title %}계정 설정 — 춘추관{% endblock %}
+{% block title %}{{ _("계정 설정") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <div class="auth-card">
-  <h2>계정 설정</h2>
+  <h2>{{ _("계정 설정") }}</h2>
   {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
   <p style="font-size:13px; margin:4px 0">
-    권한 <span class="badge role-{{ role }}">{{ role_label }}</span>
+    {{ _("권한") }} <span class="badge role-{{ role }}">{{ _(role_label) }}</span>
   </p>
 
-  <h3>사용자 이름</h3>
+  <h3>{{ _("사용자 이름") }}</h3>
   <form method="post" action="/settings/account/name">
-    <label>표시 이름 (비우면 이메일로 표시)
+    <label>{{ _("표시 이름 (비우면 이메일로 표시)") }}
       <input type="text" name="display_name" value="{{ display_name }}" maxlength="50">
     </label>
-    <button type="submit">이름 변경</button>
+    <button type="submit">{{ _("이름 변경") }}</button>
   </form>
 
-  <h3>패스워드 변경</h3>
+  <h3>{{ _("패스워드 변경") }}</h3>
   {% if has_password %}
   <form method="post" action="/settings/account/password">
-    <label>현재 패스워드
+    <label>{{ _("현재 패스워드") }}
       <input type="password" name="current_password" required
              autocomplete="current-password">
     </label>
-    <label>새 패스워드
+    <label>{{ _("새 패스워드") }}
       <input type="password" name="new_password" required autocomplete="new-password">
     </label>
-    <label>새 패스워드 확인
+    <label>{{ _("새 패스워드 확인") }}
       <input type="password" name="new_password2" required autocomplete="new-password">
     </label>
-    <button type="submit">패스워드 변경</button>
-    <p class="muted" style="font-size:12px">변경하면 다른 기기의 세션은 모두 로그아웃됩니다.</p>
+    <button type="submit">{{ _("패스워드 변경") }}</button>
+    <p class="muted" style="font-size:12px">{{ _("변경하면 다른 기기의 세션은 모두 로그아웃됩니다.") }}</p>
   </form>
   {% else %}
-  <p class="muted">SSO 전용 계정입니다. 패스워드는 IdP(Authentik)에서 관리하세요.</p>
+  <p class="muted">{{ _("SSO 전용 계정입니다. 패스워드는 IdP(Authentik)에서 관리하세요.") }}</p>
   {% endif %}
 
-  <h3>2단계 인증</h3>
+  <h3>{{ _("2단계 인증") }}</h3>
   {% if has_password %}
   <p style="font-size:13px; margin:4px 0">
-    TOTP (인증 앱)
-    {% if totp_enabled %}<span class="badge new">활성</span>
-    {% else %}<span class="badge same">미설정</span>{% endif %}
-    — <a href="/settings/totp">설정</a>
+    {{ _("TOTP (인증 앱)") }}
+    {% if totp_enabled %}<span class="badge new">{{ _("활성") }}</span>
+    {% else %}<span class="badge same">{{ _("미설정") }}</span>{% endif %}
+    — <a href="/settings/totp">{{ _("설정") }}</a>
   </p>
   <p style="font-size:13px; margin:4px 0">
-    패스키
-    {% if passkey_count > 0 %}<span class="badge new">{{ passkey_count }}개</span>
-    {% else %}<span class="badge same">미설정</span>{% endif %}
-    — <a href="/settings/passkey">관리</a>
+    {{ _("패스키") }}
+    {% if passkey_count > 0 %}<span class="badge new">{{ _("{n}개", n=passkey_count) }}</span>
+    {% else %}<span class="badge same">{{ _("미설정") }}</span>{% endif %}
+    — <a href="/settings/passkey">{{ _("관리") }}</a>
   </p>
   {% else %}
-  <p class="muted">SSO 로그인은 IdP(Authentik)의 2FA 를 사용합니다.</p>
+  <p class="muted">{{ _("SSO 로그인은 IdP(Authentik)의 2FA 를 사용합니다.") }}</p>
   {% endif %}
 
   {% if role != 'admin' %}
   <fieldset class="danger-zone">
-    <legend>위험 영역</legend>
+    <legend>{{ _("위험 영역") }}</legend>
     <p class="muted" style="font-size:12px; margin-top:0">
-      계정과 모든 세션·2FA 등록 정보가 즉시 삭제됩니다. 되돌릴 수 없습니다.
+      {{ _("계정과 모든 세션·2FA 등록 정보가 즉시 삭제됩니다. 되돌릴 수 없습니다.") }}
     </p>
     <form method="post" action="/settings/account/delete"
-          onsubmit="return confirm('정말 계정을 삭제할까요? 되돌릴 수 없습니다.')">
+          onsubmit="return confirm({{ _('정말 계정을 삭제할까요? 되돌릴 수 없습니다.')|tojson }})">
       {% if has_password %}
-      <label>패스워드 확인
+      <label>{{ _("패스워드 확인") }}
         <input type="password" name="password" required
                autocomplete="current-password">
       </label>
       {% else %}
-      <label>확인을 위해 이메일({{ email }})을 입력
+      <label>{{ _("확인을 위해 이메일({email})을 입력", email=email) }}
         <input type="text" name="confirm" required autocomplete="off">
       </label>
       {% endif %}
-      <button type="submit" class="danger">계정 삭제</button>
+      <button type="submit" class="danger">{{ _("계정 삭제") }}</button>
     </form>
   </fieldset>
   {% endif %}
