@@ -141,6 +141,7 @@ _EN: dict[str, str] = {
     "보기 전용": "Viewer",
     "권한없음": "No access",
     "차단됨": "Blocked",
+    "탈퇴": "Withdrawn",
     # ---- 목록 (index) ----
     "아카이브 목록": "Archived pages",
     "아카이빙이 백그라운드에서 시작되었습니다": "Archiving started in the background",
@@ -397,6 +398,10 @@ _EN: dict[str, str] = {
         "Blocked = no access. Approve a 'No access' user by granting them a role. "
         "Blocking logs out all of the user's sessions immediately. The "
         "founder admin's role cannot be changed.",
+    "탈퇴=본인이 탈퇴한 계정(로그인 불가) — 권한을 되돌릴 수 없고, 계정 정보를 삭제하면 같은 이메일로 다시 가입하거나 초대할 수 있습니다.":
+        "Withdrawn = the user closed their own account (cannot log in) — the role "
+        "cannot be restored; deleting the account record frees the email for "
+        "sign-up or invites again.",
     "활성 세션": "Active sessions",
     "가입일": "Joined",
     "권한 변경": "Change role",
@@ -404,6 +409,10 @@ _EN: dict[str, str] = {
     "최초 관리자": "Founder",
     "패스키": "Passkey",
     "변경 불가": "Locked",
+    "탈퇴 — 삭제만 가능": "Withdrawn — delete only",
+    "{email} 계정 정보를 완전히 삭제할까요? 되돌릴 수 없으며, 같은 이메일로 다시 가입하거나 초대할 수 있게 됩니다.":
+        "Permanently delete the account record of {email}? This cannot be undone, "
+        "and the email becomes available for sign-up or invites again.",
     "본인 계정의 모든 세션을 로그아웃합니다. 지금 이 로그인도 종료됩니다. 계속할까요?":
         "Log out all sessions of your own account? This login ends too. Continue?",
     "{email} 의 모든 세션을 로그아웃할까요?": "Log out all sessions of {email}?",
@@ -424,9 +433,16 @@ _EN: dict[str, str] = {
     "만료": "Expires",
     "{email} 초대를 취소할까요? 링크가 즉시 무효화됩니다.":
         "Cancel the invite for {email}? The link becomes invalid immediately.",
-    "알 수 없는 역할: {role}": "Unknown role: {role}",
+    "부여할 수 없는 역할: {role}": "Role cannot be assigned: {role}",
     "사용자 없음": "User not found",
     "최초 관리자의 권한은 변경할 수 없습니다.": "The founder admin's role cannot be changed.",
+    "탈퇴한 계정의 권한은 변경할 수 없습니다 — 계정 정보를 삭제하세요.":
+        "A withdrawn account's role cannot be changed — delete the account record.",
+    "최초 관리자는 삭제할 수 없습니다.": "The founder admin cannot be deleted.",
+    "본인 계정은 여기서 삭제할 수 없습니다.": "You cannot delete your own account here.",
+    "{email} 계정 정보를 삭제했습니다. 같은 이메일로 다시 가입하거나 초대할 수 있습니다.":
+        "Deleted the account record of {email}. The email can sign up or be "
+        "invited again.",
     "{email} 권한을 '{label}'(으)로 변경했습니다.": "Changed the role of {email} to '{label}'.",
     "{email} 이름을 '{name}'(으)로 변경했습니다.": "Changed the name of {email} to '{name}'.",
     "{email} 이름을 제거했습니다.": "Removed the display name of {email}.",
@@ -504,13 +520,15 @@ _EN: dict[str, str] = {
     "SSO 로그인은 IdP(Authentik)의 2FA 를 사용합니다.":
         "SSO logins use the 2FA of your IdP (Authentik).",
     "위험 영역": "Danger zone",
-    "계정과 모든 세션·2FA 등록 정보가 즉시 삭제됩니다. 되돌릴 수 없습니다.":
-        "Your account, all sessions, and 2FA registrations are deleted immediately. "
-        "This cannot be undone.",
-    "정말 계정을 삭제할까요? 되돌릴 수 없습니다.":
-        "Really delete your account? This cannot be undone.",
+    "탈퇴하면 즉시 로그아웃되고 다시 로그인할 수 없습니다. 계정 정보 삭제(같은 이메일 재가입)는 관리자에게 요청하세요.":
+        "Withdrawing logs you out immediately and you can no longer log in. "
+        "Ask an administrator to delete the account record "
+        "(required to sign up again with the same email).",
+    "정말 탈퇴할까요? 다시 로그인할 수 없습니다.":
+        "Really close your account? You will not be able to log in again.",
     "패스워드 확인": "Confirm password",
-    "확인을 위해 이메일({email})을 입력": "Type your email ({email}) to confirm",
+    "확인을 위해 이메일({email})을 입력": "Type the email ({email}) to confirm",
+    "계정 탈퇴": "Close account",
     "계정 삭제": "Delete account",
     "사용자 이름을 변경했습니다.": "Display name updated.",
     "패스워드를 변경했습니다. 다른 기기의 세션은 로그아웃되었습니다.":
@@ -519,9 +537,10 @@ _EN: dict[str, str] = {
         "SSO-only accounts have no password. Manage it in your IdP (Authentik).",
     "현재 패스워드가 올바르지 않습니다.": "The current password is incorrect.",
     "새 패스워드가 서로 일치하지 않습니다.": "The new passwords do not match.",
-    "관리자 계정은 삭제할 수 없습니다.": "Admin accounts cannot be deleted.",
+    "관리자 계정은 탈퇴할 수 없습니다.": "Admin accounts cannot be closed.",
     "패스워드가 올바르지 않습니다.": "The password is incorrect.",
     "확인 이메일이 일치하지 않습니다.": "The confirmation email does not match.",
+    "탈퇴한 계정입니다.": "This account has been closed.",
     # ---- 로그인 / 가입 / 초대 (auth) ----
     "로그인": "Log in",
     "이메일 또는 패스워드가 올바르지 않습니다.": "Incorrect email or password.",

@@ -25,6 +25,7 @@ def client(tmp_db):
             ("archiver@test.co", "archiver"),
             ("viewer@test.co", "viewer"),
             ("blocked@test.co", "blocked"),
+            ("withdrawn@test.co", "withdrawn"),
         ):
             db.create_user(conn, email, auth.hash_password("password1234"), role=role)
     return TestClient(web_app.app)
@@ -164,6 +165,171 @@ def test_blocked_user_existing_session_rejected(client):
     assert client.post("/logout", follow_redirects=False).status_code == 303
 
 
+# ---- 탈퇴한 계정 ----
+
+
+def test_withdraw_user_db(tmp_db):
+    """탈퇴는 권한 변경 + 세션 무효화 — 계정 정보는 남는다. founder 는 불가."""
+    with db.connect() as conn:
+        boss_id = db.create_first_admin(conn, "boss@test.co", "x")
+        uid = db.create_user(conn, "a@b.co")
+        token = auth.issue_session(conn, uid)
+        db.withdraw_user(conn, uid)
+        assert db.get_user_by_id(conn, uid)["role"] == "withdrawn"
+        assert auth.resolve_session(conn, token) is None
+        db.withdraw_user(conn, uid)  # 멱등 — 이미 탈퇴여도 에러 없음
+        # founder 는 탈퇴 처리되지 않는다
+        db.withdraw_user(conn, boss_id)
+        assert db.get_user_by_id(conn, boss_id)["role"] == "admin"
+
+
+def test_withdrawn_user_cannot_login(client):
+    res = _login(client, "withdrawn@test.co")
+    assert res.status_code == 403
+    assert "탈퇴한 계정" in res.text
+
+
+def test_withdrawn_user_existing_session_rejected(client):
+    """탈퇴 전에 발급된 세션이 남아 있어도 미들웨어가 막는다."""
+    with db.connect() as conn:
+        uid = db.get_user_by_email(conn, "withdrawn@test.co")["id"]
+        token = auth.issue_session(conn, uid)
+    client.cookies.set(config.SESSION_COOKIE, token)
+    res = client.get("/")
+    assert res.status_code == 403 and "탈퇴한 계정" in res.text
+    # 로그아웃은 가능
+    assert client.post("/logout", follow_redirects=False).status_code == 303
+
+
+def test_withdrawn_email_cannot_signup_or_invite(client):
+    """계정 정보가 남아 있는 동안은 같은 이메일의 재가입·초대가 막힌다."""
+    res = client.post(
+        "/signup", data={"email": "withdrawn@test.co", "password": "password1234"},
+    )
+    assert res.status_code == 400 and "이미 가입된 이메일" in res.text
+    _login(client, "boss@test.co", "bosspass1234")
+    res = client.post(
+        "/system/users/invite",
+        data={"email": "withdrawn@test.co", "role": "viewer"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and "error=" in res.headers["location"]
+
+
+def test_withdrawn_role_cannot_be_assigned(client):
+    """탈퇴는 본인 탈퇴로만 진입 — 관리자가 부여할 수 없다."""
+    _login(client, "boss@test.co", "bosspass1234")
+    uid = _user("viewer@test.co")["id"]
+    assert client.post(
+        f"/system/users/{uid}/role", data={"role": "withdrawn"}
+    ).status_code == 400
+    assert _user("viewer@test.co")["role"] == "viewer"
+
+
+def test_withdrawn_user_role_cannot_be_changed(client):
+    """탈퇴한 계정의 권한은 되돌릴 수 없다 — 계정 정보 삭제가 유일한 경로."""
+    _login(client, "boss@test.co", "bosspass1234")
+    uid = _user("withdrawn@test.co")["id"]
+    res = client.post(
+        f"/system/users/{uid}/role", data={"role": "viewer"}, follow_redirects=False
+    )
+    assert res.status_code == 303 and "error=" in res.headers["location"]
+    assert _user("withdrawn@test.co")["role"] == "withdrawn"
+    # 화면에서도 변경 폼 대신 삭제 안내 표기
+    assert "탈퇴 — 삭제만 가능" in client.get("/system/users").text
+
+
+# ---- 계정 정보 삭제 (관리자) ----
+
+
+def test_admin_delete_requires_email_confirmation(client):
+    _login(client, "boss@test.co", "bosspass1234")
+    uid = _user("withdrawn@test.co")["id"]
+    res = client.post(
+        f"/system/users/{uid}/delete", data={"email": "wrong@test.co"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and "error=" in res.headers["location"]
+    assert _user("withdrawn@test.co") is not None
+    # 빈 입력도 거부
+    res = client.post(
+        f"/system/users/{uid}/delete", data={"email": ""}, follow_redirects=False
+    )
+    assert res.status_code == 303 and "error=" in res.headers["location"]
+
+
+def test_admin_delete_user_frees_email(client):
+    """이메일 확인 후 삭제 — 종속 데이터까지 지워지고 같은 이메일 재가입 가능."""
+    with db.connect() as conn:
+        uid = db.get_user_by_email(conn, "withdrawn@test.co")["id"]
+        db.create_identity(conn, uid, "authentik", "sub-w")
+        token = auth.issue_session(conn, uid)
+    _login(client, "boss@test.co", "bosspass1234")
+    res = client.post(
+        f"/system/users/{uid}/delete", data={"email": "Withdrawn@TEST.co"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and "notice=" in res.headers["location"]
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "withdrawn@test.co") is None
+        assert auth.resolve_session(conn, token) is None
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM identities WHERE user_id = ?", (uid,)
+        ).fetchone()["c"] == 0
+    # 같은 이메일로 다시 초대할 수 있다
+    res = client.post(
+        "/system/users/invite",
+        data={"email": "withdrawn@test.co", "role": "viewer"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and "notice=" in res.headers["location"]
+    # 같은 이메일로 다시 가입할 수 있다 (새 클라이언트 세션)
+    client.cookies.clear()
+    res = client.post(
+        "/signup", data={"email": "withdrawn@test.co", "password": "password1234"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+
+
+def test_admin_delete_refuses_founder_and_self(client):
+    _login(client, "boss@test.co", "bosspass1234")
+    boss_id = _user("boss@test.co")["id"]
+    res = client.post(
+        f"/system/users/{boss_id}/delete", data={"email": "boss@test.co"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and "error=" in res.headers["location"]
+    assert _user("boss@test.co") is not None
+    # founder 가 아닌 관리자도 본인 계정은 삭제 불가
+    with db.connect() as conn:
+        db.create_user(
+            conn, "admin2@test.co", auth.hash_password("password1234"), role="admin"
+        )
+    client.cookies.clear()
+    _login(client, "admin2@test.co")
+    uid = _user("admin2@test.co")["id"]
+    res = client.post(
+        f"/system/users/{uid}/delete", data={"email": "admin2@test.co"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and "error=" in res.headers["location"]
+    assert _user("admin2@test.co") is not None
+
+
+def test_admin_delete_requires_admin_and_existing_user(client):
+    _login(client, "viewer@test.co")
+    uid = _user("archiver@test.co")["id"]
+    assert client.post(
+        f"/system/users/{uid}/delete", data={"email": "archiver@test.co"}
+    ).status_code == 403
+    client.cookies.clear()
+    _login(client, "boss@test.co", "bosspass1234")
+    assert client.post(
+        "/system/users/9999/delete", data={"email": "x@y.co"}
+    ).status_code == 404
+
+
 # ---- 사용자 관리 화면 ----
 
 
@@ -174,7 +340,8 @@ def test_users_page_admin_only(client):
     _login(client, "boss@test.co", "bosspass1234")
     res = client.get("/system/users")
     assert res.status_code == 200
-    for email in ("boss@test.co", "archiver@test.co", "viewer@test.co", "blocked@test.co"):
+    for email in ("boss@test.co", "archiver@test.co", "viewer@test.co",
+                  "blocked@test.co", "withdrawn@test.co"):
         assert email in res.text
     assert "최초 관리자" in res.text
     assert 'href="/system/users"' in client.get("/").text  # 헤더 메뉴 노출

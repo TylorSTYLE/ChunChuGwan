@@ -243,7 +243,7 @@ def users_view(request: Request, notice: str = "", error: str = ""):
             "users": users,
             "invites": invites,
             "me_id": me["id"] if me else None,
-            "roles": db.ROLES,
+            "roles": db.ASSIGNABLE_ROLES,
             "invitable_roles": db.INVITABLE_ROLES,
             "role_labels": db.ROLE_LABELS,
             "mail_enabled": config.mail_enabled(),
@@ -260,9 +260,13 @@ def _users_redirect(*, notice: str = "", error: str = "") -> RedirectResponse:
 
 @router.post("/users/{user_id}/role")
 def users_set_role(request: Request, user_id: int, role: str = Form(...)):
-    """사용자 권한 변경. 최초 관리자는 변경 불가, 차단 시 세션 즉시 무효화."""
-    if role not in db.ROLES:
-        raise HTTPException(400, t(request, "알 수 없는 역할: {role}", role=repr(role)))
+    """사용자 권한 변경. 최초 관리자는 변경 불가, 차단 시 세션 즉시 무효화.
+
+    탈퇴(withdrawn)는 본인 탈퇴로만 진입하므로 부여할 수 없고, 탈퇴한
+    계정의 권한도 되돌릴 수 없다 — 계정 정보 삭제 후 재가입/초대가 경로다.
+    """
+    if role not in db.ASSIGNABLE_ROLES:
+        raise HTTPException(400, t(request, "부여할 수 없는 역할: {role}", role=repr(role)))
     with db.connect() as conn:
         target = db.get_user_by_id(conn, user_id)
         if target is None:
@@ -271,12 +275,49 @@ def users_set_role(request: Request, user_id: int, role: str = Form(...)):
             return _users_redirect(
                 error=t(request, "최초 관리자의 권한은 변경할 수 없습니다.")
             )
+        if target["role"] == "withdrawn":
+            return _users_redirect(
+                error=t(request,
+                        "탈퇴한 계정의 권한은 변경할 수 없습니다 — 계정 정보를 삭제하세요.")
+            )
         db.set_role(conn, user_id, role)
         if role == "blocked":
             db.delete_user_sessions(conn, user_id)
     return _users_redirect(
         notice=t(request, "{email} 권한을 '{label}'(으)로 변경했습니다.",
                  email=target["email"], label=t(request, db.ROLE_LABELS[role]))
+    )
+
+
+@router.post("/users/{user_id}/delete")
+def users_delete(request: Request, user_id: int, email: str = Form("")):
+    """계정 정보 삭제 (하드 삭제) — 실수 방지로 대상 이메일 입력을 요구한다.
+
+    세션·OIDC 연결·패스키까지 일괄 삭제되어 같은 이메일로 다시 가입하거나
+    초대할 수 있게 된다. 최초 관리자와 본인 계정은 삭제할 수 없다.
+    """
+    me = request.state.user
+    with db.connect() as conn:
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, t(request, "사용자 없음"))
+        if target["is_founder"]:
+            return _users_redirect(
+                error=t(request, "최초 관리자는 삭제할 수 없습니다.")
+            )
+        if me is not None and target["id"] == me["id"]:
+            return _users_redirect(
+                error=t(request, "본인 계정은 여기서 삭제할 수 없습니다.")
+            )
+        if email.strip().lower() != target["email"].lower():
+            return _users_redirect(
+                error=t(request, "확인 이메일이 일치하지 않습니다.")
+            )
+        db.delete_user(conn, target["id"])
+    return _users_redirect(
+        notice=t(request,
+                 "{email} 계정 정보를 삭제했습니다. 같은 이메일로 다시 가입하거나 "
+                 "초대할 수 있습니다.", email=target["email"])
     )
 
 

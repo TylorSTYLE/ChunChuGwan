@@ -608,7 +608,7 @@ def test_account_page_links_2fa_settings(client):
 
 
 def test_account_page_danger_zone_only_for_non_admin(client):
-    """위험 영역(계정 삭제)은 관리자가 아닌 계정에만 보인다."""
+    """위험 영역(계정 탈퇴)은 관리자가 아닌 계정에만 보인다."""
     signup(client)
     assert "위험 영역" in client.get("/settings/account").text
     client.cookies.clear()
@@ -618,70 +618,73 @@ def test_account_page_danger_zone_only_for_non_admin(client):
     )
     admin_page = client.get("/settings/account").text
     assert "위험 영역" not in admin_page
-    assert "/settings/account/delete" not in admin_page
+    assert "/settings/account/withdraw" not in admin_page
 
 
-def test_delete_account(client):
+def test_withdraw_account(client):
+    """탈퇴 — 계정 정보는 남고 권한이 탈퇴로 바뀌며 전 세션이 무효화된다."""
     signup(client)
     with db.connect() as conn:
         uid = db.get_user_by_email(conn, "a@b.co")["id"]
         other_token = auth.issue_session(conn, uid)  # 다른 기기의 세션
     res = client.post(
-        "/settings/account/delete", data={"password": "12345678"},
+        "/settings/account/withdraw", data={"password": "12345678"},
         follow_redirects=False,
     )
     assert res.status_code == 303
     assert res.headers["location"] == "/login"
     with db.connect() as conn:
-        assert db.get_user_by_email(conn, "a@b.co") is None
+        user = db.get_user_by_email(conn, "a@b.co")
+        assert user is not None and user["role"] == "withdrawn"
         assert auth.resolve_session(conn, other_token) is None
         assert conn.execute(
             "SELECT COUNT(*) c FROM sessions WHERE user_id = ?", (uid,)
         ).fetchone()["c"] == 0
-    # 삭제 후에는 인증이 풀린다
+    # 탈퇴 후에는 인증이 풀리고, 다시 로그인할 수 없다
     assert client.get("/", follow_redirects=False).status_code in (302, 303)
+    res = client.post("/login", data={"email": "a@b.co", "password": "12345678"})
+    assert res.status_code == 403 and "탈퇴한 계정" in res.text
+    # 같은 이메일 재가입도 막힌다 (계정 정보가 남아 있는 동안)
+    assert signup(client).status_code == 400
 
 
-def test_delete_account_rejects_wrong_password(client):
+def test_withdraw_account_rejects_wrong_password(client):
     signup(client)
-    res = client.post("/settings/account/delete", data={"password": "wrongpass"})
+    res = client.post("/settings/account/withdraw", data={"password": "wrongpass"})
     assert res.status_code == 401
     with db.connect() as conn:
-        assert db.get_user_by_email(conn, "a@b.co") is not None
+        assert db.get_user_by_email(conn, "a@b.co")["role"] != "withdrawn"
 
 
-def test_delete_account_rejects_admin(client):
+def test_withdraw_account_rejects_admin(client):
     client.post(
         "/login", data={"email": "admin@test.co", "password": "adminpass123"},
         follow_redirects=False,
     )
     res = client.post(
-        "/settings/account/delete", data={"password": "adminpass123"}
+        "/settings/account/withdraw", data={"password": "adminpass123"}
     )
     assert res.status_code == 403
     with db.connect() as conn:
-        assert db.get_user_by_email(conn, "admin@test.co") is not None
+        assert db.get_user_by_email(conn, "admin@test.co")["role"] == "admin"
 
 
-def test_delete_account_sso_only_confirms_email(client):
+def test_withdraw_account_sso_only_confirms_email(client):
     """SSO 전용 계정은 패스워드가 없으므로 이메일 입력으로 확인한다."""
     with db.connect() as conn:
         uid = db.create_user(conn, "sso@b.co")  # password_hash NULL = SSO 전용
         db.create_identity(conn, uid, "authentik", "sub-1")
         token = auth.issue_session(conn, uid)
     client.cookies.set(config.SESSION_COOKIE, token)
-    bad = client.post("/settings/account/delete", data={"confirm": "other@b.co"})
+    bad = client.post("/settings/account/withdraw", data={"confirm": "other@b.co"})
     assert bad.status_code == 400
     res = client.post(
-        "/settings/account/delete", data={"confirm": "SSO@b.co"},
+        "/settings/account/withdraw", data={"confirm": "SSO@b.co"},
         follow_redirects=False,
     )
     assert res.status_code == 303
     with db.connect() as conn:
-        assert db.get_user_by_email(conn, "sso@b.co") is None
-        assert conn.execute(
-            "SELECT COUNT(*) c FROM identities WHERE user_id = ?", (uid,)
-        ).fetchone()["c"] == 0
+        assert db.get_user_by_email(conn, "sso@b.co")["role"] == "withdrawn"
 
 
 def test_display_name_migration_adds_column(tmp_db):

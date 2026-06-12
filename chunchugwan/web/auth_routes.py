@@ -135,6 +135,12 @@ def login(
                            t(request, "차단된 계정입니다. 관리자에게 문의하세요.")),
                 status_code=403,
             )
+        if user["role"] == "withdrawn":
+            return templates.TemplateResponse(
+                request, "login.html",
+                _login_ctx(conn, next, email, t(request, "탈퇴한 계정입니다.")),
+                status_code=403,
+            )
         if user["totp_secret"] is not None or db.count_passkeys(conn, user["id"]) > 0:
             # 2단계: TOTP/패스키 확인 전까지는 pending 세션 (짧은 수명)
             token = auth.issue_session(
@@ -487,19 +493,21 @@ def change_password(
     return RedirectResponse(url="/settings/account?ok=password", status_code=303)
 
 
-@router.post("/settings/account/delete", response_class=HTMLResponse)
-def delete_account(
+@router.post("/settings/account/withdraw", response_class=HTMLResponse)
+def withdraw_account(
     request: Request, password: str = Form(""), confirm: str = Form("")
 ):
-    """본인 계정 삭제 (관리자 불가). 세션 탈취 방어를 위해 재확인을 요구한다.
+    """본인 계정 탈퇴 (관리자 불가). 세션 탈취 방어를 위해 재확인을 요구한다.
 
     패스워드 계정은 패스워드 재입력, SSO 전용 계정은 이메일 입력으로 확인한다.
+    탈퇴는 권한을 탈퇴 상태로 바꾸고 전 세션을 무효화한다 — 계정 정보는
+    남아 재가입이 막히며, 삭제는 관리자가 사용자 관리에서 수행한다.
     """
     user = request.state.user
     if user["role"] == "admin":
         return templates.TemplateResponse(
             request, "account.html",
-            _account_ctx(user, error=t(request, "관리자 계정은 삭제할 수 없습니다.")),
+            _account_ctx(user, error=t(request, "관리자 계정은 탈퇴할 수 없습니다.")),
             status_code=403,
         )
     if user["password_hash"] is not None:
@@ -516,7 +524,7 @@ def delete_account(
             status_code=400,
         )
     with db.connect() as conn:
-        db.delete_user(conn, user["id"])
+        db.withdraw_user(conn, user["id"])
     res = RedirectResponse(url="/login", status_code=303)
     res.delete_cookie(config.SESSION_COOKIE)
     return res
@@ -598,8 +606,11 @@ def oidc_callback(
 
     with db.connect() as conn:
         user_id = _link_oidc_user(request, conn, claims)
-        if db.get_user_by_id(conn, user_id)["role"] == "blocked":
+        role = db.get_user_by_id(conn, user_id)["role"]
+        if role == "blocked":
             raise HTTPException(403, t(request, "차단된 계정입니다. 관리자에게 문의하세요."))
+        if role == "withdrawn":
+            raise HTTPException(403, t(request, "탈퇴한 계정입니다."))
         # SSO 는 IdP 의 2FA 를 신뢰 — 바로 active 세션
         token = auth.issue_session(conn, user_id)
     return _login_redirect(token, st["redirect_to"])
