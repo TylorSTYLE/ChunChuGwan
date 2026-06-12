@@ -159,6 +159,41 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
+    <h4>{{ _("사이트 아카이브 설정") }}</h4>
+    <form method="post" action="/system/crawl-settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1">
+      <p>
+        {{ _("사이트 전체 아카이브의 기본 옵션과 실패 페이지의 재시도 대기 시간을 설정합니다. 기본 옵션은 새 크롤 등록 시의 초깃값이고(등록할 때 변경 가능), 재시도 대기는 진행 중인 크롤에도 즉시 적용됩니다. 대기 횟수 + 1 이 페이지당 최대 시도 횟수입니다.") }}
+      </p>
+      <label class="mode">
+        {{ _("최대 페이지 수") }}
+        <input type="number" name="crawl_max_pages" required style="width:6em; margin-left:6px"
+               value="{{ crawl_defaults['max_pages'] }}" min="1" max="{{ crawl_limits['max_pages'] }}">
+      </label>
+      <label class="mode">
+        {{ _("최대 깊이") }}
+        <input type="number" name="crawl_max_depth" required style="width:6em; margin-left:6px"
+               value="{{ crawl_defaults['max_depth'] }}" min="0" max="{{ crawl_limits['max_depth'] }}">
+      </label>
+      <label class="mode">
+        {{ _("페이지 간 간격(초)") }}
+        <input type="number" name="crawl_delay" required style="width:6em; margin-left:6px"
+               value="{{ crawl_defaults['delay_seconds'] }}"
+               min="{{ crawl_limits['min_delay'] }}" max="{{ crawl_limits['max_delay'] }}">
+      </label>
+      <label class="mode">
+        {{ _("실패 재시도 대기(초, 쉼표 구분)") }}
+        <input type="text" name="crawl_retry_backoff" required style="margin-left:6px"
+               value="{{ crawl_retry_backoff }}" placeholder="300, 900">
+        — {{ _("페이지당 최대 {n}회 시도", n=crawl_max_attempts) }}
+      </label>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="sys-card">
     <h4>{{ _("API 키") }}</h4>
     <p>
       {{ _("외부 소프트웨어가 /api/v1 REST API 에 접근할 때 쓰는 키를 발급·폐기합니다. 키마다 보기/아카이브 권한과 만료를 설정합니다.") }}

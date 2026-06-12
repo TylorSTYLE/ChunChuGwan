@@ -32,6 +32,9 @@
       <td class="mono">{{ _("최대 페이지 수") }} {{ crawl['max_pages'] }} ·
           {{ _("최대 깊이") }} {{ crawl['max_depth'] }} ·
           {{ _("페이지 간 간격(초)") }} {{ crawl['delay_seconds'] }}</td></tr>
+    <tr><th>{{ _("실패 재시도") }}</th>
+      <td class="mono">{{ retry_backoff_labels | join(" → ") }}
+        <span class="muted">— {{ _("대기 후 재시도, 페이지당 최대 {n}회 시도 (시스템 화면에서 설정)", n=max_attempts) }}</span></td></tr>
     <tr><th>{{ _("등록 시각") }}</th><td>{{ crawl['created_at'] | ts }}</td></tr>
     {% if crawl['finished_at'] %}
     <tr><th>{{ _("종료 시각") }}</th><td>{{ crawl['finished_at'] | ts }}</td></tr>

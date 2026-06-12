@@ -180,6 +180,144 @@ def test_goto_missing_shows_original_link(client):
     assert 'href="https://example.com/docs/none"' in res.text
 
 
+def test_archive_form_uses_settings_defaults(client):
+    """크롤 옵션 폼의 초깃값은 시스템 설정의 기본값이다."""
+    with db.connect() as conn:
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY, "42")
+        db.set_setting(conn, db.CRAWL_DEFAULT_DELAY_KEY, "11")
+    res = client.get("/archive/new")
+    assert 'name="crawl_max_pages" value="42"' in res.text
+    assert 'name="crawl_delay" value="11"' in res.text
+
+
+def test_post_archive_site_with_interval_registers_schedule(client):
+    """사이트 아카이브 + 주기 선택 → 크롤과 크롤 스케줄이 함께 등록된다."""
+    res = client.post(
+        "/archive",
+        data={
+            "url": "example.com/docs/", "site": "on",
+            "crawl_max_pages": "30", "crawl_max_depth": "2", "crawl_delay": "10",
+            "interval": "86400", "run_at": "09:00",
+        },
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"] == "/crawls/1"
+    with db.connect() as conn:
+        sched = db.get_crawl_schedule(conn, "https://example.com/docs/")
+    assert sched is not None
+    assert sched["interval_seconds"] == 86400 and sched["run_at_time"] == "09:00"
+    # 크롤 옵션이 스케줄에도 그대로 저장된다
+    assert sched["max_pages"] == 30 and sched["max_depth"] == 2
+    assert sched["delay_seconds"] == 10
+
+
+def test_post_archive_site_without_interval_has_no_schedule(client):
+    client.post(
+        "/archive", data={"url": "example.com/docs/", "site": "on", "interval": "0"},
+        follow_redirects=False,
+    )
+    with db.connect() as conn:
+        assert db.list_crawl_schedules(conn) == []
+
+
+def test_schedules_page_lists_crawl_schedule(client):
+    crawler.set_crawl_schedule("https://example.com/docs/", 12 * 3600, max_pages=20)
+    res = client.get("/schedules")
+    assert res.status_code == 200
+    assert "사이트 아카이브" in res.text
+    assert "https://example.com/docs/" in res.text
+    assert "20 · 5 · 5s" in res.text  # 옵션 (페이지·깊이·간격)
+
+
+def test_crawl_schedule_change_interval_and_delete(client):
+    sched = crawler.set_crawl_schedule("https://example.com/docs/", 3600, max_pages=20)
+    res = client.post(
+        f"/crawl-schedules/{sched['id']}", data={"interval": "86400"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        updated = db.get_crawl_schedule_by_id(conn, sched["id"])
+    assert updated["interval_seconds"] == 86400
+    assert updated["max_pages"] == 20  # 옵션은 유지
+
+    res = client.post(
+        f"/crawl-schedules/{sched['id']}/next-run",
+        data={"next_run": "2099-01-02T03:04", "tz_offset": "0"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        updated = db.get_crawl_schedule_by_id(conn, sched["id"])
+    assert updated["next_run_at"] == "2099-01-02T03:04:00+00:00"
+
+    res = client.post(
+        f"/crawl-schedules/{sched['id']}/delete", follow_redirects=False
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.get_crawl_schedule_by_id(conn, sched["id"]) is None
+    # 없는 스케줄은 404
+    assert client.post(f"/crawl-schedules/{sched['id']}/delete").status_code == 404
+
+
+def test_crawl_detail_shows_retry_backoff(client):
+    """크롤 진행 화면에 실패 재시도 대기(시스템 설정)가 표시된다."""
+    with db.connect() as conn:
+        db.set_setting(conn, db.CRAWL_RETRY_BACKOFF_KEY, "60,120")
+    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    res = client.get(f"/crawls/{crawl['id']}")
+    assert "실패 재시도" in res.text
+    assert "1분 → 2분" in res.text
+    assert "최대 3회 시도" in res.text
+
+
+def test_system_crawl_settings_saved(client):
+    res = client.post(
+        "/system/crawl-settings",
+        data={
+            "crawl_max_pages": "50", "crawl_max_depth": "3",
+            "crawl_delay": "7", "crawl_retry_backoff": "60, 120",
+        },
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert "notice=" in res.headers["location"]
+    with db.connect() as conn:
+        assert crawler.crawl_defaults(conn) == {
+            "max_pages": 50, "max_depth": 3, "delay_seconds": 7,
+        }
+        assert crawler.retry_backoff(conn) == (60, 120)
+    # 시스템 화면에 현재 값이 보인다
+    res = client.get("/system")
+    assert 'value="50"' in res.text
+    assert 'value="60, 120"' in res.text
+
+
+def test_system_crawl_settings_rejects_bad_values(client):
+    res = client.post(
+        "/system/crawl-settings",
+        data={
+            "crawl_max_pages": "0", "crawl_max_depth": "3",
+            "crawl_delay": "7", "crawl_retry_backoff": "60",
+        },
+        follow_redirects=False,
+    )
+    assert "error=" in res.headers["location"]
+    res = client.post(
+        "/system/crawl-settings",
+        data={
+            "crawl_max_pages": "50", "crawl_max_depth": "3",
+            "crawl_delay": "7", "crawl_retry_backoff": "abc",
+        },
+        follow_redirects=False,
+    )
+    assert "error=" in res.headers["location"]
+    with db.connect() as conn:
+        assert db.get_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY) is None
+
+
 def test_goto_normalizes_url(client):
     """리졸버는 정규화된 URL 로 조회한다 (트래킹 파라미터 제거 등)."""
     url = "https://example.com/docs/a"

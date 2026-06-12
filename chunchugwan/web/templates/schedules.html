@@ -4,9 +4,9 @@
 {% block content %}
 <style>
 /* URL 컬럼이 내용 길이대로 과점하지 않도록 폭 제한 — 긴 URL 은 줄바꿈 */
-#schedules th:first-child { width: 35%; }
+#schedules th:first-child, #crawl-schedules th:first-child { width: 35%; }
 /* 주기·실행 시각·버튼은 한 줄 유지 */
-#schedules td:not(:first-child) { white-space: nowrap; }
+#schedules td:not(:first-child), #crawl-schedules td:not(:first-child) { white-space: nowrap; }
 </style>
 <div class="toolbar">
   <h2 style="margin:0">{{ _("자동 재아카이빙") }}</h2>
@@ -15,6 +15,7 @@
   <input type="text" id="q" placeholder="{{ _('URL 필터…') }}" autocomplete="off">
 </div>
 
+<h3>{{ _("페이지") }}</h3>
 {% if not items %}
 <p class="muted">{{ _("등록된 자동 재아카이빙이 없습니다. 페이지 타임라인에서 주기를 설정하세요.") }}</p>
 {% else %}
@@ -62,11 +63,58 @@
 </table>
 {% endif %}
 
+<h3>{{ _("사이트 아카이브") }}</h3>
+{% if not crawl_items %}
+<p class="muted">{{ _("등록된 사이트 아카이브 스케줄이 없습니다. 새 아카이빙에서 '사이트 전체 아카이브'와 주기를 함께 선택하세요.") }}</p>
+{% else %}
+<table id="crawl-schedules">
+  <thead>
+    <tr>
+      <th>{{ _("시작 URL") }}</th><th>{{ _("옵션 (페이지·깊이·간격)") }}</th>
+      <th>{{ _("주기") }}</th><th>{{ _("다음 실행") }}</th><th>{{ _("마지막 실행") }}</th>
+      {% if can_archive %}<th></th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+  {% for it in crawl_items %}
+    {% set s = it['row'] %}
+    <tr data-url="{{ s['start_url']|lower }}">
+      <td class="mono">{{ s['start_url'] }}</td>
+      <td class="mono">{{ s['max_pages'] }} · {{ s['max_depth'] }} · {{ s['delay_seconds'] }}s</td>
+      <td class="mono">{{ it['label'] }}</td>
+      <td class="mono">{{ s['next_run_at'] | ts }}</td>
+      <td class="mono">{{ s['last_run_at'] | ts }}</td>
+      {% if can_archive %}
+      <td>
+        <form class="inline" method="post" action="/crawl-schedules/{{ s['id'] }}"
+              style="display:inline-flex; gap:6px">
+          {{ interval_field(selected=s['interval_seconds'], run_at=s['run_at_time']) }}
+          <button type="submit">{{ _("주기 변경") }}</button>
+        </form>
+        <form class="inline" method="post" action="/crawl-schedules/{{ s['id'] }}/next-run"
+              style="display:inline-flex; gap:6px">
+          <input type="hidden" name="tz_offset" class="tz-offset" value="0">
+          <input type="datetime-local" name="next_run" required class="next-run-input"
+                 data-utc="{{ s['next_run_at'] }}" title="{{ _('브라우저 로컬 시간 기준') }}">
+          <button type="submit">{{ _("다음 실행 변경") }}</button>
+        </form>
+        <form class="inline" method="post" action="/crawl-schedules/{{ s['id'] }}/delete"
+              onsubmit="return confirm({{ (s['start_url'] ~ '\n\n' ~ _('사이트 아카이브 스케줄을 해제합니다. 저장된 스냅샷과 진행 중인 크롤은 그대로 남습니다.'))|tojson }})">
+          <button type="submit" class="danger">{{ _("해제") }}</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 {% if can_archive %}{{ interval_field_js() }}{% endif %}
 <script>
 document.getElementById('q')?.addEventListener('input', (e) => {
   const q = e.target.value.toLowerCase();
-  document.querySelectorAll('#schedules tbody tr').forEach((tr) => {
+  document.querySelectorAll('#schedules tbody tr, #crawl-schedules tbody tr').forEach((tr) => {
     tr.style.display = tr.dataset.url.includes(q) ? '' : 'none';
   });
 });

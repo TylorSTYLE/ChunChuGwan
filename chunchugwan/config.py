@@ -39,6 +39,8 @@ DOCUMENT_FETCH_TIMEOUT_SECONDS = 30
 TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")
 
 # ---- 사이트 전체 아카이브 (crawler.py) ----
+# CRAWL_DEFAULT_* 와 CRAWL_RETRY_BACKOFF_SECONDS 는 시스템 설정(settings 테이블,
+# 대시보드 시스템 화면)으로 오버라이드된다 — crawler.crawl_defaults / retry_backoff 참조.
 CRAWL_DEFAULT_MAX_PAGES = 100
 CRAWL_MAX_PAGES_LIMIT = 2000
 CRAWL_DEFAULT_MAX_DEPTH = 5
@@ -46,8 +48,10 @@ CRAWL_MAX_DEPTH_LIMIT = 20
 CRAWL_DEFAULT_DELAY_SECONDS = 5      # 페이지 간 최소 간격 (대상 서버 부담 방지)
 CRAWL_MIN_DELAY_SECONDS = 1
 CRAWL_MAX_DELAY_SECONDS = 3600
-CRAWL_MAX_ATTEMPTS = 3               # 페이지당 최대 시도 횟수
-CRAWL_RETRY_BACKOFF_SECONDS = (300, 900)   # 1·2차 실패 후 재시도 대기
+CRAWL_RETRY_BACKOFF_SECONDS = (300, 900)   # n차 실패 후 재시도 대기 — 최대 시도 = 길이 + 1
+CRAWL_RETRY_BACKOFF_MIN_SECONDS = 10       # 재시도 대기 항목별 허용 범위 (설정 검증용)
+CRAWL_RETRY_BACKOFF_MAX_SECONDS = 86400
+CRAWL_RETRY_BACKOFF_MAX_STEPS = 5          # 대기 항목 수 한도 — 최대 시도 6회
 CRAWL_STALE_CLAIM_SECONDS = 600      # 이보다 오래된 in_progress 는 중단으로 보고 복구
 CRAWLER_POLL_SECONDS = 2             # serve 크롤러 폴링 간격
 

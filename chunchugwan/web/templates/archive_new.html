@@ -28,7 +28,8 @@
     {{ _("사이트 전체 아카이브") }}
   </label>
   <div id="crawl-section" style="display:none">
-    <span class="hint">{{ _("같은 호스트에서 시작 URL 의 경로 프리픽스 이하 페이지를 링크를 따라가며 차례로 아카이빙합니다. 페이지 간 간격을 두어 대상 서버에 부담을 주지 않고, 실패한 페이지는 잠시 후 자동 재시도됩니다.") }}</span>
+    <span class="hint">{{ _("같은 호스트에서 시작 URL 의 경로 프리픽스 이하 페이지를 링크를 따라가며 차례로 아카이빙합니다. 페이지 간 간격을 두어 대상 서버에 부담을 주지 않고, 실패한 페이지는 잠시 후 자동 재시도됩니다.") }}
+      {{ _("주기를 선택하면 같은 옵션으로 사이트 전체를 주기적으로 다시 수집합니다 (스케줄 화면에서 변경/해제).") }}</span>
     <div class="crawl-options" style="margin-top:8px">
       <label>{{ _("최대 페이지 수") }}
         <input type="number" name="crawl_max_pages" value="{{ crawl_defaults['max_pages'] }}"
@@ -52,13 +53,12 @@
 </form>
 {{ interval_field_js() }}
 <script>
-/* 사이트 전체 아카이브 체크 시 크롤 옵션을 펴고, 페이지 단위 기능인
-   자동 재아카이빙 주기는 숨긴다 (서버는 site 체크 시 주기를 무시한다) */
+/* 사이트 전체 아카이브 체크 시 크롤 옵션을 편다. 자동 재아카이빙 주기는
+   두 경우 모두 쓰인다 — 페이지는 페이지 스케줄, 사이트는 크롤 스케줄로 등록 */
 (function () {
   var check = document.getElementById("site-checkbox");
   function apply() {
     document.getElementById("crawl-section").style.display = check.checked ? "" : "none";
-    document.getElementById("interval-section").style.display = check.checked ? "none" : "";
   }
   check.addEventListener("change", apply);
   apply();

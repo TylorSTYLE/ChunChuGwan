@@ -46,7 +46,13 @@
       <td class="mono muted">{{ it['domain'] }}</td>
       <td class="num">{{ it['done'] }}{% if it['total'] != it['done'] %} <span class="muted">/ {{ it['total'] }}</span>{% endif %}</td>
       <td class="mono">{{ it['activity_at'] | ts }}</td>
-      <td><span class="muted">-</span></td>
+      <td>
+        {% if it['schedule'] %}
+        <span class="mono">{{ it['schedule'] }}</span>
+        {% else %}
+        <span class="muted">-</span>
+        {% endif %}
+      </td>
       <td>
         {% if it['status'] == 'running' %}
         <span class="badge running">{{ _("진행 중") }}</span>

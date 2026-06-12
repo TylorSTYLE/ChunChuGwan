@@ -270,13 +270,19 @@ def schedule_remove(url: str) -> None:
 
 @schedule.command("run")
 def schedule_run() -> None:
-    """기한이 된 스케줄을 한 번 실행 (cron 용 — serve 중에는 자동 실행됨)."""
+    """기한이 된 스케줄을 한 번 실행 (cron 용 — serve 중에는 자동 실행됨).
+
+    크롤 스케줄도 함께 새 크롤로 등록한다 — 등록된 크롤의 페이지 처리는
+    `wccg crawl run` (또는 serve 의 크롤러)이 맡는다.
+    """
     results = scheduler.run_due()
-    if not results:
+    crawl_steps = crawler.run_due_schedules()
+    if not results and not crawl_steps:
         click.echo("실행할 스케줄이 없습니다.")
         return
     for r in results:
         click.echo(f"{r.url} — {r.status}" + (f" ({r.error})" if r.error else ""))
+    _echo_crawl_schedule_steps(crawl_steps)
 
 
 @main.group()
@@ -290,25 +296,42 @@ _CRAWL_STATUS_LABELS = {
 }
 
 
+_CRAWL_OPTION_KWARGS: list[tuple[str, dict]] = [
+    ("--max-pages", dict(
+        default=None, type=int,
+        help=f"수집할 최대 페이지 수 (1 ~ {config.CRAWL_MAX_PAGES_LIMIT}, "
+             "기본: 시스템 설정)",
+    )),
+    ("--max-depth", dict(
+        default=None, type=int,
+        help=f"시작 URL 로부터의 최대 링크 깊이 (0 ~ {config.CRAWL_MAX_DEPTH_LIMIT}, "
+             "기본: 시스템 설정)",
+    )),
+    ("--delay", dict(
+        default=None, type=int,
+        help="페이지 간 최소 간격(초) — 대상 서버 부담 방지 (기본: 시스템 설정)",
+    )),
+]
+
+
+def _crawl_options(fn):
+    """crawl add / crawl schedule add 공용 옵션 데코레이터."""
+    for name, kwargs in reversed(_CRAWL_OPTION_KWARGS):
+        fn = click.option(name, **kwargs)(fn)
+    return fn
+
+
 @crawl.command("add")
 @click.argument("url")
-@click.option(
-    "--max-pages", default=config.CRAWL_DEFAULT_MAX_PAGES, show_default=True,
-    help=f"수집할 최대 페이지 수 (1 ~ {config.CRAWL_MAX_PAGES_LIMIT})",
-)
-@click.option(
-    "--max-depth", default=config.CRAWL_DEFAULT_MAX_DEPTH, show_default=True,
-    help=f"시작 URL 로부터의 최대 링크 깊이 (0 ~ {config.CRAWL_MAX_DEPTH_LIMIT})",
-)
-@click.option(
-    "--delay", default=config.CRAWL_DEFAULT_DELAY_SECONDS, show_default=True,
-    help="페이지 간 최소 간격(초) — 대상 서버 부담 방지",
-)
+@_crawl_options
 @click.option(
     "--no-wait", is_flag=True,
     help="등록만 하고 종료 — 실행은 serve 의 크롤러가 큐를 소비",
 )
-def crawl_add(url: str, max_pages: int, max_depth: int, delay: int, no_wait: bool) -> None:
+def crawl_add(
+    url: str, max_pages: int | None, max_depth: int | None,
+    delay: int | None, no_wait: bool,
+) -> None:
     """사이트 전체 아카이브를 등록하고 (기본) 완료될 때까지 실행한다."""
     try:
         row = crawler.start_crawl(
@@ -320,7 +343,8 @@ def crawl_add(url: str, max_pages: int, max_depth: int, delay: int, no_wait: boo
     click.echo(
         f"크롤 #{row['id']} 등록: {row['start_url']} "
         f"(범위 {row['scope_host']}{row['scope_path']}, "
-        f"최대 {max_pages}페이지 · 깊이 {max_depth} · 간격 {delay}s)"
+        f"최대 {row['max_pages']}페이지 · 깊이 {row['max_depth']} · "
+        f"간격 {row['delay_seconds']}s)"
     )
     if no_wait:
         return
@@ -359,14 +383,27 @@ def crawl_list() -> None:
         )
 
 
+def _echo_crawl_schedule_steps(steps: list[crawler.ScheduleStep]) -> int:
+    """크롤 스케줄 실행 결과 출력 — 등록된 크롤 수 반환 (deferred 는 조용히 넘어간다)."""
+    started = 0
+    for s in steps:
+        if s.status == "started":
+            started += 1
+            click.echo(f"크롤 스케줄 실행: {s.start_url} → 크롤 #{s.crawl_id}")
+        elif s.status == "error":
+            click.echo(f"크롤 스케줄 실패: {s.start_url} ({s.error})")
+    return started
+
+
 @crawl.command("run")
 def crawl_run() -> None:
     """기한이 된 크롤 페이지를 처리하고 종료 (cron 용 — serve 중에는 자동 실행됨).
 
-    크롤마다 페이지 간 간격이 강제되므로 한 번 실행에 크롤당 한 페이지꼴로
-    처리된다. 간격보다 짧은 주기의 cron 으로 돌리면 큐가 계속 소비된다.
+    기한이 된 크롤 스케줄도 함께 새 크롤로 등록한다. 크롤마다 페이지 간
+    간격이 강제되므로 한 번 실행에 크롤당 한 페이지꼴로 처리된다. 간격보다
+    짧은 주기의 cron 으로 돌리면 큐가 계속 소비된다.
     """
-    ran = 0
+    ran = _echo_crawl_schedule_steps(crawler.run_due_schedules())
     while True:
         step = crawler.process_next()
         if step is None:
@@ -379,6 +416,77 @@ def crawl_run() -> None:
             click.echo(f"크롤 #{step.crawl_id} 완료")
     if ran == 0:
         click.echo("처리할 크롤 페이지가 없습니다.")
+
+
+@crawl.group("schedule")
+def crawl_schedule() -> None:
+    """사이트 전체 아카이브의 주기적 재실행 관리 (최소 1시간 ~ 최대 1개월)."""
+
+
+@crawl_schedule.command("add")
+@click.argument("url")
+@click.option(
+    "--every", required=True,
+    help="반복 주기 — 1h ~ 1mo (예: 1h, 90m, 12h, 3d, 1w, 1mo)",
+)
+@click.option(
+    "--at", "at_time", default=None,
+    help="실행 시각 HH:MM (서버 로컬 시간) — 1일 단위 주기에서만",
+)
+@_crawl_options
+def crawl_schedule_add(
+    url: str, every: str, at_time: str | None,
+    max_pages: int | None, max_depth: int | None, delay: int | None,
+) -> None:
+    """시작 URL에 주기적 사이트 아카이브를 등록/변경한다. 다음 실행은 지금 + 주기."""
+    try:
+        seconds = scheduler.parse_interval(every)
+        row = crawler.set_crawl_schedule(
+            url, seconds, run_at=at_time,
+            max_pages=max_pages, max_depth=max_depth, delay_seconds=delay,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    click.echo(
+        f"크롤 스케줄 등록: {row['start_url']} — "
+        f"{scheduler.format_schedule(seconds, at_time)} 주기 "
+        f"(최대 {row['max_pages']}페이지 · 깊이 {row['max_depth']} · "
+        f"간격 {row['delay_seconds']}s), 다음 실행 {row['next_run_at']}"
+    )
+
+
+@crawl_schedule.command("list")
+def crawl_schedule_list() -> None:
+    """등록된 크롤 스케줄 목록 (다음 실행이 가까운 순)."""
+    with db.connect() as conn:
+        rows = db.list_crawl_schedules(conn)
+    if not rows:
+        click.echo("등록된 크롤 스케줄이 없습니다.")
+        return
+    click.echo(
+        f"{'주기':<14}  {'다음 실행':<25}  {'마지막 실행':<25}  "
+        f"{'옵션(페이지·깊이·간격)':<22}  시작 URL"
+    )
+    for r in rows:
+        label = scheduler.format_schedule(r["interval_seconds"], r["run_at_time"])
+        options = f"{r['max_pages']}·{r['max_depth']}·{r['delay_seconds']}s"
+        click.echo(
+            f"{label:<14}  {r['next_run_at']:<25}  {r['last_run_at'] or '-':<25}  "
+            f"{options:<22}  {r['start_url']}"
+        )
+
+
+@crawl_schedule.command("remove")
+@click.argument("url")
+def crawl_schedule_remove(url: str) -> None:
+    """시작 URL의 크롤 스케줄을 해제한다."""
+    try:
+        removed = crawler.remove_crawl_schedule(url)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    if not removed:
+        raise click.ClickException("등록된 크롤 스케줄이 없는 URL 입니다")
+    click.echo("크롤 스케줄 해제됨")
 
 
 def _fmt_mb(n: int) -> str:
