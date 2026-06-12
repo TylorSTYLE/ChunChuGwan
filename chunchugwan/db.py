@@ -1622,13 +1622,14 @@ def site_page_totals(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row:
 def list_site_snapshot_dirs(
     conn: sqlite3.Connection, site_id: int
 ) -> list[sqlite3.Row]:
-    """사이트 소속 스냅샷의 디렉토리 위치 (page_id, domain, slug, dir_name).
+    """사이트 소속 스냅샷의 시각·디렉토리 위치 (page_id, taken_at, domain, slug, dir_name).
 
-    사이트 상세가 페이지별·사이트 전체 저장 용량을 합산하는 데 쓴다.
+    사이트 상세가 페이지별·사이트 전체 저장 용량 합산과 최신 스냅샷의
+    타이틀 조회에 쓴다.
     """
     return conn.execute(
         """
-        SELECT s.page_id, p.domain, p.slug, s.dir_name
+        SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         WHERE p.site_id = ?
         """,

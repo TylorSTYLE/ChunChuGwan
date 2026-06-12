@@ -4,6 +4,8 @@
 <style>
 /* 사이트 컬럼이 내용 길이대로 과점하지 않도록 폭 제한 */
 #items th:first-child { width: 35%; }
+.site-title { font-size: 12px; max-width: 360px; overflow: hidden;
+              text-overflow: ellipsis; white-space: nowrap; }
 </style>
 {% if queued %}
 <div class="notice">{{ _("아카이빙이 백그라운드에서 시작되었습니다") }}: <span class="mono">{{ queued }}</span> — {{ _("완료되면 목록이 자동 갱신됩니다.") }}</div>
@@ -35,12 +37,15 @@
   </thead>
   <tbody>
   {% for it in items %}
-    <tr data-url="{{ it['site_key']|lower }}">
+    <tr data-url="{{ (it['site_key'] ~ ' ' ~ (it['title'] or ''))|lower }}">
       <td>
         {% if it['site_id'] %}
         <a href="/sites/{{ it['site_id'] }}" class="mono">{{ it['site_key'] }}</a>
         {% else %}
         <span class="mono">{{ it['site_key'] }}</span>
+        {% endif %}
+        {% if it['title'] %}
+        <div class="muted site-title" title="{{ it['title'] }}">{{ it['title'] }}</div>
         {% endif %}
       </td>
       <td class="num">{{ it['page_count'] or '-' }}</td>

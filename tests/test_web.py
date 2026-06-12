@@ -143,6 +143,18 @@ def test_site_pages_pagination(client, monkeypatch):
     assert url2 in client.get(f"/sites/{site['id']}?page=99").text
 
 
+def test_index_and_site_show_title(client):
+    """목록·사이트 상세에 사이트 타이틀(최신 스냅샷 meta.json title) 표시.
+
+    fixture 의 최신 스냅샷에는 meta.json 이 없으므로 직전 스냅샷의
+    타이틀로 폴백하는 것도 함께 검증한다.
+    """
+    assert "픽스처 글" in client.get("/archives").text
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert "픽스처 글" in client.get(f"/sites/{site['id']}").text
+
+
 def test_root_serves_dashboard(client):
     """첫 페이지(/)는 현황 화면이고, 목록은 /archives 에 있다."""
     res = client.get("/")

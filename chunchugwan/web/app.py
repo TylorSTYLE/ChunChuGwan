@@ -278,6 +278,33 @@ def _snapshot_dir_size(domain: str, slug: str, dir_name: str) -> int:
     return sum(f["bytes"] for f in storage.snapshot_files(snap_dir))
 
 
+def _snapshot_title(domain: str, slug: str, dir_name: str) -> str | None:
+    """스냅샷 meta.json 의 title (없거나 읽기 실패 시 None)."""
+    path = storage.page_dir(domain, slug) / dir_name / "meta.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("title") or None
+    except (OSError, ValueError):
+        return None
+
+
+# 사이트 타이틀 탐색 시 거슬러 올라가는 최신 스냅샷 수 한도
+_TITLE_LOOKBACK = 5
+
+
+def _site_title(snap_rows) -> str | None:
+    """사이트 스냅샷 중 최신 것부터 meta.json title 을 찾는다 (현재 타이틀).
+
+    오류 페이지 캡처 등 title 없는 스냅샷이 끼어도 직전 제목으로 폴백하되,
+    파일 IO 를 한정하기 위해 _TITLE_LOOKBACK 개까지만 본다.
+    """
+    recent = sorted(snap_rows, key=lambda r: r["taken_at"], reverse=True)
+    for row in recent[:_TITLE_LOOKBACK]:
+        title = _snapshot_title(row["domain"], row["slug"], row["dir_name"])
+        if title:
+            return title
+    return None
+
+
 @app.get("/archives", response_class=HTMLResponse)
 def index(request: Request, queued: str = "", error: str = "", notice: str = ""):
     """아카이브 목록 — 사이트(서브도메인) 단위 한 테이블.
@@ -293,10 +320,13 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
         snap_dirs = db.list_snapshot_dirs(conn)
     # 사이트별 저장 용량 — 스냅샷은 불변이므로 디렉토리 용량을 그대로 합산
     site_bytes: dict[int, int] = {}
+    site_snaps: dict[int, list] = {}
     for row in snap_dirs:
         site_bytes[row["site_id"]] = site_bytes.get(row["site_id"], 0) + (
             _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
         )
+        site_snaps.setdefault(row["site_id"], []).append(row)
+    titles = {sid: _site_title(rows) for sid, rows in site_snaps.items()}
     active_keys = {storage.site_key(u) for u in active}
     items: list[dict] = [
         {
@@ -304,6 +334,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
             "page_count": s["page_count"], "snapshot_count": s["snapshot_count"],
             "crawl_count": s["crawl_count"], "schedule_count": s["schedule_count"],
             "bytes": site_bytes.get(s["id"], 0),
+            "title": titles.get(s["id"]),
             "activity_at": s["last_activity_at"] or None,
             "crawling": s["running_crawl_count"] > 0,
             "active": s["site_key"] in active_keys or s["running_crawl_count"] > 0,
@@ -316,7 +347,8 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
         {
             "site_id": None, "site_key": key,
             "page_count": 0, "snapshot_count": 0, "crawl_count": 0,
-            "schedule_count": 0, "bytes": 0, "activity_at": t, "crawling": False,
+            "schedule_count": 0, "bytes": 0, "title": None,
+            "activity_at": t, "crawling": False,
             "active": True,
         }
         for u, t in sorted(active.items())
@@ -419,6 +451,7 @@ def site_view(
         request, "site.html",
         {
             "site": site, "pages": pages, "crawls": crawls,
+            "site_title": _site_title(snap_dirs),
             "schedule_labels": schedule_labels,
             "crawl_schedules": crawl_schedule_labels,
             "page_count": totals["page_count"],
