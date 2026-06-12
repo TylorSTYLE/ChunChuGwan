@@ -119,6 +119,22 @@ _EN: dict[str, str] = {
     "크롤 없음": "Crawl not found",
     "잘못된 URL": "Invalid URL",
     "원본 페이지 열기 (라이브 사이트)": "Open original page (live site)",
+    "실패 재시도": "Retry on failure",
+    "대기 후 재시도, 페이지당 최대 {n}회 시도 (시스템 화면에서 설정)":
+        "wait then retry, up to {n} attempts per page (configured on the System screen)",
+    # ---- 사이트 아카이브 스케줄 (크롤 스케줄) ----
+    "시작 URL": "Start URL",
+    "옵션 (페이지·깊이·간격)": "Options (pages · depth · delay)",
+    "등록된 사이트 아카이브 스케줄이 없습니다. 새 아카이빙에서 '사이트 전체 아카이브'와 주기를 함께 선택하세요.":
+        "No site archive schedules registered. On New archive, check 'Archive "
+        "entire site' and pick an interval.",
+    "사이트 아카이브 스케줄을 해제합니다. 저장된 스냅샷과 진행 중인 크롤은 그대로 남습니다.":
+        "This removes the site archive schedule. Saved snapshots and any "
+        "running crawl are kept.",
+    "주기를 선택하면 같은 옵션으로 사이트 전체를 주기적으로 다시 수집합니다 (스케줄 화면에서 변경/해제).":
+        "If you pick an interval, the entire site is re-crawled periodically "
+        "with the same options (change or remove it on the Schedules screen).",
+    "스케줄 없음": "Schedule not found",
     # ---- 역할 라벨 (db.ROLE_LABELS) ----
     "관리자": "Admin",
     "아카이브": "Archiver",
@@ -348,6 +364,19 @@ _EN: dict[str, str] = {
         "Import complete [{mode}]: pages +{pages}, snapshots +{snapshots} "
         "(skipped {skipped}), checks +{checks}",
     "알 수 없는 모드: {mode}": "Unknown mode: {mode}",
+    # ---- 사이트 아카이브 설정 (system) ----
+    "사이트 아카이브 설정": "Site archive settings",
+    "사이트 전체 아카이브의 기본 옵션과 실패 페이지의 재시도 대기 시간을 설정합니다. 기본 옵션은 새 크롤 등록 시의 초깃값이고(등록할 때 변경 가능), 재시도 대기는 진행 중인 크롤에도 즉시 적용됩니다. 대기 횟수 + 1 이 페이지당 최대 시도 횟수입니다.":
+        "Configures the default options for site-wide archives and the retry "
+        "wait times for failed pages. The defaults are the initial values when "
+        "registering a new crawl (changeable at registration); retry waits "
+        "apply immediately, including to running crawls. The number of waits "
+        "+ 1 is the maximum attempts per page.",
+    "실패 재시도 대기(초, 쉼표 구분)": "Retry waits on failure (s, comma-separated)",
+    "페이지당 최대 {n}회 시도": "up to {n} attempts per page",
+    "사이트 아카이브 설정을 저장했습니다.": "Site archive settings saved.",
+    "재시도 대기는 쉼표로 구분한 초 단위 숫자 목록이어야 합니다 (예: 300, 900)":
+        "Retry waits must be a comma-separated list of seconds (e.g. 300, 900)",
     # ---- 가입 설정 (system) ----
     "가입 설정": "Sign-up settings",
     "로그인 화면의 회원 가입 기능과 가입 계정의 초기 권한을 설정합니다 (SSO 자동 생성 계정에도 적용). '권한없음'으로 가입한 사용자는 관리자가 사용자 관리에서 권한을 부여할 때까지 서비스를 이용할 수 없습니다.":
@@ -609,6 +638,9 @@ _EN: dict[str, str] = {
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다
 _EN[f"패스워드는 {config.MIN_PASSWORD_LENGTH}자 이상이어야 합니다."] = (
     f"The password must be at least {config.MIN_PASSWORD_LENGTH} characters."
+)
+_EN[f"재시도 대기는 1개 이상 {config.CRAWL_RETRY_BACKOFF_MAX_STEPS}개 이하여야 합니다"] = (
+    f"There must be between 1 and {config.CRAWL_RETRY_BACKOFF_MAX_STEPS} retry waits"
 )
 _EN[f"이름은 {MAX_DISPLAY_NAME_LENGTH}자 이하여야 합니다."] = (
     f"The name must be at most {MAX_DISPLAY_NAME_LENGTH} characters."

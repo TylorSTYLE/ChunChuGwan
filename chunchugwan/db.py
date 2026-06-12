@@ -82,6 +82,20 @@ CREATE TABLE IF NOT EXISTS crawl_pages (
 );
 CREATE INDEX IF NOT EXISTS idx_crawl_pages_status ON crawl_pages(crawl_id, status);
 
+CREATE TABLE IF NOT EXISTS crawl_schedules (
+    id               INTEGER PRIMARY KEY,
+    start_url        TEXT NOT NULL UNIQUE,  -- 정규화된 시작 URL
+    max_pages        INTEGER NOT NULL,      -- 실행 시 새 크롤에 적용할 옵션
+    max_depth        INTEGER NOT NULL,
+    delay_seconds    INTEGER NOT NULL,
+    interval_seconds INTEGER NOT NULL,      -- schedules 와 같은 범위 (scheduler 가 검증)
+    next_run_at      TEXT NOT NULL,         -- ISO 8601 UTC
+    last_run_at      TEXT,
+    run_at_time      TEXT,                  -- 'HH:MM' 서버 로컬 시간 (1일 단위 주기 전용)
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_crawl_schedules_next ON crawl_schedules(next_run_at);
+
 CREATE TABLE IF NOT EXISTS archive_logs (
     id           INTEGER PRIMARY KEY,
     url          TEXT NOT NULL,          -- 정규화 URL (정규화 실패 시 입력 원본)
@@ -921,6 +935,125 @@ def find_crawl_snapshot(
     return row["snapshot_id"] if row else None
 
 
+def find_running_crawl(conn: sqlite3.Connection, start_url: str) -> sqlite3.Row | None:
+    """같은 시작 URL 의 진행 중(running) 크롤 조회 (없으면 None).
+
+    크롤 스케줄이 이전 실행이 끝나기 전에 새 크롤을 쌓지 않기 위해 쓴다.
+    """
+    return conn.execute(
+        "SELECT * FROM crawls WHERE start_url = ? AND status = 'running' "
+        "ORDER BY id DESC LIMIT 1",
+        (start_url,),
+    ).fetchone()
+
+
+# ---- 사이트 아카이브 스케줄 (주기적 재크롤) ----
+
+
+def get_crawl_schedule(conn: sqlite3.Connection, start_url: str) -> sqlite3.Row | None:
+    """시작 URL 의 크롤 스케줄 row 조회 (없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM crawl_schedules WHERE start_url = ?", (start_url,)
+    ).fetchone()
+
+
+def get_crawl_schedule_by_id(
+    conn: sqlite3.Connection, schedule_id: int
+) -> sqlite3.Row | None:
+    """id 로 크롤 스케줄 row 조회 (없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM crawl_schedules WHERE id = ?", (schedule_id,)
+    ).fetchone()
+
+
+def list_crawl_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """전체 크롤 스케줄 목록 (다음 실행이 가까운 순)."""
+    return conn.execute(
+        "SELECT * FROM crawl_schedules ORDER BY next_run_at, id"
+    ).fetchall()
+
+
+def list_due_crawl_schedules(
+    conn: sqlite3.Connection, now_iso: str
+) -> list[sqlite3.Row]:
+    """다음 실행 시각이 지난 크롤 스케줄 목록 (ISO 8601 UTC 문자열 비교)."""
+    return conn.execute(
+        "SELECT * FROM crawl_schedules WHERE next_run_at <= ? ORDER BY next_run_at, id",
+        (now_iso,),
+    ).fetchall()
+
+
+def upsert_crawl_schedule(
+    conn: sqlite3.Connection,
+    start_url: str,
+    *,
+    max_pages: int,
+    max_depth: int,
+    delay_seconds: int,
+    interval_seconds: int,
+    next_run_at: str,
+    run_at_time: str | None = None,
+) -> None:
+    """시작 URL 의 크롤 스케줄 등록 (이미 있으면 옵션·주기·다음 실행 시각 교체)."""
+    conn.execute(
+        """
+        INSERT INTO crawl_schedules
+            (start_url, max_pages, max_depth, delay_seconds,
+             interval_seconds, next_run_at, run_at_time, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(start_url) DO UPDATE SET
+            max_pages = excluded.max_pages,
+            max_depth = excluded.max_depth,
+            delay_seconds = excluded.delay_seconds,
+            interval_seconds = excluded.interval_seconds,
+            next_run_at = excluded.next_run_at,
+            run_at_time = excluded.run_at_time
+        """,
+        (start_url, max_pages, max_depth, delay_seconds,
+         interval_seconds, next_run_at, run_at_time, _utcnow()),
+    )
+
+
+def set_crawl_schedule_next_run(
+    conn: sqlite3.Connection, schedule_id: int, next_run_at: str
+) -> bool:
+    """크롤 스케줄의 다음 실행 시각만 변경. 등록이 없었으면 False."""
+    cur = conn.execute(
+        "UPDATE crawl_schedules SET next_run_at = ? WHERE id = ?",
+        (next_run_at, schedule_id),
+    )
+    return cur.rowcount == 1
+
+
+def delete_crawl_schedule(conn: sqlite3.Connection, schedule_id: int) -> bool:
+    """크롤 스케줄 해제. 등록이 없었으면 False."""
+    cur = conn.execute("DELETE FROM crawl_schedules WHERE id = ?", (schedule_id,))
+    return cur.rowcount == 1
+
+
+def claim_crawl_schedule(
+    conn: sqlite3.Connection,
+    schedule_id: int,
+    observed_next_run_at: str,
+    *,
+    last_run_at: str,
+    next_run_at: str,
+) -> bool:
+    """크롤 스케줄 실행 클레임 — next_run_at 이 관측값일 때만 갱신 (원자적).
+
+    serve 폴링 스레드와 cron(`wccg schedule run`)이 같은 기한을 동시에
+    봐도 한쪽만 True 를 받아 크롤을 등록한다.
+    """
+    cur = conn.execute(
+        """
+        UPDATE crawl_schedules SET last_run_at = ?, next_run_at = ?
+        WHERE id = ? AND next_run_at = ?
+        """,
+        (last_run_at, next_run_at, schedule_id, observed_next_run_at),
+    )
+    return cur.rowcount == 1
+
+
 # ---- 사용자 ----
 # 주의: SCHEMA 는 CREATE IF NOT EXISTS 라 새 테이블 추가는 자동이지만
 # 기존 테이블에 컬럼을 추가하는 변경은 별도 마이그레이션이 필요하다.
@@ -1152,6 +1285,13 @@ def delete_expired_invites(conn: sqlite3.Connection) -> None:
 
 SIGNUP_ENABLED_KEY = "signup_enabled"            # 'on' | 'off' (기본 on)
 SIGNUP_DEFAULT_ROLE_KEY = "signup_default_role"  # SIGNUP_ROLES 중 하나 (기본 pending)
+
+# 사이트 전체 아카이브 기본 옵션·실패 재시도 대기. 값 해석과 범위 검증은
+# crawler.crawl_defaults / crawler.retry_backoff 가 맡는다 (오염 시 config 기본값).
+CRAWL_DEFAULT_MAX_PAGES_KEY = "crawl_default_max_pages"
+CRAWL_DEFAULT_MAX_DEPTH_KEY = "crawl_default_max_depth"
+CRAWL_DEFAULT_DELAY_KEY = "crawl_default_delay_seconds"
+CRAWL_RETRY_BACKOFF_KEY = "crawl_retry_backoff_seconds"  # 쉼표 구분 초 목록 (예: '300,900')
 
 # 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한.
 # 기본은 권한없음(pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.

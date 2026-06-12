@@ -208,11 +208,12 @@ def test_failure_schedules_backoff_retry(archive_env):
 
 def test_failure_exhausts_attempts_then_fails(archive_env):
     row = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    max_attempts = len(config.CRAWL_RETRY_BACKOFF_SECONDS) + 1
 
     def boom(url, source, link_rewriter):
         raise RuntimeError("계속 실패")
 
-    for _ in range(config.CRAWL_MAX_ATTEMPTS):
+    for _ in range(max_attempts):
         unblock_crawl(row["id"])
         with db.connect() as conn:  # 재시도 대기 해제
             conn.execute(
@@ -224,7 +225,7 @@ def test_failure_exhausts_attempts_then_fails(archive_env):
     with db.connect() as conn:
         page = db.list_crawl_pages(conn, row["id"])[0]
         assert page["status"] == "failed"
-        assert page["attempts"] == config.CRAWL_MAX_ATTEMPTS
+        assert page["attempts"] == max_attempts
         assert db.get_crawl(conn, row["id"])["status"] == "done"
 
 
@@ -308,3 +309,176 @@ def test_snapshot_delete_clears_crawl_reference(archive_env):
         assert db.delete_snapshot(conn, snap_id)
     with db.connect() as conn:
         assert db.list_crawl_pages(conn, row["id"])[0]["snapshot_id"] is None
+
+
+# ---- 시스템 설정 (크롤 기본값 / 재시도 대기) ----
+
+
+def test_start_crawl_uses_settings_defaults(archive_env):
+    with db.connect() as conn:
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY, "30")
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_DEPTH_KEY, "2")
+        db.set_setting(conn, db.CRAWL_DEFAULT_DELAY_KEY, "9")
+    row = crawler.start_crawl("https://example.com/docs/")
+    assert row["max_pages"] == 30
+    assert row["max_depth"] == 2
+    assert row["delay_seconds"] == 9
+    # 명시한 옵션은 설정보다 우선한다
+    row = crawler.start_crawl("https://example.com/blog/", max_pages=7)
+    assert row["max_pages"] == 7 and row["max_depth"] == 2
+
+
+def test_crawl_defaults_fall_back_on_bad_values(archive_env):
+    with db.connect() as conn:
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY, "0")     # 범위 밖
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_DEPTH_KEY, "abc")  # 숫자 아님
+        defaults = crawler.crawl_defaults(conn)
+    assert defaults["max_pages"] == config.CRAWL_DEFAULT_MAX_PAGES
+    assert defaults["max_depth"] == config.CRAWL_DEFAULT_MAX_DEPTH
+    assert defaults["delay_seconds"] == config.CRAWL_DEFAULT_DELAY_SECONDS
+
+
+def test_parse_backoff():
+    assert crawler.parse_backoff("300, 900") == (300, 900)
+    assert crawler.parse_backoff("60") == (60,)
+    with pytest.raises(ValueError):
+        crawler.parse_backoff("abc")
+    with pytest.raises(ValueError):
+        crawler.parse_backoff("")
+    with pytest.raises(ValueError):
+        crawler.parse_backoff("5")        # 항목 하한 미만
+    with pytest.raises(ValueError):
+        crawler.parse_backoff("100000")   # 항목 상한 초과
+    with pytest.raises(ValueError):
+        crawler.parse_backoff("60,60,60,60,60,60")  # 항목 수 초과
+
+
+def test_retry_backoff_setting_overrides_default(archive_env):
+    with db.connect() as conn:
+        assert crawler.retry_backoff(conn) == config.CRAWL_RETRY_BACKOFF_SECONDS
+        db.set_setting(conn, db.CRAWL_RETRY_BACKOFF_KEY, "60,120")
+        assert crawler.retry_backoff(conn) == (60, 120)
+        db.set_setting(conn, db.CRAWL_RETRY_BACKOFF_KEY, "망가진 값")
+        assert crawler.retry_backoff(conn) == config.CRAWL_RETRY_BACKOFF_SECONDS
+
+
+def test_failure_uses_configured_backoff(archive_env):
+    """대기 1개 설정 → 최대 2회 시도 후 failed."""
+    with db.connect() as conn:
+        db.set_setting(conn, db.CRAWL_RETRY_BACKOFF_KEY, "60")
+    row = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+
+    def boom(url, source, link_rewriter):
+        raise RuntimeError("연결 실패")
+
+    assert crawler.process_next(archive_fn=boom).status == "retry"
+    unblock_crawl(row["id"])
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE crawl_pages SET next_attempt_at = NULL WHERE crawl_id = ?",
+            (row["id"],),
+        )
+    step = crawler.process_next(archive_fn=boom)
+    assert step.status == "failed"
+    with db.connect() as conn:
+        assert db.list_crawl_pages(conn, row["id"])[0]["attempts"] == 2
+
+
+# ---- 사이트 아카이브 스케줄 ----
+
+
+def make_schedule_due(schedule_id: int) -> None:
+    """크롤 스케줄의 다음 실행 시각을 과거로 (테스트 시간 진행 대용)."""
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE crawl_schedules SET next_run_at = '2000-01-01T00:00:00+00:00' "
+            "WHERE id = ?", (schedule_id,),
+        )
+
+
+def test_set_crawl_schedule_and_remove(archive_env):
+    row = crawler.set_crawl_schedule(
+        "example.com/docs/intro?utm_source=x", 12 * 3600, max_pages=20
+    )
+    assert row["start_url"] == "https://example.com/docs/intro"  # 정규화
+    assert row["interval_seconds"] == 12 * 3600
+    assert row["max_pages"] == 20
+    assert row["max_depth"] == config.CRAWL_DEFAULT_MAX_DEPTH  # 설정 기본값
+    assert row["next_run_at"] > datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # 같은 URL 재등록은 교체 (UNIQUE)
+    again = crawler.set_crawl_schedule("https://example.com/docs/intro", 86400, run_at="09:00")
+    assert again["id"] == row["id"]
+    assert again["interval_seconds"] == 86400 and again["run_at_time"] == "09:00"
+    with db.connect() as conn:
+        assert len(db.list_crawl_schedules(conn)) == 1
+
+    assert crawler.remove_crawl_schedule("https://example.com/docs/intro")
+    assert not crawler.remove_crawl_schedule("https://example.com/docs/intro")
+
+
+def test_set_crawl_schedule_validates(archive_env):
+    with pytest.raises(ValueError):
+        crawler.set_crawl_schedule("https://example.com/", 60)  # 주기 < 1시간
+    with pytest.raises(ValueError):
+        crawler.set_crawl_schedule("https://example.com/", 3600, run_at="09:00")  # 1일 단위 아님
+    with pytest.raises(ValueError):
+        crawler.set_crawl_schedule("https://example.com/", 3600, max_pages=0)
+
+
+def test_run_due_schedules_starts_crawl(archive_env):
+    sched = crawler.set_crawl_schedule(
+        "https://example.com/docs/", 3600, max_pages=5, max_depth=1, delay_seconds=2
+    )
+    assert crawler.run_due_schedules() == []  # 아직 기한 전
+    make_schedule_due(sched["id"])
+
+    results = crawler.run_due_schedules()
+    assert len(results) == 1 and results[0].status == "started"
+    with db.connect() as conn:
+        crawl = db.get_crawl(conn, results[0].crawl_id)
+        updated = db.get_crawl_schedule_by_id(conn, sched["id"])
+    # 스케줄의 옵션이 새 크롤에 그대로 적용된다
+    assert crawl["start_url"] == "https://example.com/docs/"
+    assert crawl["max_pages"] == 5 and crawl["max_depth"] == 1
+    assert crawl["delay_seconds"] == 2 and crawl["source"] == "schedule"
+    # 다음 실행 시각·마지막 실행이 갱신된다
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    assert updated["next_run_at"] > now
+    assert updated["last_run_at"] is not None
+
+
+def test_run_due_schedules_defers_while_crawl_running(archive_env):
+    crawler.start_crawl("https://example.com/docs/", delay_seconds=1)  # running
+    sched = crawler.set_crawl_schedule("https://example.com/docs/", 3600)
+    make_schedule_due(sched["id"])
+
+    results = crawler.run_due_schedules()
+    assert len(results) == 1 and results[0].status == "deferred"
+    with db.connect() as conn:
+        # next_run_at 유지 — 진행 중 크롤이 끝난 뒤 폴링에서 시작된다
+        updated = db.get_crawl_schedule_by_id(conn, sched["id"])
+        assert updated["next_run_at"] == "2000-01-01T00:00:00+00:00"
+        assert len(db.list_crawls(conn)) == 1  # 새 크롤이 쌓이지 않는다
+        db.cancel_crawl(conn, db.list_crawls(conn)[0]["id"])
+
+    results = crawler.run_due_schedules()
+    assert results[0].status == "started"
+
+
+def test_claim_crawl_schedule_is_atomic(archive_env):
+    """다른 프로세스가 먼저 클레임했으면 (관측값 불일치) 등록하지 않는다."""
+    sched = crawler.set_crawl_schedule("https://example.com/docs/", 3600)
+    make_schedule_due(sched["id"])
+    with db.connect() as conn:
+        assert db.claim_crawl_schedule(
+            conn, sched["id"], "2000-01-01T00:00:00+00:00",
+            last_run_at="2026-01-01T00:00:00+00:00",
+            next_run_at="2099-01-01T00:00:00+00:00",
+        )
+        # 같은 관측값으로 재클레임은 실패
+        assert not db.claim_crawl_schedule(
+            conn, sched["id"], "2000-01-01T00:00:00+00:00",
+            last_run_at="2026-01-01T00:00:00+00:00",
+            next_run_at="2099-01-01T00:00:00+00:00",
+        )

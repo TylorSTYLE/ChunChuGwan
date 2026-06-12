@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
 from .. import auth, backup as backup_mod
-from .. import config, db, mailer, resources
+from .. import config, crawler, db, mailer, resources
 from . import permissions
 from .i18n import t
 from .templating import filesize, templates
@@ -55,6 +55,8 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         }
         signup_enabled = db.signup_enabled(conn)
         signup_default_role = db.signup_default_role(conn)
+        crawl_defaults = crawler.crawl_defaults(conn)
+        crawl_backoff = crawler.retry_backoff(conn)
     return templates.TemplateResponse(
         request, "system.html",
         {
@@ -63,6 +65,15 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "signup_default_role": signup_default_role,
             "signup_roles": db.SIGNUP_ROLES,
             "role_labels": db.ROLE_LABELS,
+            "crawl_defaults": crawl_defaults,
+            "crawl_retry_backoff": ", ".join(str(v) for v in crawl_backoff),
+            "crawl_max_attempts": len(crawl_backoff) + 1,
+            "crawl_limits": {
+                "max_pages": config.CRAWL_MAX_PAGES_LIMIT,
+                "max_depth": config.CRAWL_MAX_DEPTH_LIMIT,
+                "min_delay": config.CRAWL_MIN_DELAY_SECONDS,
+                "max_delay": config.CRAWL_MAX_DELAY_SECONDS,
+            },
             "archive_root": str(config.ARCHIVE_ROOT),
             "db_bytes": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
             "sites_bytes": _dir_bytes(config.SITES_DIR),
@@ -161,6 +172,34 @@ def system_settings(
         )
         db.set_setting(conn, db.SIGNUP_DEFAULT_ROLE_KEY, signup_default_role)
     return _system_redirect(notice=t(request, "가입 설정을 저장했습니다."))
+
+
+@router.post("/crawl-settings")
+def system_crawl_settings(
+    request: Request,
+    crawl_max_pages: int = Form(...),
+    crawl_max_depth: int = Form(...),
+    crawl_delay: int = Form(...),
+    crawl_retry_backoff: str = Form(...),
+):
+    """사이트 아카이브 설정 저장 — 크롤 기본 옵션과 실패 재시도 대기.
+
+    기본 옵션은 새 크롤 등록(웹 폼·CLI·크롤 스케줄)의 초깃값이고,
+    재시도 대기는 진행 중인 크롤에도 즉시 적용된다.
+    """
+    try:
+        crawler.validate_options(crawl_max_pages, crawl_max_depth, crawl_delay)
+        backoff = crawler.parse_backoff(crawl_retry_backoff)
+    except ValueError as e:
+        return _system_redirect(error=t(request, str(e)))
+    with db.connect() as conn:
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY, str(crawl_max_pages))
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_DEPTH_KEY, str(crawl_max_depth))
+        db.set_setting(conn, db.CRAWL_DEFAULT_DELAY_KEY, str(crawl_delay))
+        db.set_setting(
+            conn, db.CRAWL_RETRY_BACKOFF_KEY, ",".join(str(v) for v in backoff)
+        )
+    return _system_redirect(notice=t(request, "사이트 아카이브 설정을 저장했습니다."))
 
 
 @router.post("/restore")

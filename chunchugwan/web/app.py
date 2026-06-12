@@ -286,9 +286,14 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
         pages = db.list_pages(conn)
         schedules = db.list_schedules(conn)
         crawls = db.list_crawls(conn)
+        crawl_schedules = db.list_crawl_schedules(conn)
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
         for s in schedules
+    }
+    crawl_schedule_labels = {
+        s["start_url"]: i18n.interval_label(request, s["interval_seconds"])
+        for s in crawl_schedules
     }
     # 아직 pages 행이 없는 신규 URL 진행 건은 page_id 없는 행으로 보여준다
     known = {p["url"] for p in pages}
@@ -316,6 +321,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
             "domain": c["scope_host"] + c["scope_path"], "status": c["status"],
             "done": c["done_count"], "failed": c["failed_count"],
             "waiting": c["pending_count"], "total": c["total_count"],
+            "schedule": crawl_schedule_labels.get(c["start_url"]),
             "activity_at": c["finished_at"] or c["created_at"],
             "active": c["status"] == "running",
         }
@@ -559,21 +565,22 @@ def schedule_delete(
 
 @app.get("/schedules", response_class=HTMLResponse)
 def schedules_view(request: Request):
-    """자동 재아카이빙 목록 — 등록된 스케줄 현황과 주기 변경·해제 관리."""
+    """자동 재아카이빙 목록 — 페이지·사이트 아카이브 스케줄 현황과 변경·해제 관리."""
     with db.connect() as conn:
         rows = db.list_schedules(conn)
-    items = [
-        {
-            "row": s,
-            "label": i18n.schedule_label(
-                request, s["interval_seconds"], s["run_at_time"]
-            ),
-        }
-        for s in rows
-    ]
+        crawl_rows = db.list_crawl_schedules(conn)
+
+    def _label(s) -> str:
+        return i18n.schedule_label(request, s["interval_seconds"], s["run_at_time"])
+
+    items = [{"row": s, "label": _label(s)} for s in rows]
+    crawl_items = [{"row": s, "label": _label(s)} for s in crawl_rows]
     return templates.TemplateResponse(
         request, "schedules.html",
-        {"items": items, "interval_options": _SCHEDULE_OPTIONS},
+        {
+            "items": items, "crawl_items": crawl_items,
+            "interval_options": _SCHEDULE_OPTIONS,
+        },
     )
 
 
@@ -979,16 +986,19 @@ def archive_new_form(request: Request, error: str = "", url: str = ""):
     """새 아카이빙 등록 화면 — URL 입력 + 자동 재아카이빙 주기 선택.
 
     사이트 전체 아카이브 옵션(체크 시 크롤 옵션 노출)도 이 화면에서 받는다.
+    크롤 옵션의 초깃값은 시스템 설정의 기본값이다.
     """
     _require_archiver(request)
+    with db.connect() as conn:
+        defaults = crawler.crawl_defaults(conn)
     return templates.TemplateResponse(
         request, "archive_new.html",
         {
             "error": error, "url": url, "interval_options": _SCHEDULE_OPTIONS,
             "crawl_defaults": {
-                "max_pages": config.CRAWL_DEFAULT_MAX_PAGES,
-                "max_depth": config.CRAWL_DEFAULT_MAX_DEPTH,
-                "delay": config.CRAWL_DEFAULT_DELAY_SECONDS,
+                "max_pages": defaults["max_pages"],
+                "max_depth": defaults["max_depth"],
+                "delay": defaults["delay_seconds"],
             },
             "crawl_limits": {
                 "max_pages": config.CRAWL_MAX_PAGES_LIMIT,
@@ -1001,20 +1011,26 @@ def archive_new_form(request: Request, error: str = "", url: str = ""):
 
 
 def _archive_site(
-    request: Request, url: str, max_pages: str, max_depth: str, delay: str
+    request: Request, url: str, max_pages: str, max_depth: str, delay: str,
+    interval_seconds: int | None = None, run_at: str | None = None,
 ) -> RedirectResponse:
     """사이트 전체 아카이브 등록 — 크롤을 만들고 진행 화면으로 보낸다.
 
     실행은 크롤러 폴링 스레드가 큐를 소비하며 진행한다 (등록과 분리).
+    주기가 있으면 같은 옵션으로 크롤 스케줄도 등록한다 — 다음 실행은
+    지금 + 주기 (첫 실행은 방금 등록한 크롤).
     """
     try:
-        crawl = crawler.start_crawl(
-            url,
-            max_pages=int(max_pages or config.CRAWL_DEFAULT_MAX_PAGES),
-            max_depth=int(max_depth or config.CRAWL_DEFAULT_MAX_DEPTH),
-            delay_seconds=int(delay or config.CRAWL_DEFAULT_DELAY_SECONDS),
-            source="web",
-        )
+        options = {
+            "max_pages": int(max_pages) if max_pages else None,
+            "max_depth": int(max_depth) if max_depth else None,
+            "delay_seconds": int(delay) if delay else None,
+        }
+        crawl = crawler.start_crawl(url, **options, source="web")
+        if interval_seconds:
+            crawler.set_crawl_schedule(
+                url, interval_seconds, run_at=run_at, **options
+            )
     except ValueError as exc:
         params = urlencode(
             {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
@@ -1039,24 +1055,29 @@ def archive_new(
 ):
     """새 URL 아카이빙. 검증은 동기로, 캡처·주기 등록(interval>0)은 백그라운드로.
 
-    site 체크 시 사이트 전체 아카이브(크롤) 등록으로 분기한다 — 이때
-    자동 재아카이빙 주기는 페이지 단위 기능이므로 무시된다.
+    site 체크 시 사이트 전체 아카이브(크롤) 등록으로 분기한다 — 주기를
+    선택했으면 같은 옵션의 크롤 스케줄(주기적 재크롤)도 함께 등록된다.
     """
     _require_archiver(request)
-    if site:
-        return _archive_site(request, url, crawl_max_pages, crawl_max_depth, crawl_delay)
     try:
-        norm = storage.normalize_url(url)
         seconds = _interval_from_form(interval, custom_value, custom_unit)
         if seconds:
             scheduler.validate_interval(seconds)
             if run_at:
                 scheduler.validate_run_at(run_at, seconds)
+        if not site:
+            norm = storage.normalize_url(url)
     except ValueError as exc:
         params = urlencode(
             {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
         )
         return RedirectResponse(f"/archive/new?{params}", status_code=303)
+    if site:
+        return _archive_site(
+            request, url, crawl_max_pages, crawl_max_depth, crawl_delay,
+            interval_seconds=seconds or None,
+            run_at=(run_at or None) if seconds else None,
+        )
     _queue_archive(
         background, norm,
         interval_seconds=seconds or None, run_at=(run_at or None) if seconds else None,
@@ -1144,14 +1165,24 @@ def crawls_view():
 
 @app.get("/crawls/{crawl_id}", response_class=HTMLResponse)
 def crawl_view(request: Request, crawl_id: int):
-    """크롤 진행 화면 — 상태별 집계와 페이지 목록, 취소·재시도."""
+    """크롤 진행 화면 — 상태별 집계와 페이지 목록, 취소·재시도.
+
+    실패 재시도 대기(시스템 설정, 진행 중 크롤에도 적용)도 함께 보여준다.
+    """
     crawl = _load_crawl(request, crawl_id)
     with db.connect() as conn:
         counts = db.crawl_page_counts(conn, crawl_id)
         pages = db.list_crawl_pages(conn, crawl_id)
+        backoff = crawler.retry_backoff(conn)
     return templates.TemplateResponse(
         request, "crawl.html",
-        {"crawl": crawl, "counts": counts, "pages": pages},
+        {
+            "crawl": crawl, "counts": counts, "pages": pages,
+            "retry_backoff_labels": [
+                i18n.interval_label(request, s) for s in backoff
+            ],
+            "max_attempts": len(backoff) + 1,
+        },
     )
 
 
@@ -1182,6 +1213,73 @@ def crawl_retry(request: Request, crawl_id: int):
     with db.connect() as conn:
         db.retry_failed_crawl_pages(conn, crawl_id)
     return RedirectResponse(f"/crawls/{crawl_id}", status_code=303)
+
+
+# ---- 사이트 아카이브 스케줄 (주기적 재크롤) ----
+
+
+def _load_crawl_schedule(request: Request, schedule_id: int):
+    with db.connect() as conn:
+        sched = db.get_crawl_schedule_by_id(conn, schedule_id)
+    if sched is None:
+        raise HTTPException(404, t(request, "스케줄 없음"))
+    return sched
+
+
+@app.post("/crawl-schedules/{schedule_id}")
+def crawl_schedule_set(
+    request: Request,
+    schedule_id: int,
+    interval: str = Form(...),
+    custom_value: str = Form(""),
+    custom_unit: str = Form("h"),
+    run_at: str = Form(""),
+):
+    """크롤 스케줄 주기 변경 (크롤 옵션은 유지). admin/archiver 전용."""
+    _require_archiver(request)
+    sched = _load_crawl_schedule(request, schedule_id)
+    try:
+        seconds = _interval_from_form(interval, custom_value, custom_unit)
+        crawler.set_crawl_schedule(
+            sched["start_url"], seconds, run_at=run_at or None,
+            max_pages=sched["max_pages"], max_depth=sched["max_depth"],
+            delay_seconds=sched["delay_seconds"],
+        )
+    except ValueError as e:
+        raise HTTPException(400, t(request, str(e)))
+    return RedirectResponse("/schedules", status_code=303)
+
+
+@app.post("/crawl-schedules/{schedule_id}/next-run")
+def crawl_schedule_next_run(
+    request: Request,
+    schedule_id: int,
+    next_run: str = Form(...),
+    tz_offset: int = Form(0),
+):
+    """크롤 스케줄의 다음 실행 시각 변경 (시각 해석은 페이지 스케줄과 동일)."""
+    _require_archiver(request)
+    _load_crawl_schedule(request, schedule_id)
+    try:
+        dt = datetime.fromisoformat(next_run)
+    except ValueError:
+        raise HTTPException(400, t(request, "잘못된 시각 형식: {v}", v=next_run))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc) + timedelta(minutes=tz_offset)
+    try:
+        crawler.set_crawl_schedule_next_run(schedule_id, dt)
+    except ValueError as e:
+        raise HTTPException(400, t(request, str(e)))
+    return RedirectResponse("/schedules", status_code=303)
+
+
+@app.post("/crawl-schedules/{schedule_id}/delete")
+def crawl_schedule_delete(request: Request, schedule_id: int):
+    """크롤 스케줄 해제 — 저장된 스냅샷·진행 중 크롤은 그대로 남는다."""
+    _require_archiver(request)
+    sched = _load_crawl_schedule(request, schedule_id)
+    crawler.remove_crawl_schedule(sched["start_url"])
+    return RedirectResponse("/schedules", status_code=303)
 
 
 @app.get("/crawl/{crawl_id}/goto")

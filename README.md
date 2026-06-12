@@ -57,11 +57,25 @@ uv run wccg crawl add <url> --max-pages 50 --max-depth 3 --delay 10
 uv run wccg crawl add <url> --no-wait          # 등록만 (serve 의 크롤러가 실행)
 uv run wccg crawl list                         # 크롤 목록
 uv run wccg crawl run                          # 기한이 된 페이지 처리 (cron 용)
+uv run wccg crawl schedule add <url> --every 1w   # 주기적 사이트 재아카이빙 등록
+uv run wccg crawl schedule list                # 크롤 스케줄 목록 / remove <url> 로 해제
 ```
 
 - 페이지 간 최소 간격(`--delay`, 기본 5초)을 두어 대상 서버에 부담을 주지
-  않는다. 실패한 페이지는 백오프(5분 → 15분) 후 자동 재시도하고, 3회 초과
-  시 실패로 남는다 — 대시보드 진행 화면에서 일괄 재시도할 수 있다.
+  않는다. 실패한 페이지는 백오프(기본 5분 → 15분) 후 자동 재시도하고, 대기
+  횟수를 다 쓰면(기본 3회 시도) 실패로 남는다 — 대시보드 진행 화면에서 일괄
+  재시도할 수 있다.
+- 옵션 기본값(최대 페이지 수·깊이·간격)과 재시도 대기 시간은 대시보드
+  **시스템** 화면의 "사이트 아카이브 설정"에서 바꿀 수 있다. 재시도 대기는
+  쉼표로 구분한 초 목록(예: `300, 900`)이고 대기 횟수 + 1 이 페이지당 최대
+  시도 횟수다 — 진행 중인 크롤에도 즉시 적용된다.
+- 페이지 단위 스케줄처럼 사이트 전체도 주기 등록이 된다 (`crawl schedule`,
+  주기 1시간~1개월, `--at HH:MM` 지원). 기한이 되면 같은 옵션으로 새 크롤을
+  등록하며, 같은 URL 의 크롤이 아직 진행 중이면 끝난 뒤에 시작한다.
+  대시보드에서는 새 아카이빙 화면에서 "사이트 전체 아카이브" + 주기를 함께
+  선택하면 등록되고, 스케줄 화면(`/schedules`)에서 변경·해제한다.
+  cron 환경에서는 `wccg schedule run`(또는 `crawl run`)이 기한이 된 크롤
+  스케줄을 함께 등록한다.
 - 큐는 DB 에 있어 서버를 재시작해도 이어서 진행된다. `wccg serve` 가 떠
   있으면 크롤러 스레드가 큐를 자동 소비한다 (`WCCG_SCHEDULER=off` 면 cron
   에서 `wccg crawl run`).

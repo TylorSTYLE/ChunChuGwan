@@ -37,10 +37,12 @@ uv run wccg schedule add <url> --every 12h  # 주기적 재아카이빙 등록 (
 uv run wccg schedule add <url> --every 1d --at 09:00  # 1일 단위 주기는 실행 시각(서버 로컬) 지정 가능
 uv run wccg schedule next <url> <시각>       # 다음 실행 시각 변경 (ISO, 타임존 없으면 로컬)
 uv run wccg schedule list                # 스케줄 목록 / remove <url> 로 해제
-uv run wccg schedule run                 # 기한이 된 스케줄 1회 실행 (cron 용)
+uv run wccg schedule run                 # 기한이 된 스케줄 1회 실행 (cron 용, 크롤 스케줄 포함)
 uv run wccg crawl add <url>              # 사이트 전체 아카이브 (같은 호스트, 경로 프리픽스 이하)
 uv run wccg crawl add <url> --max-pages 50 --max-depth 3 --delay 10 [--no-wait]
 uv run wccg crawl list                   # 크롤 목록 / run 으로 기한 된 페이지 처리 (cron 용)
+uv run wccg crawl schedule add <url> --every 1w  # 주기적 사이트 재아카이빙 (--at·크롤 옵션 지정 가능)
+uv run wccg crawl schedule list          # 크롤 스케줄 목록 / remove <url> 로 해제
 uv run wccg serve                        # 대시보드 (127.0.0.1:8765)
 uv run wccg serve --host 0.0.0.0         # 외부 노출 (인증 켜진 상태에서만 허용)
 uv run wccg backup [dest]                # 전체 백업 tar.gz (DB·인증 포함)
@@ -129,7 +131,13 @@ archive/
 - `crawls` / `crawl_pages` — 사이트 전체 아카이브. 크롤(범위 host+path
   프리픽스, 옵션, 상태)과 페이지 큐(pending/in_progress/done/failed,
   시도 횟수·재시도 시각, 확인된 snapshot_id 참조). 큐가 DB 에 있어 재시작
-  후에도 이어지고, 클레임은 원자적 UPDATE 라 serve/CLI 동시 실행에 안전
+  후에도 이어지고, 클레임은 원자적 UPDATE 라 serve/CLI 동시 실행에 안전.
+  실패 재시도 대기·횟수는 `settings` 의 `crawl_retry_backoff_seconds` 기준
+- `crawl_schedules` — 사이트 전체 아카이브의 주기적 재실행 (시작 URL 별
+  크롤 옵션 + 주기 1시간~1개월·`run_at_time`). 기한이 되면 같은 옵션으로
+  새 크롤을 등록(source=schedule)하되, 같은 URL 의 크롤이 진행 중이면 끝날
+  때까지 미룬다. serve 크롤러 스레드와 `wccg schedule run`/`crawl run` 이
+  실행하며 next_run_at 갱신은 원자적 클레임이라 동시 실행에 안전
 - `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
   서버사이드 세션, OIDC state 1회용 기록). `users.role` 은
   admin(관리자)/archiver(아카이빙 가능)/viewer(보기 전용)/pending(권한없음 —
@@ -138,9 +146,14 @@ archive/
   `signup_default_role` (pending/viewer/archiver, 기본 pending — 관리자가
   사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
   관리자로 권한 변경 불가
-- `settings` — 대시보드에서 변경하는 key-value 런타임 설정. 현재 가입 설정
+- `settings` — 대시보드에서 변경하는 key-value 런타임 설정. 가입 설정
   (`signup_enabled` on/off 기본 on — off 면 `/signup` 차단 + 로그인 화면
-  가입 링크 숨김(초대 가입은 허용), `signup_default_role`)
+  가입 링크 숨김(초대 가입은 허용), `signup_default_role`)과 사이트 아카이브
+  설정 (`crawl_default_max_pages`/`crawl_default_max_depth`/
+  `crawl_default_delay_seconds` — 새 크롤 옵션 기본값,
+  `crawl_retry_backoff_seconds` — 실패 재시도 대기 쉼표 목록(초), 최대 시도
+  = 길이 + 1, 진행 중 크롤에도 즉시 적용. 해석·검증은
+  `crawler.crawl_defaults`/`retry_backoff`, 오염 시 config 기본값 폴백)
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
 - `api_keys` — 외부 소프트웨어용 API 키 (`/api/v1` REST API 인증).
   관리자만 발급, 모든 관리자가 공동 관리. 키마다 보기/아카이브 권한과
