@@ -57,7 +57,7 @@ def test_in_scope():
 
 
 def test_start_crawl_creates_queue(archive_env):
-    row = crawler.start_crawl("https://example.com/docs/intro", source="cli")
+    row, _ = crawler.start_crawl("https://example.com/docs/intro", source="cli")
     assert row["status"] == "running"
     assert row["scope_host"] == "example.com"
     assert row["scope_path"] == "/docs/"
@@ -65,6 +65,30 @@ def test_start_crawl_creates_queue(archive_env):
         pages = db.list_crawl_pages(conn, row["id"])
     assert [p["url"] for p in pages] == ["https://example.com/docs/intro"]
     assert pages[0]["status"] == "pending" and pages[0]["depth"] == 0
+
+
+def test_start_crawl_merges_into_running_crawl(archive_env):
+    """같은 시작 URL 의 크롤이 진행 중이면 새로 만들지 않고 병합한다."""
+    first, merged = crawler.start_crawl("https://example.com/docs/", max_pages=5)
+    assert not merged
+    again, merged = crawler.start_crawl("https://example.com/docs/", max_pages=9)
+    assert merged
+    assert again["id"] == first["id"]
+    assert again["max_pages"] == 5  # 기존 옵션 유지 — 이번 옵션은 버린다
+    with db.connect() as conn:
+        assert len(db.list_crawls(conn)) == 1
+    # 다른 시작 URL 은 병합되지 않는다 (범위가 같아도 시작 URL 기준)
+    other, merged = crawler.start_crawl("https://example.com/docs/intro")
+    assert not merged and other["id"] != first["id"]
+
+
+def test_start_crawl_after_finished_creates_new(archive_env):
+    """끝난(취소 포함) 크롤은 병합 대상이 아니다 — 재수집은 새 크롤."""
+    first, _ = crawler.start_crawl("https://example.com/docs/")
+    with db.connect() as conn:
+        db.cancel_crawl(conn, first["id"])
+    again, merged = crawler.start_crawl("https://example.com/docs/")
+    assert not merged and again["id"] != first["id"]
 
 
 def test_start_crawl_validates_options(archive_env):
@@ -101,7 +125,7 @@ def test_link_rewriter_maps_http_links_only():
 
 
 def test_process_next_enqueues_in_scope_links(archive_env):
-    row = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    row, _ = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
     calls = []
 
     def fake(url, source, link_rewriter):
@@ -139,7 +163,7 @@ def test_process_next_respects_delay_between_pages(archive_env):
 
 
 def test_process_next_respects_max_pages_and_depth(archive_env):
-    row = crawler.start_crawl(
+    row, _ = crawler.start_crawl(
         "https://example.com/docs/", max_pages=2, max_depth=1, delay_seconds=1
     )
 
@@ -170,7 +194,7 @@ def test_process_next_records_snapshot_for_unchanged(archive_env):
             dir_name="2026-06-01T00-00-00", content_hash="0" * 64,
             final_url=url, http_status=200, changed=1,
         )
-    row = crawler.start_crawl(url, delay_seconds=1)
+    row, _ = crawler.start_crawl(url, delay_seconds=1)
 
     def fake(u, source, link_rewriter):
         return fake_outcome(u, status="unchanged", snapshot_id=snap_id)
@@ -187,7 +211,7 @@ def test_process_next_records_snapshot_for_unchanged(archive_env):
 
 
 def test_failure_schedules_backoff_retry(archive_env):
-    row = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    row, _ = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
 
     def boom(url, source, link_rewriter):
         raise RuntimeError("연결 실패")
@@ -207,7 +231,7 @@ def test_failure_schedules_backoff_retry(archive_env):
 
 
 def test_failure_exhausts_attempts_then_fails(archive_env):
-    row = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    row, _ = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
     max_attempts = len(config.CRAWL_RETRY_BACKOFF_SECONDS) + 1
 
     def boom(url, source, link_rewriter):
@@ -230,7 +254,7 @@ def test_failure_exhausts_attempts_then_fails(archive_env):
 
 
 def test_retry_failed_reopens_crawl(archive_env):
-    row = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    row, _ = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
     with db.connect() as conn:
         conn.execute(
             "UPDATE crawl_pages SET status = 'failed', attempts = 3, error = 'x' "
@@ -253,7 +277,7 @@ def test_retry_failed_reopens_crawl(archive_env):
 
 
 def test_cancelled_crawl_is_not_processed(archive_env):
-    row = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    row, _ = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
     with db.connect() as conn:
         assert db.cancel_crawl(conn, row["id"])
     assert crawler.process_next(archive_fn=lambda *a, **k: fake_outcome("x")) is None
@@ -263,7 +287,7 @@ def test_cancelled_crawl_is_not_processed(archive_env):
 
 def test_claim_conflict_releases_page(archive_env):
     """진행 중 작업 레지스트리와 충돌하면 클레임을 반납한다."""
-    row = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    row, _ = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
     step = crawler.process_next(
         claim=lambda url: False, archive_fn=lambda *a, **k: fake_outcome("x")
     )
@@ -275,7 +299,7 @@ def test_claim_conflict_releases_page(archive_env):
 
 def test_stale_in_progress_recovered(archive_env):
     """중단된 프로세스가 남긴 in_progress 는 일정 시간 후 복구된다."""
-    row = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    row, _ = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
     stale = (
         datetime.now(timezone.utc)
         - timedelta(seconds=config.CRAWL_STALE_CLAIM_SECONDS + 60)
@@ -301,7 +325,7 @@ def test_snapshot_delete_clears_crawl_reference(archive_env):
             dir_name="2026-06-01T00-00-00", content_hash="0" * 64,
             final_url=url, http_status=200, changed=1,
         )
-    row = crawler.start_crawl(url, delay_seconds=1)
+    row, _ = crawler.start_crawl(url, delay_seconds=1)
     with db.connect() as conn:
         page = db.list_crawl_pages(conn, row["id"])[0]
         db.finish_crawl_page(conn, page["id"], snap_id)
@@ -319,12 +343,12 @@ def test_start_crawl_uses_settings_defaults(archive_env):
         db.set_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY, "30")
         db.set_setting(conn, db.CRAWL_DEFAULT_MAX_DEPTH_KEY, "2")
         db.set_setting(conn, db.CRAWL_DEFAULT_DELAY_KEY, "9")
-    row = crawler.start_crawl("https://example.com/docs/")
+    row, _ = crawler.start_crawl("https://example.com/docs/")
     assert row["max_pages"] == 30
     assert row["max_depth"] == 2
     assert row["delay_seconds"] == 9
     # 명시한 옵션은 설정보다 우선한다
-    row = crawler.start_crawl("https://example.com/blog/", max_pages=7)
+    row, _ = crawler.start_crawl("https://example.com/blog/", max_pages=7)
     assert row["max_pages"] == 7 and row["max_depth"] == 2
 
 
@@ -366,7 +390,7 @@ def test_failure_uses_configured_backoff(archive_env):
     """대기 1개 설정 → 최대 2회 시도 후 failed."""
     with db.connect() as conn:
         db.set_setting(conn, db.CRAWL_RETRY_BACKOFF_KEY, "60")
-    row = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    row, _ = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
 
     def boom(url, source, link_rewriter):
         raise RuntimeError("연결 실패")

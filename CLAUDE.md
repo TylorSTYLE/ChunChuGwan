@@ -132,6 +132,8 @@ archive/
   프리픽스, 옵션, 상태)과 페이지 큐(pending/in_progress/done/failed,
   시도 횟수·재시도 시각, 확인된 snapshot_id 참조). 큐가 DB 에 있어 재시작
   후에도 이어지고, 클레임은 원자적 UPDATE 라 serve/CLI 동시 실행에 안전.
+  같은 시작 URL 의 크롤이 진행 중이면 새 등록은 그 크롤로 자동 병합
+  (`start_crawl` 이 기존 크롤 + merged=True 반환, 새 옵션은 버림).
   실패 재시도 대기·횟수는 `settings` 의 `crawl_retry_backoff_seconds` 기준
 - `crawl_schedules` — 사이트 전체 아카이브의 주기적 재실행 (시작 URL 별
   크롤 옵션 + 주기 1시간~1개월·`run_at_time`). 기한이 되면 같은 옵션으로

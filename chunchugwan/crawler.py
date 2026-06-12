@@ -12,9 +12,11 @@ pipeline.archive_url 을 그대로 쓴다 (쓰기는 코어 모듈 원칙).
 - 실패는 백오프 후 재시도(대기 시간·횟수는 시스템 설정 retry_backoff,
   최대 시도 = 대기 목록 길이 + 1), 초과 시 failed 로 남기고 대시보드에서
   일괄 재시도할 수 있다.
+- 같은 시작 URL 의 크롤이 진행 중이면 새 등록은 그 크롤로 자동 병합된다
+  (start_crawl 이 기존 크롤을 반환) — 같은 사이트를 두 번 돌지 않는다.
 - 크롤 스케줄(crawl_schedules)은 기한이 되면 같은 옵션으로 새 크롤을
   등록한다 — run_due_schedules 참조. 같은 시작 URL 의 크롤이 진행 중이면
-  끝날 때까지 미룬다.
+  병합하지 않고 끝날 때까지 미룬다 (주기적 재수집이 건너뛰어지지 않게).
 - 캡처 시 page.html 의 앵커를 `/crawl/{id}/goto?url=...` 리졸버로 재작성해
   아카이브 안에서 링크 이동이 되게 한다 (뷰어 샌드박스의
   allow-top-navigation-by-user-activation 와 한 쌍 — web/app.py 보안 노트).
@@ -175,8 +177,14 @@ def start_crawl(
     max_depth: int | None = None,
     delay_seconds: int | None = None,
     source: str = "web",
-) -> sqlite3.Row:
-    """크롤을 등록하고(시작 URL 을 큐에 넣고) 크롤 row 를 반환.
+) -> tuple[sqlite3.Row, bool]:
+    """크롤을 등록하고(시작 URL 을 큐에 넣고) (크롤 row, 병합 여부)를 반환.
+
+    같은 시작 URL 의 크롤이 이미 진행 중(running)이면 새 크롤을 만들지 않고
+    그 크롤로 자동 병합한다 — 기존 row 와 merged=True 를 반환하며, 이번에
+    넘긴 옵션은 범위 검증만 하고 버린다 (진행 중 크롤의 옵션 유지). 검사는
+    best-effort — 정확히 동시에 등록하는 드문 경우에는 별도 크롤이
+    만들어질 수 있다.
 
     실행은 등록과 분리되어 있다 — serve 의 크롤러 스레드 또는
     run_crawl/process_next 가 큐를 소비한다. 옵션이 None 이면 시스템 설정의
@@ -188,6 +196,9 @@ def start_crawl(
         max_pages, max_depth, delay_seconds = _resolve_options(
             conn, max_pages, max_depth, delay_seconds
         )
+        running = db.find_running_crawl(conn, norm)
+        if running is not None:
+            return running, True
         crawl_id = db.insert_crawl(
             conn,
             start_url=norm, scope_host=scope_host, scope_path=scope_path,
@@ -195,7 +206,7 @@ def start_crawl(
             delay_seconds=delay_seconds, source=source,
         )
         db.insert_crawl_page(conn, crawl_id, norm, 0)
-        return db.get_crawl(conn, crawl_id)
+        return db.get_crawl(conn, crawl_id), False
 
 
 def _normalize_http(href: str) -> str | None:
@@ -460,11 +471,15 @@ def run_due_schedules(*, source: str = "schedule") -> list[ScheduleStep]:
         if not claimed:
             continue  # 다른 프로세스가 이미 실행했다
         try:
-            crawl = start_crawl(
+            crawl, merged = start_crawl(
                 url,
                 max_pages=sched["max_pages"], max_depth=sched["max_depth"],
                 delay_seconds=sched["delay_seconds"], source=source,
             )
+            if merged:
+                # 미루기 검사 직후 다른 경로가 같은 크롤을 등록한 드문 경우 —
+                # 이번 회차는 그 크롤에 병합된 것으로 친다 (next_run_at 은 이미 갱신됨)
+                logger.info("크롤 스케줄 병합: %s → 진행 중 크롤 #%d", url, crawl["id"])
             results.append(
                 ScheduleStep(start_url=url, status="started", crawl_id=crawl["id"])
             )

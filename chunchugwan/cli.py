@@ -332,20 +332,31 @@ def crawl_add(
     url: str, max_pages: int | None, max_depth: int | None,
     delay: int | None, no_wait: bool,
 ) -> None:
-    """사이트 전체 아카이브를 등록하고 (기본) 완료될 때까지 실행한다."""
+    """사이트 전체 아카이브를 등록하고 (기본) 완료될 때까지 실행한다.
+
+    같은 시작 URL 의 크롤이 이미 진행 중이면 새로 만들지 않고 그 크롤에
+    병합된다 (이번에 넘긴 옵션은 무시).
+    """
     try:
-        row = crawler.start_crawl(
+        row, merged = crawler.start_crawl(
             url, max_pages=max_pages, max_depth=max_depth,
             delay_seconds=delay, source="cli",
         )
     except ValueError as e:
         raise click.ClickException(str(e))
-    click.echo(
-        f"크롤 #{row['id']} 등록: {row['start_url']} "
-        f"(범위 {row['scope_host']}{row['scope_path']}, "
-        f"최대 {row['max_pages']}페이지 · 깊이 {row['max_depth']} · "
-        f"간격 {row['delay_seconds']}s)"
-    )
+    if merged:
+        click.echo(
+            f"같은 시작 URL 의 크롤 #{row['id']} 이(가) 진행 중 — 병합합니다 "
+            f"(기존 옵션 유지: 최대 {row['max_pages']}페이지 · "
+            f"깊이 {row['max_depth']} · 간격 {row['delay_seconds']}s)"
+        )
+    else:
+        click.echo(
+            f"크롤 #{row['id']} 등록: {row['start_url']} "
+            f"(범위 {row['scope_host']}{row['scope_path']}, "
+            f"최대 {row['max_pages']}페이지 · 깊이 {row['max_depth']} · "
+            f"간격 {row['delay_seconds']}s)"
+        )
     if no_wait:
         return
 

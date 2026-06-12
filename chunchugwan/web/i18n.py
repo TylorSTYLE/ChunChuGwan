@@ -122,6 +122,9 @@ _EN: dict[str, str] = {
     "실패 재시도": "Retry on failure",
     "대기 후 재시도, 페이지당 최대 {n}회 시도 (시스템 화면에서 설정)":
         "wait then retry, up to {n} attempts per page (configured on the System screen)",
+    "같은 사이트의 아카이브가 이미 진행 중이라 이 크롤에 병합되었습니다 (기존 옵션 유지).":
+        "An archive of this site is already in progress, so your request was "
+        "merged into this crawl (existing options kept).",
     # ---- 사이트 아카이브 스케줄 (크롤 스케줄) ----
     "시작 URL": "Start URL",
     "옵션 (페이지·깊이·간격)": "Options (pages · depth · delay)",

@@ -19,6 +19,10 @@
   <a href="/archives">{{ _("목록으로") }}</a>
 </div>
 
+{% if merged %}
+<div class="notice">{{ _("같은 사이트의 아카이브가 이미 진행 중이라 이 크롤에 병합되었습니다 (기존 옵션 유지).") }}</div>
+{% endif %}
+
 <table style="max-width:760px; margin-bottom:16px">
   <tbody>
     <tr><th>{{ _("상태") }}</th><td>

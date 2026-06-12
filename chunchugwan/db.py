@@ -938,7 +938,8 @@ def find_crawl_snapshot(
 def find_running_crawl(conn: sqlite3.Connection, start_url: str) -> sqlite3.Row | None:
     """같은 시작 URL 의 진행 중(running) 크롤 조회 (없으면 None).
 
-    크롤 스케줄이 이전 실행이 끝나기 전에 새 크롤을 쌓지 않기 위해 쓴다.
+    start_crawl 의 자동 병합(진행 중이면 새 크롤을 만들지 않음)과 크롤
+    스케줄의 미루기(이전 실행이 끝나기 전에 쌓지 않음)에 쓴다.
     """
     return conn.execute(
         "SELECT * FROM crawls WHERE start_url = ? AND status = 'running' "

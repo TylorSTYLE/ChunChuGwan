@@ -1019,6 +1019,8 @@ def _archive_site(
 ) -> RedirectResponse:
     """사이트 전체 아카이브 등록 — 크롤을 만들고 진행 화면으로 보낸다.
 
+    같은 시작 URL 의 크롤이 진행 중이면 그 크롤로 자동 병합되어 기존 진행
+    화면으로 보낸다 (merged=1 — 화면이 병합 알림을 띄운다).
     실행은 크롤러 폴링 스레드가 큐를 소비하며 진행한다 (등록과 분리).
     주기가 있으면 같은 옵션으로 크롤 스케줄도 등록한다 — 다음 실행은
     지금 + 주기 (첫 실행은 방금 등록한 크롤).
@@ -1029,7 +1031,7 @@ def _archive_site(
             "max_depth": int(max_depth) if max_depth else None,
             "delay_seconds": int(delay) if delay else None,
         }
-        crawl = crawler.start_crawl(url, **options, source="web")
+        crawl, merged = crawler.start_crawl(url, **options, source="web")
         if interval_seconds:
             crawler.set_crawl_schedule(
                 url, interval_seconds, run_at=run_at, **options
@@ -1039,7 +1041,8 @@ def _archive_site(
             {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
         )
         return RedirectResponse(f"/archive/new?{params}", status_code=303)
-    return RedirectResponse(f"/crawls/{crawl['id']}", status_code=303)
+    suffix = "?merged=1" if merged else ""
+    return RedirectResponse(f"/crawls/{crawl['id']}{suffix}", status_code=303)
 
 
 @app.post("/archive")
@@ -1167,9 +1170,11 @@ def crawls_view():
 
 
 @app.get("/crawls/{crawl_id}", response_class=HTMLResponse)
-def crawl_view(request: Request, crawl_id: int):
+def crawl_view(request: Request, crawl_id: int, merged: int = 0):
     """크롤 진행 화면 — 상태별 집계와 페이지 목록, 취소·재시도.
 
+    merged=1 이면 같은 사이트 아카이브가 이미 진행 중이라 이 크롤로
+    병합되었다는 알림을 띄운다 (등록 직후 리다이렉트에서만 붙는다).
     실패 재시도 대기(시스템 설정, 진행 중 크롤에도 적용)도 함께 보여준다.
     """
     crawl = _load_crawl(request, crawl_id)
@@ -1180,7 +1185,7 @@ def crawl_view(request: Request, crawl_id: int):
     return templates.TemplateResponse(
         request, "crawl.html",
         {
-            "crawl": crawl, "counts": counts, "pages": pages,
+            "crawl": crawl, "counts": counts, "pages": pages, "merged": merged,
             "retry_backoff_labels": [
                 i18n.interval_label(request, s) for s in backoff
             ],
