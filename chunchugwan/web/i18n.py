@@ -16,7 +16,7 @@ from __future__ import annotations
 from fastapi import Request
 
 from .. import config
-from ..auth import MAX_DISPLAY_NAME_LENGTH
+from ..auth import MAX_API_KEY_NAME_LENGTH, MAX_DISPLAY_NAME_LENGTH
 
 LANG_COOKIE = "wccg_lang"
 LANG_COOKIE_MAX_AGE = 365 * 86400
@@ -359,6 +359,43 @@ _EN: dict[str, str] = {
         "Invite link for {email} (mail not configured — share it directly): {link}",
     "초대를 취소했습니다.": "Invite cancelled.",
     "초대 없음": "Invite not found",
+    # ---- API 키 (api_keys) ----
+    "API 키": "API keys",
+    "API 키 관리": "API key management",
+    "외부 소프트웨어가 Authorization: Bearer 또는 X-API-Key 헤더로 /api/v1 에 접근할 때 쓰는 키입니다. 보기=아카이브 데이터 조회, 아카이브=아카이빙 트리거. 키 원문은 발급 직후 한 번만 표시되며, 폐기하면 즉시 무효화됩니다. 모든 관리자가 공동으로 관리합니다.":
+        "Keys for external software accessing /api/v1 with an Authorization: Bearer "
+        "or X-API-Key header. View = read archived data, Archive = trigger archiving. "
+        "The key itself is shown only once right after issuing; revoking takes effect "
+        "immediately. All admins manage keys together.",
+    "복사": "Copy",
+    "복사됨": "Copied",
+    "키": "Key",
+    "발급자": "Issued by",
+    "perm|아카이브": "Archive",
+    "만료됨": "Expired",
+    "영구": "Permanent",
+    "{name} 키를 폐기할까요? 이 키를 쓰는 외부 소프트웨어의 접근이 즉시 차단됩니다.":
+        "Revoke the key '{name}'? External software using this key loses access "
+        "immediately.",
+    "폐기": "Revoke",
+    "발급된 키가 없습니다.": "No keys issued yet.",
+    "새 키 발급": "Issue a new key",
+    "키 이름 (예: rss-bot)": "Key name (e.g. rss-bot)",
+    "1개월 (30일)": "1 month (30 days)",
+    "1년 (365일)": "1 year (365 days)",
+    "사용자 지정 (일)": "Custom (days)",
+    "만료까지 일 수": "Days until expiry",
+    "발급": "Issue",
+    "권한을 하나 이상 선택하세요.": "Select at least one permission.",
+    "사용자 지정 만료는 1 ~ {n}일 사이여야 합니다.":
+        "Custom expiry must be between 1 and {n} days.",
+    "알 수 없는 만료 선택: {expiry}": "Unknown expiry option: {expiry}",
+    "'{name}' 키를 발급했습니다 — 아래 키를 지금 복사하세요. 다시 표시되지 않습니다.":
+        "Issued the key '{name}' — copy it below now. It will not be shown again.",
+    "API 키 없음": "API key not found",
+    "키를 폐기했습니다.": "Key revoked.",
+    "키 이름을 입력하세요.": "Enter a key name.",
+    "키 이름에 제어 문자를 쓸 수 없습니다.": "The key name cannot contain control characters.",
     # ---- 계정 설정 (account) ----
     "계정 설정": "Account settings",
     "사용자 이름": "Display name",
@@ -511,6 +548,9 @@ _EN[f"패스워드는 {config.MIN_PASSWORD_LENGTH}자 이상이어야 합니다.
 )
 _EN[f"이름은 {MAX_DISPLAY_NAME_LENGTH}자 이하여야 합니다."] = (
     f"The name must be at most {MAX_DISPLAY_NAME_LENGTH} characters."
+)
+_EN[f"키 이름은 {MAX_API_KEY_NAME_LENGTH}자 이하여야 합니다."] = (
+    f"The key name must be at most {MAX_API_KEY_NAME_LENGTH} characters."
 )
 
 CATALOGS: dict[str, dict[str, str]] = {"en": _EN}

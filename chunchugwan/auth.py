@@ -132,6 +132,56 @@ def resolve_session(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
     return db.get_session(conn, hash_token(token))
 
 
+# ---- API 키 ----
+# 외부 소프트웨어용 장기 자격증명. 세션과 동일하게 DB에는 SHA-256 만 저장하고
+# 원문은 발급 직후 한 번만 노출된다.
+
+API_KEY_PREFIX = "wccg_"
+API_KEY_DISPLAY_CHARS = 10  # 목록 화면에서 식별용으로 보여줄 키 앞부분 길이
+
+MAX_API_KEY_NAME_LENGTH = 50
+
+
+def validate_api_key_name(name: str) -> str | None:
+    """API 키 이름 검증. 문제 있으면 한국어 오류 메시지, 정상이면 None."""
+    if not name:
+        return "키 이름을 입력하세요."
+    if len(name) > MAX_API_KEY_NAME_LENGTH:
+        return f"키 이름은 {MAX_API_KEY_NAME_LENGTH}자 이하여야 합니다."
+    if not name.isprintable():
+        return "키 이름에 제어 문자를 쓸 수 없습니다."
+    return None
+
+
+def issue_api_key(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    can_view: bool,
+    can_archive: bool,
+    created_by: int | None,
+    ttl_seconds: int | None,
+) -> str:
+    """API 키를 생성하고 원문을 반환 (이후에는 다시 조회할 수 없다).
+
+    ttl_seconds=None 이면 영구 키.
+    """
+    token = API_KEY_PREFIX + secrets.token_urlsafe(32)
+    db.create_api_key(
+        conn, name, hash_token(token), token[:API_KEY_DISPLAY_CHARS],
+        can_view=can_view, can_archive=can_archive,
+        created_by=created_by, ttl_seconds=ttl_seconds,
+    )
+    return token
+
+
+def resolve_api_key(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
+    """헤더의 키 원문으로 유효한 api_keys row 조회 (없거나 만료면 None)."""
+    if not token.startswith(API_KEY_PREFIX):
+        return None
+    return db.get_api_key_by_hash(conn, hash_token(token))
+
+
 # ---- TOTP ----
 
 

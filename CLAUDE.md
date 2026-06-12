@@ -70,8 +70,8 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
    문서 파일(`files/`)은 CAS 가 아니라 스냅샷 안에 두고, 인증이 걸린
    `/snapshot/{id}/doc/{name}` 에서 meta.json 의 documents 목록에 있는
    이름만 항상 첨부파일 다운로드(렌더링 금지)로 서빙한다.
-6. **인증 데이터 규칙.** 패스워드는 Argon2id 해시만, 세션은 서버사이드로 토큰의
-   SHA-256 만 저장. 2FA(TOTP·패스키)는 패스워드 로그인에만 적용하고 SSO(OIDC)는
+6. **인증 데이터 규칙.** 패스워드는 Argon2id 해시만, 세션·API 키는 토큰의
+   SHA-256 만 저장 (세션은 서버사이드). 2FA(TOTP·패스키)는 패스워드 로그인에만 적용하고 SSO(OIDC)는
    IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origin 은
    `WCCG_PUBLIC_URL` 에서 파생(미설정 시 localhost). 환경변수 목록은
    README "인증" 절 참조.
@@ -117,6 +117,9 @@ archive/
   신규 가입·SSO 자동 생성은 viewer, `users.is_founder` 는 최초 등록 관리자로
   권한 변경 불가
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
+- `api_keys` — 외부 소프트웨어용 API 키 (`/api/v1` REST API 인증).
+  관리자만 발급, 모든 관리자가 공동 관리. 키마다 보기/아카이브 권한과
+  만료 시각(NULL=영구), 토큰은 SHA-256 해시만 저장 (원문은 발급 시 1회 표시)
 
 ## 코딩 컨벤션
 
@@ -128,7 +131,7 @@ archive/
 
 ## 대시보드 디자인 방향
 
-- 화면 10개: 현황(dashboard — 첫 화면 `/`(= `/dashboard`). 페이지·스냅샷 수,
+- 화면 11개: 현황(dashboard — 첫 화면 `/`(= `/dashboard`). 페이지·스냅샷 수,
   기간별 용량 트렌드(오늘/이번 주/이번 달/올해), 최근 스냅샷·최근 로그)
   / 목록(index — `/archives`, 헤더 메뉴 "목록")
   / 새 아카이빙(archive_new — `/archive/new`, admin/archiver 전용. URL 등록 +
@@ -145,6 +148,9 @@ archive/
   와 동일). 백업에 인증 데이터가 포함되므로 인증이 켜진 환경에서는 관리자 전용)
   / 사용자(users — 관리자 전용 사용자 관리. 권한 조정, 차단 시 세션 즉시 무효화,
   최초 관리자는 변경 불가)
+  / API 키(api_keys — `/system/api-keys`, 관리자 전용. 외부 소프트웨어용
+  키 발급·폐기. 권한(보기/아카이브)과 만료(영구·1일·1개월·1년·사용자 지정 일)
+  선택, 키 원문은 발급 직후 1회만 표시)
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
 - 다국어(ko/en): `web/i18n.py` — 한국어 원문이 메시지 키(gettext msgid 방식),
