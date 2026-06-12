@@ -1,0 +1,62 @@
+{# 자동 재아카이빙 주기 입력 위젯 — 프리셋 select + 직접 입력 + 실행 시각.
+   사용하는 페이지에서 interval_field(...) 를 폼 안에 넣고,
+   페이지당 한 번 interval_field_js() 를 포함한다 (with context 필요). #}
+
+{% macro interval_field(selected=None, run_at=None, allow_off=False) %}
+{% set presets = interval_options | map(attribute=0) | list %}
+{% set is_custom = selected is not none and selected != 0 and selected not in presets %}
+{% set ns = namespace(cv='', cu='h') %}
+{% if is_custom %}
+  {% if selected % 86400 == 0 %}{% set ns.cv, ns.cu = selected // 86400, 'd' %}
+  {% elif selected % 3600 == 0 %}{% set ns.cv, ns.cu = selected // 3600, 'h' %}
+  {% else %}{% set ns.cv, ns.cu = selected // 60, 'm' %}{% endif %}
+{% endif %}
+{% set daily = is_custom and ns.cu == 'd' or (not is_custom and selected and selected % 86400 == 0) %}
+<span class="sched-field" style="display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap">
+  <select name="interval" class="sched-interval">
+    {% if allow_off %}<option value="0">{{ _("사용 안 함 (1회만 아카이빙)") }}</option>{% endif %}
+    {% for v, label in interval_options %}
+    <option value="{{ v }}" {% if selected == v %}selected{% endif %}>{{ _("{label}마다", label=_(label)) if allow_off else _(label) }}</option>
+    {% endfor %}
+    <option value="custom" {% if is_custom %}selected{% endif %}>{{ _("직접 입력…") }}</option>
+  </select>
+  <span class="sched-custom" {% if not is_custom %}hidden{% endif %}>
+    <input type="number" name="custom_value" min="1" step="1" value="{{ ns.cv }}"
+           style="width:4.5em" {% if not is_custom %}disabled{% endif %}>
+    <select name="custom_unit" {% if not is_custom %}disabled{% endif %}>
+      <option value="m" {% if ns.cu == 'm' %}selected{% endif %}>{{ _("분", ctx="unit") }}</option>
+      <option value="h" {% if ns.cu == 'h' %}selected{% endif %}>{{ _("시간", ctx="unit") }}</option>
+      <option value="d" {% if ns.cu == 'd' %}selected{% endif %}>{{ _("일", ctx="unit") }}</option>
+    </select>
+  </span>
+  <label class="sched-at" {% if not daily %}hidden{% endif %}
+         title="{{ _('1일 단위 주기에서 실행할 시각 (서버 시간 기준, 비우면 등록 시점 기준)') }}"
+         style="display:inline-flex; gap:4px; align-items:center">
+    <input type="time" name="run_at" value="{{ run_at or '' }}" {% if not daily %}disabled{% endif %}>
+  </label>
+</span>
+{% endmacro %}
+
+{% macro interval_field_js() %}
+<script>
+function syncSchedField(field) {
+  const interval = field.querySelector('.sched-interval');
+  const custom = field.querySelector('.sched-custom');
+  const at = field.querySelector('.sched-at');
+  const isCustom = interval.value === 'custom';
+  custom.hidden = !isCustom;
+  custom.querySelectorAll('input,select').forEach((el) => { el.disabled = !isCustom; });
+  // 실행 시각은 1일 단위 주기(1일·3일·1주일, 직접 입력 '일')에서만
+  const unit = custom.querySelector('select[name=custom_unit]').value;
+  const seconds = parseInt(interval.value, 10);
+  const daily = isCustom ? unit === 'd' : (seconds > 0 && seconds % 86400 === 0);
+  at.hidden = !daily;
+  at.querySelector('input').disabled = !daily;  // disabled 면 폼 전송에서 제외
+}
+document.querySelectorAll('.sched-field').forEach(syncSchedField);
+document.addEventListener('change', (e) => {
+  const field = e.target.closest && e.target.closest('.sched-field');
+  if (field) syncSchedField(field);
+});
+</script>
+{% endmacro %}

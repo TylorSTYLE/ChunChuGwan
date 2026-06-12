@@ -1,7 +1,8 @@
 """주기적 재아카이빙 스케줄러.
 
 페이지마다 반복 주기(최소 1시간 ~ 최대 1개월)를 등록하면 기한이 된
-페이지를 자동으로 다시 아카이빙한다. 실행 경로는 두 가지:
+페이지를 자동으로 다시 아카이빙한다. 1일 단위 주기(1일~1개월)는
+실행 시각(HH:MM, 서버 로컬 시간)을 함께 지정할 수 있다. 실행 경로는 두 가지:
 
 - 대시보드(serve) 프로세스의 백그라운드 폴링 스레드 (`run_loop`)
 - `wccg schedule run` — 기한이 된 스케줄을 한 번 실행 (cron 용)
@@ -18,7 +19,7 @@ import re
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Callable
 
 from . import db, pipeline, storage
@@ -30,12 +31,21 @@ MAX_INTERVAL_SECONDS = 30 * 86400    # 1개월 (30일)
 
 _INTERVAL_RE = re.compile(r"^(\d+)\s*(mo|[mhdw])$", re.IGNORECASE)
 _UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400, "w": 7 * 86400, "mo": 30 * 86400}
+_RUN_AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 
 def validate_interval(seconds: int) -> None:
     """반복 주기 범위 검증 — 1시간 이상 1개월 이하. 위반 시 ValueError."""
     if not (MIN_INTERVAL_SECONDS <= seconds <= MAX_INTERVAL_SECONDS):
         raise ValueError("반복 주기는 1시간(1h) 이상 1개월(1mo) 이하여야 합니다")
+
+
+def validate_run_at(run_at: str, interval_seconds: int) -> None:
+    """실행 시각(HH:MM) 검증 — 1일 단위 주기에서만 허용. 위반 시 ValueError."""
+    if _RUN_AT_RE.match(run_at) is None:
+        raise ValueError(f"잘못된 실행 시각 형식: {run_at!r} (예: 09:00, 23:30)")
+    if interval_seconds % 86400 != 0:
+        raise ValueError("실행 시각은 1일 단위 주기(1일~1개월)에서만 지정할 수 있습니다")
 
 
 def parse_interval(text: str) -> int:
@@ -60,6 +70,12 @@ def format_interval(seconds: int) -> str:
     return " ".join(parts) or "0분"
 
 
+def format_schedule(interval_seconds: int, run_at: str | None) -> str:
+    """주기 + 실행 시각 표기 (예: '1일 · 09:00'). 시각 미지정이면 주기만."""
+    label = format_interval(interval_seconds)
+    return f"{label} · {run_at}" if run_at else label
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -68,20 +84,46 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat(timespec="seconds")
 
 
-def set_schedule(url: str, interval_seconds: int) -> sqlite3.Row:
+def next_run_after(
+    reference: datetime,
+    interval_seconds: int,
+    run_at: str | None,
+    tz: tzinfo | None = None,
+) -> datetime:
+    """reference 기준 다음 실행 시각(UTC) 계산.
+
+    기본은 reference + 주기. run_at(HH:MM)이 지정되면 그 시각으로 정렬한다 —
+    시각은 서버 로컬 시간 기준이며 tz 는 테스트용 오버라이드.
+    """
+    base = reference + timedelta(seconds=interval_seconds)
+    if not run_at:
+        return base
+    hour, minute = (int(p) for p in run_at.split(":"))
+    aligned = base.astimezone(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    while aligned <= reference:  # 정렬로 과거가 되면 다음 날로 (방어적 — DST 등)
+        aligned += timedelta(days=1)
+    return aligned.astimezone(timezone.utc)
+
+
+def set_schedule(
+    url: str, interval_seconds: int, run_at: str | None = None
+) -> sqlite3.Row:
     """페이지에 반복 주기를 등록/변경하고 스케줄 row 반환.
 
     아카이브에 없는 URL 이거나 주기가 범위 밖이면 ValueError.
     다음 실행 시각은 지금 + 주기 (등록 직후 즉시 실행하지 않는다).
+    run_at(HH:MM, 서버 로컬 시간)이 있으면 1일 단위 주기에서 그 시각에 실행.
     """
     validate_interval(interval_seconds)
+    if run_at:
+        validate_run_at(run_at, interval_seconds)
     norm = storage.normalize_url(url)
     with db.connect() as conn:
         page = db.get_page(conn, norm)
         if page is None:
             raise ValueError(f"아카이브에 없는 URL: {norm} — 먼저 아카이빙(add)하세요")
-        next_run = _iso(_utcnow() + timedelta(seconds=interval_seconds))
-        db.upsert_schedule(conn, page["id"], interval_seconds, next_run)
+        next_run = _iso(next_run_after(_utcnow(), interval_seconds, run_at))
+        db.upsert_schedule(conn, page["id"], interval_seconds, next_run, run_at)
         return db.get_schedule(conn, page["id"])
 
 
@@ -158,12 +200,15 @@ def run_due(
             if release is not None:
                 release(url)
         finished = _utcnow()
+        next_run = next_run_after(
+            finished, sched["interval_seconds"], sched["run_at_time"]
+        )
         with db.connect() as conn:
             db.mark_schedule_run(
                 conn,
                 sched["id"],
                 last_run_at=_iso(finished),
-                next_run_at=_iso(finished + timedelta(seconds=sched["interval_seconds"])),
+                next_run_at=_iso(next_run),
             )
     return results
 

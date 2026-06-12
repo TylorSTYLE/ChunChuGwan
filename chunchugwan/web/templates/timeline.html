@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_schedule_field.html" import interval_field, interval_field_js with context %}
 {% block title %}{{ _("타임라인") }} — {{ page['url'] }}{% endblock %}
 {% block content %}
 {% if queued %}<div class="notice">{{ _("재아카이빙이 백그라운드에서 시작되었습니다. 잠시 후 새로고침하세요.") }}</div>{% endif %}
@@ -30,11 +31,9 @@
   {% endif %}
   {% if can_archive %}
   <form class="inline" method="post" action="/page/{{ page['id'] }}/schedule" style="display:flex; gap:6px">
-    <select name="interval">
-      {% for v, label in interval_options %}
-      <option value="{{ v }}" {% if schedule and schedule['interval_seconds'] == v %}selected{% endif %}>{{ _(label) }}</option>
-      {% endfor %}
-    </select>
+    {{ interval_field(
+        selected=schedule['interval_seconds'] if schedule else None,
+        run_at=schedule['run_at_time'] if schedule else None) }}
     <button type="submit">{{ _('주기 변경') if schedule else _('주기 설정') }}</button>
   </form>
   {% if schedule %}
@@ -98,4 +97,5 @@
   </tbody>
 </table>
 {% endif %}
+{% if can_archive %}{{ interval_field_js() }}{% endif %}
 {% endblock %}

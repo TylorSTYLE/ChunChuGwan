@@ -335,6 +335,28 @@ _SCHEDULE_OPTIONS = [
     (86400, "1일"), (3 * 86400, "3일"), (7 * 86400, "1주일"), (30 * 86400, "1개월"),
 ]
 
+# 직접 입력 단위 (분/시간/일 — 주는 7일로 입력)
+_CUSTOM_UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400}
+
+
+def _interval_from_form(interval: str, custom_value: str, custom_unit: str) -> int:
+    """주기 폼 값을 초로 변환 — 프리셋(초 단위 숫자) 또는 직접 입력('custom').
+
+    범위 검증은 scheduler.validate_interval 몫. 형식 위반 시 ValueError.
+    """
+    if interval != "custom":
+        return int(interval)
+    unit = _CUSTOM_UNIT_SECONDS.get(custom_unit)
+    if unit is None:
+        raise ValueError(f"잘못된 주기 단위: {custom_unit!r}")
+    try:
+        value = int(custom_value)
+    except ValueError:
+        raise ValueError("직접 입력 주기는 숫자여야 합니다")
+    if value <= 0:
+        raise ValueError("직접 입력 주기는 1 이상이어야 합니다")
+    return value * unit
+
 
 @app.get("/page/{page_id}", response_class=HTMLResponse)
 def timeline(
@@ -360,7 +382,9 @@ def timeline(
             "notice": notice, "error": error,
             "schedule": schedule,
             "schedule_label": (
-                i18n.interval_label(request, schedule["interval_seconds"])
+                i18n.schedule_label(
+                    request, schedule["interval_seconds"], schedule["run_at_time"]
+                )
                 if schedule else ""
             ),
             "interval_options": _SCHEDULE_OPTIONS,
@@ -377,17 +401,21 @@ def _schedule_redirect(page_id: int, next_path: str) -> str:
 def schedule_set(
     request: Request,
     page_id: int,
-    interval: int = Form(...),
+    interval: str = Form(...),
+    custom_value: str = Form(""),
+    custom_unit: str = Form("h"),
+    run_at: str = Form(""),
     next_path: str = Form("", alias="next"),
 ):
-    """페이지 반복 주기 등록/변경. 주기는 1시간 ~ 1개월(초 단위)."""
+    """페이지 반복 주기 등록/변경. 주기는 1시간 ~ 1개월, 직접 입력·실행 시각 지원."""
     _require_archiver(request)
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
     if page is None:
         raise HTTPException(404, t(request, "페이지 없음"))
     try:
-        scheduler.set_schedule(page["url"], interval)
+        seconds = _interval_from_form(interval, custom_value, custom_unit)
+        scheduler.set_schedule(page["url"], seconds, run_at=run_at or None)
     except ValueError as e:
         raise HTTPException(400, t(request, str(e)))
     return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
@@ -445,7 +473,12 @@ def schedules_view(request: Request):
     with db.connect() as conn:
         rows = db.list_schedules(conn)
     items = [
-        {"row": s, "label": i18n.interval_label(request, s["interval_seconds"])}
+        {
+            "row": s,
+            "label": i18n.schedule_label(
+                request, s["interval_seconds"], s["run_at_time"]
+            ),
+        }
         for s in rows
     ]
     return templates.TemplateResponse(
@@ -689,6 +722,8 @@ def shotdiff(
 
 
 _LOG_STATUSES = ("new", "changed", "unchanged", "forced_same", "error")
+_LOG_PAGE_SIZES = (10, 25, 50, 100, 200)
+_LOG_PAGE_SIZE_DEFAULT = 25
 
 
 def _clean_date(value: str | None) -> str | None:
@@ -711,10 +746,11 @@ def logs_view(
     date_from: str | None = None,
     date_to: str | None = None,
     page: int = 1,
-    limit: int = 100,
+    limit: int = _LOG_PAGE_SIZE_DEFAULT,
 ):
     """아카이브 실행 로그. 도메인/페이지/스냅샷/상태/기간 필터 + 페이징."""
-    limit = max(1, min(limit, 500))
+    if limit not in _LOG_PAGE_SIZES:
+        limit = _LOG_PAGE_SIZE_DEFAULT
     if status not in _LOG_STATUSES:
         status = None
     date_from = _clean_date(date_from)
@@ -762,7 +798,7 @@ def logs_view(
             ("date_from", date_from), ("date_to", date_to),
         ) if v is not None
     ]
-    if limit != 100:
+    if limit != _LOG_PAGE_SIZE_DEFAULT:
         qs_base.append(("limit", limit))
 
     def _page_url(n: int) -> str:
@@ -776,6 +812,7 @@ def logs_view(
             "domain": domain or "", "status": status or "",
             "date_from": date_from or "", "date_to": date_to or "",
             "snapshot_id": snapshot_id, "limit": limit,
+            "limits": _LOG_PAGE_SIZES,
             "statuses": _LOG_STATUSES,
             "total": total, "total_pages": total_pages, "page_num": page,
             "prev_url": _page_url(page - 1) if page > 1 else None,
@@ -785,7 +822,10 @@ def logs_view(
 
 
 def _run_archive(
-    url: str, force: bool = False, interval_seconds: int | None = None
+    url: str,
+    force: bool = False,
+    interval_seconds: int | None = None,
+    run_at: str | None = None,
 ) -> None:
     """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다.
 
@@ -800,7 +840,7 @@ def _run_archive(
     finally:
         if interval_seconds:
             try:
-                scheduler.set_schedule(url, interval_seconds)
+                scheduler.set_schedule(url, interval_seconds, run_at=run_at)
             except ValueError as e:
                 # 아카이빙 실패로 pages 행이 안 생겼으면 주기 등록도 불가
                 logger.warning("자동 재아카이빙 등록 실패: %s — %s", url, e)
@@ -812,13 +852,14 @@ def _queue_archive(
     url: str,
     force: bool = False,
     interval_seconds: int | None = None,
+    run_at: str | None = None,
 ) -> None:
     """진행 목록 등록 후 백그라운드 작업 추가. 이미 진행 중이면 무시.
 
     등록은 응답 전(동기)에 해서 리다이렉트된 목록 화면이 바로 진행 상태를 본다.
     """
     if _register_job(url):
-        background.add_task(_run_archive, url, force, interval_seconds)
+        background.add_task(_run_archive, url, force, interval_seconds, run_at)
 
 
 def _require_archiver(request: Request) -> None:
@@ -848,20 +889,29 @@ def archive_new(
     request: Request,
     background: BackgroundTasks,
     url: str = Form(...),
-    interval: int = Form(0),
+    interval: str = Form("0"),
+    custom_value: str = Form(""),
+    custom_unit: str = Form("h"),
+    run_at: str = Form(""),
 ):
     """새 URL 아카이빙. 검증은 동기로, 캡처·주기 등록(interval>0)은 백그라운드로."""
     _require_archiver(request)
     try:
         norm = storage.normalize_url(url)
-        if interval:
-            scheduler.validate_interval(interval)
+        seconds = _interval_from_form(interval, custom_value, custom_unit)
+        if seconds:
+            scheduler.validate_interval(seconds)
+            if run_at:
+                scheduler.validate_run_at(run_at, seconds)
     except ValueError as exc:
         params = urlencode(
             {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
         )
         return RedirectResponse(f"/archive/new?{params}", status_code=303)
-    _queue_archive(background, norm, interval_seconds=interval or None)
+    _queue_archive(
+        background, norm,
+        interval_seconds=seconds or None, run_at=(run_at or None) if seconds else None,
+    )
     return RedirectResponse(f"/archives?queued={quote(norm, safe='')}", status_code=303)
 
 

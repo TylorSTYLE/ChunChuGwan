@@ -308,19 +308,43 @@ def test_logs_ignores_invalid_date(client):
 
 
 def test_logs_pagination(client):
-    # limit=1 → 2페이지: 1페이지는 최신(error), 2페이지는 이전(new) 로그
-    res = client.get("/logs?limit=1")
+    # 시드 2건 + 9건 추가 = 11건 → limit=10 이면 2페이지
+    with db.connect() as conn:
+        for i in range(9):
+            db.insert_archive_log(
+                conn, url=f"https://b.com/p{i}", domain="b.com", source="cli",
+                status="new", started_at=f"2026-06-11T01:00:0{i}+00:00",
+                duration_ms=10,
+            )
+    res = client.get("/logs?limit=10")
     assert res.status_code == 200
+    # 1페이지는 최신 10건 — 가장 오래된 a.com/x 는 2페이지로 밀린다
     assert "https://b.com/y" in res.text and "https://a.com/x" not in res.text
-    assert "총 2건" in res.text and "1/2 페이지" in res.text
-    assert "/logs?limit=1&amp;page=2" in res.text  # 다음 링크에 필터 유지
+    assert "총 11건" in res.text and "1/2 페이지" in res.text
+    assert "/logs?limit=10&amp;page=2" in res.text  # 다음 링크에 필터 유지
 
-    res = client.get("/logs?limit=1&page=2")
+    res = client.get("/logs?limit=10&page=2")
     assert "https://a.com/x" in res.text and "https://b.com/y" not in res.text
 
     # 범위 밖 페이지 번호는 마지막 페이지로 보정
-    res = client.get("/logs?limit=1&page=99")
+    res = client.get("/logs?limit=10&page=99")
     assert "https://a.com/x" in res.text
+
+
+def test_logs_limit_select(client):
+    # 기본값 25 — 페이징 링크에 limit 을 붙이지 않고, 25줄이 선택된 상태
+    res = client.get("/logs")
+    assert res.status_code == 200
+    assert '<option value="25" selected>25줄</option>' in res.text
+
+    # 허용 목록(10/25/50/100/200) 밖의 값은 기본값 25 로 보정
+    res = client.get("/logs?limit=7")
+    assert res.status_code == 200
+    assert '<option value="25" selected>25줄</option>' in res.text
+    assert "https://a.com/x" in res.text and "https://b.com/y" in res.text
+
+    res = client.get("/logs?limit=200")
+    assert '<option value="200" selected>200줄</option>' in res.text
 
 
 # ---- 저장 파일 목록/용량 표시 ----

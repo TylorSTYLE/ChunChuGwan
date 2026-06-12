@@ -65,6 +65,78 @@ def test_format_interval():
     assert scheduler.format_interval(2592000) == "1개월"
 
 
+def test_format_schedule():
+    assert scheduler.format_schedule(86400, None) == "1일"
+    assert scheduler.format_schedule(86400, "09:00") == "1일 · 09:00"
+
+
+# ---- 실행 시각 (run_at) ----
+
+
+def test_validate_run_at_ok():
+    scheduler.validate_run_at("09:00", 86400)
+    scheduler.validate_run_at("23:59", 3 * 86400)
+    scheduler.validate_run_at("00:00", 7 * 86400)
+
+
+@pytest.mark.parametrize("at", ["24:00", "9:00", "09:60", "0900", "", "abc"])
+def test_validate_run_at_bad_format(at):
+    with pytest.raises(ValueError, match="실행 시각 형식"):
+        scheduler.validate_run_at(at, 86400)
+
+
+def test_validate_run_at_requires_daily_interval():
+    with pytest.raises(ValueError, match="1일 단위 주기"):
+        scheduler.validate_run_at("09:00", 3600)
+    with pytest.raises(ValueError, match="1일 단위 주기"):
+        scheduler.validate_run_at("09:00", 86400 + 3600)
+
+
+def test_next_run_after_without_run_at():
+    from datetime import datetime, timezone
+
+    ref = datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc)
+    got = scheduler.next_run_after(ref, 3600, None)
+    assert got == datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
+
+
+def test_next_run_after_aligns_to_run_at():
+    from datetime import datetime, timezone
+
+    # 1일 주기, 09:00 — 기준 + 1일의 날짜에서 09:00 으로 정렬
+    ref = datetime(2026, 6, 1, 8, 30, tzinfo=timezone.utc)
+    got = scheduler.next_run_after(ref, 86400, "09:00", tz=timezone.utc)
+    assert got == datetime(2026, 6, 2, 9, 0, tzinfo=timezone.utc)
+
+    # 실행이 늦어진 경우(15:00 종료)에도 다음 날 09:00 으로 재정렬
+    ref = datetime(2026, 6, 1, 15, 0, tzinfo=timezone.utc)
+    got = scheduler.next_run_after(ref, 86400, "09:00", tz=timezone.utc)
+    assert got == datetime(2026, 6, 2, 9, 0, tzinfo=timezone.utc)
+
+    # 1주 주기 — 등록 요일 유지 + 시각 정렬
+    ref = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
+    got = scheduler.next_run_after(ref, 7 * 86400, "09:00", tz=timezone.utc)
+    assert got == datetime(2026, 6, 8, 9, 0, tzinfo=timezone.utc)
+
+
+def test_set_schedule_with_run_at(archive_env):
+    from datetime import datetime
+
+    row = scheduler.set_schedule(archive_env, 86400, run_at="09:00")
+    assert row["run_at_time"] == "09:00"
+    # 다음 실행 시각(UTC 저장)을 로컬로 되돌리면 정확히 09:00
+    nxt = datetime.fromisoformat(row["next_run_at"]).astimezone()
+    assert (nxt.hour, nxt.minute) == (9, 0)
+
+    row = scheduler.set_schedule(archive_env, 86400)  # 시각 없이 갱신하면 해제
+    assert row["run_at_time"] is None
+
+
+def test_set_schedule_rejects_run_at_for_hourly(archive_env):
+    with pytest.raises(ValueError, match="1일 단위 주기"):
+        scheduler.set_schedule(archive_env, 3600, run_at="09:00")
+
+
 # ---- 등록/해제 ----
 
 
@@ -167,6 +239,20 @@ def test_run_due_archives_and_advances(archive_env, monkeypatch):
     assert row["next_run_at"] > scheduler._iso(scheduler._utcnow())
 
 
+def test_run_due_advances_aligned_to_run_at(archive_env, monkeypatch):
+    from datetime import datetime
+
+    monkeypatch.setattr(pipeline, "archive_url", lambda *a, **k: _outcome())
+    with db.connect() as conn:
+        page = db.get_page(conn, URL)
+        db.upsert_schedule(conn, page["id"], 86400, PAST, "09:00")
+    scheduler.run_due()
+    row = _schedule_row()
+    assert row["next_run_at"] > scheduler._iso(scheduler._utcnow())
+    nxt = datetime.fromisoformat(row["next_run_at"]).astimezone()
+    assert (nxt.hour, nxt.minute) == (9, 0)  # 다음 실행도 로컬 09:00 정렬 유지
+
+
 def test_run_due_nothing_due(archive_env, monkeypatch):
     monkeypatch.setattr(
         pipeline, "archive_url", lambda *a, **k: pytest.fail("실행되면 안 됨")
@@ -258,6 +344,25 @@ def test_cli_schedule_next_errors(archive_env):
     )
     assert result.exit_code != 0
     assert "등록된 스케줄이 없는" in result.output
+
+
+def test_cli_schedule_add_with_at(archive_env):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.main, ["schedule", "add", archive_env, "--every", "1d", "--at", "09:00"]
+    )
+    assert result.exit_code == 0
+    assert "1일 · 09:00" in result.output
+
+    result = runner.invoke(cli.main, ["schedule", "list"])
+    assert "1일 · 09:00" in result.output
+
+    # 시간 단위 주기에는 --at 불가
+    result = runner.invoke(
+        cli.main, ["schedule", "add", archive_env, "--every", "6h", "--at", "09:00"]
+    )
+    assert result.exit_code != 0
+    assert "1일 단위 주기" in result.output
 
 
 def test_cli_schedule_add_invalid_interval(archive_env):
