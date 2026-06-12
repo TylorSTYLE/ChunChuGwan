@@ -1,39 +1,37 @@
 {% extends "base.html" %}
-{% block title %}사용자 — 춘추관{% endblock %}
+{% block title %}{{ _("사용자") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
-<h2>사용자 관리</h2>
+<h2>{{ _("사용자 관리") }}</h2>
 {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
 <p class="muted" style="font-size:12px; max-width:720px">
-  관리자=전체 관리, 아카이브=아카이빙 가능, 보기 전용=열람만, 차단됨=접근 불가.
-  차단하면 해당 사용자의 모든 세션이 즉시 로그아웃됩니다.
-  최초 등록된 관리자의 권한은 변경할 수 없습니다.
+  {{ _("관리자=전체 관리, 아카이브=아카이빙 가능, 보기 전용=열람만, 차단됨=접근 불가. 차단하면 해당 사용자의 모든 세션이 즉시 로그아웃됩니다. 최초 등록된 관리자의 권한은 변경할 수 없습니다.") }}
 </p>
 
 <table>
   <thead>
-    <tr><th>이메일</th><th>이름</th><th>권한</th><th>2FA</th><th>SSO</th>
-        <th>활성 세션</th><th>가입일</th><th>권한 변경</th></tr>
+    <tr><th>{{ _("이메일") }}</th><th>{{ _("이름") }}</th><th>{{ _("권한") }}</th><th>2FA</th><th>SSO</th>
+        <th>{{ _("활성 세션") }}</th><th>{{ _("가입일") }}</th><th>{{ _("권한 변경") }}</th></tr>
   </thead>
   <tbody>
   {% for u in users %}
     <tr>
-      <td class="mono">{{ u['email'] }}{% if u['id'] == me_id %} <span class="muted">(나)</span>{% endif %}</td>
+      <td class="mono">{{ u['email'] }}{% if u['id'] == me_id %} <span class="muted">{{ _("(나)") }}</span>{% endif %}</td>
       <td>
         <form class="inline" method="post" action="/system/users/{{ u['id'] }}/name">
           <input type="text" name="display_name" value="{{ u['display_name'] or '' }}"
                  size="10" maxlength="50" placeholder="-">
-          <button type="submit">저장</button>
+          <button type="submit">{{ _("저장") }}</button>
         </form>
       </td>
       <td>
-        <span class="badge role-{{ u['role'] }}">{{ role_labels.get(u['role'], u['role']) }}</span>
-        {% if u['is_founder'] %}<span class="badge role-admin">최초 관리자</span>{% endif %}
+        <span class="badge role-{{ u['role'] }}">{{ _(role_labels.get(u['role'], u['role'])) }}</span>
+        {% if u['is_founder'] %}<span class="badge role-admin">{{ _("최초 관리자") }}</span>{% endif %}
       </td>
       <td>
         {% if u['totp_secret'] %}<span class="badge new">TOTP</span>{% endif %}
-        {% if u['passkey_count'] > 0 %}<span class="badge new">패스키 {{ u['passkey_count'] }}</span>{% endif %}
+        {% if u['passkey_count'] > 0 %}<span class="badge new">{{ _("패스키") }} {{ u['passkey_count'] }}</span>{% endif %}
         {% if not u['totp_secret'] and u['passkey_count'] == 0 %}<span class="muted">-</span>{% endif %}
       </td>
       <td>{% if u['identity_count'] > 0 %}<span class="badge same">OIDC</span>{% else %}<span class="muted">-</span>{% endif %}</td>
@@ -42,32 +40,32 @@
         {% if u['session_count'] > 0 %}
         <form class="inline" method="post" action="/system/users/{{ u['id'] }}/logout"
               {% if u['id'] == me_id %}
-              onsubmit="return confirm('본인 계정의 모든 세션을 로그아웃합니다. 지금 이 로그인도 종료됩니다. 계속할까요?')"
+              onsubmit="return confirm({{ _('본인 계정의 모든 세션을 로그아웃합니다. 지금 이 로그인도 종료됩니다. 계속할까요?')|tojson }})"
               {% else %}
-              onsubmit="return confirm('{{ u['email'] }} 의 모든 세션을 로그아웃할까요?')"
+              onsubmit="return confirm({{ _('{email} 의 모든 세션을 로그아웃할까요?', email=u['email'])|tojson }})"
               {% endif %}>
-          <button type="submit">로그아웃</button>
+          <button type="submit">{{ _("로그아웃") }}</button>
         </form>
         {% endif %}
       </td>
-      <td class="mono">{{ u['created_at'][:10] }}</td>
+      <td class="mono">{{ u['created_at'] | ts('date') }}</td>
       <td>
         {% if u['is_founder'] %}
-        <span class="muted" style="font-size:12px">변경 불가</span>
+        <span class="muted" style="font-size:12px">{{ _("변경 불가") }}</span>
         {% else %}
         <form class="inline" method="post" action="/system/users/{{ u['id'] }}/role"
               {% if u['id'] == me_id %}
-              onsubmit="return confirm('본인 계정의 권한을 변경합니다. 관리자 권한을 잃으면 이 화면에 다시 접근할 수 없습니다. 계속할까요?')"
+              onsubmit="return confirm({{ _('본인 계정의 권한을 변경합니다. 관리자 권한을 잃으면 이 화면에 다시 접근할 수 없습니다. 계속할까요?')|tojson }})"
               {% elif u['role'] != 'blocked' %}
               onsubmit="return this.role.value !== 'blocked'
-                        || confirm('{{ u['email'] }} 계정을 차단할까요? 모든 세션이 즉시 로그아웃됩니다.')"
+                        || confirm({{ _('{email} 계정을 차단할까요? 모든 세션이 즉시 로그아웃됩니다.', email=u['email'])|tojson }})"
               {% endif %}>
           <select name="role">
             {% for r in roles %}
-            <option value="{{ r }}" {% if r == u['role'] %}selected{% endif %}>{{ role_labels[r] }}</option>
+            <option value="{{ r }}" {% if r == u['role'] %}selected{% endif %}>{{ _(role_labels[r]) }}</option>
             {% endfor %}
           </select>
-          <button type="submit">변경</button>
+          <button type="submit">{{ _("변경", ctx="action") }}</button>
         </form>
         {% endif %}
       </td>
@@ -76,41 +74,39 @@
   </tbody>
 </table>
 
-<h3 style="margin-top:24px">이메일 초대</h3>
+<h3 style="margin-top:24px">{{ _("이메일 초대") }}</h3>
 <p class="muted" style="font-size:12px; max-width:720px">
-  초대 링크는 {{ invite_ttl_days }}일 후 만료되며, 같은 이메일을 다시 초대하면
-  새 링크로 교체됩니다.
+  {{ _("초대 링크는 {n}일 후 만료되며, 같은 이메일을 다시 초대하면 새 링크로 교체됩니다.", n=invite_ttl_days) }}
   {% if not mail_enabled %}
-  메일 발송이 설정되지 않아(WCCG_SMTP_*) 초대 링크가 화면에 표시됩니다 —
-  직접 전달하세요.
+  {{ _("메일 발송이 설정되지 않아(WCCG_SMTP_*) 초대 링크가 화면에 표시됩니다 — 직접 전달하세요.") }}
   {% endif %}
 </p>
 <form class="inline" method="post" action="/system/users/invite">
   <input type="email" name="email" placeholder="invite@example.com" size="28" required>
   <select name="role">
     {% for r in invitable_roles %}
-    <option value="{{ r }}" {% if r == 'viewer' %}selected{% endif %}>{{ role_labels[r] }}</option>
+    <option value="{{ r }}" {% if r == 'viewer' %}selected{% endif %}>{{ _(role_labels[r]) }}</option>
     {% endfor %}
   </select>
-  <button type="submit">초대</button>
+  <button type="submit">{{ _("초대") }}</button>
 </form>
 
 {% if invites %}
 <table style="margin-top:12px">
   <thead>
-    <tr><th>이메일</th><th>권한</th><th>초대한 사람</th><th>만료</th><th></th></tr>
+    <tr><th>{{ _("이메일") }}</th><th>{{ _("권한") }}</th><th>{{ _("초대한 사람") }}</th><th>{{ _("만료") }}</th><th></th></tr>
   </thead>
   <tbody>
   {% for i in invites %}
     <tr>
       <td class="mono">{{ i['email'] }}</td>
-      <td><span class="badge role-{{ i['role'] }}">{{ role_labels.get(i['role'], i['role']) }}</span></td>
+      <td><span class="badge role-{{ i['role'] }}">{{ _(role_labels.get(i['role'], i['role'])) }}</span></td>
       <td class="mono">{{ i['inviter_email'] or '-' }}</td>
-      <td class="mono">{{ i['expires_at'][:10] }}</td>
+      <td class="mono">{{ i['expires_at'] | ts('date') }}</td>
       <td>
         <form class="inline" method="post" action="/system/users/invite/{{ i['id'] }}/delete"
-              onsubmit="return confirm('{{ i['email'] }} 초대를 취소할까요? 링크가 즉시 무효화됩니다.')">
-          <button type="submit">취소</button>
+              onsubmit="return confirm({{ _('{email} 초대를 취소할까요? 링크가 즉시 무효화됩니다.', email=i['email'])|tojson }})">
+          <button type="submit">{{ _("취소") }}</button>
         </form>
       </td>
     </tr>

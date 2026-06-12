@@ -14,23 +14,23 @@
 {% set daily = is_custom and ns.cu == 'd' or (not is_custom and selected and selected % 86400 == 0) %}
 <span class="sched-field" style="display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap">
   <select name="interval" class="sched-interval">
-    {% if allow_off %}<option value="0">사용 안 함 (1회만 아카이빙)</option>{% endif %}
+    {% if allow_off %}<option value="0">{{ _("사용 안 함 (1회만 아카이빙)") }}</option>{% endif %}
     {% for v, label in interval_options %}
-    <option value="{{ v }}" {% if selected == v %}selected{% endif %}>{{ label }}{{ '마다' if allow_off else '' }}</option>
+    <option value="{{ v }}" {% if selected == v %}selected{% endif %}>{{ _("{label}마다", label=_(label)) if allow_off else _(label) }}</option>
     {% endfor %}
-    <option value="custom" {% if is_custom %}selected{% endif %}>직접 입력…</option>
+    <option value="custom" {% if is_custom %}selected{% endif %}>{{ _("직접 입력…") }}</option>
   </select>
   <span class="sched-custom" {% if not is_custom %}hidden{% endif %}>
     <input type="number" name="custom_value" min="1" step="1" value="{{ ns.cv }}"
            style="width:4.5em" {% if not is_custom %}disabled{% endif %}>
     <select name="custom_unit" {% if not is_custom %}disabled{% endif %}>
-      <option value="m" {% if ns.cu == 'm' %}selected{% endif %}>분</option>
-      <option value="h" {% if ns.cu == 'h' %}selected{% endif %}>시간</option>
-      <option value="d" {% if ns.cu == 'd' %}selected{% endif %}>일</option>
+      <option value="m" {% if ns.cu == 'm' %}selected{% endif %}>{{ _("분", ctx="unit") }}</option>
+      <option value="h" {% if ns.cu == 'h' %}selected{% endif %}>{{ _("시간", ctx="unit") }}</option>
+      <option value="d" {% if ns.cu == 'd' %}selected{% endif %}>{{ _("일", ctx="unit") }}</option>
     </select>
   </span>
   <label class="sched-at" {% if not daily %}hidden{% endif %}
-         title="1일 단위 주기에서 실행할 시각 (서버 시간 기준, 비우면 등록 시점 기준)"
+         title="{{ _('1일 단위 주기에서 실행할 시각 (서버 시간 기준, 비우면 등록 시점 기준)') }}"
          style="display:inline-flex; gap:4px; align-items:center">
     <input type="time" name="run_at" value="{{ run_at or '' }}" {% if not daily %}disabled{% endif %}>
   </label>

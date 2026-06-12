@@ -17,7 +17,7 @@ async function postJson(url, payload) {
     body: payload !== undefined ? JSON.stringify(payload) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || "요청 실패 (" + res.status + ")");
+  if (!res.ok) throw new Error(data.detail || {{ _("요청 실패")|tojson }} + " (" + res.status + ")");
   return data;
 }
 </script>

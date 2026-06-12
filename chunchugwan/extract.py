@@ -9,6 +9,7 @@ import html
 import re
 
 import trafilatura
+from lxml import html as lxml_html
 
 _TIMESTAMP_PATTERNS = (
     # ISO 8601: 2026-06-10T12:34:56.123+09:00, 2026-06-10 12:34
@@ -32,13 +33,30 @@ _AD_LINE = re.compile(r"^(?:광고|AD|Advertisement|Sponsored(?:\s+Content)?|스
 
 
 def extract_text(raw_html: str, url: str) -> str:
-    """raw.html 에서 본문 텍스트(markdown)를 추출. 실패 시 <body> 텍스트 폴백."""
+    """raw.html 에서 본문 텍스트(markdown)를 추출. 실패 시 <body> 텍스트 폴백.
+
+    trafilatura 는 링크 비중이 높은 블록을 보일러플레이트로 잘라내는데,
+    게시판/목록형 페이지에서는 본문(글 제목)이 전부 <a> 안이라 통째로
+    사라진다. 추출 전에 <a> 를 <span> 으로 바꿔 link-density 필터를
+    우회한다 — nav/footer 등 본문 영역 탐지는 그대로 동작한다.
+    """
     text = trafilatura.extract(
-        raw_html, output_format="markdown", include_links=True, url=url
+        _detag_links(raw_html), output_format="markdown", url=url
     )
     if text:
         return text
     return _body_text_fallback(raw_html)
+
+
+def _detag_links(raw_html: str) -> str:
+    """<a> 태그를 <span> 으로 치환한 HTML 반환. 파싱 실패 시 원본 그대로."""
+    try:
+        tree = lxml_html.fromstring(raw_html)
+    except Exception:
+        return raw_html
+    for a in tree.iter("a"):
+        a.tag = "span"
+    return lxml_html.tostring(tree, encoding="unicode")
 
 
 def _body_text_fallback(raw_html: str) -> str:

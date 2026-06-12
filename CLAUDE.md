@@ -65,7 +65,10 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
    일은 절대 없어야 한다. `/resource/` (공유 자원 CAS)는 유일한 인증 예외
    경로 — 샌드박스 문서의 하위 요청에는 SameSite 쿠키가 안 붙기 때문이며,
    sha256 콘텐츠 주소 이름 + 미디어 타입 화이트리스트(문서 타입 금지) +
-   CSP sandbox 로만 서빙한다 (`resources.py` 보안 노트 참조).
+   CSP sandbox 로만 서빙한다 (`resources.py` 보안 노트 참조). 함께 저장된
+   문서 파일(`files/`)은 CAS 가 아니라 스냅샷 안에 두고, 인증이 걸린
+   `/snapshot/{id}/doc/{name}` 에서 meta.json 의 documents 목록에 있는
+   이름만 항상 첨부파일 다운로드(렌더링 금지)로 서빙한다.
 6. **인증 데이터 규칙.** 패스워드는 Argon2id 해시만, 세션은 서버사이드로 토큰의
    SHA-256 만 저장. 2FA(TOTP·패스키)는 패스워드 로그인에만 적용하고 SSO(OIDC)는
    IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origin 은
@@ -88,7 +91,10 @@ archive/
                 ├── raw.html.gz     # 렌더링 후 DOM 소스 (gzip)
                 ├── content.md      # 추출+정규화 텍스트
                 ├── screenshot.webp # 전체 페이지 (변환 실패 시 screenshot.png 유지)
-                └── meta.json       # url, final_url, 시각, 해시, http 정보
+                ├── files/          # 페이지가 링크한 문서 파일 (PDF·워드·한글 등,
+                │                   #   documents.py — 문서 링크가 없으면 생기지 않음)
+                └── meta.json       # url, final_url, 시각, 해시, http 정보,
+                                    #   documents 목록(files/ 서빙 화이트리스트)
 ```
 
 `wccg compact` 이전의 구형 스냅샷(page.html / raw.html / screenshot.png)도
@@ -140,6 +146,11 @@ archive/
   최초 관리자는 변경 불가)
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
+- 다국어(ko/en): `web/i18n.py` — 한국어 원문이 메시지 키(gettext msgid 방식),
+  언어별 "원문 → 번역" dict 로 확장. 로케일은 `wccg_lang` 쿠키(헤더의 언어
+  선택, `POST /lang`) → Accept-Language → ko. 템플릿은 `_("…")`, 라우트는
+  `i18n.t(request, "…")`. 새 UI 문자열 추가 시 en 카탈로그도 채울 것 —
+  템플릿 리터럴 키 누락은 `tests/test_i18n.py` 가 검사한다. CLI 는 한국어 유지.
 - diff 뷰: 텍스트 side-by-side + 스크린샷 비교(슬라이더 또는 토글)
 
 ## 구현 로드맵 (이 순서로 진행할 것)
@@ -183,5 +194,9 @@ archive/
       세션도 미들웨어가 차단. 관리자 전용 사용자 관리 화면(`/system/users`)
       에서 권한 조정 (차단 시 대상 세션 즉시 삭제). 권한 판정은
       `web/permissions.py` 헬퍼로 일원화 (라우트 가드·템플릿 노출 공용).
+- [x] **M8 웹 UI 다국어**: `web/i18n.py` — ko/en 카탈로그(한국어 원문 키),
+      쿠키(`wccg_lang`) + Accept-Language 로케일 결정, 헤더 언어 선택
+      (`POST /lang`), 주기 표기 로케일화(`i18n.format_interval`). 템플릿 전체
+      `_()` 적용 + 라우트 메시지 `i18n.t()` 번역. 향후 언어 추가 = dict 추가.
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.
