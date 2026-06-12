@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
-from . import config
+from . import config, storage
 
 # 쓰기 락 대기 한도(초) — WAL 에서도 쓰기는 한 번에 하나라, 동시 쓰기가
 # 겹치면 이 시간만큼 기다린 뒤 OperationalError.
@@ -35,14 +35,44 @@ CREATE TABLE IF NOT EXISTS network_tags (
     created_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sites (
+    id          INTEGER PRIMARY KEY,
+    site_key    TEXT NOT NULL UNIQUE,   -- 서브도메인 단위 키 (storage.site_key —
+                                        --   www 제거 호스트, 기본 외 포트 포함)
+    created_at  TEXT NOT NULL           -- ISO 8601 UTC
+);
+
+CREATE TABLE IF NOT EXISTS site_certificates (
+    id           INTEGER PRIMARY KEY,
+    site_id      INTEGER NOT NULL REFERENCES sites(id),
+    host         TEXT NOT NULL,           -- 인증서를 받은 호스트[:포트] (www 변형 구분)
+    fingerprint  TEXT NOT NULL,           -- DER sha256 hex — 버전 식별자
+    subject      TEXT NOT NULL,
+    issuer       TEXT NOT NULL,
+    serial       TEXT NOT NULL,
+    san          TEXT NOT NULL DEFAULT '[]',  -- SAN 목록 (JSON 배열)
+    not_before   TEXT,
+    not_after    TEXT,
+    signature_algorithm TEXT,
+    verified     INTEGER NOT NULL DEFAULT 1,  -- 캡처가 인증서 검증을 통과했는지
+    pem          TEXT NOT NULL,           -- 인증서 원문 (PEM — 보관·다운로드)
+    first_seen_at TEXT NOT NULL,          -- 이 버전을 처음/마지막으로 본 시각
+    last_seen_at  TEXT NOT NULL,
+    UNIQUE (site_id, host, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_site_certificates_site
+    ON site_certificates(site_id, last_seen_at);
+
 CREATE TABLE IF NOT EXISTS pages (
     id          INTEGER PRIMARY KEY,
     url         TEXT NOT NULL UNIQUE,   -- 정규화된 URL
     domain      TEXT NOT NULL,
     slug        TEXT NOT NULL,          -- 디렉토리명 {slug}-{hash8}
+    site_id     INTEGER REFERENCES sites(id),  -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id),  -- 사설 대역 페이지의 로컬 네트워크 태그
     created_at  TEXT NOT NULL           -- ISO 8601 UTC
 );
+CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id);
 
 CREATE TABLE IF NOT EXISTS snapshots (
     id            INTEGER PRIMARY KEY,
@@ -53,7 +83,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
     final_url     TEXT NOT NULL,        -- 리다이렉트 후 최종 URL
     http_status   INTEGER,
     changed       INTEGER NOT NULL DEFAULT 1,  -- 직전 스냅샷 대비 변경 여부
-    note          TEXT
+    note          TEXT,
+    resources_indexed INTEGER NOT NULL DEFAULT 0  -- 자원 참조(snapshot_resources) 기록 여부.
+                                                  --   0 이면 저장공간 최적화의 백필 대상
 );
 
 CREATE TABLE IF NOT EXISTS checks (
@@ -65,6 +97,16 @@ CREATE TABLE IF NOT EXISTS checks (
 
 CREATE INDEX IF NOT EXISTS idx_snapshots_page ON snapshots(page_id, taken_at);
 CREATE INDEX IF NOT EXISTS idx_checks_page ON checks(page_id, checked_at);
+
+CREATE TABLE IF NOT EXISTS snapshot_resources (
+    id           INTEGER PRIMARY KEY,
+    snapshot_id  INTEGER NOT NULL REFERENCES snapshots(id),
+    name         TEXT NOT NULL,         -- 자원 CAS 이름 (sha256 + 확장자, resources.py)
+    url          TEXT,                  -- 원본 URL (모를 수 있음 — compact 백필 등)
+    UNIQUE (snapshot_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_resources_name ON snapshot_resources(name);
+CREATE INDEX IF NOT EXISTS idx_snapshot_resources_url ON snapshot_resources(url);
 
 CREATE TABLE IF NOT EXISTS snapshot_documents (
     id           INTEGER PRIMARY KEY,
@@ -99,12 +141,14 @@ CREATE TABLE IF NOT EXISTS crawls (
     max_depth      INTEGER NOT NULL,
     delay_seconds  INTEGER NOT NULL,   -- 페이지 간 최소 간격 (대상 서버 부담 방지)
     source         TEXT NOT NULL DEFAULT 'web',      -- 'web' | 'cli'
+    site_id        INTEGER REFERENCES sites(id),     -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id), -- 사설 대역 크롤의 로컬 네트워크 태그
     created_at     TEXT NOT NULL,
     finished_at    TEXT,
     next_page_at   TEXT NOT NULL       -- 다음 페이지 처리 가능 시각 (ISO 8601 UTC)
 );
 CREATE INDEX IF NOT EXISTS idx_crawls_status ON crawls(status, next_page_at);
+CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id);
 
 CREATE TABLE IF NOT EXISTS crawl_pages (
     id              INTEGER PRIMARY KEY,
@@ -131,6 +175,7 @@ CREATE TABLE IF NOT EXISTS crawl_schedules (
     next_run_at      TEXT NOT NULL,         -- ISO 8601 UTC
     last_run_at      TEXT,
     run_at_time      TEXT,                  -- 'HH:MM' 서버 로컬 시간 (1일 단위 주기 전용)
+    site_id          INTEGER REFERENCES sites(id),       -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id   TEXT REFERENCES network_tags(id),  -- 사설 대역 사이트의 로컬 네트워크 태그
     created_at       TEXT NOT NULL
 );
@@ -277,6 +322,39 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN network_tag_id TEXT REFERENCES network_tags(id)"
             )
+    # 자원 참조 인덱스 여부 — 0 인 스냅샷은 저장공간 최적화가 백필한다
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
+    if cols and "resources_indexed" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN resources_indexed INTEGER NOT NULL DEFAULT 0"
+        )
+    # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
+    for table in ("pages", "crawls", "crawl_schedules"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if cols and "site_id" not in cols:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN site_id INTEGER REFERENCES sites(id)"
+            )
+    _backfill_sites(conn)
+
+
+def _backfill_sites(conn: sqlite3.Connection) -> None:
+    """site_id 가 비어 있는 기존 행을 사이트에 자동 연결 (멱등).
+
+    사이트 도입 전 데이터의 1회성 마이그레이션이지만, 행 단위로 조건을
+    걸어 언제 다시 실행돼도 안전하다. URL 단위 작업이라 수 초면 끝난다.
+    """
+    for table, url_col in (
+        ("pages", "url"), ("crawls", "start_url"), ("crawl_schedules", "start_url"),
+    ):
+        rows = conn.execute(
+            f"SELECT id, {url_col} AS url FROM {table} WHERE site_id IS NULL"
+        ).fetchall()
+        for row in rows:
+            site_id = get_or_create_site(conn, storage.site_key(row["url"]))
+            conn.execute(
+                f"UPDATE {table} SET site_id = ? WHERE id = ?", (site_id, row["id"])
+            )
 
 
 @contextmanager
@@ -357,6 +435,184 @@ def list_checks(conn: sqlite3.Connection, page_id: int, limit: int = 20) -> list
     ).fetchall()
 
 
+# ---- 사이트 (서브도메인 단위 그룹) ----
+# 모든 페이지·크롤·크롤 스케줄은 사이트에 속한다. 키는 storage.site_key —
+# www 와 apex 는 같은 사이트, 다른 서브도메인·포트는 다른 사이트.
+# 사이트 행은 첫 소속 행이 생길 때 자동 생성되고, 마지막 소속 행이
+# 사라지면 자동 삭제된다 (prune_site_if_empty).
+
+
+def get_or_create_site(conn: sqlite3.Connection, site_key: str) -> int:
+    """사이트 키로 site row 를 찾거나 생성하고 id 반환."""
+    row = conn.execute(
+        "SELECT id FROM sites WHERE site_key = ?", (site_key,)
+    ).fetchone()
+    if row is not None:
+        return row["id"]
+    cur = conn.execute(
+        "INSERT INTO sites (site_key, created_at) VALUES (?, ?)",
+        (site_key, _utcnow()),
+    )
+    return cur.lastrowid
+
+
+def get_site(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row | None:
+    """id 로 site row 조회 (없으면 None)."""
+    return conn.execute("SELECT * FROM sites WHERE id = ?", (site_id,)).fetchone()
+
+
+def get_site_by_key(conn: sqlite3.Connection, site_key: str) -> sqlite3.Row | None:
+    """사이트 키로 site row 조회 (없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM sites WHERE site_key = ?", (site_key,)
+    ).fetchone()
+
+
+def _site_is_empty(conn: sqlite3.Connection, site_id: int) -> bool:
+    """사이트에 소속 행(페이지·크롤·크롤 스케줄)이 하나도 없는지."""
+    row = conn.execute(
+        """
+        SELECT NOT EXISTS (SELECT 1 FROM pages WHERE site_id = :id)
+           AND NOT EXISTS (SELECT 1 FROM crawls WHERE site_id = :id)
+           AND NOT EXISTS (SELECT 1 FROM crawl_schedules WHERE site_id = :id) AS empty
+        """,
+        {"id": site_id},
+    ).fetchone()
+    return bool(row["empty"])
+
+
+def prune_site_if_empty(conn: sqlite3.Connection, site_id: int | None) -> bool:
+    """소속 행(페이지·크롤·크롤 스케줄)이 하나도 없으면 사이트 행 삭제.
+
+    페이지·크롤 스케줄 삭제 경로가 호출한다 — 크롤 회차는 개별 삭제가
+    없으므로(사이트 단위 삭제뿐) 회차가 남아 있는 한 사이트도 남는다.
+    인증서 이력은 사이트의 부가 기록이라 함께 지운다.
+    """
+    if site_id is None or not _site_is_empty(conn, site_id):
+        return False
+    conn.execute("DELETE FROM site_certificates WHERE site_id = ?", (site_id,))
+    cur = conn.execute("DELETE FROM sites WHERE id = ?", (site_id,))
+    return cur.rowcount == 1
+
+
+def prune_empty_sites(conn: sqlite3.Connection) -> int:
+    """소속 행이 하나도 없는 사이트 행 일괄 삭제 (가져오기 overwrite 등 정리용)."""
+    empty_filter = """
+          NOT EXISTS (SELECT 1 FROM pages WHERE site_id = sites.id)
+          AND NOT EXISTS (SELECT 1 FROM crawls WHERE site_id = sites.id)
+          AND NOT EXISTS (SELECT 1 FROM crawl_schedules WHERE site_id = sites.id)
+    """
+    conn.execute(
+        "DELETE FROM site_certificates WHERE site_id IN "
+        f"(SELECT id FROM sites WHERE {empty_filter})"
+    )
+    cur = conn.execute(f"DELETE FROM sites WHERE {empty_filter}")
+    return cur.rowcount
+
+
+def count_sites(conn: sqlite3.Connection) -> int:
+    """전체 사이트 수 (현황 대시보드용)."""
+    return conn.execute("SELECT COUNT(*) AS c FROM sites").fetchone()["c"]
+
+
+_CERT_INFO_COLUMNS = (
+    "fingerprint", "subject", "issuer", "serial", "san",
+    "not_before", "not_after", "signature_algorithm", "pem",
+)
+
+
+def upsert_site_certificate(
+    conn: sqlite3.Connection,
+    site_id: int,
+    info: dict,
+    *,
+    verified: bool,
+) -> bool:
+    """사이트 인증서 기록 — 새 버전이면 행 추가, 같은 버전이면 last_seen 갱신.
+
+    버전 식별은 (site_id, host, fingerprint). 갱신된 인증서는 새 행이 되고
+    이전 행은 남아 버전 이력이 보존된다. info 는 certs.fetch_certificate_info
+    형식. 반환은 새 버전 행을 만들었는지 여부.
+    """
+    now = _utcnow()
+    cur = conn.execute(
+        """
+        UPDATE site_certificates
+        SET last_seen_at = ?, verified = ?
+        WHERE site_id = ? AND host = ? AND fingerprint = ?
+        """,
+        (now, int(verified), site_id, info["host"], info["fingerprint"]),
+    )
+    if cur.rowcount == 1:
+        return False
+    conn.execute(
+        f"""
+        INSERT INTO site_certificates
+            (site_id, host, {', '.join(_CERT_INFO_COLUMNS)},
+             verified, first_seen_at, last_seen_at)
+        VALUES ({', '.join('?' for _ in range(len(_CERT_INFO_COLUMNS) + 5))})
+        """,
+        (site_id, info["host"], *(info[c] for c in _CERT_INFO_COLUMNS),
+         int(verified), now, now),
+    )
+    return True
+
+
+def list_site_certificates(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트의 인증서 버전 이력 (호스트별 최근 확인 순) — 사이트 상세용."""
+    return conn.execute(
+        """
+        SELECT * FROM site_certificates
+        WHERE site_id = ? ORDER BY host, last_seen_at DESC, id DESC
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def get_site_certificate(
+    conn: sqlite3.Connection, site_id: int, cert_id: int
+) -> sqlite3.Row | None:
+    """사이트 소속 인증서 행 조회 (소속이 아니면 None) — PEM 다운로드 검증용."""
+    return conn.execute(
+        "SELECT * FROM site_certificates WHERE id = ? AND site_id = ?",
+        (cert_id, site_id),
+    ).fetchone()
+
+
+def list_sites_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """사이트 목록 + 페이지·스냅샷·크롤 회차·스케줄 집계 (아카이브 목록 화면용).
+
+    last_activity_at 은 마지막 스냅샷과 마지막 크롤 활동(완료 또는 생성) 중
+    더 최근 시각 — 목록 정렬 기준이다.
+    """
+    return conn.execute(
+        """
+        SELECT st.*,
+               (SELECT COUNT(*) FROM pages p WHERE p.site_id = st.id) AS page_count,
+               (SELECT COUNT(*) FROM snapshots s JOIN pages p ON p.id = s.page_id
+                 WHERE p.site_id = st.id) AS snapshot_count,
+               (SELECT COUNT(*) FROM crawls c WHERE c.site_id = st.id) AS crawl_count,
+               (SELECT COUNT(*) FROM crawls c
+                 WHERE c.site_id = st.id AND c.status = 'running') AS running_crawl_count,
+               (SELECT COUNT(*) FROM schedules sc JOIN pages p ON p.id = sc.page_id
+                 WHERE p.site_id = st.id)
+                 + (SELECT COUNT(*) FROM crawl_schedules cs
+                    WHERE cs.site_id = st.id) AS schedule_count,
+               MAX(
+                   COALESCE((SELECT MAX(s.taken_at) FROM snapshots s
+                             JOIN pages p ON p.id = s.page_id
+                             WHERE p.site_id = st.id), ''),
+                   COALESCE((SELECT MAX(COALESCE(c.finished_at, c.created_at))
+                             FROM crawls c WHERE c.site_id = st.id), '')
+               ) AS last_activity_at
+        FROM sites st
+        ORDER BY last_activity_at DESC, st.site_key
+        """
+    ).fetchall()
+
+
 def get_or_create_page(
     conn: sqlite3.Connection,
     url: str,
@@ -366,6 +622,8 @@ def get_or_create_page(
 ) -> int:
     """정규화 URL로 page row를 찾거나 생성하고 id 반환.
 
+    소속 사이트(site_id)는 URL 에서 계산해 자동 연결한다 — 같은 서브도메인의
+    사이트가 있으면 거기 속하고, 없으면 사이트가 함께 만들어진다.
     network_tag_id 를 주면 기존 페이지의 태그도 갱신한다 — 태그 없이
     만들어진 사설 대역 페이지를 새 아카이빙 폼에서 태그를 골라 다시
     제출하는 것이 태그 지정/변경 경로다.
@@ -380,12 +638,13 @@ def get_or_create_page(
                 (network_tag_id, row["id"]),
             )
         return row["id"]
+    site_id = get_or_create_site(conn, storage.site_key(url))
     cur = conn.execute(
         """
-        INSERT INTO pages (url, domain, slug, network_tag_id, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO pages (url, domain, slug, site_id, network_tag_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (url, domain, slug, network_tag_id, _utcnow()),
+        (url, domain, slug, site_id, network_tag_id, _utcnow()),
     )
     return cur.lastrowid
 
@@ -399,7 +658,8 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 
 _SNAPSHOT_COLUMNS = frozenset(
-    {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed", "note"}
+    {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
+     "note", "resources_indexed"}
 )
 
 
@@ -459,6 +719,9 @@ def delete_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> bool:
     conn.execute(
         "DELETE FROM snapshot_documents WHERE snapshot_id = ?", (snapshot_id,)
     )
+    conn.execute(
+        "DELETE FROM snapshot_resources WHERE snapshot_id = ?", (snapshot_id,)
+    )
     conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
     if nxt is not None:
         changed = 1 if prev is None else int(prev["content_hash"] != nxt["content_hash"])
@@ -472,8 +735,10 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
     """페이지와 종속 데이터(스냅샷·확인 기록·스케줄)를 일괄 삭제. 없으면 False.
 
     archive_logs 는 실행 이력으로 보존하되 page_id/snapshot_id 참조만 해제한다.
+    사이트의 마지막 소속 행이었다면 사이트 행도 함께 삭제된다.
     """
-    if get_page_by_id(conn, page_id) is None:
+    page = get_page_by_id(conn, page_id)
+    if page is None:
         return False
     conn.execute(
         """
@@ -499,10 +764,18 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
         """,
         (page_id,),
     )
+    conn.execute(
+        """
+        DELETE FROM snapshot_resources
+        WHERE snapshot_id IN (SELECT id FROM snapshots WHERE page_id = ?)
+        """,
+        (page_id,),
+    )
     conn.execute("DELETE FROM checks WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM schedules WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM snapshots WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM pages WHERE id = ?", (page_id,))
+    prune_site_if_empty(conn, page["site_id"])
     return True
 
 
@@ -686,6 +959,110 @@ def list_recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sql
     ).fetchall()
 
 
+# ---- 스냅샷의 공유 자원 참조 (자원 CAS — resources.py) ----
+# page.html.gz 가 /resource/{name} 으로 참조하는 자원의 인덱스. 스냅샷 삭제
+# 시 참조가 0 이 된 CAS 파일을 GC 하고, 캡처의 자원 인라인 실패 시 같은
+# URL 의 과거 캡처본을 재사용하는 폴백 조회에 쓴다.
+
+
+def insert_snapshot_resources(
+    conn: sqlite3.Connection, snapshot_id: int, refs: list[dict]
+) -> None:
+    """스냅샷의 자원 참조 행들 삽입 (refs: [{name, url}], url 은 None 가능).
+
+    INSERT OR IGNORE — compact 백필 재실행 등 같은 (snapshot_id, name)
+    재기록에 멱등.
+    """
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO snapshot_resources (snapshot_id, name, url)
+        VALUES (?, ?, ?)
+        """,
+        [(snapshot_id, r["name"], r.get("url")) for r in refs],
+    )
+
+
+def find_resource_by_url(conn: sqlite3.Connection, url: str) -> str | None:
+    """URL 로 가장 최근에 저장된 자원의 CAS 이름 조회 (없으면 None).
+
+    캡처의 자원 인라인 실패 폴백 — 같은 URL 을 과거에 성공적으로 받아둔
+    적이 있으면 그 콘텐츠를 재사용한다.
+    """
+    row = conn.execute(
+        "SELECT name FROM snapshot_resources WHERE url = ? ORDER BY id DESC LIMIT 1",
+        (url,),
+    ).fetchone()
+    return row["name"] if row else None
+
+
+def list_snapshot_resource_refs(
+    conn: sqlite3.Connection, snapshot_ids: list[int]
+) -> list[str]:
+    """해당 스냅샷들이 참조하는 자원 CAS 이름 목록 (중복 제거) — 삭제 GC 용."""
+    if not snapshot_ids:
+        return []
+    marks = ", ".join("?" for _ in snapshot_ids)
+    return [
+        r["name"]
+        for r in conn.execute(
+            f"SELECT DISTINCT name FROM snapshot_resources "
+            f"WHERE snapshot_id IN ({marks})",
+            snapshot_ids,
+        )
+    ]
+
+
+def list_resource_refs_by_names(
+    conn: sqlite3.Connection, names: list[str]
+) -> list[str]:
+    """해당 이름들을 참조하는 자원 이름 목록 — 삭제 후 잔존 참조 확인용."""
+    if not names:
+        return []
+    marks = ", ".join("?" for _ in names)
+    return [
+        r["name"]
+        for r in conn.execute(
+            f"SELECT DISTINCT name FROM snapshot_resources WHERE name IN ({marks})",
+            names,
+        )
+    ]
+
+
+def count_unindexed_snapshots(conn: sqlite3.Connection) -> int:
+    """자원 참조가 아직 기록되지 않은 스냅샷 수 — 최적화 백필 대상."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots WHERE resources_indexed = 0"
+    ).fetchone()["c"]
+
+
+def list_unindexed_snapshots(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """자원 참조 백필 대상 스냅샷 (+ 디렉토리 위치) — 저장공간 최적화용."""
+    return conn.execute(
+        """
+        SELECT s.id, p.domain, p.slug, s.dir_name
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.resources_indexed = 0 ORDER BY s.id
+        """
+    ).fetchall()
+
+
+def mark_snapshot_resources_indexed(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> None:
+    """스냅샷의 자원 참조 기록 완료 표시 — 이후 백필 대상에서 제외된다."""
+    conn.execute(
+        "UPDATE snapshots SET resources_indexed = 1 WHERE id = ?", (snapshot_id,)
+    )
+
+
+def list_all_resource_names(conn: sqlite3.Connection) -> set[str]:
+    """참조 중인 자원 CAS 이름 전체 — 고아 자원 정리(sweep)의 기준."""
+    return {
+        r["name"]
+        for r in conn.execute("SELECT DISTINCT name FROM snapshot_resources")
+    }
+
+
 # ---- 함께 저장된 문서 파일 (문서 CAS 참조) ----
 
 
@@ -773,7 +1150,7 @@ def list_document_groups(
         """
         SELECT g.sha256, g.snapshot_count, g.page_count, g.first_seen, g.last_seen,
                d.file, d.url, d.bytes, d.content_type, d.snapshot_id,
-               s.page_id, p.url AS page_url
+               s.page_id, p.url AS page_url, p.site_id, st.site_key
         FROM (
             SELECT d2.sha256 AS sha256, MAX(d2.id) AS doc_id,
                    COUNT(*) AS snapshot_count,
@@ -785,6 +1162,7 @@ def list_document_groups(
         JOIN snapshot_documents d ON d.id = g.doc_id
         JOIN snapshots s ON s.id = d.snapshot_id
         JOIN pages p ON p.id = s.page_id
+        LEFT JOIN sites st ON st.id = p.site_id
         ORDER BY g.last_seen DESC, g.sha256
         LIMIT ? OFFSET ?
         """,
@@ -910,17 +1288,21 @@ def insert_crawl(
     source: str,
     network_tag_id: str | None = None,
 ) -> int:
-    """크롤 row 생성 후 id 반환. next_page_at 은 지금 — 즉시 시작 가능."""
+    """크롤 row 생성 후 id 반환. next_page_at 은 지금 — 즉시 시작 가능.
+
+    소속 사이트(site_id)는 시작 URL 에서 계산해 자동 연결한다.
+    """
     now = _utcnow()
+    site_id = get_or_create_site(conn, storage.site_key(start_url))
     cur = conn.execute(
         """
         INSERT INTO crawls
             (start_url, scope_host, scope_path, max_pages, max_depth,
-             delay_seconds, source, network_tag_id, created_at, next_page_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             delay_seconds, source, site_id, network_tag_id, created_at, next_page_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (start_url, scope_host, scope_path, max_pages, max_depth,
-         delay_seconds, source, network_tag_id, now, now),
+         delay_seconds, source, site_id, network_tag_id, now, now),
     )
     return cur.lastrowid
 
@@ -1179,6 +1561,82 @@ def find_running_crawl(conn: sqlite3.Connection, start_url: str) -> sqlite3.Row 
     ).fetchone()
 
 
+def list_site_pages(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
+    """사이트 소속 페이지 목록 + 스냅샷 수·마지막 캡처 시각 (사이트 상세/삭제용)."""
+    return conn.execute(
+        """
+        SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
+        FROM pages p LEFT JOIN snapshots s ON s.page_id = p.id
+        WHERE p.site_id = ?
+        GROUP BY p.id
+        ORDER BY last_taken_at DESC NULLS LAST, p.url
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
+    """사이트 소속 크롤 회차 목록 (최신 순) + 상태별 페이지 수 집계."""
+    return conn.execute(
+        """
+        SELECT c.*,
+               COUNT(cp.id) AS total_count,
+               COALESCE(SUM(cp.status = 'done'), 0) AS done_count,
+               COALESCE(SUM(cp.status = 'failed'), 0) AS failed_count,
+               COALESCE(SUM(cp.status IN ('pending', 'in_progress')), 0) AS pending_count
+        FROM crawls c LEFT JOIN crawl_pages cp ON cp.crawl_id = c.id
+        WHERE c.site_id = ?
+        GROUP BY c.id ORDER BY c.id DESC
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def list_site_schedules(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
+    """사이트 소속 페이지들의 재아카이빙 스케줄 (+ 페이지 url) — 사이트 상세용."""
+    return conn.execute(
+        """
+        SELECT sc.*, p.url FROM schedules sc JOIN pages p ON p.id = sc.page_id
+        WHERE p.site_id = ? ORDER BY sc.next_run_at, sc.id
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def list_site_crawl_schedules(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트 소속 크롤 스케줄 목록 — 사이트 상세용."""
+    return conn.execute(
+        "SELECT * FROM crawl_schedules WHERE site_id = ? ORDER BY next_run_at, id",
+        (site_id,),
+    ).fetchall()
+
+
+def delete_site_crawls(conn: sqlite3.Connection, site_id: int) -> int:
+    """사이트 소속 크롤 회차와 페이지 큐를 일괄 삭제. 반환은 삭제된 크롤 수.
+
+    사이트 단위 삭제 전용 — 크롤 회차의 개별 삭제 경로는 없다.
+    """
+    conn.execute(
+        """
+        DELETE FROM crawl_pages
+        WHERE crawl_id IN (SELECT id FROM crawls WHERE site_id = ?)
+        """,
+        (site_id,),
+    )
+    cur = conn.execute("DELETE FROM crawls WHERE site_id = ?", (site_id,))
+    return cur.rowcount
+
+
+def delete_site_crawl_schedules(conn: sqlite3.Connection, site_id: int) -> int:
+    """사이트 소속 크롤 스케줄 일괄 삭제. 반환은 삭제된 스케줄 수."""
+    cur = conn.execute(
+        "DELETE FROM crawl_schedules WHERE site_id = ?", (site_id,)
+    )
+    return cur.rowcount
+
+
 # ---- 사이트 아카이브 스케줄 (주기적 재크롤) ----
 
 
@@ -1227,13 +1685,17 @@ def upsert_crawl_schedule(
     run_at_time: str | None = None,
     network_tag_id: str | None = None,
 ) -> None:
-    """시작 URL 의 크롤 스케줄 등록 (이미 있으면 옵션·주기·다음 실행 시각 교체)."""
+    """시작 URL 의 크롤 스케줄 등록 (이미 있으면 옵션·주기·다음 실행 시각 교체).
+
+    소속 사이트(site_id)는 시작 URL 에서 계산해 자동 연결한다.
+    """
+    site_id = get_or_create_site(conn, storage.site_key(start_url))
     conn.execute(
         """
         INSERT INTO crawl_schedules
-            (start_url, max_pages, max_depth, delay_seconds,
-             interval_seconds, next_run_at, run_at_time, network_tag_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (start_url, max_pages, max_depth, delay_seconds, interval_seconds,
+             next_run_at, run_at_time, site_id, network_tag_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(start_url) DO UPDATE SET
             max_pages = excluded.max_pages,
             max_depth = excluded.max_depth,
@@ -1241,10 +1703,11 @@ def upsert_crawl_schedule(
             interval_seconds = excluded.interval_seconds,
             next_run_at = excluded.next_run_at,
             run_at_time = excluded.run_at_time,
+            site_id = excluded.site_id,
             network_tag_id = excluded.network_tag_id
         """,
-        (start_url, max_pages, max_depth, delay_seconds,
-         interval_seconds, next_run_at, run_at_time, network_tag_id, _utcnow()),
+        (start_url, max_pages, max_depth, delay_seconds, interval_seconds,
+         next_run_at, run_at_time, site_id, network_tag_id, _utcnow()),
     )
 
 
@@ -1260,9 +1723,16 @@ def set_crawl_schedule_next_run(
 
 
 def delete_crawl_schedule(conn: sqlite3.Connection, schedule_id: int) -> bool:
-    """크롤 스케줄 해제. 등록이 없었으면 False."""
-    cur = conn.execute("DELETE FROM crawl_schedules WHERE id = ?", (schedule_id,))
-    return cur.rowcount == 1
+    """크롤 스케줄 해제. 등록이 없었으면 False.
+
+    사이트의 마지막 소속 행이었다면 사이트 행도 함께 삭제된다.
+    """
+    sched = get_crawl_schedule_by_id(conn, schedule_id)
+    if sched is None:
+        return False
+    conn.execute("DELETE FROM crawl_schedules WHERE id = ?", (schedule_id,))
+    prune_site_if_empty(conn, sched["site_id"])
+    return True
 
 
 def claim_crawl_schedule(

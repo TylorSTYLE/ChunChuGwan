@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import capture, config, db, documents, extract, netcheck, resources, storage
+from . import capture, certs, config, db, documents, extract, netcheck, resources, storage
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +158,66 @@ def _resolve_network_tag(norm: str, host: str, requested: str | None) -> str | N
     )
 
 
+def _https_supported(http_url: str) -> bool:
+    """http URL 의 호스트가 같은 경로를 https 로도 서빙하는지 가벼운 확인.
+
+    유효한 인증서의 https 응답이 400 미만이면 지원으로 본다 — 리다이렉트
+    (301/302, HSTS 사이트의 일반적 응답)도 지원이다. 자체 서명 인증서
+    (사설 NAS 등)·연결 실패·4xx 는 미지원으로 보고 http 를 유지한다.
+    """
+    import httpx
+
+    https_url = "https://" + http_url.removeprefix("http://")
+    try:
+        resp = httpx.get(
+            https_url,
+            timeout=config.HTTPS_PROBE_TIMEOUT_SECONDS,
+            follow_redirects=False,
+            headers={"User-Agent": config.USER_AGENT},
+        )
+        return resp.status_code < 400
+    except Exception:
+        return False
+
+
+def upgrade_http_to_https(norm: str) -> str:
+    """명시적 http URL 의 https 승격 — 지원이 확인되면 https URL 반환.
+
+    스킴 생략 입력의 https 추정(normalize_url)과 짝을 이루는 반대 방향
+    확인이다: http:// 를 명시한 URL 도 같은 사이트가 https 를 서빙하면
+    https 로 아카이빙해 페이지 히스토리가 스킴으로 갈라지지 않게 한다.
+    https 가 아니거나 미지원이면 입력 그대로 반환.
+    """
+    if not norm.startswith("http://"):
+        return norm
+    if not _https_supported(norm):
+        return norm
+    return "https://" + norm.removeprefix("http://")
+
+
+def _resource_fallback(url: str) -> tuple[str, bytes] | None:
+    """자원 인라인 실패 폴백 — 같은 URL 로 저장된 과거 캡처본(자원 CAS) 조회.
+
+    snapshot_resources 에서 URL 의 가장 최근 자원 이름을 찾아 CAS 콘텐츠와
+    미디어 타입을 돌려준다. 폴백 실패가 캡처를 막지 않도록 예외는 삼킨다.
+    """
+    try:
+        with db.connect() as conn:
+            name = db.find_resource_by_url(conn, url)
+        if name is None or not resources.is_valid_name(name):
+            return None
+        path = resources.resource_path(name)
+        if not path.is_file():
+            return None
+        media = resources.EXT_MEDIA_TYPES.get(
+            Path(name).suffix, "application/octet-stream"
+        )
+        return media.split(";")[0].strip(), path.read_bytes()
+    except Exception:
+        logger.warning("자원 폴백 조회 실패, 건너뜀: %s", url, exc_info=True)
+        return None
+
+
 def _archive_url(
     url: str,
     force: bool,
@@ -175,43 +235,82 @@ def _archive_url(
     if network_tag_id:
         run.step("netcheck", f"사설 대역 — 로컬 네트워크 태그 {network_tag_id}")
 
+    # 명시적 http URL 의 https 승격 — 신규 페이지에만. 이미 http 로 쌓인
+    # 페이지는 그대로 둔다 (재아카이빙마다 프로브하지 않고, 히스토리도
+    # 갈라지지 않는다). 게이트 통과 후에만 프로브한다 (SSRF 최소화).
+    if norm.startswith("http://"):
+        with db.connect() as conn:
+            existing = db.get_page(conn, norm)
+        if existing is None:
+            upgraded = upgrade_http_to_https(norm)
+            if upgraded != norm:
+                run.step("https", f"https 지원 확인 — 승격: {upgraded}")
+                norm = upgraded
+                slug = storage.url_to_slug(norm)
+                run.url = norm
+
     rules = config.load_domain_rules(domain)
     run.step("normalize", f"{norm} → {domain}/{slug}"
              + (" (도메인 룰 적용)" if rules else ""))
 
     # 해시가 같으면 스냅샷 디렉토리를 만들지 않도록 임시 디렉토리에 먼저 캡처
+    capture_kwargs = dict(
+        remove_selectors=tuple(rules.get("remove_selectors") or ()),
+        link_rewriter=link_rewriter,
+        session=browser_session,
+        resource_fallback=_resource_fallback,
+    )
+    insecure_tls = False
     tmp_dir = Path(tempfile.mkdtemp(prefix="wccg-"))
     try:
         try:
-            result = capture.capture(
-                norm, tmp_dir,
-                remove_selectors=tuple(rules.get("remove_selectors") or ()),
-                link_rewriter=link_rewriter,
-                session=browser_session,
-            )
+            result = capture.capture(norm, tmp_dir, **capture_kwargs)
         except capture.CaptureError as e:
-            # HTTP 전용 사이트(443 닫힘 등)일 수 있으므로 http 로 한 번 더 시도한다:
-            # 스킴 생략 입력에 https 를 추정 보완한 경우는 모든 캡처 실패에서,
-            # 명시적 https 는 서버 연결 자체가 안 된 실패에 한해서만.
-            retriable = storage.scheme_inferred(url) or isinstance(
-                e, capture.CaptureConnectError
-            )
-            if not (retriable and norm.startswith("https://")):
-                raise
-            run.step("capture", f"https 캡처 실패 — http 로 재시도: {str(e).splitlines()[0]}")
-            norm = "http://" + norm.removeprefix("https://")
-            slug = storage.url_to_slug(norm)
-            run.url = norm
-            result = capture.capture(
-                norm, tmp_dir,
-                remove_selectors=tuple(rules.get("remove_selectors") or ()),
-                link_rewriter=link_rewriter,
-                session=browser_session,
-            )
+            result = None
+            if norm.startswith("https://") and capture.is_cert_error(e):
+                # 자체 서명 인증서 등으로 https 만 서빙하는 사이트(사설 NAS 등)
+                # 대비 — 검증을 무시하고 https 로 한 번 더 시도한다. 시도와
+                # 결과는 실행 로그 단계에 남는다.
+                run.step(
+                    "capture",
+                    f"인증서 검증 실패 — 검증 무시로 https 재시도: "
+                    f"{str(e).splitlines()[0]}",
+                )
+                try:
+                    result = capture.capture(
+                        norm, tmp_dir, insecure_tls=True, **capture_kwargs
+                    )
+                    insecure_tls = True
+                except capture.CaptureError:
+                    pass  # http 폴백 판단은 원래 오류 기준으로 이어간다
+            if result is None:
+                # HTTP 전용 사이트(443 닫힘 등)일 수 있으므로 http 로 한 번 더
+                # 시도한다: 스킴 생략 입력에 https 를 추정 보완한 경우는 모든
+                # 캡처 실패에서, 명시적 https 는 서버 연결 자체가 안 된 실패에
+                # 한해서만.
+                retriable = storage.scheme_inferred(url) or isinstance(
+                    e, capture.CaptureConnectError
+                )
+                if not (retriable and norm.startswith("https://")):
+                    raise
+                run.step(
+                    "capture",
+                    f"https 캡처 실패 — http 로 재시도: {str(e).splitlines()[0]}",
+                )
+                norm = "http://" + norm.removeprefix("https://")
+                slug = storage.url_to_slug(norm)
+                run.url = norm
+                result = capture.capture(norm, tmp_dir, **capture_kwargs)
         run.step(
             "capture",
             f"http {result.http_status or '-'} · 최종 URL {result.final_url} · "
             f"제목 {result.title or '-'}",
+        )
+        # https 사이트의 TLS 인증서 수집 — 갱신되면 새 버전으로 기록된다
+        # (site_certificates). 수집 실패는 아카이빙을 막지 않는다 (None).
+        cert_info = (
+            certs.fetch_certificate_info(norm)
+            if norm.startswith("https://") else None
         )
         # 리다이렉트가 게이트를 우회하지 못하게 최종 URL 호스트도 판정한다.
         # 요청 자체는 이미 일어났지만 아카이브에는 아무것도 남기지 않는다.
@@ -239,6 +338,19 @@ def _archive_url(
             page_id = db.get_or_create_page(
                 conn, norm, domain, slug, network_tag_id=network_tag_id
             )
+            if cert_info:
+                # 콘텐츠가 동일(unchanged)해도 인증서 갱신은 기록돼야 하므로
+                # 저장 생략 판단 전에 기록한다
+                site_id = db.get_or_create_site(conn, storage.site_key(norm))
+                created = db.upsert_site_certificate(
+                    conn, site_id, cert_info, verified=not insecure_tls
+                )
+                run.step(
+                    "certificate",
+                    ("새 인증서 버전 기록" if created else "기존 인증서 버전 확인")
+                    + f" — {cert_info['fingerprint'][:12]} · "
+                      f"만료 {cert_info['not_after']}",
+                )
             prev = db.last_snapshot(conn, page_id)
 
             if prev and prev["content_hash"] == content_hash and not force:
@@ -266,6 +378,7 @@ def _archive_url(
                 doc_manifest, doc_failed = documents.download_documents(
                     result.document_links, tmp_dir / "files",
                     referer=result.final_url,
+                    verify=not insecure_tls,  # 자체 서명 사이트의 문서도 받는다
                 )
                 documents.ingest_into_cas(tmp_dir / "files", doc_manifest)
                 run.step(
@@ -303,9 +416,20 @@ def _archive_url(
                 taken_at=meta.taken_at, dir_name=snap_dir.name,
                 content_hash=content_hash, final_url=result.final_url,
                 http_status=result.http_status, changed=changed,
+                resources_indexed=1,  # 참조는 바로 아래에서 기록 — 백필 불필요
             )
             if doc_manifest:
                 db.insert_snapshot_documents(conn, snapshot_id, doc_manifest)
+            if stats.resource_names:
+                # CAS 추출 자원의 참조 기록 — 삭제 GC 와 URL 폴백의 근거.
+                # 원본 URL 은 캡처가 기록한 sha256 매핑에서 찾는다 (없으면 NULL)
+                db.insert_snapshot_resources(
+                    conn, snapshot_id,
+                    [
+                        {"name": n, "url": result.resource_urls.get(n[:64])}
+                        for n in stats.resource_names
+                    ],
+                )
             status = "new" if prev is None else ("changed" if changed else "forced_same")
             run.step("store", f"스냅샷 저장 [{status}]: {snap_dir.name}")
             run.write(

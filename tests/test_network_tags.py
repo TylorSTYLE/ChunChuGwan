@@ -44,7 +44,8 @@ def _fake_capture(monkeypatch, final_url: str | None = None):
     """캡처 모킹 — 호출 여부를 기록하고 고정 HTML 을 돌려준다."""
     calls: list[str] = []
 
-    def fake(url, out_dir, remove_selectors=(), link_rewriter=None, session=None):
+    def fake(url, out_dir, remove_selectors=(), link_rewriter=None, session=None,
+             resource_fallback=None):
         calls.append(url)
         return capture.CaptureResult(
             final_url=final_url or url, http_status=200, title="제목",

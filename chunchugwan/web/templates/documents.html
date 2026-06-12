@@ -25,7 +25,7 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
 </p>
 {% if legacy_pending %}
 <p class="muted" style="font-size:13px">
-  {{ _("압축 전 스냅샷에 남아 있는 문서 파일이 있습니다 — 시스템 화면에서 저장 공간 압축을 실행하면 이 목록에 포함되고 중복이 제거됩니다.") }}
+  {{ _("압축 전 스냅샷에 남아 있는 문서 파일이 있습니다 — 시스템 화면에서 저장공간 최적화를 실행하면 이 목록에 포함되고 중복이 제거됩니다.") }}
 </p>
 {% endif %}
 
@@ -36,6 +36,7 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
       <th>{{ _("문서명") }}</th>
       <th>{{ _("형식") }}</th>
       <th style="text-align:right">{{ _("용량") }}</th>
+      <th>{{ _("사이트") }}</th>
       <th>{{ _("출처 페이지") }}</th>
       <th style="text-align:right">{{ _("참조 스냅샷") }}</th>
       <th>{{ _("마지막 저장") }}</th>
@@ -50,6 +51,9 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
       </td>
       <td class="mono">{{ g['file'].rsplit('.', 1)[1] | upper if '.' in g['file'] else '-' }}</td>
       <td class="mono" style="text-align:right">{{ g['bytes'] | filesize }}</td>
+      <td class="mono">
+        {% if g['site_id'] %}<a href="/sites/{{ g['site_id'] }}">{{ g['site_key'] }}</a>{% else %}-{% endif %}
+      </td>
       <td class="url-cell">
         <a href="/page/{{ g['page_id'] }}" title="{{ g['page_url'] }}">{{ g['page_url'] }}</a>
         {%- if g['page_count'] > 1 %}

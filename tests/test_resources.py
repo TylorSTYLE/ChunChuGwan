@@ -24,9 +24,9 @@ def _data_uri(data: bytes, mime: str = "image/png") -> str:
 def test_externalize_replaces_with_resource_ref(cas_env):
     data = b"P" * 64
     html = f'<img src="{_data_uri(data)}">'
-    out, count = resources.externalize_data_uris(html)
-    assert count == 1
+    out, names = resources.externalize_data_uris(html)
     name = hashlib.sha256(data).hexdigest() + ".png"
+    assert names == [name]
     assert f'/resource/{name}' in out
     assert "base64" not in out
     assert resources.resource_path(name).read_bytes() == data
@@ -36,24 +36,25 @@ def test_externalize_keeps_small_and_unknown_mime(cas_env):
     small = _data_uri(b"x" * 4)                            # 임계값 미만
     html_doc = _data_uri(b"<script>evil</script>" * 10, "text/html")  # 문서 타입 금지
     html = f'<img src="{small}"><iframe src="{html_doc}"></iframe>'
-    out, count = resources.externalize_data_uris(html)
-    assert count == 0
+    out, names = resources.externalize_data_uris(html)
+    assert names == []
     assert out == html
     assert not config.RESOURCES_DIR.exists()
 
 
 def test_externalize_dedups_same_content(cas_env):
     uri = _data_uri(b"F" * 100, "font/woff2")
-    out, count = resources.externalize_data_uris(f"url({uri}) url({uri})")
-    assert count == 2
+    out, names = resources.externalize_data_uris(f"url({uri}) url({uri})")
+    assert len(names) == 1  # 같은 내용은 이름도 하나 (참조 기록용 중복 제거)
+    assert out.count(f"/resource/{names[0]}") == 2
     files = list(config.RESOURCES_DIR.glob("*/*"))
     assert len(files) == 1 and files[0].suffix == ".woff2"
 
 
 def test_externalize_strips_base_tag(cas_env):
     html = f'<base href="https://evil.example/"><img src="{_data_uri(b"i" * 64)}">'
-    out, count = resources.externalize_data_uris(html)
-    assert count == 1
+    out, names = resources.externalize_data_uris(html)
+    assert len(names) == 1
     assert "<base" not in out  # base href 가 /resource/ 참조를 깨지 않게 제거
 
 

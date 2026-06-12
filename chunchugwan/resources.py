@@ -33,7 +33,7 @@ import os
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import config, documents
@@ -102,32 +102,82 @@ def resource_path(name: str) -> Path:
 
 
 def _store(data: bytes, ext: str) -> str:
-    """자원 바이트를 CAS 에 저장하고 이름 반환. 이미 있으면 그대로 쓴다."""
+    """자원 바이트를 CAS 에 저장하고 이름 반환. 이미 있으면 그대로 쓴다.
+
+    이미 있는 파일은 mtime 만 갱신한다 — 고아 자원 정리(sweep)의 유예 창이
+    "방금 다시 쓰이기 시작한 파일"을 진행 중 캡처의 커밋 전에 지우지 않게.
+    """
     name = hashlib.sha256(data).hexdigest() + ext
     path = resource_path(name)
-    if not path.is_file():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # 동시 아카이빙(스케줄러 + 수동)에 안전하도록 임시 파일 후 원자적 교체
-        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-        try:
-            os.write(fd, data)
-        finally:
-            os.close(fd)
-        os.replace(tmp, path)
+    if path.is_file():
+        os.utime(path)
+        return name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # 동시 아카이빙(스케줄러 + 수동)에 안전하도록 임시 파일 후 원자적 교체
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
     return name
 
 
-def externalize_data_uris(html: str) -> tuple[str, int]:
+_RESOURCE_REF_RE = re.compile(r"/resource/([0-9a-f]{64}\.[a-z0-9]{2,6})")
+
+
+def referenced_names_in_html(html: str) -> list[str]:
+    """page.html(.gz 해제 후) 텍스트가 참조하는 자원 CAS 이름 목록.
+
+    저장공간 최적화의 참조 백필이 구형 스냅샷을 스캔하는 데 쓴다.
+    형식이 유효한 이름만 (중복 제거·등장 순).
+    """
+    names: list[str] = []
+    for m in _RESOURCE_REF_RE.finditer(html):
+        name = m.group(1)
+        if is_valid_name(name) and name not in names:
+            names.append(name)
+    return names
+
+
+def cas_files() -> list[Path]:
+    """자원 CAS 의 파일 전체 (이름 형식이 유효한 것만) — sweep 대상 스캔."""
+    if not config.RESOURCES_DIR.is_dir():
+        return []
+    return sorted(
+        f for f in config.RESOURCES_DIR.glob("*/*")
+        if f.is_file() and is_valid_name(f.name)
+    )
+
+
+def delete_cas(names: list[str]) -> None:
+    """참조가 사라진 자원 CAS 파일들 삭제 (빈 버킷 디렉토리도 정리).
+
+    잔존 참조 판정(snapshot_resources)은 호출부(deletion.py)가 한다.
+    """
+    for name in names:
+        if not is_valid_name(name):
+            continue
+        path = resource_path(name)
+        path.unlink(missing_ok=True)
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
+
+
+def externalize_data_uris(html: str) -> tuple[str, list[str]]:
     """RESOURCE_MIN_BYTES 이상인 화이트리스트 data URI 를 CAS 로 추출.
 
     추출분은 ``/resource/{이름}`` 참조로 치환한다. 치환이 한 건이라도 있으면
     <base> 태그를 제거한다 — 원본 DOM 은 raw.html.gz 가 보존하므로 파생
-    산출물인 page.html 에서는 제거해도 된다. (치환된 HTML, 추출 수) 반환.
+    산출물인 page.html 에서는 제거해도 된다.
+    (치환된 HTML, 추출된 CAS 이름 목록 — 중복 제거·등장 순) 반환.
+    이름 목록은 snapshot_resources 참조 기록(GC 의 근거)이 된다.
     """
-    count = 0
+    names: list[str] = []
 
     def _repl(m: re.Match[str]) -> str:
-        nonlocal count
         ext = _MIME_EXT.get(m.group(1).lower())
         if ext is None:
             return m.group(0)
@@ -137,13 +187,15 @@ def externalize_data_uris(html: str) -> tuple[str, int]:
             return m.group(0)
         if len(data) < config.RESOURCE_MIN_BYTES:
             return m.group(0)
-        count += 1
-        return "/resource/" + _store(data, ext)
+        name = _store(data, ext)
+        if name not in names:
+            names.append(name)
+        return "/resource/" + name
 
     out = _DATA_URI_RE.sub(_repl, html)
-    if count:
+    if names:
         out = _BASE_TAG_RE.sub("", out)
-    return out, count
+    return out, names
 
 
 def _gzip_replace(src: Path) -> Path:
@@ -176,11 +228,13 @@ def _screenshot_to_webp(png: Path) -> Path | None:
 
 @dataclass
 class CompactStats:
-    """compact_snapshot_dir 결과 — 변환 전/후 바이트와 추출 자원 수."""
+    """compact_snapshot_dir 결과 — 변환 전/후 바이트와 추출 자원 이름."""
 
     externalized: int = 0
     before_bytes: int = 0
     after_bytes: int = 0
+    # 이번 변환에서 CAS 로 추출된 자원 이름 (snapshot_resources 기록용)
+    resource_names: list[str] = field(default_factory=list)
 
     @property
     def saved_bytes(self) -> int:
@@ -203,9 +257,10 @@ def compact_snapshot_dir(snap_dir: Path) -> CompactStats:
     page = snap_dir / "page.html"
     if page.is_file():
         stats.before_bytes += page.stat().st_size
-        html, stats.externalized = externalize_data_uris(
+        html, stats.resource_names = externalize_data_uris(
             page.read_text(encoding="utf-8")
         )
+        stats.externalized = len(stats.resource_names)
         dst = snap_dir / "page.html.gz"
         dst.write_bytes(gzip.compress(html.encode("utf-8"), compresslevel=9))
         page.unlink()

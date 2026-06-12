@@ -161,5 +161,8 @@ def test_schedule_label_locale(client):
             conn, page_id, 12 * 3600,
             next_run_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
-    assert "12시간" in client.get("/archives").text
-    assert "12h" in client.get("/archives", headers={"Accept-Language": "en"}).text
+        site = db.get_site_by_key(conn, "example.com")
+    assert "12시간" in client.get(f"/sites/{site['id']}").text
+    assert "12h" in client.get(
+        f"/sites/{site['id']}", headers={"Accept-Language": "en"}
+    ).text

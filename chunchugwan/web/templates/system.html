@@ -92,22 +92,22 @@ h3.danger-heading { color: var(--red); }
 <h3>{{ _("유지 관리") }}</h3>
 <div class="sys-grid">
   <div class="sys-card">
-    <h4>{{ _("저장 공간 압축") }}
-      {% if compactable %}<span class="badge changed">{{ _("대상 {n}개", n=compactable) }}</span>
+    <h4>{{ _("저장공간 최적화") }}
+      {% if optimize_pending %}<span class="badge changed">{{ _("대상 {n}개", n=optimize_pending) }}</span>
       {% else %}<span class="badge same">{{ _("대상 없음") }}</span>{% endif %}
     </h4>
     <p>
-      {{ _("구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP + 문서 파일 공유 저장소 이전)로 변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축됩니다.") }}
+      {{ _("구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP + 문서 파일 공유 저장소 이전)로 변환하고, 자원 참조를 인덱스한 뒤 어떤 스냅샷도 참조하지 않는 공유 자원을 삭제합니다. 내용 보존이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축·인덱스됩니다.") }}
     </p>
     <div class="actions">
-      {% if compactable %}
+      {% if optimize_pending %}
       <form method="post" action="/system/compact"
-            onsubmit="return confirm({{ _('기존 스냅샷 파일을 압축 저장 형태로 변환합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')|tojson }})">
-        <button type="submit">{{ _("압축 실행") }}</button>
+            onsubmit="return confirm({{ _('기존 스냅샷을 압축·인덱스하고 참조 없는 공유 자원을 정리합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')|tojson }})">
+        <button type="submit">{{ _("최적화 실행") }}</button>
       </form>
       {% else %}
-      <button type="button" disabled>{{ _("압축 실행") }}</button>
-      <span class="muted" style="font-size:12px">{{ _("압축할 스냅샷이 없습니다.") }}</span>
+      <button type="button" disabled>{{ _("최적화 실행") }}</button>
+      <span class="muted" style="font-size:12px">{{ _("최적화할 항목이 없습니다 — 스냅샷이 모두 압축·인덱스 형태입니다.") }}</span>
       {% endif %}
     </div>
   </div>

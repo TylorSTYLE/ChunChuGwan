@@ -140,7 +140,7 @@ def test_worker_command_runs_with_resolved_count(monkeypatch):
         signal.signal(signal.SIGTERM, old_term)
 
 
-# ---- compact (저장 공간 압축) ----
+# ---- compact (저장공간 최적화) ----
 
 
 def test_compact_converts_existing_snapshots(archive_env, monkeypatch):
@@ -171,9 +171,9 @@ def test_compact_converts_existing_snapshots(archive_env, monkeypatch):
     assert not (snap_dir / "screenshot.png").exists()
     assert list(config.RESOURCES_DIR.glob("*/*"))  # 추출된 공유 자원
 
-    # 멱등 — 두 번째 실행은 변환할 것이 없다
+    # 멱등 — 두 번째 실행은 변환·백필할 것이 없다
     again = CliRunner().invoke(cli.main, ["compact", "--yes"])
-    assert "모두 이미 압축 형태" in again.output
+    assert "최적화할 항목이 없습니다" in again.output
 
     # 변환 후에도 diff 동작 (WebP 스크린샷)
     d = CliRunner().invoke(cli.main, ["diff", archive_env])

@@ -60,13 +60,16 @@ def document_filename(url: str) -> str:
 
 
 def download_documents(
-    links: list[str], dest_dir: Path, referer: str | None = None
+    links: list[str], dest_dir: Path, referer: str | None = None,
+    verify: bool = True,
 ) -> tuple[list[dict[str, object]], list[str]]:
     """문서 링크들을 dest_dir 에 내려받아 (성공 manifest, 실패 URL) 반환.
 
     manifest 항목: {url, file, bytes, sha256, content_type}.
     개수(config.DOCUMENT_MAX_COUNT)·크기(config.DOCUMENT_MAX_BYTES) 한도를
     넘거나 응답이 HTML 인 항목은 건너뛴다. 실패가 아카이빙을 막지 않는다.
+    verify=False 는 TLS 인증서 검증을 끈다 — 자체 서명 사이트를 검증 무시로
+    캡처한 경우(pipeline insecure_tls)에만 쓴다.
     """
     links = list(dict.fromkeys(links))
     if len(links) > config.DOCUMENT_MAX_COUNT:
@@ -84,14 +87,16 @@ def download_documents(
     failed: list[str] = []
     for url in links:
         try:
-            manifest.append(_download_one(url, dest_dir, headers))
+            manifest.append(_download_one(url, dest_dir, headers, verify))
         except Exception as e:
             logger.warning("문서 다운로드 실패(건너뜀): %s — %s", url, e)
             failed.append(url)
     return manifest, failed
 
 
-def _download_one(url: str, dest_dir: Path, headers: dict[str, str]) -> dict[str, object]:
+def _download_one(
+    url: str, dest_dir: Path, headers: dict[str, str], verify: bool = True
+) -> dict[str, object]:
     """문서 1개를 스트리밍 다운로드 (크기 한도 검사 + sha256 계산)."""
     name = document_filename(url)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -101,7 +106,7 @@ def _download_one(url: str, dest_dir: Path, headers: dict[str, str]) -> dict[str
     try:
         with httpx.stream(
             "GET", url, headers=headers, follow_redirects=True,
-            timeout=config.DOCUMENT_FETCH_TIMEOUT_SECONDS,
+            timeout=config.DOCUMENT_FETCH_TIMEOUT_SECONDS, verify=verify,
         ) as resp:
             resp.raise_for_status()
             content_type = (

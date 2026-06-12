@@ -44,32 +44,50 @@ def test_crawls_redirects_to_archives(client):
     assert res.headers["location"] == "/archives"
 
 
-def test_archives_lists_crawl_with_pages(client):
-    """통합 목록에 크롤 행이 페이지 행과 함께 보인다 — 유형 구분·상태 뱃지 포함."""
+def test_archives_groups_by_site(client):
+    """목록은 사이트(서브도메인) 단위 — 페이지와 크롤이 같은 사이트 행으로 묶인다."""
     make_snapshot("https://example.com/post")
     crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     res = client.get("/archives")
     assert res.status_code == 200
-    # 페이지 행과 크롤 행이 한 화면에
-    assert 'href="/page/1"' in res.text
-    assert f'href="/crawls/{crawl["id"]}"' in res.text
-    assert "https://example.com/docs/" in res.text
-    assert "example.com/docs/" in res.text  # 범위 표기
-    # 유형 필터용 행 구분과 진행 중 상태 뱃지
-    assert 'data-kind="site"' in res.text
-    assert 'data-kind="page"' in res.text
-    assert "진행 중" in res.text
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    # 페이지와 크롤이 사이트 행 하나로 합쳐진다
+    assert res.text.count(f'href="/sites/{site["id"]}"') == 1
+    assert "크롤 진행 중" in res.text
+    # 사이트 상세에 페이지 행과 크롤 회차가 모두 보인다
+    detail = client.get(f"/sites/{site['id']}")
+    assert 'href="/page/1"' in detail.text
+    assert f'href="/crawls/{crawl["id"]}"' in detail.text
+    assert "example.com/docs/" in detail.text  # 회차 범위 표기
+    assert "진행 중" in detail.text
+
+
+def test_www_and_apex_share_site_row(client):
+    """www 페이지와 apex 페이지는 같은 사이트 행 하나로 보인다."""
+    make_snapshot("https://example.com/a")
+    make_snapshot("https://www.example.com/b")
+    res = client.get("/archives")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+        assert db.count_sites(conn) == 1
+    assert res.text.count(f'href="/sites/{site["id"]}"') == 1
+    detail = client.get(f"/sites/{site['id']}")
+    assert "https://example.com/a" in detail.text
+    assert "https://www.example.com/b" in detail.text
 
 
 def test_archives_shows_finished_crawl_status(client):
-    """끝난 크롤은 폴링 없이 상태 뱃지(취소됨)로 보인다."""
+    """끝난 크롤은 사이트 상세에서 상태 뱃지(취소됨)로 보인다."""
     crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     with db.connect() as conn:
         db.cancel_crawl(conn, crawl["id"])
+        site = db.get_site_by_key(conn, "example.com")
     res = client.get("/archives")
-    assert "취소됨" in res.text
     # 진행 중 크롤이 없으면 폴링 목록도 비어 있다
     assert "const runningCrawls = []" in res.text
+    detail = client.get(f"/sites/{site['id']}")
+    assert "취소됨" in detail.text
 
 
 def test_archive_form_has_site_option(client):

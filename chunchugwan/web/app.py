@@ -274,77 +274,169 @@ def favicon() -> FileResponse:
 
 @app.get("/archives", response_class=HTMLResponse)
 def index(request: Request, queued: str = "", error: str = "", notice: str = ""):
-    """통합 아카이브 목록 — 페이지 아카이브와 사이트 아카이브(크롤)를 한 테이블로.
+    """아카이브 목록 — 사이트(서브도메인) 단위 한 테이블.
 
-    진행 중 항목(아카이빙 중 페이지·진행 중 크롤)을 맨 위에, 나머지는 마지막
-    활동 시각 내림차순으로 합쳐 보여준다. 유형 구분은 행의 kind 로 한다.
+    단일 페이지 아카이브든 사이트 전체 아카이브(크롤)든 같은 서브도메인이면
+    한 행이다. 진행 중인 사이트(아카이빙 중 페이지·진행 중 크롤 보유)를 맨
+    위에, 나머지는 마지막 활동 시각 내림차순. 행을 누르면 사이트 상세로 간다.
     """
     active = _active_snapshot()
     with db.connect() as conn:
-        pages = db.list_pages(conn)
-        schedules = db.list_schedules(conn)
-        crawls = db.list_crawls(conn)
-        crawl_schedules = db.list_crawl_schedules(conn)
-    schedule_labels = {
-        s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
-        for s in schedules
-    }
-    crawl_schedule_labels = {
-        s["start_url"]: i18n.interval_label(request, s["interval_seconds"])
-        for s in crawl_schedules
-    }
-    # 아직 pages 행이 없는 신규 URL 진행 건은 page_id 없는 행으로 보여준다
-    known = {p["url"] for p in pages}
+        sites = db.list_sites_overview(conn)
+        running = [c for c in db.list_crawls(conn) if c["status"] == "running"]
+    active_keys = {storage.site_key(u) for u in active}
     items: list[dict] = [
         {
-            "kind": "page", "page_id": None, "url": u,
-            "domain": urlsplit(u).hostname or "", "snapshot_count": None,
-            "schedule": None, "activity_at": t, "active": True,
+            "site_id": s["id"], "site_key": s["site_key"],
+            "page_count": s["page_count"], "snapshot_count": s["snapshot_count"],
+            "crawl_count": s["crawl_count"], "schedule_count": s["schedule_count"],
+            "activity_at": s["last_activity_at"] or None,
+            "crawling": s["running_crawl_count"] > 0,
+            "active": s["site_key"] in active_keys or s["running_crawl_count"] > 0,
+        }
+        for s in sites
+    ]
+    # 아직 pages 행이 없는 신규 URL 진행 건 — 사이트 행이 없으면 임시 행으로
+    known_keys = {s["site_key"] for s in sites}
+    items += [
+        {
+            "site_id": None, "site_key": key,
+            "page_count": 0, "snapshot_count": 0, "crawl_count": 0,
+            "schedule_count": 0, "activity_at": t, "crawling": False,
+            "active": True,
         }
         for u, t in sorted(active.items())
-        if u not in known
+        if (key := storage.site_key(u)) not in known_keys
     ]
-    items += [
-        {
-            "kind": "page", "page_id": p["id"], "url": p["url"],
-            "domain": p["domain"], "snapshot_count": p["snapshot_count"],
-            "schedule": schedule_labels.get(p["id"]),
-            "activity_at": p["last_taken_at"], "active": p["url"] in active,
-        }
-        for p in pages
-    ]
-    items += [
-        {
-            "kind": "site", "crawl_id": c["id"], "url": c["start_url"],
-            "domain": c["scope_host"] + c["scope_path"], "status": c["status"],
-            "done": c["done_count"], "failed": c["failed_count"],
-            "waiting": c["pending_count"], "total": c["total_count"],
-            "schedule": crawl_schedule_labels.get(c["start_url"]),
-            "activity_at": c["finished_at"] or c["created_at"],
-            "active": c["status"] == "running",
-        }
-        for c in crawls
-    ]
-    # 안정 정렬 3단계: URL → 최근 활동 내림차순 → 진행 중 먼저
-    items.sort(key=lambda i: i["url"])
+    items.sort(key=lambda i: i["site_key"])
     items.sort(key=lambda i: i["activity_at"] or "", reverse=True)
     items.sort(key=lambda i: not i["active"])
     # 진행 중 크롤 폴링용 — 카운트가 바뀌면 화면을 새로 그린다
     running_crawls = [
-        {"id": i["crawl_id"],
-         "counts": {"done": i["done"], "failed": i["failed"], "waiting": i["waiting"]}}
-        for i in items
-        if i["kind"] == "site" and i["status"] == "running"
+        {"id": c["id"],
+         "counts": {"done": c["done_count"], "failed": c["failed_count"],
+                    "waiting": c["pending_count"]}}
+        for c in running
     ]
     return templates.TemplateResponse(
         request, "index.html",
         {
             "items": items, "queued": queued, "error": error, "notice": notice,
             "active_list": sorted(active), "running_crawls": running_crawls,
-            "page_count": sum(1 for i in items if i["kind"] == "page"),
-            "site_count": len(crawls),
         },
     )
+
+
+@app.get("/sites/{site_id}", response_class=HTMLResponse)
+def site_view(request: Request, site_id: int, error: str = "", notice: str = ""):
+    """사이트 상세 — 소속 페이지 목록 + 크롤 회차 목록 + 스케줄.
+
+    사이트는 서브도메인 단위 그릇이고, 크롤 회차는 그 사이트를 특정 시점에
+    돌았던 실행 기록이다 — 회차 상세(/crawls/{id})는 그대로 유지된다.
+    """
+    active = _active_snapshot()
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, t(request, "사이트 없음"))
+        pages = db.list_site_pages(conn, site_id)
+        crawls = db.list_site_crawls(conn, site_id)
+        schedules = db.list_site_schedules(conn, site_id)
+        crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
+        certificates = db.list_site_certificates(conn, site_id)
+    schedule_labels = {
+        s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
+        for s in schedules
+    }
+    crawl_schedule_labels = [
+        {
+            "start_url": s["start_url"],
+            "label": i18n.interval_label(request, s["interval_seconds"]),
+            "next_run_at": s["next_run_at"],
+        }
+        for s in crawl_schedules
+    ]
+    # 인증서 — 호스트별 최신 행이 "현재", 나머지는 이전 버전 (db 가 정렬)
+    current_cert_ids = {}
+    for c in certificates:
+        current_cert_ids.setdefault(c["host"], c["id"])
+    cert_rows = [
+        {
+            "cert": c,
+            "san": json.loads(c["san"] or "[]"),
+            "is_current": current_cert_ids[c["host"]] == c["id"],
+        }
+        for c in certificates
+    ]
+    snapshot_total = sum(p["snapshot_count"] for p in pages)
+    running_crawls = [
+        {"id": c["id"],
+         "counts": {"done": c["done_count"], "failed": c["failed_count"],
+                    "waiting": c["pending_count"]}}
+        for c in crawls if c["status"] == "running"
+    ]
+    return templates.TemplateResponse(
+        request, "site.html",
+        {
+            "site": site, "pages": pages, "crawls": crawls,
+            "schedule_labels": schedule_labels,
+            "crawl_schedules": crawl_schedule_labels,
+            "snapshot_total": snapshot_total,
+            "certificates": cert_rows,
+            "active": active, "running_crawls": running_crawls,
+            "error": error, "notice": notice,
+        },
+    )
+
+
+@app.get("/sites/{site_id}/certificates/{cert_id}.pem")
+def site_certificate_pem(request: Request, site_id: int, cert_id: int):
+    """보관된 인증서 PEM 다운로드 — 사이트 소속 행만, 항상 첨부파일로."""
+    with db.connect() as conn:
+        cert = db.get_site_certificate(conn, site_id, cert_id)
+    if cert is None:
+        raise HTTPException(404, t(request, "인증서 없음"))
+    filename = f"{cert['host'].replace(':', '_')}-{cert['fingerprint'][:12]}.pem"
+    return PlainTextResponse(
+        cert["pem"],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/sites/{site_id}/delete")
+def site_delete(request: Request, site_id: int):
+    """사이트 전체 삭제 — 소속 페이지·크롤 회차·크롤 스케줄 일괄. admin/archiver 전용.
+
+    소속 페이지의 아카이빙이나 크롤이 진행 중이면 거부한다 — 삭제 직후
+    스냅샷이 다시 생기는 경합을 막는다.
+    """
+    _require_deleter(request)
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, t(request, "사이트 없음"))
+        busy = any(
+            c["status"] == "running" for c in db.list_site_crawls(conn, site_id)
+        )
+    active_keys = {storage.site_key(u) for u in _active_snapshot()}
+    if busy or site["site_key"] in active_keys:
+        return RedirectResponse(
+            f"/sites/{site_id}?error="
+            + quote(t(request, "아카이빙·크롤이 진행 중인 사이트입니다 — 완료 후 다시 시도하세요"), safe=""),
+            status_code=303,
+        )
+    result = deletion.delete_site(site_id)
+    if result is None:
+        raise HTTPException(404, t(request, "사이트 없음"))
+    params = urlencode({
+        "notice": t(
+            request,
+            "사이트 삭제됨: {key} (페이지 {p}개, 스냅샷 {s}개, 크롤 {c}개)",
+            key=result.site_key, p=result.pages_deleted,
+            s=result.snapshots_deleted, c=result.crawls_deleted,
+        )
+    })
+    return RedirectResponse(f"/archives?{params}", status_code=303)
 
 
 @app.get("/archive/active")
@@ -380,6 +472,7 @@ def dashboard(request: Request):
     starts = _period_starts(datetime.now(timezone.utc))
     with db.connect() as conn:
         total_pages = db.count_pages(conn)
+        total_sites = db.count_sites(conn)
         snap_dirs = db.list_snapshot_dirs(conn)
         recent_snaps = db.list_recent_snapshots(conn, limit=10)
         recent_logs = db.list_archive_logs(conn, limit=10)
@@ -411,6 +504,7 @@ def dashboard(request: Request):
         request, "dashboard.html",
         {
             "total_pages": total_pages,
+            "total_sites": total_sites,
             "total_snapshots": len(snap_dirs),
             "total_bytes": total_bytes,
             "week_count": counts["week"],
@@ -467,6 +561,7 @@ def timeline(
             db.get_network_tag(conn, page["network_tag_id"])
             if page["network_tag_id"] else None
         )
+        site = db.get_site(conn, page["site_id"]) if page["site_id"] else None
 
     items = []
     for i, s in enumerate(snaps, 1):
@@ -478,7 +573,7 @@ def timeline(
         {
             "page": page, "items": items, "checks": checks, "queued": queued,
             "notice": notice, "error": error,
-            "network_tag": network_tag,
+            "network_tag": network_tag, "site": site,
             "schedule": schedule,
             "schedule_label": (
                 i18n.schedule_label(

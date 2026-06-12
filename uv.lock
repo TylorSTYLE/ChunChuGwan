@@ -193,6 +193,7 @@ source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },
     { name = "click" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "jinja2" },
@@ -216,6 +217,7 @@ dev = [
 requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1" },
     { name = "click", specifier = ">=8.1" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", specifier = ">=0.111" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "jinja2", specifier = ">=3.1" },

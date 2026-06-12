@@ -279,7 +279,7 @@ _EN: dict[str, str] = {
         "All document files (PDF, Word, HWP, …) linked by archived pages in one "
         "list. Identical documents are stored once and shared by every snapshot "
         "that references them.",
-    "압축 전 스냅샷에 남아 있는 문서 파일이 있습니다 — 시스템 화면에서 저장 공간 압축을 실행하면 이 목록에 포함되고 중복이 제거됩니다.":
+    "압축 전 스냅샷에 남아 있는 문서 파일이 있습니다 — 시스템 화면에서 저장공간 최적화를 실행하면 이 목록에 포함되고 중복이 제거됩니다.":
         "Some documents are still stored inside pre-compaction snapshots — run "
         "storage compaction from the System screen to include and deduplicate "
         "them here.",
@@ -338,19 +338,20 @@ _EN: dict[str, str] = {
     "공유 자원": "Shared resources",
     "합계": "Total",
     "유지 관리": "Maintenance",
-    "저장 공간 압축": "Storage compaction",
+    "저장공간 최적화": "Storage optimization",
     "대상 {n}개": "{n} pending",
     "대상 없음": "None pending",
-    "구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP + 문서 파일 공유 저장소 이전)로 변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축됩니다.":
+    "구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP + 문서 파일 공유 저장소 이전)로 변환하고, 자원 참조를 인덱스한 뒤 어떤 스냅샷도 참조하지 않는 공유 자원을 삭제합니다. 내용 보존이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축·인덱스됩니다.":
         "Converts legacy snapshots to the compact storage form (shared-resource "
         "extraction + gzipped HTML + WebP screenshots + moving document files to "
-        "the shared store). The conversion preserves content — snapshots keep "
-        "exactly the same information — and is idempotent, so running it multiple "
-        "times is safe. New snapshots are compacted on save.",
-    "기존 스냅샷 파일을 압축 저장 형태로 변환합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?":
-        "Convert existing snapshot files to the compact storage form? "
-        "With many snapshots this can take a while.",
-    "압축 실행": "Run compaction",
+        "the shared store), indexes resource references, then deletes shared "
+        "resources no snapshot references. Content is preserved — snapshots keep "
+        "exactly the same information — and it is idempotent, so running it "
+        "multiple times is safe. New snapshots are compacted and indexed on save.",
+    "기존 스냅샷을 압축·인덱스하고 참조 없는 공유 자원을 정리합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?":
+        "Compact and index existing snapshots, then clean up unreferenced shared "
+        "resources? With many snapshots this can take a while.",
+    "최적화 실행": "Run optimization",
     "전체 백업": "Full backup",
     "DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.":
         "Downloads a tar.gz containing the entire DB (including auth data such as "
@@ -381,13 +382,14 @@ _EN: dict[str, str] = {
         "overwrite mode: erases all existing archive data (pages, snapshots, checks, "
         "files) before importing. Continue?",
     "관리자만 접근할 수 있습니다": "Admin access only",
-    "압축할 스냅샷이 없습니다.": "No snapshots to compact.",
-    "스냅샷 {n}개 모두 이미 압축 형태입니다.": "All {n} snapshots are already in compact form.",
-    "압축 실패: {e}": "Compaction failed: {e}",
-    "압축 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · 문서 {documents}개 이전 · {before} → {after} ({saved} 절약)":
-        "Compaction finished: converted {converted}/{total} · extracted "
+    "최적화할 항목이 없습니다 — 스냅샷이 모두 압축·인덱스 형태입니다.":
+        "Nothing to optimize — all snapshots are already compacted and indexed.",
+    "최적화 실패: {e}": "Optimization failed: {e}",
+    "최적화 완료: 변환 {converted}/{total}개 · 공유 자원 {externalized}개 추출 · 문서 {documents}개 이전 · 참조 백필 {indexed}개 · 고아 자원 {swept}개 정리 ({saved} 절약)":
+        "Optimization finished: converted {converted}/{total} · extracted "
         "{externalized} shared resources · moved {documents} documents · "
-        "{before} → {after} (saved {saved})",
+        "backfilled {indexed} reference(s) · cleaned {swept} orphaned "
+        "resource(s) (saved {saved})",
     "복원 실패: {e}": "Restore failed: {e}",
     "복원 완료 (백업: {created_at}, 페이지 {pages}개, 스냅샷 {snapshots}개)":
         "Restore complete (backup: {created_at}, {pages} pages, {snapshots} snapshots)",
@@ -726,6 +728,54 @@ _EN: dict[str, str] = {
         "The tag '{name}' is in use and cannot be deleted ({n} reference(s)).",
     "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.":
         "Deleted local network tag '{name}'.",
+    # 사이트(서브도메인) 단위 아카이브 — 목록·사이트 상세
+    "사이트 {n}개": "{n} site(s)",
+    "사이트 필터…": "Filter sites…",
+    "아카이브는 사이트(서브도메인) 단위로 묶입니다 — www 와 도메인 자체는 같은 사이트입니다. 사이트를 누르면 페이지·크롤 회차 목록이 보입니다.":
+        "Archives are grouped by site (subdomain) — www and the bare domain are "
+        "the same site. Click a site to see its pages and crawl runs.",
+    "크롤 회차": "Crawl runs",
+    "크롤 진행 중": "Crawling",
+    "페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개":
+        "{p} page(s) · {s} snapshot(s) · {c} crawl run(s)",
+    "사이트 삭제": "Delete site",
+    "페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
+        "This deletes the entire site archive including {p} page(s) and {c} "
+        "crawl run(s). This cannot be undone.",
+    "이 사이트(서브도메인)에 속한 페이지 아카이브와 크롤 회차입니다. www 와 도메인 자체는 같은 사이트로 취급됩니다.":
+        "Page archives and crawl runs that belong to this site (subdomain). "
+        "www and the bare domain are treated as the same site.",
+    "아직 페이지가 없습니다 — 크롤이 진행되면 여기에 쌓입니다.":
+        "No pages yet — they will appear here as crawls make progress.",
+    "크롤 회차가 없습니다 — 새 아카이빙에서 '사이트 전체 아카이브'를 선택하면 만들어집니다.":
+        "No crawl runs — select 'Archive entire site' on the new archive "
+        "screen to create one.",
+    "크롤 스케줄": "Crawl schedules",
+    "스케줄 관리(해제·시각 변경)는": "Manage schedules (remove, change time) on the",
+    "화면에서 합니다.": "screen.",
+    "사이트 없음": "Site not found",
+    # 사이트 인증서 (site_certificates — 버전 이력)
+    "인증서": "Certificates",
+    "인증서 없음": "Certificate not found",
+    "https 아카이빙 때 받은 서버 인증서의 버전 이력입니다. 인증서가 갱신되면 새 버전으로 기록되고 이전 버전은 남습니다.":
+        "Version history of server certificates collected during https "
+        "archiving. When a certificate is renewed it is recorded as a new "
+        "version and earlier versions are kept.",
+    "호스트": "Host",
+    "주체": "Subject",
+    "유효 기간": "Valid",
+    "확인 기간": "Seen",
+    "지문": "Fingerprint",
+    "현재": "Current",
+    "이전 버전": "Previous",
+    "검증 안 됨": "Unverified",
+    "캡처가 인증서 검증을 통과하지 못했습니다 (자체 서명 등)":
+        "The capture did not pass certificate verification (self-signed, etc.)",
+    "아카이빙·크롤이 진행 중인 사이트입니다 — 완료 후 다시 시도하세요":
+        "Archiving or crawling is in progress for this site — try again after "
+        "it finishes",
+    "사이트 삭제됨: {key} (페이지 {p}개, 스냅샷 {s}개, 크롤 {c}개)":
+        "Site deleted: {key} ({p} page(s), {s} snapshot(s), {c} crawl(s))",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

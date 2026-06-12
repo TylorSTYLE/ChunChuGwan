@@ -111,6 +111,35 @@ def normalize_url(raw: str) -> str:
     return urlunsplit((scheme, netloc, path, query, fragment))
 
 
+def strip_www(host: str) -> str:
+    """호스트의 `www.` 접두 제거 — www 와 apex 는 같은 사이트로 취급.
+
+    남는 부분이 도메인 형태(점 포함)일 때만 제거한다 — `www.com` 처럼
+    www 자체가 등록 도메인인 호스트나 IP 호스트는 그대로 둔다.
+    """
+    if host.startswith("www.") and "." in host[4:]:
+        return host[4:]
+    return host
+
+
+def netloc_site_key(netloc: str) -> str:
+    """netloc(`host[:port]`)의 사이트 키 — www 접두만 제거, 포트는 유지."""
+    host, sep, port = netloc.rpartition(":")
+    if sep and port.isdigit():
+        return f"{strip_www(host)}:{port}"
+    return strip_www(netloc)
+
+
+def site_key(normalized_url: str) -> str:
+    """정규화 URL 의 사이트 키 — 서브도메인 단위 그룹핑 식별자.
+
+    www 와 apex 는 같은 사이트, 다른 서브도메인은 다른 사이트다.
+    기본 포트는 normalize_url 이 이미 제거했으므로 남은 포트는 다른
+    사이트를 뜻한다 (예: localhost 게이트와 무관한 192.168.x.x:8080).
+    """
+    return netloc_site_key(urlsplit(normalized_url).netloc)
+
+
 def scheme_inferred(raw: str) -> bool:
     """입력에 스킴이 없어 normalize_url 이 https:// 를 추정 보완하는지.
 

@@ -61,13 +61,18 @@ def scope_of(start_url: str) -> tuple[str, str]:
 
 
 def in_scope(url: str, scope_host: str, scope_path: str) -> bool:
-    """정규화 URL 이 크롤 범위(같은 호스트 + 경로 프리픽스 이하)인지.
+    """정규화 URL 이 크롤 범위(같은 사이트 호스트 + 경로 프리픽스 이하)인지.
 
     스킴은 비교하지 않는다 — https 추정 보완·http 폴백(pipeline 참조)으로
-    스킴이 갈리는 경우를 같은 페이지로 취급한다.
+    스킴이 갈리는 경우를 같은 페이지로 취급한다. 호스트는 사이트 키
+    기준으로 비교한다 — www 와 apex 를 혼용하는 사이트의 내부 링크가
+    범위 밖으로 버려지지 않게 한다 (다른 서브도메인은 여전히 범위 밖).
     """
     parts = urlsplit(url)
-    return parts.netloc == scope_host and (parts.path or "/").startswith(scope_path)
+    return (
+        storage.netloc_site_key(parts.netloc) == storage.netloc_site_key(scope_host)
+        and (parts.path or "/").startswith(scope_path)
+    )
 
 
 def _validate_range(name: str, value: int, lo: int, hi: int) -> None:
@@ -215,13 +220,17 @@ def start_crawl(
     기본값(crawl_defaults)을 쓴다. 옵션 범위 위반은 ValueError.
     network_tag_id 는 사설 대역(로컬 네트워크) 사이트일 때 필수 — 크롤이
     아카이빙하는 모든 페이지에 적용된다 (루프백은 항상 ValueError).
+    명시적 http 시작 URL 은 https 지원이 확인되면 https 로 승격해 등록한다
+    (pipeline.upgrade_http_to_https — 게이트 통과 후 프로브).
     """
     norm = storage.normalize_url(url)
-    scope_host, scope_path = scope_of(norm)
     with db.connect() as conn:
         network_tag_id = _check_network_tag(
             conn, urlsplit(norm).hostname or "", network_tag_id
         )
+    norm = pipeline.upgrade_http_to_https(norm)
+    scope_host, scope_path = scope_of(norm)
+    with db.connect() as conn:
         max_pages, max_depth, delay_seconds = _resolve_options(
             conn, max_pages, max_depth, delay_seconds
         )
@@ -423,7 +432,8 @@ def set_crawl_schedule(
     지정 가능). 다음 실행은 지금 + 주기 — 보통 등록과 함께 첫 크롤을 따로
     시작하므로 즉시 실행하지 않는다. 옵션이 None 이면 시스템 설정 기본값.
     주기·옵션 범위 위반은 ValueError. network_tag_id 는 사설 대역 사이트일
-    때 필수 — 주기 실행으로 만드는 크롤에 그대로 적용된다.
+    때 필수 — 주기 실행으로 만드는 크롤에 그대로 적용된다. 명시적 http
+    시작 URL 은 https 지원이 확인되면 https 로 승격해 저장한다.
     """
     scheduler.validate_interval(interval_seconds)
     if run_at:
@@ -433,6 +443,8 @@ def set_crawl_schedule(
         network_tag_id = _check_network_tag(
             conn, urlsplit(norm).hostname or "", network_tag_id
         )
+    norm = pipeline.upgrade_http_to_https(norm)
+    with db.connect() as conn:
         max_pages, max_depth, delay_seconds = _resolve_options(
             conn, max_pages, max_depth, delay_seconds
         )

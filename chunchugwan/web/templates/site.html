@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}{{ site['site_key'] }} — {{ _("춘추관") }}{% endblock %}
+{% block content %}
+<style>
+#pages th:first-child { width: 45%; }
+</style>
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+{% if notice %}
+<div class="notice">{{ notice }}</div>
+{% endif %}
+
+<div class="toolbar">
+  <h2 style="margin:0" class="mono">{{ site['site_key'] }}</h2>
+  <span class="muted" style="font-size:13px">
+    {{ _("페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개", p=pages|length, s=snapshot_total, c=crawls|length) }}
+  </span>
+  <span class="spacer"></span>
+  {% if can_delete %}
+  <form class="inline" method="post" action="/sites/{{ site['id'] }}/delete"
+        onsubmit="return confirm({{ (site['site_key'] ~ '\n\n' ~ _('페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', p=pages|length, c=crawls|length))|tojson }})">
+    <button type="submit" class="danger">{{ _("사이트 삭제") }}</button>
+  </form>
+  {% endif %}
+</div>
+<p class="muted" style="font-size:13px">
+  {{ _("이 사이트(서브도메인)에 속한 페이지 아카이브와 크롤 회차입니다. www 와 도메인 자체는 같은 사이트로 취급됩니다.") }}
+</p>
+
+<h3>{{ _("페이지") }}</h3>
+{% if pages %}
+<table id="pages">
+  <thead>
+    <tr><th>URL</th><th class="num">{{ _("스냅샷") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for p in pages %}
+    <tr>
+      <td><a href="/page/{{ p['id'] }}">{{ p['url'] }}</a></td>
+      <td class="num">{{ p['snapshot_count'] }}</td>
+      <td class="mono">{% if p['last_taken_at'] %}{{ p['last_taken_at'] | ts }}{% else %}-{% endif %}</td>
+      <td>
+        {% if schedule_labels.get(p['id']) %}
+        <span class="mono">{{ schedule_labels[p['id']] }}</span>
+        {% else %}
+        <span class="muted">-</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if p['url'] in active %}
+        <span class="badge running">{{ _("아카이빙 중") }}</span>
+        {% else %}
+        {% if can_archive %}
+        <form class="inline" method="post" action="/page/{{ p['id'] }}/rearchive">
+          <button type="submit">{{ _("재아카이빙") }}</button>
+        </form>
+        {% endif %}
+        {% if can_delete %}
+        <form class="inline" method="post" action="/page/{{ p['id'] }}/delete"
+              onsubmit="return confirm({{ (p['url'] ~ '\n\n' ~ _('스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', n=p['snapshot_count']))|tojson }})">
+          <button type="submit" class="danger">{{ _("삭제") }}</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">{{ _("아직 페이지가 없습니다 — 크롤이 진행되면 여기에 쌓입니다.") }}</p>
+{% endif %}
+
+<h3>{{ _("크롤 회차") }}</h3>
+{% if crawls %}
+<table id="crawls">
+  <thead>
+    <tr><th>{{ _("시작 URL") }}</th><th>{{ _("범위") }}</th><th class="num">{{ _("페이지") }}</th><th>{{ _("시작") }}</th><th>{{ _("상태") }}</th></tr>
+  </thead>
+  <tbody>
+  {% for c in crawls %}
+    <tr>
+      <td><a href="/crawls/{{ c['id'] }}">{{ c['start_url'] }}</a></td>
+      <td class="mono muted">{{ c['scope_host'] }}{{ c['scope_path'] }}</td>
+      <td class="num">{{ c['done_count'] }}{% if c['total_count'] != c['done_count'] %} <span class="muted">/ {{ c['total_count'] }}</span>{% endif %}</td>
+      <td class="mono">{{ c['created_at'] | ts }}</td>
+      <td>
+        {% if c['status'] == 'running' %}
+        <span class="badge running">{{ _("진행 중") }}</span>
+        {% if c['pending_count'] %}<span class="muted">{{ _("대기") }} {{ c['pending_count'] }}</span>{% endif %}
+        {% elif c['status'] == 'done' %}
+        <span class="badge new">{{ _("완료됨") }}</span>
+        {% else %}
+        <span class="badge same">{{ _("취소됨") }}</span>
+        {% endif %}
+        {% if c['failed_count'] %}<span class="badge error">{{ _("실패") }} {{ c['failed_count'] }}</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">{{ _("크롤 회차가 없습니다 — 새 아카이빙에서 '사이트 전체 아카이브'를 선택하면 만들어집니다.") }}</p>
+{% endif %}
+
+{% if certificates %}
+<h3>{{ _("인증서") }}</h3>
+<p class="muted" style="font-size:13px">
+  {{ _("https 아카이빙 때 받은 서버 인증서의 버전 이력입니다. 인증서가 갱신되면 새 버전으로 기록되고 이전 버전은 남습니다.") }}
+</p>
+<table id="certificates">
+  <thead>
+    <tr>
+      <th>{{ _("호스트") }}</th>
+      <th>{{ _("주체") }}</th>
+      <th>{{ _("발급자") }}</th>
+      <th>{{ _("유효 기간") }}</th>
+      <th>{{ _("확인 기간") }}</th>
+      <th>{{ _("상태") }}</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for row in certificates %}
+  {% set c = row['cert'] %}
+    <tr title="{{ _('지문') }} {{ c['fingerprint'] }}{% if row['san'] %} · SAN: {{ row['san']|join(', ') }}{% endif %}{% if c['signature_algorithm'] %} · {{ c['signature_algorithm'] }}{% endif %}">
+      <td class="mono">{{ c['host'] }}</td>
+      <td class="mono" style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="{{ c['subject'] }}">{{ c['subject'] }}</td>
+      <td class="mono" style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="{{ c['issuer'] }}">{{ c['issuer'] }}</td>
+      <td class="mono">{{ c['not_before'] | ts }} ~ {{ c['not_after'] | ts }}</td>
+      <td class="mono">{{ c['first_seen_at'] | ts }}{% if c['last_seen_at'] != c['first_seen_at'] %} ~ {{ c['last_seen_at'] | ts }}{% endif %}</td>
+      <td>
+        {% if row['is_current'] %}
+        <span class="badge new">{{ _("현재") }}</span>
+        {% else %}
+        <span class="badge same">{{ _("이전 버전") }}</span>
+        {% endif %}
+        {% if not c['verified'] %}
+        <span class="badge changed" title="{{ _('캡처가 인증서 검증을 통과하지 못했습니다 (자체 서명 등)') }}">{{ _("검증 안 됨") }}</span>
+        {% endif %}
+      </td>
+      <td><a href="/sites/{{ site['id'] }}/certificates/{{ c['id'] }}.pem" download>PEM</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if crawl_schedules %}
+<h3>{{ _("크롤 스케줄") }}</h3>
+<table>
+  <thead>
+    <tr><th>{{ _("시작 URL") }}</th><th>{{ _("주기") }}</th><th>{{ _("다음 실행") }}</th></tr>
+  </thead>
+  <tbody>
+  {% for s in crawl_schedules %}
+    <tr>
+      <td class="mono">{{ s['start_url'] }}</td>
+      <td class="mono">{{ s['label'] }}</td>
+      <td class="mono">{{ s['next_run_at'] | ts }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted" style="font-size:13px">{{ _("스케줄 관리(해제·시각 변경)는") }} <a href="/schedules">{{ _("스케줄") }}</a> {{ _("화면에서 합니다.") }}</p>
+{% endif %}
+
+<script>
+// 진행 중 작업이 있으면 폴링하다가 바뀌는 순간 새로고침
+const active = {{ active.keys() | list | sort | tojson }};
+if (active.length) {
+  setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      const res = await fetch('/archive/active');
+      if (!res.ok) return;
+      const now = (await res.json()).active;
+      if (JSON.stringify(now) !== JSON.stringify(active)) location.reload();
+    } catch (e) { /* 일시적 오류 — 다음 폴링에서 재시도 */ }
+  }, 2000);
+}
+// 진행 중 크롤이 있으면 상태를 폴링해 카운트·상태가 바뀌면 새로고침
+const runningCrawls = {{ running_crawls | tojson }};
+if (runningCrawls.length) {
+  setInterval(async () => {
+    if (document.hidden) return;
+    for (const c of runningCrawls) {
+      try {
+        const res = await fetch(`/crawls/${c.id}/status`);
+        if (!res.ok) continue;
+        const data = await res.json();
+        const waiting = data.counts.pending + data.counts.in_progress;
+        if (data.status !== 'running' || data.counts.done !== c.counts.done
+            || data.counts.failed !== c.counts.failed || waiting !== c.counts.waiting) {
+          location.reload();
+          return;
+        }
+      } catch (e) { /* 일시적 오류 — 다음 폴링에서 재시도 */ }
+    }
+  }, 5000);
+}
+</script>
+{% endblock %}

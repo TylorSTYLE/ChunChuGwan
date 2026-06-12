@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -22,21 +23,44 @@ from . import config, documents
 logger = logging.getLogger(__name__)
 
 # 페이지 컨텍스트에서 스타일시트/이미지/폰트를 data URI로 치환.
-# 실패한 자원 목록 {kind, url, raw?} 반환 — 페이지 컨텍스트 fetch() 는 CORS 에
-# 막힐 수 있으므로(<img> 렌더링과 달리), 실패분은 Python 쪽 폴백이 재시도한다.
+# {failed, inlined} 반환 — failed 는 실패 자원 {kind, url, raw?} 목록으로,
+# 페이지 컨텍스트 fetch() 는 CORS 에 막힐 수 있으므로(<img> 렌더링과 달리)
+# Python 쪽 폴백이 재시도한다. inlined 는 성공 자원의 {url, sha256} 목록 —
+# CAS 추출 후 snapshot_resources 에 원본 URL 을 기록하는 근거다. sha256 은
+# crypto.subtle(보안 컨텍스트)로 계산하고, http 페이지처럼 없는 환경에서는
+# expose_function 으로 노출된 Python 바인딩(_sha256_of_base64)으로 폴백한다.
 _INLINE_JS = """
 async () => {
   const failed = [];
+  const inlined = [];
+  const shaHex = async (blob, dataUrl) => {
+    if (crypto.subtle) {
+      const buf = await blob.arrayBuffer();
+      const digest = await crypto.subtle.digest("SHA-256", buf);
+      return Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+    // 비보안 컨텍스트(http) — Python 바인딩으로 폴백 (hashlib, capture.py)
+    if (window._wccgSha256) {
+      return await window._wccgSha256(dataUrl.slice(dataUrl.indexOf(",") + 1));
+    }
+    return null;
+  };
   const toDataUrl = async (url) => {
     const res = await fetch(url, { credentials: "omit" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const blob = await res.blob();
-    return await new Promise((resolve, reject) => {
+    const dataUrl = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(blob);
     });
+    try {
+      const sha = await shaHex(blob, dataUrl);
+      if (sha) inlined.push({ url, sha256: sha });
+    } catch (e) { /* 해시 실패는 인라인을 막지 않는다 */ }
+    return dataUrl;
   };
   const FONT_URL_RE = /url\\((['"]?)([^)'"]+?\\.(?:woff2?|ttf|otf|eot)(?:[?#][^)'"]*)?)\\1\\)/gi;
   const inlineFonts = async (cssText, baseUrl) => {
@@ -84,7 +108,7 @@ async () => {
       failed.push({ kind: "img", url: src });
     }
   }
-  return failed;
+  return { failed, inlined };
 }
 """
 
@@ -195,10 +219,17 @@ class CaptureResult:
     document_links: list[str] = field(default_factory=list)
     # 페이지의 모든 앵커 href (절대 URL, 중복 제거) — 크롤러의 링크 추적용
     page_links: list[str] = field(default_factory=list)
+    # 인라인된 자원의 sha256 → 원본 URL — CAS 추출 후 snapshot_resources 의
+    # url 컬럼을 채우는 근거 (sha 를 못 구한 자원은 빠진다)
+    resource_urls: dict[str, str] = field(default_factory=dict)
 
 
 # 앵커 절대 URL 목록 → {원본 href: 재작성 href}. 비거나 None 이면 재작성 없음.
 LinkRewriter = Callable[[Sequence[str]], dict[str, str]]
+
+# 자원 인라인 실패 시 과거 캡처본 조회 — URL 을 받아 (content-type, body) 또는
+# None 을 반환한다 (pipeline 이 snapshot_resources + 자원 CAS 로 구현).
+ResourceFallback = Callable[[str], "tuple[str, bytes] | None"]
 
 
 class BrowserSession:
@@ -254,6 +285,8 @@ def capture(
     remove_selectors: tuple[str, ...] = (),
     link_rewriter: LinkRewriter | None = None,
     session: BrowserSession | None = None,
+    resource_fallback: ResourceFallback | None = None,
+    insecure_tls: bool = False,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
 
@@ -270,7 +303,8 @@ def capture(
     """
     try:
         return _capture_once(url, out_dir, remove_selectors, link_rewriter,
-                             session=session)
+                             session=session, resource_fallback=resource_fallback,
+                             insecure_tls=insecure_tls)
     except CaptureError as e:
         if "ERR_HTTP2" not in str(e):
             raise
@@ -278,6 +312,8 @@ def capture(
         return _capture_once(
             url, out_dir, remove_selectors, link_rewriter,
             browser_args=("--disable-http2",),
+            resource_fallback=resource_fallback,
+            insecure_tls=insecure_tls,
         )
 
 
@@ -288,6 +324,8 @@ def _capture_once(
     link_rewriter: LinkRewriter | None = None,
     browser_args: tuple[str, ...] = (),
     session: BrowserSession | None = None,
+    resource_fallback: ResourceFallback | None = None,
+    insecure_tls: bool = False,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
     from playwright.sync_api import Error as PlaywrightError
@@ -296,13 +334,15 @@ def _capture_once(
     try:
         if session is not None and not browser_args:
             return _capture_in_browser(
-                session.browser(), url, out_dir, remove_selectors, link_rewriter
+                session.browser(), url, out_dir, remove_selectors, link_rewriter,
+                resource_fallback, insecure_tls,
             )
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=list(browser_args))
             try:
                 return _capture_in_browser(
-                    browser, url, out_dir, remove_selectors, link_rewriter
+                    browser, url, out_dir, remove_selectors, link_rewriter,
+                    resource_fallback, insecure_tls,
                 )
             finally:
                 browser.close()
@@ -318,14 +358,25 @@ def _capture_in_browser(
     out_dir: Path,
     remove_selectors: tuple[str, ...],
     link_rewriter: LinkRewriter | None,
+    resource_fallback: ResourceFallback | None = None,
+    insecure_tls: bool = False,
 ) -> CaptureResult:
-    """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다."""
+    """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다.
+
+    insecure_tls 는 인증서 검증을 무시한다 — 자체 서명 인증서로 https 만
+    서빙하는 사이트(사설 NAS 등)의 재시도 경로(pipeline)에서만 켠다.
+    컨텍스트 옵션이라 페이지의 하위 자원 요청·context.request 폴백에도
+    적용된다.
+    """
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-    context = browser.new_context(user_agent=config.USER_AGENT)
+    context = browser.new_context(
+        user_agent=config.USER_AGENT, ignore_https_errors=insecure_tls
+    )
     try:
         page = context.new_page()
         page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
+        _expose_sha256_binding(page)
         try:
             response = page.goto(
                 url, wait_until="networkidle", timeout=config.PAGE_LOAD_TIMEOUT_MS
@@ -357,9 +408,10 @@ def _capture_in_browser(
             _rewrite_links(page, link_rewriter, page_links)
 
         page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
-        (out_dir / "page.html").write_text(
-            _inline_resources(page, raw_html), encoding="utf-8"
+        page_html, resource_urls = _inline_resources(
+            page, raw_html, resource_fallback
         )
+        (out_dir / "page.html").write_text(page_html, encoding="utf-8")
 
         return CaptureResult(
             final_url=page.url,
@@ -369,6 +421,7 @@ def _capture_in_browser(
             content_html=content_html,
             document_links=document_links,
             page_links=page_links,
+            resource_urls=resource_urls,
         )
     finally:
         context.close()
@@ -414,32 +467,68 @@ def _rewrite_links(page, link_rewriter: LinkRewriter, page_links: list[str]) -> 
         logger.warning("링크 재작성 실패, 원본 링크 유지: %s", e)
 
 
-def _inline_resources(page, raw_html: str) -> str:
+def _sha256_of_base64(b64: str) -> str:
+    """base64 문자열을 디코딩한 바이트의 sha256 hex.
+
+    _INLINE_JS 의 자원 해시 폴백 — crypto.subtle 이 없는 비보안 컨텍스트
+    (http 페이지)에서 페이지 바인딩(window._wccgSha256)으로 호출된다.
+    데이터는 FileReader 의 data URL 에서 잘라낸 base64 부분이라 항상 유효하다.
+    """
+    return hashlib.sha256(base64.b64decode(b64)).hexdigest()
+
+
+def _expose_sha256_binding(page) -> None:
+    """sha256 페이지 바인딩 등록 — 실패해도 캡처는 계속된다.
+
+    바인딩이 없으면 http 페이지의 자원 URL 매핑만 빠진다 (저장은 정상).
+    """
+    try:
+        page.expose_function("_wccgSha256", _sha256_of_base64)
+    except Exception as e:
+        logger.warning("sha256 바인딩 등록 실패 — http 페이지의 자원 URL 매핑 생략: %s", e)
+
+
+def _inline_resources(
+    page, raw_html: str, resource_fallback: ResourceFallback | None = None
+) -> tuple[str, dict[str, str]]:
     """<img src>, <link rel=stylesheet>, 폰트를 data URI로 치환한 단일 HTML 생성.
 
     페이지 컨텍스트 fetch() 가 CORS 로 막힌 자원은 context.request 폴백으로
-    재시도하고, 끝내 실패한 자원만 원본 URL을 유지하며 경고 로그를 남긴다.
+    재시도하고, 그래도 실패한 자원은 resource_fallback(과거 캡처본 재사용)을
+    시도한다. 끝내 실패한 자원만 원본 URL을 유지하며 경고 로그를 남긴다.
+    (HTML, 인라인 자원의 sha256 → 원본 URL) 반환.
     """
+    resource_urls: dict[str, str] = {}
     try:
-        failed: list[dict] = page.evaluate(_INLINE_JS)
+        result: dict = page.evaluate(_INLINE_JS)
+        failed: list[dict] = result["failed"]
+        resource_urls = {
+            i["sha256"]: i["url"] for i in result["inlined"] if i.get("sha256")
+        }
         if failed:
-            failed = _retry_inline_via_context(page, failed)
+            failed = _retry_inline_via_context(page, failed, resource_urls)
+        if failed and resource_fallback is not None:
+            failed = _apply_resource_fallback(
+                page, failed, resource_fallback, resource_urls
+            )
         for item in failed:
             logger.warning(
                 "자원 인라인 실패(원본 URL 유지): %s", item.get("url") or item.get("raw")
             )
-        return page.content()
+        return page.content(), resource_urls
     except Exception as e:  # 인라인이 실패해도 캡처 자체는 유효
         logger.warning("자원 인라인 단계 실패, raw HTML로 대체: %s", e)
-        return raw_html
+        return raw_html, resource_urls
 
 
-def _retry_inline_via_context(page, failed: list[dict]) -> list[dict]:
+def _retry_inline_via_context(
+    page, failed: list[dict], resource_urls: dict[str, str]
+) -> list[dict]:
     """CORS 로 막힌 자원을 브라우저 밖 API 요청(context.request)으로 재시도.
 
     context.request 는 CORS 제약이 없고 컨텍스트의 쿠키/UA 를 공유한다.
     핫링크 보호 대비 Referer 를 현재 페이지로 보낸다. 성공분은 DOM 에 반영하고
-    끝내 실패한 항목만 돌려준다.
+    (sha256 → URL 을 resource_urls 에 기록), 끝내 실패한 항목만 돌려준다.
     """
     replacements: list[dict] = []
     still_failed: list[dict] = []
@@ -456,15 +545,46 @@ def _retry_inline_via_context(page, failed: list[dict]) -> list[dict]:
             still_failed.append(item)
             continue
         content_type, body = result
-        if item["kind"] == "css":
-            css_text = _absolutize_css_urls(
-                body.decode("utf-8", errors="replace"), url
-            )
-            replacements.append({"kind": "css", "url": url, "cssText": css_text})
-        else:
-            encoded = base64.b64encode(body).decode("ascii")
-            data_url = f"data:{content_type};base64,{encoded}"
-            replacements.append({**item, "dataUrl": data_url})
+        replacements.append(_replacement_for(item, url, content_type, body))
+        resource_urls[hashlib.sha256(body).hexdigest()] = url
+    if replacements:
+        page.evaluate(_APPLY_INLINE_JS, replacements)
+    return still_failed
+
+
+def _replacement_for(item: dict, url: str, content_type: str, body: bytes) -> dict:
+    """받아온 자원 바이트 → _APPLY_INLINE_JS 치환 항목."""
+    if item["kind"] == "css":
+        css_text = _absolutize_css_urls(body.decode("utf-8", errors="replace"), url)
+        return {"kind": "css", "url": url, "cssText": css_text}
+    encoded = base64.b64encode(body).decode("ascii")
+    return {**item, "dataUrl": f"data:{content_type};base64,{encoded}"}
+
+
+def _apply_resource_fallback(
+    page,
+    failed: list[dict],
+    resource_fallback: ResourceFallback,
+    resource_urls: dict[str, str],
+) -> list[dict]:
+    """끝내 받지 못한 자원을 과거 캡처본(자원 CAS)으로 메운다.
+
+    같은 URL 로 저장된 콘텐츠가 있으면 재사용한다 — 그 사이 원본이 바뀌었을
+    수 있지만, 라이브 URL 을 남겨 뷰어가 원본 사이트로 요청을 흘리는 것보다
+    낫다 (정적 자원 전제). 성공분은 DOM 에 반영하고 남은 실패만 돌려준다.
+    """
+    replacements: list[dict] = []
+    still_failed: list[dict] = []
+    for item in failed:
+        url = item.get("url")
+        result = resource_fallback(url) if url else None
+        if result is None:
+            still_failed.append(item)
+            continue
+        content_type, body = result
+        replacements.append(_replacement_for(item, url, content_type, body))
+        resource_urls[hashlib.sha256(body).hexdigest()] = url
+        logger.info("자원 인라인 실패 — 이전 캡처본 재사용: %s", url)
     if replacements:
         page.evaluate(_APPLY_INLINE_JS, replacements)
     return still_failed
@@ -500,6 +620,18 @@ def _absolutize_css_urls(css_text: str, base_url: str) -> str:
         return f"url({urljoin(base_url, ref)})"
 
     return _CSS_URL_RE.sub(repl, css_text)
+
+
+# TLS 인증서/SSL 단계의 실패 — 검증 무시(insecure_tls) 재시도 판단용
+_CERT_ERROR_MARKERS = ("net::ERR_CERT_", "net::ERR_SSL_")
+
+
+def is_cert_error(exc: Exception) -> bool:
+    """캡처 실패가 인증서/SSL 단계인지 — 자체 서명 인증서 등.
+
+    pipeline 이 검증 무시로 https 를 한 번 더 시도할지 판단하는 데 쓴다.
+    """
+    return any(marker in str(exc) for marker in _CERT_ERROR_MARKERS)
 
 
 # 서버 연결 단계에서 나는 chromium 네트워크 오류 (DNS 실패는 스킴과 무관하므로 제외)

@@ -271,13 +271,41 @@ def test_web_delete_refused_while_archiving(client, archive):
     assert len(_snaps(archive["page_id"])) == 3
 
 
+def _site_url() -> str:
+    """아카이브 픽스처 페이지가 속한 사이트 상세 경로."""
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, storage.site_key(URL))
+    return f"/sites/{site['id']}"
+
+
 def test_web_delete_buttons_visible_when_allowed(client, archive):
-    assert 'action="/page/1/delete"' in client.get("/archives").text
+    assert 'action="/page/1/delete"' in client.get(_site_url()).text
+    assert f'action="{_site_url()}/delete"' in client.get(_site_url()).text
     snaps = _snaps(archive["page_id"])
     assert (
         f'action="/snapshot/{snaps[0]["id"]}/delete"'
         in client.get(f"/page/{archive['page_id']}").text
     )
+
+
+def test_web_site_delete(client, archive):
+    """사이트 삭제 — 소속 페이지가 모두 지워지고 목록으로 리다이렉트."""
+    res = client.post(f"{_site_url()}/delete", follow_redirects=False)
+    assert res.status_code == 303
+    assert res.headers["location"].startswith("/archives?notice=")
+    with db.connect() as conn:
+        assert db.count_pages(conn) == 0
+        assert db.count_sites(conn) == 0
+
+
+def test_web_site_delete_refused_while_archiving(client, archive):
+    """소속 페이지가 아카이빙 중이면 사이트 삭제를 거부한다."""
+    site_url = _site_url()
+    web_app._register_job(URL)
+    res = client.post(f"{site_url}/delete", follow_redirects=False)
+    assert res.status_code == 303 and "error=" in res.headers["location"]
+    with db.connect() as conn:
+        assert db.get_page_by_id(conn, archive["page_id"]) is not None
 
 
 # ---- 권한 (인증 on — 삭제는 admin/archiver 전용) ----
@@ -310,13 +338,16 @@ def test_viewer_cannot_delete(role_client, archive):
     snaps = _snaps(archive["page_id"])
     assert role_client.post(f"/snapshot/{snaps[0]['id']}/delete").status_code == 403
     # 버튼도 노출되지 않는다
-    assert "/delete" not in role_client.get("/archives").text
+    assert "/delete" not in role_client.get(_site_url()).text
 
 
 def test_archiver_can_delete(role_client, archive):
     _login(role_client, "archiver@test.co", "password1234")
-    # 버튼이 노출된다
-    assert f'action="/page/{archive["page_id"]}/delete"' in role_client.get("/archives").text
+    # 버튼이 노출된다 (사이트 상세)
+    assert (
+        f'action="/page/{archive["page_id"]}/delete"'
+        in role_client.get(_site_url()).text
+    )
     snaps = _snaps(archive["page_id"])
     res = role_client.post(f"/snapshot/{snaps[0]['id']}/delete", follow_redirects=False)
     assert res.status_code == 303

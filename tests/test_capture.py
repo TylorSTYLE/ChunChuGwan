@@ -85,6 +85,54 @@ def test_capture_artifacts_and_inlining(site_url, tmp_path):
     assert result.document_links == [f"{base}/report.pdf"]
 
 
+def test_capture_records_resource_url_mapping(site_url, tmp_path):
+    """인라인 성공 자원의 sha256 → 원본 URL 매핑이 기록된다 (보안 컨텍스트)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    result = capture.capture(site_url, out)
+    base = site_url.rsplit("/", 1)[0]
+    assert f"{base}/img.png" in result.resource_urls.values()
+    assert f"{base}/font.woff2" in result.resource_urls.values()
+    # sha 키가 실제 콘텐츠 해시와 일치한다
+    import hashlib
+    from urllib.request import urlopen
+
+    img_sha = hashlib.sha256(urlopen(f"{base}/img.png").read()).hexdigest()
+    assert result.resource_urls.get(img_sha) == f"{base}/img.png"
+
+
+def test_resource_sha_falls_back_to_python_binding(site_url, tmp_path, monkeypatch):
+    """crypto.subtle 이 없는 환경(http 페이지)에서도 sha 매핑이 기록된다.
+
+    127.0.0.1 은 브라우저가 보안 컨텍스트로 취급하므로, JS 의 crypto.subtle
+    분기를 막아 비보안 컨텍스트의 폴백 경로(Python 바인딩)를 재현한다.
+    """
+    monkeypatch.setattr(
+        capture, "_INLINE_JS",
+        capture._INLINE_JS.replace("if (crypto.subtle) {", "if (false) {"),
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+    result = capture.capture(site_url, out)
+    base = site_url.rsplit("/", 1)[0]
+    assert f"{base}/img.png" in result.resource_urls.values()
+    import hashlib
+    from urllib.request import urlopen
+
+    img_sha = hashlib.sha256(urlopen(f"{base}/img.png").read()).hexdigest()
+    assert result.resource_urls.get(img_sha) == f"{base}/img.png"
+
+
+def test_sha256_of_base64_matches_hashlib():
+    import base64
+    import hashlib
+
+    data = b"binding-check"
+    assert capture._sha256_of_base64(
+        base64.b64encode(data).decode("ascii")
+    ) == hashlib.sha256(data).hexdigest()
+
+
 def test_capture_without_rules_keeps_content(site_url, tmp_path):
     out = tmp_path / "out"
     out.mkdir()
@@ -151,7 +199,8 @@ def test_capture_retries_with_http2_disabled(monkeypatch, tmp_path):
     calls = []
 
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
-                  browser_args=(), session=None):
+                  browser_args=(), session=None, resource_fallback=None,
+                  insecure_tls=False):
         calls.append(browser_args)
         if not browser_args:
             raise capture.CaptureError(
@@ -169,7 +218,8 @@ def test_capture_does_not_retry_other_errors(monkeypatch, tmp_path):
     calls = []
 
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
-                  browser_args=(), session=None):
+                  browser_args=(), session=None, resource_fallback=None,
+                  insecure_tls=False):
         calls.append(browser_args)
         raise capture.CaptureError(f"{url} 캡처 실패: net::ERR_NAME_NOT_RESOLVED")
 
@@ -208,3 +258,50 @@ def test_capture_connect_error_on_closed_port(tmp_path):
         port = s.getsockname()[1]
     with pytest.raises(capture.CaptureConnectError):
         capture.capture(f"https://127.0.0.1:{port}/", tmp_path)
+
+
+@pytest.fixture
+def self_signed_site(tmp_path):
+    """자체 서명 인증서로 https 만 서빙하는 사이트 (사설 NAS 재현)."""
+    import ssl
+    from pathlib import Path
+
+    site = tmp_path / "ssl-site"
+    site.mkdir()
+    (site / "index.html").write_text(
+        '<html><head><meta charset="utf-8"></head>'
+        "<body><p>자체 서명 본문</p></body></html>", encoding="utf-8"
+    )
+    fixtures = Path(__file__).parent / "fixtures"
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(
+        fixtures / "selfsigned-cert.pem", fixtures / "selfsigned-key.pem"
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"https://127.0.0.1:{server.server_address[1]}/index.html"
+    server.shutdown()
+    thread.join(timeout=5)
+
+
+def test_capture_self_signed_rejected_by_default(self_signed_site, tmp_path):
+    """기본은 인증서 검증 — 자체 서명은 인증서 오류로 실패한다."""
+    out = tmp_path / "out-default"
+    out.mkdir()
+    with pytest.raises(capture.CaptureConnectError) as exc:
+        capture.capture(self_signed_site, out)
+    assert capture.is_cert_error(exc.value)
+
+
+def test_capture_self_signed_with_insecure_tls(self_signed_site, tmp_path):
+    """insecure_tls=True 면 검증을 무시하고 https 캡처가 성공한다."""
+    out = tmp_path / "out-insecure"
+    out.mkdir()
+    result = capture.capture(self_signed_site, out, insecure_tls=True)
+    assert result.http_status == 200
+    assert "자체 서명 본문" in result.raw_html
+    assert (out / "page.html").is_file()

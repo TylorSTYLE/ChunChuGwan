@@ -332,9 +332,12 @@ def _wipe_archive_data(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM crawls")
     conn.execute("DELETE FROM schedules")
     conn.execute("DELETE FROM snapshot_documents")
+    conn.execute("DELETE FROM snapshot_resources")
     conn.execute("DELETE FROM checks")
     conn.execute("DELETE FROM snapshots")
     conn.execute("DELETE FROM pages")
+    # 사이트 행은 소속이 남은 것(크롤 스케줄 등)만 남기고 정리
+    db.prune_empty_sites(conn)
     if config.SITES_DIR.is_dir():
         for child in config.SITES_DIR.iterdir():
             shutil.rmtree(child) if child.is_dir() else child.unlink()
@@ -409,9 +412,14 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
             for p in data["pages"]:
                 row = db.get_page(conn, p["url"])
                 if row is None:
+                    site_id = db.get_or_create_site(conn, storage.site_key(p["url"]))
                     cur = conn.execute(
-                        "INSERT INTO pages (url, domain, slug, created_at) VALUES (?, ?, ?, ?)",
-                        (p["url"], p["domain"], p["slug"], p["created_at"] or _utcnow()),
+                        """
+                        INSERT INTO pages (url, domain, slug, site_id, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (p["url"], p["domain"], p["slug"], site_id,
+                         p["created_at"] or _utcnow()),
                     )
                     page_ids[p["url"]] = cur.lastrowid
                     page_paths[p["url"]] = (p["domain"], p["slug"])
