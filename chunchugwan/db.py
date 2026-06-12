@@ -232,6 +232,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             WHERE id = (SELECT MIN(id) FROM users WHERE role = 'admin')
             """
         )
+    if cols and "timezone" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'")
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
     if cols and "webauthn_challenge" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN webauthn_challenge TEXT")
@@ -1315,6 +1317,11 @@ def delete_user_sessions(conn: sqlite3.Connection, user_id: int) -> None:
 def set_display_name(conn: sqlite3.Connection, user_id: int, name: str | None) -> None:
     """표시용 사용자 이름 변경 (None 이면 제거 — 이메일로 표시)."""
     conn.execute("UPDATE users SET display_name = ? WHERE id = ?", (name, user_id))
+
+
+def set_user_timezone(conn: sqlite3.Connection, user_id: int, tz_name: str) -> None:
+    """사용자 타임존 변경 (IANA 이름, 예: Asia/Seoul)."""
+    conn.execute("UPDATE users SET timezone = ? WHERE id = ?", (tz_name, user_id))
 
 
 def set_password_hash(conn: sqlite3.Connection, user_id: int, password_hash: str) -> None:

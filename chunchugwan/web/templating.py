@@ -23,6 +23,16 @@ def _auth_context(request: Request) -> dict:
     }
 
 
+def _tz_context(request: Request) -> dict:
+    """로그인 사용자의 타임존(IANA)을 모든 템플릿에 주입. 미로그인 시 UTC."""
+    user = getattr(request.state, "user", None)
+    try:
+        tz = (user["timezone"] if user is not None else None) or "UTC"
+    except (IndexError, KeyError):
+        tz = "UTC"
+    return {"user_timezone": tz}
+
+
 def _i18n_context(request: Request) -> dict:
     """요청 로케일의 번역 함수(`_`)와 언어 선택 UI 데이터를 모든 템플릿에 주입."""
     from . import i18n
@@ -74,7 +84,7 @@ def ts(value: str | None, fmt: str = "datetime") -> Markup | str:
 
 templates = Jinja2Templates(
     directory=Path(__file__).parent / "templates",
-    context_processors=[_auth_context, _i18n_context],
+    context_processors=[_auth_context, _i18n_context, _tz_context],
 )
 templates.env.filters["filesize"] = filesize
 templates.env.filters["ts"] = ts

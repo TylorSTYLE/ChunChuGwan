@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import secrets
 import sqlite3
+import zoneinfo
 
 import httpx
 import jwt
@@ -19,6 +20,67 @@ from fastapi.responses import (
 from .. import auth, config, db, oidc
 from .i18n import t
 from .templating import templates
+
+# (지역명, [(IANA 이름, 표시 이름), ...]) — 계정 설정 선택기에 사용
+TIMEZONE_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("아시아", [
+        ("Asia/Seoul", "한국 (UTC+9)"),
+        ("Asia/Tokyo", "일본 (UTC+9)"),
+        ("Asia/Shanghai", "중국 (UTC+8)"),
+        ("Asia/Hong_Kong", "홍콩 (UTC+8)"),
+        ("Asia/Singapore", "싱가포르 (UTC+8)"),
+        ("Asia/Bangkok", "태국 (UTC+7)"),
+        ("Asia/Jakarta", "인도네시아 서부 (UTC+7)"),
+        ("Asia/Kolkata", "인도 (UTC+5:30)"),
+        ("Asia/Karachi", "파키스탄 (UTC+5)"),
+        ("Asia/Dubai", "UAE (UTC+4)"),
+        ("Asia/Tehran", "이란 (UTC+3:30)"),
+        ("Asia/Baghdad", "이라크 (UTC+3)"),
+        ("Asia/Istanbul", "튀르키예 (UTC+3)"),
+    ]),
+    ("유럽", [
+        ("Europe/London", "영국 (UTC+0/+1)"),
+        ("Europe/Paris", "프랑스 (UTC+1/+2)"),
+        ("Europe/Berlin", "독일 (UTC+1/+2)"),
+        ("Europe/Rome", "이탈리아 (UTC+1/+2)"),
+        ("Europe/Madrid", "스페인 (UTC+1/+2)"),
+        ("Europe/Amsterdam", "네덜란드 (UTC+1/+2)"),
+        ("Europe/Warsaw", "폴란드 (UTC+1/+2)"),
+        ("Europe/Helsinki", "핀란드 (UTC+2/+3)"),
+        ("Europe/Moscow", "러시아 모스크바 (UTC+3)"),
+    ]),
+    ("아메리카", [
+        ("America/New_York", "미국 동부 (UTC-5/-4)"),
+        ("America/Chicago", "미국 중부 (UTC-6/-5)"),
+        ("America/Denver", "미국 산악 (UTC-7/-6)"),
+        ("America/Los_Angeles", "미국 서부 (UTC-8/-7)"),
+        ("America/Toronto", "캐나다 동부 (UTC-5/-4)"),
+        ("America/Vancouver", "캐나다 서부 (UTC-8/-7)"),
+        ("America/Sao_Paulo", "브라질 (UTC-3/-2)"),
+        ("America/Mexico_City", "멕시코 (UTC-6/-5)"),
+    ]),
+    ("태평양·오세아니아", [
+        ("Australia/Sydney", "호주 동부 (UTC+10/+11)"),
+        ("Australia/Adelaide", "호주 중부 (UTC+9:30/+10:30)"),
+        ("Australia/Perth", "호주 서부 (UTC+8)"),
+        ("Pacific/Auckland", "뉴질랜드 (UTC+12/+13)"),
+        ("Pacific/Honolulu", "하와이 (UTC-10)"),
+        ("Pacific/Guam", "괌 (UTC+10)"),
+    ]),
+    ("아프리카·중동", [
+        ("Africa/Cairo", "이집트 (UTC+2)"),
+        ("Africa/Johannesburg", "남아프리카 (UTC+2)"),
+        ("Africa/Lagos", "나이지리아 (UTC+1)"),
+        ("Africa/Nairobi", "케냐 (UTC+3)"),
+    ]),
+    ("UTC", [
+        ("UTC", "UTC (협정 세계시)"),
+    ]),
+]
+
+_VALID_TIMEZONES: frozenset[str] = frozenset(
+    tz for _, group in TIMEZONE_GROUPS for tz, _ in group
+)
 
 logger = logging.getLogger(__name__)
 
@@ -423,6 +485,8 @@ def _account_ctx(
         "role_label": db.ROLE_LABELS.get(user["role"], user["role"]),
         "totp_enabled": user["totp_secret"] is not None,
         "passkey_count": passkey_count,
+        "timezone": user["timezone"] or "UTC",
+        "timezone_groups": TIMEZONE_GROUPS,
         "error": error,
         "notice": notice,
     }
@@ -434,12 +498,25 @@ def account_page(request: Request, ok: str | None = None):
     notice = {
         "name": "사용자 이름을 변경했습니다.",
         "password": "패스워드를 변경했습니다. 다른 기기의 세션은 로그아웃되었습니다.",
+        "timezone": "시간대를 변경했습니다.",
     }.get(ok or "")
     if notice:
         notice = t(request, notice)
     return templates.TemplateResponse(
         request, "account.html", _account_ctx(user, notice=notice)
     )
+
+
+@router.post("/settings/account/timezone", response_class=HTMLResponse)
+def change_timezone(request: Request, timezone: str = Form(...)):
+    user = request.state.user
+    tz = timezone.strip()
+    if tz not in _VALID_TIMEZONES:
+        ctx = _account_ctx(user, error=t(request, "지원하지 않는 타임존입니다."))
+        return templates.TemplateResponse(request, "account.html", ctx, status_code=400)
+    with db.connect() as conn:
+        db.set_user_timezone(conn, user["id"], tz)
+    return RedirectResponse(url="/settings/account?ok=timezone", status_code=303)
 
 
 @router.post("/settings/account/name", response_class=HTMLResponse)

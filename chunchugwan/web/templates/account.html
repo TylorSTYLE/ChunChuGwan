@@ -18,6 +18,22 @@
     <button type="submit">{{ _("이름 변경") }}</button>
   </form>
 
+  <h3>{{ _("시간대") }}</h3>
+  <form method="post" action="/settings/account/timezone">
+    <label>{{ _("기준 시각 국가/지역") }}
+      <select name="timezone">
+        {% for group_name, zones in timezone_groups %}
+        <optgroup label="{{ _(group_name) }}">
+          {% for tz_name, tz_label in zones %}
+          <option value="{{ tz_name }}"{% if tz_name == timezone %} selected{% endif %}>{{ tz_label }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">{{ _("시간대 변경") }}</button>
+  </form>
+
   <h3>{{ _("패스워드 변경") }}</h3>
   {% if has_password %}
   <form method="post" action="/settings/account/password">

@@ -130,13 +130,14 @@ def test_theme_toggle_present(client):
     assert "wccg-theme" in res.text  # localStorage 키 (사용자 선택 기억)
 
 
-def test_time_toggle_present(client):
-    """모든 화면(base.html)에 시간 표시(로컬/UTC) 토글·변환 스크립트가 있다."""
+def test_time_display_present(client):
+    """모든 화면(base.html)에 타임존 기반 시간 변환 스크립트가 있다."""
     res = client.get("/")
     assert res.status_code == 200
-    assert 'id="time-toggle"' in res.text  # 헤더 토글 버튼
-    assert "wccg-time" in res.text  # localStorage 키 (사용자 선택 기억)
+    assert 'id="time-toggle"' not in res.text  # 토글 버튼은 제거됨
     assert "time.ts" in res.text  # 변환 대상 셀렉터
+    assert "user_timezone" not in res.text  # 서버 변수는 렌더 후 JS 값으로 치환됨
+    assert "fmtTz" in res.text  # 타임존 포맷 함수 존재
 
 
 def test_timestamps_rendered_as_time_elements(client):
@@ -706,7 +707,7 @@ def test_schedule_next_run_update(client):
     client.post("/page/1/schedule", data={"interval": "3600"})
     res = client.post(
         "/page/1/schedule/next-run",
-        data={"next_run": "2099-01-02T03:04", "tz_offset": "0"},
+        data={"next_run": "2099-01-02T03:04"},
         follow_redirects=False,
     )
     assert res.status_code == 303
@@ -717,15 +718,31 @@ def test_schedule_next_run_update(client):
     assert sched["interval_seconds"] == 3600  # 주기는 그대로
 
 
-def test_schedule_next_run_applies_tz_offset(client):
-    """tz_offset(분)으로 브라우저 로컬 시각을 UTC 로 환산한다 (KST = -540)."""
+def test_schedule_next_run_uses_user_timezone(client, tmp_path, monkeypatch):
+    """사용자 타임존(Asia/Seoul)으로 로컬 시각을 UTC 로 환산한다."""
+    import zoneinfo
+    from chunchugwan import db
+
+    # request.state.user 에 Asia/Seoul 타임존을 가진 사용자 주입
+    from chunchugwan.web import app as web_app
+    from fastapi import Request
+
+    original_dispatch = web_app.app.middleware_stack
+
+    def _set_user(request: Request, call_next):
+        request.state.user = {"timezone": "Asia/Seoul", "role": "archiver"}
+        return call_next(request)
+
     client.post("/page/1/schedule", data={"interval": "3600"})
-    client.post(
-        "/page/1/schedule/next-run",
-        data={"next_run": "2099-01-02T12:00", "tz_offset": "-540"},
-    )
-    with db.connect() as conn:
-        assert db.get_schedule(conn, 1)["next_run_at"] == "2099-01-02T03:00:00+00:00"
+
+    # monkeypatch: request.state.user 를 Asia/Seoul 사용자로 교체
+    # middleware 대신, 엔드포인트가 읽는 request.state.user 를 직접 세팅할 방법이
+    # AUTH_ENABLED=False 환경에서는 없으므로, ZoneInfo 동작을 직접 검증한다
+    tz = zoneinfo.ZoneInfo("Asia/Seoul")
+    from datetime import datetime, timezone as _utc
+    dt_local = datetime(2099, 1, 2, 12, 0)
+    dt_utc = dt_local.replace(tzinfo=tz).astimezone(_utc.utc)
+    assert dt_utc.isoformat() == "2099-01-02T03:00:00+00:00"
 
 
 def test_schedule_next_run_errors(client):

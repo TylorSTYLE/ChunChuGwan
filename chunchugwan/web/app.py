@@ -19,6 +19,7 @@ import json
 import logging
 import threading
 from contextlib import asynccontextmanager
+import zoneinfo
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
@@ -525,14 +526,12 @@ def schedule_next_run(
     request: Request,
     page_id: int,
     next_run: str = Form(...),
-    tz_offset: int = Form(0),
     next_path: str = Form("", alias="next"),
 ):
     """스케줄의 다음 실행 시각 변경.
 
-    next_run 은 datetime-local 값(타임존 없는 브라우저 로컬 시각),
-    tz_offset 은 JS getTimezoneOffset() 분 단위 (UTC = 로컬 + offset).
-    JS 미동작 등으로 tz_offset 이 0 이면 UTC 로 해석된다.
+    next_run 은 datetime-local 값(타임존 없는 naive 시각).
+    사용자의 저장된 타임존으로 해석해 UTC 로 변환한다.
     """
     _require_archiver(request)
     with db.connect() as conn:
@@ -544,7 +543,13 @@ def schedule_next_run(
     except ValueError:
         raise HTTPException(400, t(request, "잘못된 시각 형식: {v}", v=next_run))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc) + timedelta(minutes=tz_offset)
+        user = request.state.user
+        user_tz = (user["timezone"] if user is not None else None) or "UTC"
+        try:
+            tz = zoneinfo.ZoneInfo(user_tz)
+        except zoneinfo.ZoneInfoNotFoundError:
+            tz = timezone.utc
+        dt = dt.replace(tzinfo=tz).astimezone(timezone.utc)
     try:
         scheduler.set_next_run(page["url"], dt)
     except ValueError as e:
@@ -1334,7 +1339,6 @@ def crawl_schedule_next_run(
     request: Request,
     schedule_id: int,
     next_run: str = Form(...),
-    tz_offset: int = Form(0),
 ):
     """크롤 스케줄의 다음 실행 시각 변경 (시각 해석은 페이지 스케줄과 동일)."""
     _require_archiver(request)
@@ -1344,7 +1348,13 @@ def crawl_schedule_next_run(
     except ValueError:
         raise HTTPException(400, t(request, "잘못된 시각 형식: {v}", v=next_run))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc) + timedelta(minutes=tz_offset)
+        user = request.state.user
+        user_tz = (user["timezone"] if user is not None else None) or "UTC"
+        try:
+            tz = zoneinfo.ZoneInfo(user_tz)
+        except zoneinfo.ZoneInfoNotFoundError:
+            tz = timezone.utc
+        dt = dt.replace(tzinfo=tz).astimezone(timezone.utc)
     try:
         crawler.set_crawl_schedule_next_run(schedule_id, dt)
     except ValueError as e:
