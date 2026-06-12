@@ -242,6 +242,27 @@ def snapshot_files(snapshot_dir: Path) -> list[dict[str, object]]:
     return out
 
 
+def dir_bytes(root: Path) -> int:
+    """디렉토리 전체 파일 용량 합 (바이트). 없으면 0."""
+    if not root.is_dir():
+        return 0
+    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+
+
+def archive_disk_usage() -> dict[str, int]:
+    """아카이브 실제 저장공간 사용량 (바이트) — db/sites/resources/documents.
+
+    스냅샷 파일 합산과 달리 DB·공유 자원 CAS·문서 CAS 를 포함한 디스크
+    사용량이다. 현황·시스템 화면의 용량 표시가 같은 기준을 쓴다.
+    """
+    return {
+        "db": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
+        "sites": dir_bytes(config.SITES_DIR),
+        "resources": dir_bytes(config.RESOURCES_DIR),
+        "documents": dir_bytes(config.DOCUMENTS_DIR),
+    }
+
+
 def _validate_path_parts(*parts: str) -> None:
     """디렉토리 경로 조각 검증 — 구분자/상위 참조가 섞이면 ValueError.
 
