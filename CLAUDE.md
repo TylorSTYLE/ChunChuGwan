@@ -5,7 +5,7 @@
 
 ## 참고 문서 (해당 작업 시 읽을 것)
 
-- `docs/DASHBOARD.md` — 대시보드 화면 14개의 라우트·권한·세부 동작 레퍼런스.
+- `docs/DASHBOARD.md` — 대시보드 화면 15개의 라우트·권한·세부 동작 레퍼런스.
   웹 UI 화면을 추가/수정하기 전에 읽는다.
 - `docs/ROADMAP.md` — 완료된 구현 로드맵 히스토리(M1~M8, A1~A11 상세).
   기능의 도입 배경·구현 범위가 궁금할 때 읽는다.
@@ -188,6 +188,11 @@ archive/
   대시보드 `/documents` 통합 목록의 데이터 소스
 - `archive_logs` — 아카이브 실행 로그 (성공/실패, 단계별 소요시간 JSON,
   출처 cli/web/schedule/api/crawl)
+- `system_logs` — 앱 동작 로그 (`system_log.py` 의 logging 핸들러가
+  chunchugwan 네임스페이스의 INFO 이상 레코드를 적재 — 레벨·로거·출처
+  serve/worker/cli·트레이스백). 비차단 큐 + 쓰기 스레드, 보관 한도
+  (`WCCG_SYSTEM_LOG_MAX_ROWS`) 초과분 자동 정리. 대시보드 `/system/logs`
+  (관리자 전용)의 데이터 소스
 - `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1개월, 다음 실행 시각,
   1일 단위 주기는 `run_at_time` HH:MM 으로 실행 시각 지정 — 서버 로컬 시간)
 - `crawls` / `crawl_pages` — 사이트 전체 아카이브의 실행 회차. 크롤(범위
@@ -254,12 +259,14 @@ archive/
 
 ## 대시보드 디자인 방향
 
-- 화면 14개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
+- 화면 15개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
   사이트 상세(`/sites/{id}` — 소속 페이지·크롤 회차·스케줄·사이트 삭제),
   문서(`/documents` — 문서 파일 통합 목록), 새 아카이빙(`/archive/new`),
   사이트 아카이브 진행(`/crawls/{id}` — 크롤 회차 상세), 스케줄(`/schedules`),
-  타임라인, 스냅샷 뷰어, diff 뷰어, 로그, 시스템, 사용자, API 키.
-  화면별 라우트·권한·세부 동작은 `docs/DASHBOARD.md` 참조.
+  타임라인, 스냅샷 뷰어, diff 뷰어, 아카이빙 로그(`/logs` — viewer 이상),
+  시스템 로그(`/system/logs` — 관리자 전용), 시스템, 사용자, API 키.
+  권한이 없는 메뉴는 헤더에 표시하지 않는다 (`templating._auth_context` 의
+  노출 플래그). 화면별 라우트·권한·세부 동작은 `docs/DASHBOARD.md` 참조.
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
 - 다국어(ko/en): `web/i18n.py` — 한국어 원문이 메시지 키(gettext msgid 방식),

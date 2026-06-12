@@ -15,7 +15,7 @@ from . import capture as capture_mod
 from . import worker as worker_mod
 from . import (
     config, crawler, db, deletion, differ, optimize, pipeline, resources,
-    scheduler, storage,
+    scheduler, storage, system_log,
 )
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
@@ -24,12 +24,24 @@ _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(�
 @click.group()
 @click.version_option(__version__, "-V", "--version", message="춘추관 %(version)s")
 @click.option("-v", "--verbose", is_flag=True, help="단계별 상세 로그를 stderr 로 출력")
-def main(verbose: bool) -> None:
+@click.pass_context
+def main(ctx: click.Context, verbose: bool) -> None:
     """춘추관 — 개인 웹 아카이빙 시스템."""
+    level = logging.INFO if verbose else logging.WARNING
+    root = logging.getLogger()
+    fresh = not root.handlers
     logging.basicConfig(
-        level=logging.INFO if verbose else logging.WARNING,
+        level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if fresh:
+        # DB 적재(system_log)가 앱 로거를 INFO 로 낮춰도 콘솔 출력 수준은
+        # 그대로 두기 위해 stderr 핸들러에 레벨을 직접 박는다.
+        for handler in root.handlers:
+            handler.setLevel(level)
+    # 시스템 로그 적재 — serve/worker 는 별도 출처, 나머지 명령은 'cli'
+    source = ctx.invoked_subcommand
+    system_log.install(source if source in ("serve", "worker") else "cli")
 
 
 @main.command()

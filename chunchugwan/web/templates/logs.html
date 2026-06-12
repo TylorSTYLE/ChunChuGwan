@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "_snapshot_detail.html" import snapshot_detail with context %}
-{% block title %}{{ _("로그") }} — {{ _("춘추관") }}{% endblock %}
+{% block title %}{{ _("아카이빙 로그") }} — {{ _("춘추관") }}{% endblock %}
 {% block head %}
 <style>
 tr.steps-row { display: none; }
@@ -25,8 +25,14 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
 {% set status_label = {'new': _('신규'), 'changed': _('변경'), 'unchanged': _('동일'),
                        'forced_same': _('동일(강제)'), 'error': _('실패')} %}
 
+{% if retry == 'queued' %}
+<div class="notice">{{ _("재시도가 백그라운드에서 시작되었습니다. 잠시 후 새로고침하세요.") }}</div>
+{% elif retry == 'active' %}
+<div class="notice">{{ _("이미 같은 URL 의 아카이빙이 진행 중입니다.") }}</div>
+{% endif %}
+
 <div class="toolbar">
-  <h2 style="margin:0">{{ _("아카이브 로그") }}</h2>
+  <h2 style="margin:0">{{ _("아카이빙 로그") }}</h2>
   {% if filter_page %}
   <span class="mono muted">{{ _("페이지:") }} <a href="/page/{{ filter_page['id'] }}">{{ filter_page['url'] }}</a></span>
   {% endif %}
@@ -105,6 +111,11 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
       <td>
         {% if log['snapshot_id'] %}
         <a href="/snapshot/{{ log['snapshot_id'] }}">{{ _("보기") }}</a>
+        {% elif log['status'] == 'error' and can_archive %}
+        <form class="inline" method="post" action="/logs/{{ log['id'] }}/retry">
+          <input type="hidden" name="next" value="{{ current_url }}">
+          <button type="submit">{{ _("재시도", ctx="action") }}</button>
+        </form>
         {% endif %}
       </td>
       <td>

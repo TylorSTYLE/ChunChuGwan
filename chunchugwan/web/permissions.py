@@ -30,3 +30,10 @@ def can_archive(user: sqlite3.Row | None) -> bool:
 def can_delete(user: sqlite3.Row | None) -> bool:
     """아카이브 데이터(페이지/스냅샷) 삭제 가능 여부 — 아카이빙 권한(admin/archiver)과 동일."""
     return can_archive(user)
+
+
+def can_view_logs(user: sqlite3.Row | None) -> bool:
+    """아카이빙 로그(/logs) 열람 가능 여부 — viewer 이상 (pending/blocked 제외)."""
+    return not config.AUTH_ENABLED or bool(
+        user and user["role"] in ("admin", "archiver", "viewer")
+    )

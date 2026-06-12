@@ -1,6 +1,6 @@
 # 대시보드 화면 구성 (참조)
 
-화면 14개의 라우트·권한·세부 동작 레퍼런스. UI 스타일·i18n 규칙 등
+화면 15개의 라우트·권한·세부 동작 레퍼런스. UI 스타일·i18n 규칙 등
 작업 시 지켜야 하는 원칙은 CLAUDE.md "대시보드 디자인 방향" 절 참조.
 
 - **현황** (dashboard) — 첫 화면 `/`(= `/dashboard`). 사이트·페이지·스냅샷 수,
@@ -77,8 +77,19 @@
   저장 용량과 상세 펼침 버튼 — 로그 화면과 같은 파일 목록(용량·보기 링크)과
   실행 로그의 단계별 소요를 보여준다 (`_snapshot_detail.html` 매크로 공용).
 - **스냅샷 뷰어** (snapshot) / **diff 뷰어** (diff)
-- **로그** (logs) — 실행 기록, 도메인·페이지·스냅샷·상태 필터 + 단계별
-  상세 펼침.
+- **아카이빙 로그** (logs) — `/logs`. 아카이브 실행 기록, 도메인·페이지·
+  스냅샷·상태 필터 + 단계별 상세 펼침. viewer 이상(admin/archiver/viewer)만
+  열람 — 권한이 없으면(pending) 메뉴에 보이지 않고 라우트도 403.
+  실패(error) 행의 스냅샷 컬럼에는 재시도 버튼(`POST /logs/{id}/retry`,
+  admin/archiver 전용)이 보인다 — 로그의 url 을 백그라운드로 다시
+  아카이빙하고 필터를 유지한 채 복귀(`retry=queued|active` 알림). 같은
+  URL 이 이미 진행 중이면 중복 실행하지 않는다.
+- **시스템 로그** (system_logs) — `/system/logs`, 관리자 전용 (메뉴도
+  관리자에게만 표시). 앱(serve·worker·CLI)의 Python logging 레코드 —
+  `system_log.py` 의 DB 핸들러가 `system_logs` 테이블에 적재한 경고/오류와
+  INFO 기록. 레벨·출처(serve/worker/cli)·기간 필터 + 트레이스백 펼침.
+  보관 한도(`WCCG_SYSTEM_LOG_MAX_ROWS`, 기본 2만 행) 초과분은 적재 중
+  자동 정리.
 - **시스템** (system) — 백업/복원·내보내기/가져오기·저장공간 최적화
   (`POST /system/compact`, `wccg compact` 와 동일 — 압축 변환 + 인라인
   스타일 추출 + 자원 참조 백필 + 고아 공유 자원 정리. 대상이 없으면 버튼
