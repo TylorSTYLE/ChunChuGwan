@@ -96,6 +96,15 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
    IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origin 은
    `WCCG_PUBLIC_URL` 에서 파생(미설정 시 localhost). 환경변수 목록은
    README "인증" 절 참조.
+7. **사설 IP·루프백 게이트.** 아카이빙 대상 호스트의 네트워크 대역은
+   `netcheck.py` 가 판정한다(IP 리터럴·localhost 는 즉시, 호스트명은 서버
+   리졸버 해석 + TTL 캐시, 해석 실패는 공인 취급). 루프백은 항상 거부 —
+   대시보드 자신이 아카이브로 새는 것을 막는다. 사설 대역(RFC1918·링크
+   로컬·ULA)은 시스템 설정의 로컬 네트워크 태그(`network_tags`, id 는
+   GUID)를 지정해야 한다. 강제는 코어(pipeline `_resolve_network_tag` —
+   캡처 전 + 리다이렉트 최종 URL 재검증, crawler `_check_network_tag`)가
+   하고, 웹 폼·REST API 는 같은 정책을 동기 검증으로 미리 보여준다.
+   공개 주소에 태그를 넘기면 무시된다.
 
 ## 저장 구조
 
@@ -128,7 +137,12 @@ archive/
 ## DB 스키마
 
 `chunchugwan/db.py`의 `SCHEMA` 참조. 핵심 테이블:
-- `pages` — 정규화된 URL 단위 (1 URL = 1 row)
+- `pages` — 정규화된 URL 단위 (1 URL = 1 row). 사설 대역 페이지는
+  `network_tag_id` 로 로컬 네트워크 태그를 참조 (crawls·crawl_schedules 도
+  같은 컬럼 보유 — 크롤 페이지·스케줄 재실행에 태그가 이어진다)
+- `network_tags` — 로컬 네트워크 태그 (id 는 GUID 자동 발급, 이름 유일,
+  설명). 사설 IP 대역 아카이빙은 태그 지정이 필수, 루프백은 항상 금지
+  (아키텍처 원칙 7 · netcheck.py). 참조 중인 태그는 삭제 거부
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관
 - `checks` — 중복으로 저장 생략된 확인 기록
 - `snapshot_documents` — 스냅샷의 문서 파일 참조 (url·정제 파일명·bytes·

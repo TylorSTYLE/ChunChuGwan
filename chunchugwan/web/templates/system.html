@@ -198,6 +198,49 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
+    <h4>{{ _("로컬 네트워크 태그") }}</h4>
+    <p>
+      {{ _("사설 IP 대역(로컬 네트워크)의 웹서버를 아카이빙할 때 어느 네트워크인지 구분하는 태그입니다. 사설 대역 주소는 태그를 지정해야 아카이빙할 수 있고, 루프백 주소는 항상 아카이빙할 수 없습니다. ID(GUID)는 자동 발급됩니다.") }}
+    </p>
+    {% if network_tags %}
+    <table style="font-size:12px; border-collapse:collapse; width:100%">
+      <thead>
+        <tr style="text-align:left; color:var(--muted)">
+          <th style="padding:2px 8px 2px 0">{{ _("이름") }}</th>
+          <th style="padding:2px 8px 2px 0">{{ _("설명") }}</th>
+          <th style="padding:2px 8px 2px 0">{{ _("사용") }}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tag in network_tags %}
+        <tr title="ID: {{ tag.id }}">
+          <td style="padding:2px 8px 2px 0">{{ tag.name }}</td>
+          <td style="padding:2px 8px 2px 0; color:var(--muted)">{{ tag.description }}</td>
+          <td style="padding:2px 8px 2px 0" class="mono">{{ tag.page_count + tag.crawl_count }}</td>
+          <td style="padding:2px 0; text-align:right">
+            <form method="post" action="/system/network-tags/{{ tag.id }}/delete"
+                  onsubmit="return confirm({{ _('태그를 삭제할까요? 페이지·크롤이 사용 중이면 삭제되지 않습니다.')|tojson }})">
+              <button type="submit" class="danger" style="font-size:11px; padding:1px 8px">{{ _("삭제") }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted" style="font-size:12px">{{ _("등록된 태그가 없습니다 — 사설 IP 대역 아카이빙이 모두 거부됩니다.") }}</p>
+    {% endif %}
+    <form method="post" action="/system/network-tags" class="actions">
+      <input type="text" name="name" required maxlength="60" style="width:9em"
+             placeholder="{{ _('이름 (예: 집 NAS)') }}">
+      <input type="text" name="description" maxlength="200" style="flex:1; min-width:10em"
+             placeholder="{{ _('설명 (선택)') }}">
+      <button type="submit">{{ _("추가") }}</button>
+    </form>
+  </div>
+
+  <div class="sys-card">
     <h4>{{ _("API 키") }}</h4>
     <p>
       {{ _("외부 소프트웨어가 /api/v1 REST API 에 접근할 때 쓰는 키를 발급·폐기합니다. 키마다 보기/아카이브 권한과 만료를 설정합니다.") }}

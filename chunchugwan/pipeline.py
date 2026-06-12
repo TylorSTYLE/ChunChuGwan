@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import capture, config, db, documents, extract, resources, storage
+from . import capture, config, db, documents, extract, netcheck, resources, storage
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,7 @@ def archive_url(
     source: str = "cli",
     link_rewriter: capture.LinkRewriter | None = None,
     browser_session: capture.BrowserSession | None = None,
+    network_tag_id: str | None = None,
 ) -> ArchiveOutcome:
     """URL 아카이빙 전체 흐름.
 
@@ -116,13 +117,45 @@ def archive_url(
     archive_logs 에 기록된다. link_rewriter 는 사이트 전체 아카이브용
     page.html 앵커 재작성, browser_session 은 크롤러의 브라우저 재사용
     (둘 다 capture 참조).
+
+    네트워크 게이트(netcheck): 루프백 주소는 항상 ValueError. 사설 대역은
+    network_tag_id(시스템 설정의 로컬 네트워크 태그) 또는 기존 페이지의
+    태그가 있어야 한다 — 없으면 ValueError. 공인 주소면 태그는 무시된다.
     """
     run = _RunLog(url, source)
     try:
-        return _archive_url(url, force, run, link_rewriter, browser_session)
+        return _archive_url(url, force, run, link_rewriter, browser_session,
+                            network_tag_id)
     except Exception as e:
         _log_failure(run, e)
         raise
+
+
+def _resolve_network_tag(norm: str, host: str, requested: str | None) -> str | None:
+    """네트워크 게이트 — 루프백 금지, 사설 대역은 로컬 네트워크 태그 필수.
+
+    반환값은 페이지에 기록할 태그 id. 사설 대역이 아니면 None (공인 주소에
+    태그를 넘겨도 무시). 태그 요청이 없으면 기존 페이지의 태그를 물려받아
+    스케줄·재아카이빙이 태그 재지정 없이 동작한다. 위반은 ValueError.
+    """
+    kind = netcheck.classify_host(host)
+    if kind == netcheck.LOOPBACK:
+        raise ValueError(f"루프백 주소는 아카이빙할 수 없습니다: {host}")
+    if kind != netcheck.PRIVATE:
+        return None
+    with db.connect() as conn:
+        if requested is not None:
+            if db.get_network_tag(conn, requested) is None:
+                raise ValueError(f"등록되지 않은 로컬 네트워크 태그: {requested}")
+            return requested
+        page = db.get_page(conn, norm)
+        if page is not None and page["network_tag_id"]:
+            return page["network_tag_id"]
+    raise ValueError(
+        "로컬 네트워크(사설 IP) 주소는 로컬 네트워크 태그를 지정해야 "
+        "아카이빙할 수 있습니다 — 시스템 화면에서 태그를 만들고 "
+        "새 아카이빙 화면에서 선택하세요"
+    )
 
 
 def _archive_url(
@@ -131,11 +164,16 @@ def _archive_url(
     run: _RunLog,
     link_rewriter: capture.LinkRewriter | None = None,
     browser_session: capture.BrowserSession | None = None,
+    network_tag_id: str | None = None,
 ) -> ArchiveOutcome:
     norm = storage.normalize_url(url)
     domain = urlsplit(norm).hostname or ""
     slug = storage.url_to_slug(norm)
     run.url, run.domain = norm, domain
+
+    network_tag_id = _resolve_network_tag(norm, domain, network_tag_id)
+    if network_tag_id:
+        run.step("netcheck", f"사설 대역 — 로컬 네트워크 태그 {network_tag_id}")
 
     rules = config.load_domain_rules(domain)
     run.step("normalize", f"{norm} → {domain}/{slug}"
@@ -175,6 +213,20 @@ def _archive_url(
             f"http {result.http_status or '-'} · 최종 URL {result.final_url} · "
             f"제목 {result.title or '-'}",
         )
+        # 리다이렉트가 게이트를 우회하지 못하게 최종 URL 호스트도 판정한다.
+        # 요청 자체는 이미 일어났지만 아카이브에는 아무것도 남기지 않는다.
+        final_host = urlsplit(result.final_url).hostname or ""
+        if final_host and final_host != domain:
+            final_kind = netcheck.classify_host(final_host)
+            if final_kind == netcheck.LOOPBACK:
+                raise ValueError(
+                    f"최종 URL 이 루프백 주소입니다 — 저장 중단: {result.final_url}"
+                )
+            if final_kind == netcheck.PRIVATE and network_tag_id is None:
+                raise ValueError(
+                    "최종 URL 이 로컬 네트워크(사설 IP) 주소입니다 — 로컬 네트워크 "
+                    f"태그 없이 저장할 수 없습니다: {result.final_url}"
+                )
         text = extract.extract_text(result.content_html, norm)
         normalized = extract.normalize(
             text, drop_line_patterns=tuple(rules.get("remove_line_patterns") or ())
@@ -184,7 +236,9 @@ def _archive_url(
         run.step("hash", f"sha256 {content_hash[:12]}")
 
         with db.connect() as conn:
-            page_id = db.get_or_create_page(conn, norm, domain, slug)
+            page_id = db.get_or_create_page(
+                conn, norm, domain, slug, network_tag_id=network_tag_id
+            )
             prev = db.last_snapshot(conn, page_id)
 
             if prev and prev["content_hash"] == content_hash and not force:

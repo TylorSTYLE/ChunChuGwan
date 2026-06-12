@@ -683,6 +683,49 @@ _EN: dict[str, str] = {
         "This page is being archived — try again after it finishes",
     "삭제됨: {url} (스냅샷 {n}개)": "Deleted: {url} ({n} snapshot(s))",
     "스냅샷 삭제됨: {t}": "Snapshot deleted: {t}",
+    # 로컬 네트워크 태그 (사설 IP 아카이빙 게이트 — netcheck)
+    "로컬 네트워크 태그": "Local network tag",
+    "선택 안 함 (공개 주소)": "None (public address)",
+    "사설 IP 대역(로컬 네트워크) 주소는 태그를 선택해야 아카이빙할 수 있습니다. "
+    "루프백 주소는 아카이빙할 수 없습니다.":
+        "Addresses in private IP ranges (local networks) can only be archived "
+        "with a tag selected. Loopback addresses cannot be archived.",
+    "등록된 로컬 네트워크 태그가 없습니다 — 시스템 화면에서 먼저 추가하세요.":
+        "No local network tags are registered — add one on the System page first.",
+    "사설 IP 대역(로컬 네트워크)의 웹서버를 아카이빙할 때 어느 네트워크인지 "
+    "구분하는 태그입니다. 사설 대역 주소는 태그를 지정해야 아카이빙할 수 있고, "
+    "루프백 주소는 항상 아카이빙할 수 없습니다. ID(GUID)는 자동 발급됩니다.":
+        "Tags that identify which local network a web server on a private IP "
+        "range belongs to. Private-range addresses can only be archived with a "
+        "tag, and loopback addresses can never be archived. The ID (GUID) is "
+        "issued automatically.",
+    "사용": "In use",
+    "태그를 삭제할까요? 페이지·크롤이 사용 중이면 삭제되지 않습니다.":
+        "Delete this tag? It cannot be deleted while pages or crawls use it.",
+    "등록된 태그가 없습니다 — 사설 IP 대역 아카이빙이 모두 거부됩니다.":
+        "No tags registered — all private IP range archiving is rejected.",
+    "이름 (예: 집 NAS)": "Name (e.g. Home NAS)",
+    "설명 (선택)": "Description (optional)",
+    "추가": "Add",
+    "루프백 주소는 아카이빙할 수 없습니다": "Loopback addresses cannot be archived",
+    "로컬 네트워크(사설 IP) 주소는 로컬 네트워크 태그를 선택해야 "
+    "아카이빙할 수 있습니다 — 태그는 시스템 화면에서 관리합니다":
+        "Local network (private IP) addresses can only be archived with a local "
+        "network tag selected — tags are managed on the System page",
+    "알 수 없는 로컬 네트워크 태그입니다": "Unknown local network tag",
+    "태그 이름을 입력하세요.": "Enter a tag name.",
+    "태그 이름은 {n}자 이하여야 합니다.":
+        "The tag name must be at most {n} characters.",
+    "태그 설명은 {n}자 이하여야 합니다.":
+        "The tag description must be at most {n} characters.",
+    "이미 있는 태그 이름입니다: {name}": "A tag with this name already exists: {name}",
+    "로컬 네트워크 태그 '{name}'을(를) 추가했습니다.":
+        "Added local network tag '{name}'.",
+    "로컬 네트워크 태그 없음": "Local network tag not found",
+    "'{name}' 태그는 사용 중이라 삭제할 수 없습니다 (참조 {n}개).":
+        "The tag '{name}' is in use and cannot be deleted ({n} reference(s)).",
+    "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.":
+        "Deleted local network tag '{name}'.",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다
