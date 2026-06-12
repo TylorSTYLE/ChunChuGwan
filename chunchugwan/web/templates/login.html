@@ -19,6 +19,8 @@
     <a href="/auth/oidc/login?next={{ next | urlencode }}">{{ _("Authentik으로 로그인 →") }}</a>
   </div>
   {% endif %}
+  {% if signup_enabled %}
   <div class="alt muted">{{ _("계정이 없나요?") }} <a href="/signup">{{ _("가입하기") }}</a></div>
+  {% endif %}
 </div>
 {% endblock %}

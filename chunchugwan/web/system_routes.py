@@ -53,10 +53,16 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             t: conn.execute(f"SELECT COUNT(*) AS c FROM {t}").fetchone()["c"]
             for t in ("pages", "snapshots", "checks", "users")
         }
+        signup_enabled = db.signup_enabled(conn)
+        signup_default_role = db.signup_default_role(conn)
     return templates.TemplateResponse(
         request, "system.html",
         {
             "counts": counts,
+            "signup_enabled": signup_enabled,
+            "signup_default_role": signup_default_role,
+            "signup_roles": db.SIGNUP_ROLES,
+            "role_labels": db.ROLE_LABELS,
             "archive_root": str(config.ARCHIVE_ROOT),
             "db_bytes": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
             "sites_bytes": _dir_bytes(config.SITES_DIR),
@@ -135,6 +141,26 @@ def system_compact(request: Request):
             saved=filesize(result.saved_bytes),
         )
     )
+
+
+@router.post("/settings")
+def system_settings(
+    request: Request,
+    signup_enabled: bool = Form(False),
+    signup_default_role: str = Form("pending"),
+):
+    """가입 설정 저장 — 회원 가입 허용 여부와 가입 계정의 초기 권한."""
+    if signup_default_role not in db.SIGNUP_ROLES:
+        raise HTTPException(
+            400, t(request, "가입 초기 권한으로 쓸 수 없는 역할: {role}",
+                   role=repr(signup_default_role))
+        )
+    with db.connect() as conn:
+        db.set_setting(
+            conn, db.SIGNUP_ENABLED_KEY, "on" if signup_enabled else "off"
+        )
+        db.set_setting(conn, db.SIGNUP_DEFAULT_ROLE_KEY, signup_default_role)
+    return _system_redirect(notice=t(request, "가입 설정을 저장했습니다."))
 
 
 @router.post("/restore")

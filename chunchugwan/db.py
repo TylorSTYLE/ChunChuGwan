@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret         TEXT,               -- NULL = 2FA 미설정
     totp_pending_secret TEXT,               -- 등록 확인 전 임시 시크릿
     totp_last_used_at   TEXT,               -- 마지막으로 사용된 코드의 시간창 (재사용 방지)
-    role                TEXT NOT NULL DEFAULT 'viewer',  -- admin|archiver|viewer|blocked
+    role                TEXT NOT NULL DEFAULT 'viewer',  -- admin|archiver|viewer|pending|blocked
     is_founder          INTEGER NOT NULL DEFAULT 0,  -- 최초 등록 관리자 (권한 변경 불가)
     display_name        TEXT,               -- 표시용 이름 (NULL = 이메일로 표시)
     created_at          TEXT NOT NULL
@@ -134,6 +134,12 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at   TEXT NOT NULL,
     expires_at   TEXT,                    -- ISO 8601 UTC, NULL = 영구
     last_used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS oidc_states (
@@ -606,12 +612,14 @@ def mark_schedule_run(
 # 주의: SCHEMA 는 CREATE IF NOT EXISTS 라 새 테이블 추가는 자동이지만
 # 기존 테이블에 컬럼을 추가하는 변경은 별도 마이그레이션이 필요하다.
 
-# 권한 역할. admin=관리자, archiver=아카이빙 가능, viewer=보기만, blocked=차단
-ROLES = ("admin", "archiver", "viewer", "blocked")
+# 권한 역할. admin=관리자, archiver=아카이빙 가능, viewer=보기만,
+# pending=권한없음(가입 승인 대기 — 안내 페이지 외 접근 불가), blocked=차단
+ROLES = ("admin", "archiver", "viewer", "pending", "blocked")
 ROLE_LABELS = {
     "admin": "관리자",
     "archiver": "아카이브",
     "viewer": "보기 전용",
+    "pending": "권한없음",
     "blocked": "차단됨",
 }
 
@@ -641,7 +649,8 @@ def create_user(
 ) -> int:
     """사용자 생성 후 id 반환. password_hash=None 이면 SSO 전용 계정.
 
-    기본 권한은 보기 전용(viewer) — 승격은 관리자가 사용자 관리에서 한다.
+    role 기본값은 보기 전용(viewer)이지만, 회원 가입·SSO 자동 생성 경로는
+    signup_default_role() 설정값(기본 pending)을 명시적으로 넘긴다.
     """
     if role not in ROLES:
         raise ValueError(f"알 수 없는 역할: {role!r}")
@@ -822,6 +831,47 @@ def delete_invite(conn: sqlite3.Connection, invite_id: int) -> bool:
 def delete_expired_invites(conn: sqlite3.Connection) -> None:
     """만료 초대 일괄 삭제 (기회적 정리용)."""
     conn.execute("DELETE FROM invites WHERE expires_at <= ?", (_utcnow(),))
+
+
+# ---- 설정 (key-value) ----
+# 대시보드에서 변경 가능한 런타임 설정. 환경변수 설정(config.py)과 달리
+# DB 에 저장돼 재시작 없이 반영되고 백업/복원에 포함된다.
+
+SIGNUP_ENABLED_KEY = "signup_enabled"            # 'on' | 'off' (기본 on)
+SIGNUP_DEFAULT_ROLE_KEY = "signup_default_role"  # SIGNUP_ROLES 중 하나 (기본 pending)
+
+# 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한.
+# 기본은 권한없음(pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.
+SIGNUP_ROLES = ("pending", "viewer", "archiver")
+
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    """설정 값 조회 (없으면 None)."""
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row is not None else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """설정 값 저장 (있으면 교체)."""
+    conn.execute(
+        """
+        INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                       updated_at = excluded.updated_at
+        """,
+        (key, value, _utcnow()),
+    )
+
+
+def signup_enabled(conn: sqlite3.Connection) -> bool:
+    """로그인 화면의 회원 가입 허용 여부 (기본 허용)."""
+    return get_setting(conn, SIGNUP_ENABLED_KEY) != "off"
+
+
+def signup_default_role(conn: sqlite3.Connection) -> str:
+    """회원 가입으로 생성되는 계정의 초기 권한 (기본·값 오염 시 pending)."""
+    role = get_setting(conn, SIGNUP_DEFAULT_ROLE_KEY)
+    return role if role in SIGNUP_ROLES else "pending"
 
 
 # ---- API 키 ----

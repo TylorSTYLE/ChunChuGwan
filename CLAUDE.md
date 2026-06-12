@@ -113,9 +113,15 @@ archive/
   1일 단위 주기는 `run_at_time` HH:MM 으로 실행 시각 지정 — 서버 로컬 시간)
 - `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
   서버사이드 세션, OIDC state 1회용 기록). `users.role` 은
-  admin(관리자)/archiver(아카이빙 가능)/viewer(보기 전용)/blocked(차단) —
-  신규 가입·SSO 자동 생성은 viewer, `users.is_founder` 는 최초 등록 관리자로
-  권한 변경 불가
+  admin(관리자)/archiver(아카이빙 가능)/viewer(보기 전용)/pending(권한없음 —
+  가입 승인 대기, 로그인은 되지만 `/pending` 안내 페이지 외 접근 불가)/
+  blocked(차단). 신규 가입·SSO 자동 생성의 초기 권한은 `settings` 의
+  `signup_default_role` (pending/viewer/archiver, 기본 pending — 관리자가
+  사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
+  관리자로 권한 변경 불가
+- `settings` — 대시보드에서 변경하는 key-value 런타임 설정. 현재 가입 설정
+  (`signup_enabled` on/off 기본 on — off 면 `/signup` 차단 + 로그인 화면
+  가입 링크 숨김(초대 가입은 허용), `signup_default_role`)
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
 - `api_keys` — 외부 소프트웨어용 API 키 (`/api/v1` REST API 인증).
   관리자만 발급, 모든 관리자가 공동 관리. 키마다 보기/아카이브 권한과
@@ -145,7 +151,8 @@ archive/
   / 스냅샷 뷰어(snapshot) / diff 뷰어(diff)
   / 로그(logs — 실행 기록, 도메인·페이지·스냅샷·상태 필터 + 단계별 상세 펼침)
   / 시스템(system — 백업/복원·내보내기/가져오기·저장 공간 압축(`wccg compact`
-  와 동일). 백업에 인증 데이터가 포함되므로 인증이 켜진 환경에서는 관리자 전용)
+  와 동일)·가입 설정(회원 가입 허용 여부 + 가입 초기 권한 — `settings` 테이블).
+  백업에 인증 데이터가 포함되므로 인증이 켜진 환경에서는 관리자 전용)
   / 사용자(users — 관리자 전용 사용자 관리. 권한 조정, 차단 시 세션 즉시 무효화,
   최초 관리자는 변경 불가)
   / API 키(api_keys — `/system/api-keys`, 관리자 전용. 헤더 메뉴 없이 시스템
@@ -198,7 +205,8 @@ archive/
       실행은 pipeline 공유 (archive_logs source='schedule').
 - [x] **A9 사용자 권한**: `users.role`(admin/archiver/viewer/blocked) +
       `is_founder`(최초 관리자 — 권한 변경 불가). 신규 가입·SSO 자동 생성은
-      viewer. viewer 는 아카이빙 트리거·아카이브 삭제 403 (삭제는 admin/
+      viewer(이후 A10 에서 설정 가능한 초기 권한으로 대체 — 기본 pending).
+      viewer 는 아카이빙 트리거·아카이브 삭제 403 (삭제는 admin/
       archiver 만 가능), blocked 는 로그인 거부 + 기존
       세션도 미들웨어가 차단. 관리자 전용 사용자 관리 화면(`/system/users`)
       에서 권한 조정 (차단 시 대상 세션 즉시 삭제). 권한 판정은
@@ -207,5 +215,14 @@ archive/
       쿠키(`wccg_lang`) + Accept-Language 로케일 결정, 헤더 언어 선택
       (`POST /lang`), 주기 표기 로케일화(`i18n.format_interval`). 템플릿 전체
       `_()` 적용 + 라우트 메시지 `i18n.t()` 번역. 향후 언어 추가 = dict 추가.
+- [x] **A10 가입 승인**: `users.role` 에 pending(권한없음 — 가입 승인 대기)
+      추가. pending 계정은 로그인 후 `/pending` 안내 페이지·로그아웃·언어
+      전환만 가능 (미들웨어가 그 외 전부 `/pending` 으로 리다이렉트).
+      `settings` 테이블(key-value) 신설 — 시스템 화면의 가입 설정에서 회원
+      가입 허용(`signup_enabled`, off 면 `/signup` 차단 + 로그인 화면 가입
+      링크 숨김, 초대 가입은 허용)과 가입 초기 권한(`signup_default_role`:
+      pending/viewer/archiver, 기본 pending) 관리. SSO 자동 프로비저닝도
+      같은 초기 권한을 따른다 (승인 절차 우회 방지). 승인 = 관리자가
+      사용자 관리에서 권한 부여.
 
 각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.

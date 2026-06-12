@@ -103,11 +103,16 @@ def tmp_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(tmp_db):
-    """관리자 1명이 등록된 상태의 TestClient (최초 구동 통과)."""
+    """관리자 1명이 등록된 상태의 TestClient (최초 구동 통과).
+
+    signup 헬퍼가 만든 계정이 바로 설정 화면을 쓸 수 있도록
+    가입 초기 권한을 보기 전용으로 설정한다 (기본값은 pending — 승인 대기).
+    """
     with db.connect() as conn:
         db.create_user(
             conn, "admin@test.co", auth.hash_password("adminpass123"), role="admin"
         )
+        db.set_setting(conn, db.SIGNUP_DEFAULT_ROLE_KEY, "viewer")
     return TestClient(web_app.app)
 
 

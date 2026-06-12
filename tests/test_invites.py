@@ -192,7 +192,8 @@ def test_invite_accept_conflicts_with_signed_up_email(client):
     assert res.status_code == 400 and "이미 가입된 이메일" in res.text
     with db.connect() as conn:
         assert db.list_invites(conn) == []
-        assert db.get_user_by_email(conn, "new@test.co")["role"] == "viewer"
+        # 일반 가입의 초기 권한(기본 pending) 그대로 — 초대 권한이 덮어쓰지 않는다
+        assert db.get_user_by_email(conn, "new@test.co")["role"] == "pending"
 
 
 def test_reinvite_invalidates_old_link(client):

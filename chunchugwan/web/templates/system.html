@@ -133,6 +133,32 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
+    <h4>{{ _("가입 설정") }}</h4>
+    <form method="post" action="/system/settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1">
+      <p>
+        {{ _("로그인 화면의 회원 가입 기능과 가입 계정의 초기 권한을 설정합니다 (SSO 자동 생성 계정에도 적용). '권한없음'으로 가입한 사용자는 관리자가 사용자 관리에서 권한을 부여할 때까지 서비스를 이용할 수 없습니다.") }}
+      </p>
+      <label class="mode">
+        <input type="checkbox" name="signup_enabled" value="on"
+               {% if signup_enabled %}checked{% endif %}>
+        {{ _("로그인 화면에서 회원 가입 허용") }}
+      </label>
+      <label class="mode">
+        {{ _("가입 초기 권한") }}
+        <select name="signup_default_role" style="margin-left:6px">
+          {% for r in signup_roles %}
+          <option value="{{ r }}" {% if r == signup_default_role %}selected{% endif %}>{{ _(role_labels[r]) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="sys-card">
     <h4>{{ _("API 키") }}</h4>
     <p>
       {{ _("외부 소프트웨어가 /api/v1 REST API 에 접근할 때 쓰는 키를 발급·폐기합니다. 키마다 보기/아카이브 권한과 만료를 설정합니다.") }}

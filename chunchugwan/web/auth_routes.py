@@ -86,15 +86,25 @@ def setup(request: Request, email: str = Form(...), password: str = Form(...)):
     )
 
 
+def _login_ctx(
+    conn: sqlite3.Connection, next_url: str | None, email: str = "",
+    error: str | None = None,
+) -> dict:
+    """로그인 화면 템플릿 컨텍스트 (가입 링크 노출 여부 포함)."""
+    return {
+        "next": safe_next(next_url), "error": error, "email": email,
+        "oidc_enabled": config.oidc_enabled(),
+        "signup_enabled": db.signup_enabled(conn),
+    }
+
+
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str | None = None):
     if getattr(request.state, "user", None) is not None:
         return RedirectResponse(url="/", status_code=302)
-    return templates.TemplateResponse(
-        request, "login.html",
-        {"next": safe_next(next), "error": None, "email": "",
-         "oidc_enabled": config.oidc_enabled()},
-    )
+    with db.connect() as conn:
+        ctx = _login_ctx(conn, next)
+    return templates.TemplateResponse(request, "login.html", ctx)
 
 
 @router.post("/login", response_class=HTMLResponse)
@@ -114,17 +124,15 @@ def login(
         if not ok:
             return templates.TemplateResponse(
                 request, "login.html",
-                {"next": safe_next(next),
-                 "error": t(request, "이메일 또는 패스워드가 올바르지 않습니다."),
-                 "email": email, "oidc_enabled": config.oidc_enabled()},
+                _login_ctx(conn, next, email,
+                           t(request, "이메일 또는 패스워드가 올바르지 않습니다.")),
                 status_code=401,
             )
         if user["role"] == "blocked":
             return templates.TemplateResponse(
                 request, "login.html",
-                {"next": safe_next(next),
-                 "error": t(request, "차단된 계정입니다. 관리자에게 문의하세요."),
-                 "email": email, "oidc_enabled": config.oidc_enabled()},
+                _login_ctx(conn, next, email,
+                           t(request, "차단된 계정입니다. 관리자에게 문의하세요.")),
                 status_code=403,
             )
         if user["totp_secret"] is not None or db.count_passkeys(conn, user["id"]) > 0:
@@ -538,6 +546,8 @@ def _link_oidc_user(request: Request, conn: sqlite3.Connection, claims: dict) ->
     ① (provider, sub) 기존 연결 → 그 계정.
     ② 검증된 이메일이 기존 계정과 일치 → identity 연결.
     ③ 둘 다 없으면 SSO 전용 계정 자동 프로비저닝 (password_hash NULL).
+       초기 권한은 회원 가입과 같은 설정값(signup_default_role)을 따른다 —
+       SSO 가 가입 승인 절차를 우회하는 경로가 되지 않게 한다.
     """
     sub = str(claims["sub"])
     ident = db.get_identity(conn, config.OIDC_PROVIDER, sub)
@@ -558,7 +568,7 @@ def _link_oidc_user(request: Request, conn: sqlite3.Connection, claims: dict) ->
         db.create_identity(conn, existing["id"], config.OIDC_PROVIDER, sub)
         return existing["id"]
 
-    user_id = db.create_user(conn, email)  # SSO 전용 계정
+    user_id = db.create_user(conn, email, role=db.signup_default_role(conn))  # SSO 전용
     db.create_identity(conn, user_id, config.OIDC_PROVIDER, sub)
     return user_id
 
@@ -599,6 +609,9 @@ def oidc_callback(
 def signup_page(request: Request):
     if getattr(request.state, "user", None) is not None:
         return RedirectResponse(url="/", status_code=302)
+    with db.connect() as conn:
+        if not db.signup_enabled(conn):
+            return RedirectResponse(url="/login", status_code=302)
     return templates.TemplateResponse(
         request, "signup.html", {"error": None, "email": ""}
     )
@@ -610,16 +623,34 @@ def signup(request: Request, email: str = Form(...), password: str = Form(...)):
     error = auth.validate_credentials(email, password)
     if error is None:
         with db.connect() as conn:
+            if not db.signup_enabled(conn):
+                raise HTTPException(403, t(request, "회원 가입이 비활성화되어 있습니다."))
             if db.get_user_by_email(conn, email) is not None:
                 error = "이미 가입된 이메일입니다."
             else:
-                user_id = db.create_user(conn, email, auth.hash_password(password))
+                user_id = db.create_user(
+                    conn, email, auth.hash_password(password),
+                    role=db.signup_default_role(conn),
+                )
                 token = auth.issue_session(conn, user_id)
         if error is None:
             return _login_redirect(token, "/")
     return templates.TemplateResponse(
         request, "signup.html", {"error": t(request, error), "email": email},
         status_code=400,
+    )
+
+
+@router.get("/pending", response_class=HTMLResponse)
+def pending_page(request: Request):
+    """가입 승인 대기(권한없음) 안내 — 미들웨어가 pending 계정을 여기로 보낸다."""
+    user = getattr(request.state, "user", None)
+    if user is None:
+        return RedirectResponse(url="/login", status_code=302)
+    if user["role"] != "pending":
+        return RedirectResponse(url="/", status_code=302)
+    return templates.TemplateResponse(
+        request, "pending.html", {"email": user["email"]}
     )
 
 

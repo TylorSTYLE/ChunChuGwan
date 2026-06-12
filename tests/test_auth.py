@@ -19,11 +19,16 @@ def tmp_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def client(tmp_db):
-    """인증이 켜진 TestClient (쿠키 유지). 최초 구동을 끝낸 상태(관리자 존재)."""
+    """인증이 켜진 TestClient (쿠키 유지). 최초 구동을 끝낸 상태(관리자 존재).
+
+    이 모듈의 signup 헬퍼는 가입 즉시 이용 가능한 계정을 전제하므로
+    가입 초기 권한을 보기 전용으로 설정한다 (기본값은 pending — 승인 대기).
+    """
     with db.connect() as conn:
         db.create_user(
             conn, "admin@test.co", auth.hash_password("adminpass123"), role="admin"
         )
+        db.set_setting(conn, db.SIGNUP_DEFAULT_ROLE_KEY, "viewer")
     return TestClient(web_app.app)
 
 
