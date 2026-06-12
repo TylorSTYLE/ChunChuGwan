@@ -1731,6 +1731,25 @@ def get_failed_crawl_page(
     ).fetchone()
 
 
+def resolve_failed_crawl_pages(
+    conn: sqlite3.Connection, url: str, snapshot_id: int | None
+) -> list[int]:
+    """같은 URL 의 failed 크롤 페이지를 다른 경로의 아카이빙 성공으로 done 처리.
+
+    수동 단일 아카이빙·스케줄이 같은 주소를 성공적으로 아카이빙했다면
+    크롤의 실패 기록은 더 이상 유효하지 않다 — done 으로 돌리고 이번에
+    확인된 스냅샷을 연결한다. 반환은 갱신된 행들의 crawl_id 목록
+    (중복 제거 — 호출 쪽이 finish_crawl_if_done 으로 마감을 재평가).
+    """
+    rows = conn.execute(
+        "SELECT id, crawl_id FROM crawl_pages WHERE url = ? AND status = 'failed'",
+        (url,),
+    ).fetchall()
+    for row in rows:
+        finish_crawl_page(conn, row["id"], snapshot_id)
+    return sorted({row["crawl_id"] for row in rows})
+
+
 def find_crawl_snapshot(
     conn: sqlite3.Connection, crawl_id: int, url: str
 ) -> int | None:
