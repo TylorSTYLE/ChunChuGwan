@@ -193,11 +193,17 @@ def content_sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+# WebP 변환을 하지 않기로 확정한 스크린샷 PNG 의 마커 (빈 파일) — WebP 한 변
+# 16383px 한도 초과로 변환에 실패했거나, 변환 결과가 원본보다 커서 생략한 경우.
+# resources._screenshot_to_webp 가 남기고, needs_compaction(압축 대상 카운트)이
+# 이 마커가 있는 PNG 를 변환 대상에서 제외한다.
+WEBP_SKIP_MARKER = "screenshot.png.keep"
+
 # 캡처 산출물 — 압축 변환(resources.compact_snapshot_dir) 전/후 이름 모두 포함.
 # 변환이 일부 실패해도 (예: WebP 한도 초과로 PNG 유지) 산출물이 유실되지 않는다.
 CAPTURE_ARTIFACTS = (
     "raw.html", "raw.html.gz", "page.html", "page.html.gz",
-    "screenshot.png", "screenshot.webp",
+    "screenshot.png", "screenshot.webp", WEBP_SKIP_MARKER,
 )
 
 # 스냅샷 디렉토리를 구성하는 파일 전체 (표시 순서 고정)
