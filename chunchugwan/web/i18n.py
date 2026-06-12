@@ -765,6 +765,10 @@ _EN: dict[str, str] = {
     "실패 기록 없음": "Failed run not found",
     "재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.":
         "Retry queued — the crawler will try again shortly.",
+    "사이트 내보내기": "Export site",
+    "소속 페이지·스냅샷을 아카이브 내보내기 파일(tar.gz)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.":
+        "Download this site's pages and snapshots as an archive export file "
+        "(tar.gz) — it can be restored via import.",
     "사이트 삭제": "Delete site",
     "페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
         "This deletes the entire site archive including {p} page(s) and {c} "

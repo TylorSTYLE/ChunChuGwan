@@ -341,6 +341,23 @@ def test_viewer_cannot_delete(role_client, archive):
     assert "/delete" not in role_client.get(_site_url()).text
 
 
+def test_viewer_cannot_export_site(role_client, archive):
+    """사이트 내보내기는 admin/archiver 전용 — viewer 는 403, 버튼도 숨김."""
+    _login(role_client, "viewer@test.co", "password1234")
+    site_url = _site_url()
+    assert role_client.post(f"{site_url}/export").status_code == 403
+    assert f'action="{site_url}/export"' not in role_client.get(site_url).text
+
+
+def test_archiver_can_export_site(role_client, archive):
+    _login(role_client, "archiver@test.co", "password1234")
+    site_url = _site_url()
+    assert f'action="{site_url}/export"' in role_client.get(site_url).text
+    res = role_client.post(f"{site_url}/export")
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/gzip"
+
+
 def test_archiver_can_delete(role_client, archive):
     _login(role_client, "archiver@test.co", "password1234")
     # 버튼이 노출된다 (사이트 상세)

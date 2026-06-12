@@ -102,6 +102,32 @@ def test_export_download_and_import_upload(client, tmp_path, monkeypatch):
     assert "스킵 1" in res.text
 
 
+def test_site_export_download_and_import(client, tmp_path, monkeypatch):
+    """사이트 내보내기 — 그 사이트만 담긴 export 파일을 받아 가져올 수 있다."""
+    _seed("https://other.org/page")
+    with db.connect() as conn:
+        site_id = db.get_site_by_key(conn, storage.site_key(URL))["id"]
+    res = client.post(f"/sites/{site_id}/export")
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/gzip"
+    assert "chunchugwan-export-example.com-" in res.headers["content-disposition"]
+
+    _patch_root(monkeypatch, tmp_path / "b")
+    up = client.post(
+        "/system/import", data={"mode": "merge"},
+        files={"file": ("e.tar.gz", io.BytesIO(res.content), "application/gzip")},
+        follow_redirects=False,
+    )
+    assert up.status_code == 303 and "notice=" in up.headers["location"]
+    with db.connect() as conn:
+        assert db.get_page(conn, URL) is not None
+        assert db.get_page(conn, "https://other.org/page") is None
+
+
+def test_site_export_unknown_site_404(client):
+    assert client.post("/sites/9999/export").status_code == 404
+
+
 def test_restore_rejects_export_file(client, tmp_path, monkeypatch):
     payload = client.post("/system/export").content
     _patch_root(monkeypatch, tmp_path / "b")

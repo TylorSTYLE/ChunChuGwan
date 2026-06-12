@@ -194,14 +194,26 @@ def restore_backup(src: Path) -> dict:
 # ---- 아카이브 데이터 내보내기/가져오기 ----
 
 
-def export_archive(dest: Path) -> Path:
-    """아카이브 데이터(pages/snapshots/checks + 스냅샷 파일)만 tar.gz 로 내보낸다."""
+def export_archive(dest: Path, site_id: int | None = None) -> Path:
+    """아카이브 데이터(pages/snapshots/checks + 스냅샷 파일)만 tar.gz 로 내보낸다.
+
+    site_id 를 주면 그 사이트 소속 페이지로 한정한다 — 공유 자원·문서 CAS 도
+    내보내는 스냅샷이 참조하는 파일만 담는다. 파일 형식은 전체 내보내기와
+    같아 가져오기(import_archive)로 똑같이 읽힌다. 사이트가 없으면 ValueError.
+    """
     config.ensure_dirs()
-    out = _resolve_dest(dest, "chunchugwan-export")
+    where = "" if site_id is None else " WHERE p.site_id = ?"
+    args: tuple = () if site_id is None else (site_id,)
+    prefix = "chunchugwan-export"
     with db.connect() as conn:
+        if site_id is not None:
+            site = db.get_site(conn, site_id)
+            if site is None:
+                raise ValueError(f"사이트 없음: {site_id}")
+            prefix += "-" + site["site_key"].replace(":", "_")
         pages = [
             {k: r[k] for k in ("url", "domain", "slug", "created_at")}
-            for r in conn.execute("SELECT * FROM pages ORDER BY id")
+            for r in conn.execute(f"SELECT * FROM pages p{where} ORDER BY p.id", args)
         ]
         snapshots = [
             {
@@ -212,21 +224,23 @@ def export_archive(dest: Path) -> Path:
                 )
             }
             for r in conn.execute(
-                """
+                f"""
                 SELECT s.*, p.url AS page_url, p.domain, p.slug
                 FROM snapshots s JOIN pages p ON p.id = s.page_id
-                ORDER BY s.id
-                """
+                {where} ORDER BY s.id
+                """,
+                args,
             )
         ]
         checks = [
             {k: r[k] for k in ("page_url", "checked_at", "content_hash")}
             for r in conn.execute(
-                """
+                f"""
                 SELECT c.*, p.url AS page_url
                 FROM checks c JOIN pages p ON p.id = c.page_id
-                ORDER BY c.id
-                """
+                {where} ORDER BY c.id
+                """,
+                args,
             )
         ]
         # 문서 참조 — 스냅샷은 (page_url, dir_name)으로 식별한다
@@ -239,17 +253,33 @@ def export_archive(dest: Path) -> Path:
                 )
             }
             for r in conn.execute(
-                """
+                f"""
                 SELECT d.*, s.dir_name, p.url AS page_url
                 FROM snapshot_documents d
                 JOIN snapshots s ON s.id = d.snapshot_id
                 JOIN pages p ON p.id = s.page_id
-                ORDER BY d.id
-                """
+                {where} ORDER BY d.id
+                """,
+                args,
             )
         ]
-        counts = _archive_counts(conn)
+        # 사이트 한정이면 내보내는 스냅샷이 참조하는 공유 자원만 추린다
+        resource_names = None if site_id is None else [
+            r["name"]
+            for r in conn.execute(
+                """
+                SELECT DISTINCT sr.name
+                FROM snapshot_resources sr
+                JOIN snapshots s ON s.id = sr.snapshot_id
+                JOIN pages p ON p.id = s.page_id
+                WHERE p.site_id = ? ORDER BY sr.name
+                """,
+                (site_id,),
+            )
+        ]
 
+    out = _resolve_dest(dest, prefix)
+    counts = {"pages": len(pages), "snapshots": len(snapshots), "checks": len(checks)}
     manifest = {
         "kind": "archive",
         "format_version": FORMAT_VERSION,
@@ -278,11 +308,31 @@ def export_archive(dest: Path) -> Path:
                         snap_dir,
                         arcname=f"sites/{s['domain']}/{s['slug']}/{s['dir_name']}",
                     )
-            # 모든 스냅샷을 내보내므로 공유 자원·문서 CAS 도 전량 포함한다
-            if config.RESOURCES_DIR.is_dir():
-                tar.add(config.RESOURCES_DIR, arcname="resources")
-            if config.DOCUMENTS_DIR.is_dir():
-                tar.add(config.DOCUMENTS_DIR, arcname="documents")
+            if resource_names is None:
+                # 모든 스냅샷을 내보내므로 공유 자원·문서 CAS 도 전량 포함한다
+                if config.RESOURCES_DIR.is_dir():
+                    tar.add(config.RESOURCES_DIR, arcname="resources")
+                if config.DOCUMENTS_DIR.is_dir():
+                    tar.add(config.DOCUMENTS_DIR, arcname="documents")
+            else:
+                # 사이트 한정 — 소속 스냅샷이 참조하는 CAS 파일만 담는다
+                for name in resource_names:
+                    if not resources.is_valid_name(name):
+                        continue
+                    f = resources.resource_path(name)
+                    if f.is_file():
+                        tar.add(f, arcname=f"resources/{name[:2]}/{name}")
+                doc_names = sorted({
+                    n
+                    for n in (
+                        documents.cas_name(d["sha256"], d["file"]) for d in doc_rows
+                    )
+                    if n is not None
+                })
+                for name in doc_names:
+                    f = documents.cas_path(name)
+                    if f.is_file():
+                        tar.add(f, arcname=f"documents/{name[:2]}/{name}")
     return out
 
 
