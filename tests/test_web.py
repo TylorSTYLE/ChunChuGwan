@@ -880,8 +880,8 @@ def test_resource_route(client):
 
     data = b"R" * 5000
     html = f'<img src="data:image/png;base64,{base64.b64encode(data).decode()}">'
-    out, count = resources.externalize_data_uris(html)
-    assert count == 1
+    out, names = resources.externalize_data_uris(html)
+    assert len(names) == 1
     name = out.split("/resource/", 1)[1].split('"', 1)[0]
 
     res = client.get(f"/resource/{name}")

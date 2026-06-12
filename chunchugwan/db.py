@@ -75,6 +75,16 @@ CREATE TABLE IF NOT EXISTS checks (
 CREATE INDEX IF NOT EXISTS idx_snapshots_page ON snapshots(page_id, taken_at);
 CREATE INDEX IF NOT EXISTS idx_checks_page ON checks(page_id, checked_at);
 
+CREATE TABLE IF NOT EXISTS snapshot_resources (
+    id           INTEGER PRIMARY KEY,
+    snapshot_id  INTEGER NOT NULL REFERENCES snapshots(id),
+    name         TEXT NOT NULL,         -- 자원 CAS 이름 (sha256 + 확장자, resources.py)
+    url          TEXT,                  -- 원본 URL (모를 수 있음 — compact 백필 등)
+    UNIQUE (snapshot_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_resources_name ON snapshot_resources(name);
+CREATE INDEX IF NOT EXISTS idx_snapshot_resources_url ON snapshot_resources(url);
+
 CREATE TABLE IF NOT EXISTS snapshot_documents (
     id           INTEGER PRIMARY KEY,
     snapshot_id  INTEGER NOT NULL REFERENCES snapshots(id),
@@ -604,6 +614,9 @@ def delete_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> bool:
     conn.execute(
         "DELETE FROM snapshot_documents WHERE snapshot_id = ?", (snapshot_id,)
     )
+    conn.execute(
+        "DELETE FROM snapshot_resources WHERE snapshot_id = ?", (snapshot_id,)
+    )
     conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
     if nxt is not None:
         changed = 1 if prev is None else int(prev["content_hash"] != nxt["content_hash"])
@@ -642,6 +655,13 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
     conn.execute(
         """
         DELETE FROM snapshot_documents
+        WHERE snapshot_id IN (SELECT id FROM snapshots WHERE page_id = ?)
+        """,
+        (page_id,),
+    )
+    conn.execute(
+        """
+        DELETE FROM snapshot_resources
         WHERE snapshot_id IN (SELECT id FROM snapshots WHERE page_id = ?)
         """,
         (page_id,),
@@ -832,6 +852,75 @@ def list_recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sql
         """,
         (limit,),
     ).fetchall()
+
+
+# ---- 스냅샷의 공유 자원 참조 (자원 CAS — resources.py) ----
+# page.html.gz 가 /resource/{name} 으로 참조하는 자원의 인덱스. 스냅샷 삭제
+# 시 참조가 0 이 된 CAS 파일을 GC 하고, 캡처의 자원 인라인 실패 시 같은
+# URL 의 과거 캡처본을 재사용하는 폴백 조회에 쓴다.
+
+
+def insert_snapshot_resources(
+    conn: sqlite3.Connection, snapshot_id: int, refs: list[dict]
+) -> None:
+    """스냅샷의 자원 참조 행들 삽입 (refs: [{name, url}], url 은 None 가능).
+
+    INSERT OR IGNORE — compact 백필 재실행 등 같은 (snapshot_id, name)
+    재기록에 멱등.
+    """
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO snapshot_resources (snapshot_id, name, url)
+        VALUES (?, ?, ?)
+        """,
+        [(snapshot_id, r["name"], r.get("url")) for r in refs],
+    )
+
+
+def find_resource_by_url(conn: sqlite3.Connection, url: str) -> str | None:
+    """URL 로 가장 최근에 저장된 자원의 CAS 이름 조회 (없으면 None).
+
+    캡처의 자원 인라인 실패 폴백 — 같은 URL 을 과거에 성공적으로 받아둔
+    적이 있으면 그 콘텐츠를 재사용한다.
+    """
+    row = conn.execute(
+        "SELECT name FROM snapshot_resources WHERE url = ? ORDER BY id DESC LIMIT 1",
+        (url,),
+    ).fetchone()
+    return row["name"] if row else None
+
+
+def list_snapshot_resource_refs(
+    conn: sqlite3.Connection, snapshot_ids: list[int]
+) -> list[str]:
+    """해당 스냅샷들이 참조하는 자원 CAS 이름 목록 (중복 제거) — 삭제 GC 용."""
+    if not snapshot_ids:
+        return []
+    marks = ", ".join("?" for _ in snapshot_ids)
+    return [
+        r["name"]
+        for r in conn.execute(
+            f"SELECT DISTINCT name FROM snapshot_resources "
+            f"WHERE snapshot_id IN ({marks})",
+            snapshot_ids,
+        )
+    ]
+
+
+def list_resource_refs_by_names(
+    conn: sqlite3.Connection, names: list[str]
+) -> list[str]:
+    """해당 이름들을 참조하는 자원 이름 목록 — 삭제 후 잔존 참조 확인용."""
+    if not names:
+        return []
+    marks = ", ".join("?" for _ in names)
+    return [
+        r["name"]
+        for r in conn.execute(
+            f"SELECT DISTINCT name FROM snapshot_resources WHERE name IN ({marks})",
+            names,
+        )
+    ]
 
 
 # ---- 함께 저장된 문서 파일 (문서 CAS 참조) ----

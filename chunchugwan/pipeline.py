@@ -158,6 +158,29 @@ def _resolve_network_tag(norm: str, host: str, requested: str | None) -> str | N
     )
 
 
+def _resource_fallback(url: str) -> tuple[str, bytes] | None:
+    """자원 인라인 실패 폴백 — 같은 URL 로 저장된 과거 캡처본(자원 CAS) 조회.
+
+    snapshot_resources 에서 URL 의 가장 최근 자원 이름을 찾아 CAS 콘텐츠와
+    미디어 타입을 돌려준다. 폴백 실패가 캡처를 막지 않도록 예외는 삼킨다.
+    """
+    try:
+        with db.connect() as conn:
+            name = db.find_resource_by_url(conn, url)
+        if name is None or not resources.is_valid_name(name):
+            return None
+        path = resources.resource_path(name)
+        if not path.is_file():
+            return None
+        media = resources.EXT_MEDIA_TYPES.get(
+            Path(name).suffix, "application/octet-stream"
+        )
+        return media.split(";")[0].strip(), path.read_bytes()
+    except Exception:
+        logger.warning("자원 폴백 조회 실패, 건너뜀: %s", url, exc_info=True)
+        return None
+
+
 def _archive_url(
     url: str,
     force: bool,
@@ -188,6 +211,7 @@ def _archive_url(
                 remove_selectors=tuple(rules.get("remove_selectors") or ()),
                 link_rewriter=link_rewriter,
                 session=browser_session,
+                resource_fallback=_resource_fallback,
             )
         except capture.CaptureError as e:
             # HTTP 전용 사이트(443 닫힘 등)일 수 있으므로 http 로 한 번 더 시도한다:
@@ -207,6 +231,7 @@ def _archive_url(
                 remove_selectors=tuple(rules.get("remove_selectors") or ()),
                 link_rewriter=link_rewriter,
                 session=browser_session,
+                resource_fallback=_resource_fallback,
             )
         run.step(
             "capture",
@@ -306,6 +331,16 @@ def _archive_url(
             )
             if doc_manifest:
                 db.insert_snapshot_documents(conn, snapshot_id, doc_manifest)
+            if stats.resource_names:
+                # CAS 추출 자원의 참조 기록 — 삭제 GC 와 URL 폴백의 근거.
+                # 원본 URL 은 캡처가 기록한 sha256 매핑에서 찾는다 (없으면 NULL)
+                db.insert_snapshot_resources(
+                    conn, snapshot_id,
+                    [
+                        {"name": n, "url": result.resource_urls.get(n[:64])}
+                        for n in stats.resource_names
+                    ],
+                )
             status = "new" if prev is None else ("changed" if changed else "forced_same")
             run.step("store", f"스냅샷 저장 [{status}]: {snap_dir.name}")
             run.write(

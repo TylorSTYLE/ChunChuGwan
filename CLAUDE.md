@@ -113,7 +113,8 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 archive/
 ├── index.db
 ├── resources/                       # 스냅샷 간 공유 자원 CAS (resources.py)
-│   └── {sha256 앞 2자}/{sha256}{확장자}   # 이미지·폰트·CSS, 콘텐츠 주소라 불변
+│   └── {sha256 앞 2자}/{sha256}{확장자}   # 이미지·폰트·CSS, 콘텐츠 주소라 불변.
+│                                    #   참조(snapshot_resources)가 0 이 되면 삭제(GC)
 ├── documents/                       # 문서 파일 CAS (documents.py — 인증 라우트 전용)
 │   └── {sha256 앞 2자}/{sha256}{확장자}   # PDF·워드·한글 등, 같은 내용은 한 번만.
 │                                    #   참조(snapshot_documents)가 0 이 되면 삭제(GC)
@@ -153,6 +154,13 @@ archive/
   (아키텍처 원칙 7 · netcheck.py). 참조 중인 태그는 삭제 거부
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관
 - `checks` — 중복으로 저장 생략된 확인 기록
+- `snapshot_resources` — 스냅샷이 /resource/ CAS 로 참조하는 공유 자원
+  인덱스 (CAS 이름 = sha256+확장자, 원본 url — 모를 수 있음). 캡처가
+  기록하고(인라인 자원의 sha256 은 브라우저 crypto.subtle 로 계산), 삭제 시
+  참조가 0 이 된 CAS 파일은 deletion.py 가 GC 한다. 자원 인라인 실패 시
+  같은 url 의 과거 캡처본을 재사용하는 폴백(pipeline._resource_fallback)의
+  조회 인덱스이기도 하다. 참조가 기록되지 않은 구형 스냅샷은 저장공간
+  최적화(compact)의 백필이 채운다
 - `snapshot_documents` — 스냅샷의 문서 파일 참조 (url·정제 파일명·bytes·
   sha256·content_type). 파일 본체는 문서 CAS — 같은 sha256 은 한 번만
   저장되고, 삭제 시 참조가 0 이 된 CAS 파일은 deletion.py 가 GC 한다.
@@ -238,7 +246,7 @@ M1~M8, A1~A10 전 마일스톤 완료 — 상세 내역은 `docs/ROADMAP.md` 참
   자동 마이그레이션(백필), in_scope www 통합, 사이트 단위 삭제(CLI `--site`)
 - [x] 대시보드 사이트 재편 — /archives 사이트 그룹핑, 사이트 상세 화면 신설,
   /documents·타임라인 사이트 표시, 사이트 삭제 UI, 현황 사이트 수
-- [ ] 자원 참조 추적 — snapshot_resources(url 포함), 캡처 시 기록, 삭제 시
+- [x] 자원 참조 추적 — snapshot_resources(url 포함), 캡처 시 기록, 삭제 시
   고아 자원 GC, 인라인 실패 시 같은 URL 의 과거 캡처본 재사용
 - [ ] 저장공간 최적화 — compact 에 참조 백필 + 고아 sweep 단계 추가,
   시스템 메뉴 라벨 "저장공간 최적화"로 변경 (CLI 명령명은 유지)
