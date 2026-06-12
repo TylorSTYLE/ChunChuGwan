@@ -145,12 +145,25 @@ _EN: dict[str, str] = {
     "변경 없음 확인 기록 (최근 {n}건)": "No-change checks (last {n})",
     # ---- 스케줄 (schedules) ----
     "주기 최소 1시간 ~ 최대 1주일": "Interval from 1 hour to 1 week",
+    "주기 최소 1시간 ~ 최대 1주일 · 1일 단위 주기는 실행 시각 지정 가능":
+        "Interval from 1 hour to 1 week · daily+ intervals can run at a set time",
     "등록된 자동 재아카이빙이 없습니다. 페이지 타임라인에서 주기를 설정하세요.":
         "No auto re-archiving registered. Set an interval on a page's timeline.",
     "자동 재아카이빙을 해제합니다. 저장된 스냅샷은 그대로 남습니다.":
         "This removes auto re-archiving. Saved snapshots are kept.",
     "반복 주기는 1시간(1h) 이상 1주일(1w) 이하여야 합니다":
         "The interval must be between 1 hour (1h) and 1 week (1w)",
+    "실행 시각은 1일 단위 주기(1일~1주일)에서만 지정할 수 있습니다":
+        "A run time can only be set for daily intervals (1 day to 1 week)",
+    "직접 입력 주기는 숫자여야 합니다": "Custom interval must be a number",
+    "직접 입력 주기는 1 이상이어야 합니다": "Custom interval must be 1 or greater",
+    "직접 입력…": "Custom…",
+    "unit|분": "min",
+    "unit|시간": "hr",
+    "unit|일": "day",
+    "1일 단위 주기에서 실행할 시각 (서버 시간 기준, 비우면 등록 시점 기준)":
+        "Time of day for daily+ intervals (server time; leave empty to run "
+        "relative to registration)",
     # ---- 새 아카이빙 (archive_new) ----
     "https:// 생략 가능": "https:// can be omitted",
     "트래킹 파라미터(utm_* 등)는 자동으로 제거된 정규화 URL 로 저장됩니다.":
@@ -161,6 +174,11 @@ _EN: dict[str, str] = {
     "주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다. 타임라인 화면에서 언제든 변경/해제할 수 있습니다.":
         "If you pick an interval, auto re-archiving is registered once the archive "
         "completes. You can change or remove it anytime on the timeline.",
+    "주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다. 직접 입력은 1시간~1주일 범위, 1일 단위 주기는 실행 시각(서버 시간)도 지정할 수 있습니다. 타임라인 화면에서 언제든 변경/해제할 수 있습니다.":
+        "If you pick an interval, auto re-archiving is registered once the archive "
+        "completes. Custom intervals range from 1 hour to 1 week; daily+ intervals "
+        "can also run at a set time (server time). You can change or remove it "
+        "anytime on the timeline.",
     "아카이빙 시작": "Start archiving",
     "1시간": "1 hour",
     "3시간": "3 hours",
@@ -566,3 +584,9 @@ def format_interval(locale: str, seconds: int) -> str:
 def interval_label(request: Request, seconds: int) -> str:
     """라우트 핸들러용 — 요청 로케일로 주기 표기."""
     return format_interval(getattr(request.state, "locale", DEFAULT_LOCALE), seconds)
+
+
+def schedule_label(request: Request, seconds: int, run_at: str | None) -> str:
+    """주기 + 실행 시각 표기 (예: '1일 · 09:00') — scheduler.format_schedule 의 로케일 버전."""
+    label = interval_label(request, seconds)
+    return f"{label} · {run_at}" if run_at else label
