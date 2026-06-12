@@ -1,6 +1,6 @@
 [project]
 name = "chunchugwan"
-version = "0.2.2"
+version = "0.2.3"
 description = "개인 웹 아카이빙 시스템 — 스냅샷 히스토리와 diff 지원"
 requires-python = ">=3.12"
 dependencies = [
