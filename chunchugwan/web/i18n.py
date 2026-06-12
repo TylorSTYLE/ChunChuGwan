@@ -4,7 +4,7 @@
 원문 그대로 출력하고, 다른 언어는 "한국어 원문 → 번역" dict 하나로 추가한다.
 카탈로그에 없는 문자열은 원문(한국어)으로 폴백한다.
 
-- 로케일 결정: `wccg_lang` 쿠키(헤더의 언어 선택) → Accept-Language → 한국어.
+- 로케일 결정: 로그인 사용자의 users.locale → Accept-Language → 한국어.
 - 같은 원문이 문맥에 따라 다르게 번역돼야 하면 ctx 를 쓴다 —
   카탈로그 키는 "{ctx}|{원문}" (예: "diff|이전").
 - 새 언어 추가: SUPPORTED_LOCALES·LOCALE_NAMES 에 코드/이름을 등록하고
@@ -17,9 +17,6 @@ from fastapi import Request
 
 from .. import config
 from ..auth import MAX_API_KEY_NAME_LENGTH, MAX_DISPLAY_NAME_LENGTH
-
-LANG_COOKIE = "wccg_lang"
-LANG_COOKIE_MAX_AGE = 365 * 86400
 
 DEFAULT_LOCALE = "ko"
 SUPPORTED_LOCALES = ("ko", "en")
@@ -44,14 +41,26 @@ _EN: dict[str, str] = {
     "시스템": "System",
     "계정": "Account",
     "로그아웃": "Log out",
-    "언어": "Language",
     "테마 전환 (자동 → 라이트 → 다크)": "Switch theme (auto → light → dark)",
     "테마: 자동": "Theme: auto",
     "테마: 라이트": "Theme: light",
     "테마: 다크": "Theme: dark",
-    "시간 표시 전환 (로컬 ↔ UTC)": "Switch time display (local ↔ UTC)",
-    "시간: UTC": "Time: UTC",
-    "시간: 로컬": "Time: local",
+    "언어": "Language",
+    "표시 언어": "Display language",
+    "언어 변경": "Change language",
+    "언어를 변경했습니다.": "Language updated.",
+    "지원하지 않는 언어입니다.": "Unsupported language.",
+    "시간대": "Time zone",
+    "기준 시각 국가/지역": "Country/region",
+    "시간대 변경": "Change time zone",
+    "시간대를 변경했습니다.": "Time zone updated.",
+    "지원하지 않는 타임존입니다.": "Unsupported time zone.",
+    "선택한 시간대 기준": "Based on selected time zone",
+    "아시아": "Asia",
+    "유럽": "Europe",
+    "아메리카": "Americas",
+    "태평양·오세아니아": "Pacific & Oceania",
+    "아프리카·중동": "Africa & Middle East",
     "시각": "Time",
     "상태": "Status",
     "용량": "Size",
@@ -694,10 +703,10 @@ CATALOGS: dict[str, dict[str, str]] = {"en": _EN}
 
 
 def resolve_locale(request: Request) -> str:
-    """요청의 표시 언어 — 쿠키(언어 선택) → Accept-Language → 기본(ko)."""
-    cookie = request.cookies.get(LANG_COOKIE)
-    if cookie in SUPPORTED_LOCALES:
-        return cookie
+    """미인증 요청의 표시 언어 — Accept-Language → 기본(ko).
+
+    로그인 사용자는 미들웨어가 users.locale 로 덮어쓴다.
+    """
     return _parse_accept_language(request.headers.get("accept-language", ""))
 
 

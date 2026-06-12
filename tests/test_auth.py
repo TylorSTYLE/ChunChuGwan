@@ -216,13 +216,13 @@ def test_login_page_public(client):
 
 
 def test_login_page_has_no_nav_but_keeps_controls(client):
-    """로그인 화면은 메뉴 없는 전용 레이아웃 — 언어·테마 전환만 남는다."""
+    """로그인 화면은 메뉴 없는 전용 레이아웃 — 테마 전환만 남는다."""
     res = client.get("/login")
     assert 'href="/archives"' not in res.text
     assert 'href="/schedules"' not in res.text
     assert 'href="/logs"' not in res.text
     assert 'id="theme-toggle"' in res.text
-    assert 'action="/lang"' in res.text
+    assert 'action="/lang"' not in res.text
 
 
 def test_signup_then_authenticated(client):

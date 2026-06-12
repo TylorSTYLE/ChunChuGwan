@@ -39,9 +39,8 @@
   {% if schedule %}
   <form class="inline" method="post" action="/page/{{ page['id'] }}/schedule/next-run"
         style="display:flex; gap:6px">
-    <input type="hidden" name="tz_offset" class="tz-offset" value="0">
     <input type="datetime-local" name="next_run" required class="next-run-input"
-           data-utc="{{ schedule['next_run_at'] }}" title="{{ _('브라우저 로컬 시간 기준') }}">
+           data-utc="{{ schedule['next_run_at'] }}" title="{{ _('선택한 시간대 기준') }}">
     <button type="submit">{{ _("다음 실행 변경") }}</button>
   </form>
   <form class="inline" method="post" action="/page/{{ page['id'] }}/schedule/delete">

@@ -19,6 +19,7 @@ import json
 import logging
 import threading
 from contextlib import asynccontextmanager
+import zoneinfo
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
@@ -91,7 +92,7 @@ app.include_router(api_routes.router)
 # 라우트 핸들러가 pending_totp 세션을 직접 요구한다.
 # /invite/{token} 은 초대받은 본인의 가입 페이지 — 토큰 자체가 자격 증명이다.
 _PUBLIC_PATHS = {
-    "/healthz", "/login", "/login/totp", "/signup", "/lang",
+    "/healthz", "/login", "/login/totp", "/signup",
     "/login/passkey/options", "/login/passkey",
 }
 
@@ -106,7 +107,7 @@ _BROWSER_ICON_PATHS = {
 # 승인 대기(pending — 권한없음) 계정에게 허용하는 경로. 그 외는 전부
 # /pending 안내 페이지로 보낸다 — 어떤 서비스 기능도 쓸 수 없어야 한다.
 _PENDING_ALLOWED_PATHS = {
-    "/pending", "/logout", "/lang", "/healthz",
+    "/pending", "/logout", "/healthz",
 } | _BROWSER_ICON_PATHS
 
 
@@ -146,13 +147,19 @@ async def auth_gate(request: Request, call_next):
                     if sess["state"] == "active":
                         request.state.user = db.get_user_by_id(conn, sess["user_id"])
 
+        # 로그인 사용자는 DB에 저장된 언어 설정을 우선 적용
+        if request.state.user is not None:
+            stored = request.state.user["locale"]
+            if stored in i18n.SUPPORTED_LOCALES:
+                request.state.locale = stored
+
         if first_run:
             if path.startswith("/api/"):
                 # API 클라이언트에게 /setup 리다이렉트는 의미가 없다
                 return PlainTextResponse(
                     "최초 설정이 완료되지 않았습니다", status_code=401
                 )
-            if path not in ("/setup", "/healthz", "/lang") and path not in _BROWSER_ICON_PATHS:
+            if path not in ("/setup", "/healthz") and path not in _BROWSER_ICON_PATHS:
                 return RedirectResponse("/setup", status_code=302)
         else:
             # 차단·탈퇴된 계정 — 로그아웃 외 모든 접근 거부 (세션은 차단/탈퇴
@@ -263,18 +270,6 @@ _FAVICON_PATH = Path(__file__).parent / "static" / "favicon.svg"
 def favicon() -> FileResponse:
     """SVG 파비콘 (OS 라이트/다크 자동) — 인증 없이 서빙 (_BROWSER_ICON_PATHS)."""
     return FileResponse(_FAVICON_PATH, media_type="image/svg+xml")
-
-
-@app.post("/lang")
-def set_language(lang: str = Form(...), next_path: str = Form("/", alias="next")):
-    """표시 언어 선택 — 쿠키에 저장하고 보던 화면으로 복귀."""
-    if lang not in i18n.SUPPORTED_LOCALES:
-        raise HTTPException(400, f"unsupported language: {lang!r}")
-    res = RedirectResponse(auth_routes.safe_next(next_path), status_code=303)
-    res.set_cookie(
-        i18n.LANG_COOKIE, lang, max_age=i18n.LANG_COOKIE_MAX_AGE, samesite="lax",
-    )
-    return res
 
 
 @app.get("/archives", response_class=HTMLResponse)
@@ -525,14 +520,12 @@ def schedule_next_run(
     request: Request,
     page_id: int,
     next_run: str = Form(...),
-    tz_offset: int = Form(0),
     next_path: str = Form("", alias="next"),
 ):
     """스케줄의 다음 실행 시각 변경.
 
-    next_run 은 datetime-local 값(타임존 없는 브라우저 로컬 시각),
-    tz_offset 은 JS getTimezoneOffset() 분 단위 (UTC = 로컬 + offset).
-    JS 미동작 등으로 tz_offset 이 0 이면 UTC 로 해석된다.
+    next_run 은 datetime-local 값(타임존 없는 naive 시각).
+    사용자의 저장된 타임존으로 해석해 UTC 로 변환한다.
     """
     _require_archiver(request)
     with db.connect() as conn:
@@ -544,7 +537,13 @@ def schedule_next_run(
     except ValueError:
         raise HTTPException(400, t(request, "잘못된 시각 형식: {v}", v=next_run))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc) + timedelta(minutes=tz_offset)
+        user = request.state.user
+        user_tz = (user["timezone"] if user is not None else None) or "UTC"
+        try:
+            tz = zoneinfo.ZoneInfo(user_tz)
+        except zoneinfo.ZoneInfoNotFoundError:
+            tz = timezone.utc
+        dt = dt.replace(tzinfo=tz).astimezone(timezone.utc)
     try:
         scheduler.set_next_run(page["url"], dt)
     except ValueError as e:
@@ -1334,7 +1333,6 @@ def crawl_schedule_next_run(
     request: Request,
     schedule_id: int,
     next_run: str = Form(...),
-    tz_offset: int = Form(0),
 ):
     """크롤 스케줄의 다음 실행 시각 변경 (시각 해석은 페이지 스케줄과 동일)."""
     _require_archiver(request)
@@ -1344,7 +1342,13 @@ def crawl_schedule_next_run(
     except ValueError:
         raise HTTPException(400, t(request, "잘못된 시각 형식: {v}", v=next_run))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc) + timedelta(minutes=tz_offset)
+        user = request.state.user
+        user_tz = (user["timezone"] if user is not None else None) or "UTC"
+        try:
+            tz = zoneinfo.ZoneInfo(user_tz)
+        except zoneinfo.ZoneInfoNotFoundError:
+            tz = timezone.utc
+        dt = dt.replace(tzinfo=tz).astimezone(timezone.utc)
     try:
         crawler.set_crawl_schedule_next_run(schedule_id, dt)
     except ValueError as e:

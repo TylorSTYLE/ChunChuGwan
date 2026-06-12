@@ -156,8 +156,6 @@ button.danger:hover { background: var(--red-hover); }
   <a href="/system" style="font-size:12px">{{ _("시스템") }}</a>
   {% endif %}
   <span class="spacer"></span>
-  {% include "_lang_form.html" %}
-  <button type="button" id="time-toggle" title="{{ _('시간 표시 전환 (로컬 ↔ UTC)') }}"></button>
   <button type="button" id="theme-toggle" title="{{ _('테마 전환 (자동 → 라이트 → 다크)') }}"></button>
   {% if user %}
   <span class="mono muted">{{ user['display_name'] or user['email'] }}</span>
@@ -187,55 +185,36 @@ button.danger:hover { background: var(--red-hover); }
   });
   render();
 })();
-/* 시간 표시 토글 — time.ts 요소를 로컬/UTC 로 변환, localStorage 에 기억 (기본 로컬) */
+/* 시간 표시 — time.ts 요소를 사용자 타임존으로 변환 */
 (function () {
-  var KEY = "wccg-time";
-  var btn = document.getElementById("time-toggle");
-  function stored() {
-    try { var v = localStorage.getItem(KEY); } catch (e) { return null; }
-    return v === "utc" || v === "local" ? v : null;
+  var tz = {{ user_timezone|tojson }};
+  function fmtTz(d, dateOnly) {
+    var opts = { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" };
+    if (!dateOnly) {
+      opts.hour = "2-digit"; opts.minute = "2-digit"; opts.second = "2-digit";
+      opts.hour12 = false;
+    }
+    /* sv-SE 로케일은 YYYY-MM-DD (HH:MM:SS) 형식 반환 */
+    return d.toLocaleString("sv-SE", opts).replace(", ", " ");
   }
-  function mode() { return stored() || "local"; }
-  function pad(n) { return (n < 10 ? "0" : "") + n; }
-  function fmt(d, dateOnly, utc) {
-    var s = (utc ? d.getUTCFullYear() : d.getFullYear())
-      + "-" + pad((utc ? d.getUTCMonth() : d.getMonth()) + 1)
-      + "-" + pad(utc ? d.getUTCDate() : d.getDate());
-    if (dateOnly) return s;
-    return s + " " + pad(utc ? d.getUTCHours() : d.getHours())
-      + ":" + pad(utc ? d.getUTCMinutes() : d.getMinutes())
-      + ":" + pad(utc ? d.getUTCSeconds() : d.getSeconds());
-  }
-  function apply() {
-    var utc = mode() === "utc";
-    document.querySelectorAll("time.ts").forEach(function (el) {
-      var iso = el.getAttribute("datetime");
-      var d = new Date(iso);
-      if (isNaN(d)) return;
-      el.textContent = fmt(d, el.dataset.fmt === "date", utc);
-      el.title = iso;  /* 마우스 오버 시 원본 UTC ISO 표기 */
-    });
-    if (btn) btn.textContent = utc ? {{ _("시간: UTC")|tojson }} : {{ _("시간: 로컬")|tojson }};
-  }
-  if (btn) btn.addEventListener("click", function () {
-    try { localStorage.setItem(KEY, mode() === "utc" ? "local" : "utc"); }
-    catch (e) { /* localStorage 불가 환경에서는 전환이 유지되지 않음 */ }
-    apply();
+  document.querySelectorAll("time.ts").forEach(function (el) {
+    var iso = el.getAttribute("datetime");
+    var d = new Date(iso);
+    if (isNaN(d)) return;
+    el.textContent = fmtTz(d, el.dataset.fmt === "date");
+    el.title = iso;  /* 마우스 오버 시 원본 UTC ISO 표기 */
   });
-  apply();
 })();
-/* 스케줄 다음 실행 폼 — datetime-local 입력을 브라우저 로컬 시각으로 프리필하고,
-   서버가 UTC 로 환산할 수 있게 tz_offset(분)을 채운다 */
+/* 스케줄 다음 실행 폼 — datetime-local 입력을 사용자 타임존 시각으로 프리필 */
 (function () {
-  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  var tz = {{ user_timezone|tojson }};
   document.querySelectorAll("input.next-run-input[data-utc]").forEach(function (el) {
     var d = new Date(el.dataset.utc);
     if (isNaN(d)) return;
-    el.value = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
-      + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
-  });
-  document.querySelectorAll("input.tz-offset").forEach(function (el) {
-    el.value = new Date().getTimezoneOffset();
+    /* sv-SE 로케일: "YYYY-MM-DD HH:MM" → "YYYY-MM-DDTHH:MM" */
+    var opts = { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+                 hour: "2-digit", minute: "2-digit", hour12: false };
+    el.value = d.toLocaleString("sv-SE", opts).replace(", ", "T").slice(0, 16);
   });
 })();
 </script>
