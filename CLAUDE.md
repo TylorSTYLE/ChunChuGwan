@@ -3,6 +3,13 @@
 개인 웹 아카이빙 시스템. URL을 받아 전체 페이지를 스냅샷으로 저장하고,
 같은 URL을 다시 아카이빙하면 히스토리가 쌓이며 스냅샷 간 비교(diff)가 가능하다.
 
+## 참고 문서 (해당 작업 시 읽을 것)
+
+- `docs/DASHBOARD.md` — 대시보드 화면 11개의 라우트·권한·세부 동작 레퍼런스.
+  웹 UI 화면을 추가/수정하기 전에 읽는다.
+- `docs/ROADMAP.md` — 완료된 구현 로드맵 히스토리(M1~M8, A1~A9 상세).
+  기능의 도입 배경·구현 범위가 궁금할 때 읽는다.
+
 ## 기술 스택
 
 - Python 3.12+ / 패키지 관리: `uv` (없으면 pip + venv)
@@ -137,28 +144,9 @@ archive/
 
 ## 대시보드 디자인 방향
 
-- 화면 11개: 현황(dashboard — 첫 화면 `/`(= `/dashboard`). 페이지·스냅샷 수,
-  기간별 용량 트렌드(오늘/이번 주/이번 달/올해), 최근 스냅샷·최근 로그)
-  / 목록(index — `/archives`, 헤더 메뉴 "목록")
-  / 새 아카이빙(archive_new — `/archive/new`, admin/archiver 전용. URL 등록 +
-  자동 재아카이빙 주기 선택. 신규 URL 은 pages 행이 아카이빙 후에 생기므로
-  주기 등록은 백그라운드 작업 말미에 수행)
-  / 스케줄(schedules — `/schedules`, 헤더 메뉴 "스케줄". 자동 재아카이빙
-  등록 목록 + 주기 변경·해제. 변경/해제는 admin/archiver 만, viewer 는
-  읽기 전용. 주기 입력은 프리셋 + 직접 입력(분/시간/일) + 1일 단위 주기의
-  실행 시각 — `_schedule_field.html` 매크로를 타임라인·새 아카이빙과 공용)
-  / 타임라인(timeline)
-  / 스냅샷 뷰어(snapshot) / diff 뷰어(diff)
-  / 로그(logs — 실행 기록, 도메인·페이지·스냅샷·상태 필터 + 단계별 상세 펼침)
-  / 시스템(system — 백업/복원·내보내기/가져오기·저장 공간 압축(`wccg compact`
-  와 동일)·가입 설정(회원 가입 허용 여부 + 가입 초기 권한 — `settings` 테이블).
-  백업에 인증 데이터가 포함되므로 인증이 켜진 환경에서는 관리자 전용)
-  / 사용자(users — 관리자 전용 사용자 관리. 권한 조정, 차단 시 세션 즉시 무효화,
-  최초 관리자는 변경 불가)
-  / API 키(api_keys — `/system/api-keys`, 관리자 전용. 헤더 메뉴 없이 시스템
-  화면의 카드에서 진입. 외부 소프트웨어용
-  키 발급·폐기. 권한(보기/아카이브)과 만료(영구·1일·1개월·1년·사용자 지정 일)
-  선택, 키 원문은 발급 직후 1회만 표시)
+- 화면 11개 — 현황(`/`), 목록(`/archives`), 새 아카이빙(`/archive/new`),
+  스케줄(`/schedules`), 타임라인, 스냅샷 뷰어, diff 뷰어, 로그, 시스템,
+  사용자, API 키. 화면별 라우트·권한·세부 동작은 `docs/DASHBOARD.md` 참조.
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
 - 다국어(ko/en): `web/i18n.py` — 한국어 원문이 메시지 키(gettext msgid 방식),
@@ -168,61 +156,8 @@ archive/
   템플릿 리터럴 키 누락은 `tests/test_i18n.py` 가 검사한다. CLI 는 한국어 유지.
 - diff 뷰: 텍스트 side-by-side + 스크린샷 비교(슬라이더 또는 토글)
 
-## 구현 로드맵 (이 순서로 진행할 것)
+## 구현 로드맵
 
-- [x] **M1 코어 저장소**: `config.py`, `db.py`, `storage.py` 완성 + 테스트.
-      URL 정규화(쿼리 정렬, fragment 제거, 트래킹 파라미터 utm_* 제거 등) 포함.
-- [x] **M2 캡처**: `capture.py` — Playwright로 렌더링 → raw.html, 전체 스크린샷,
-      자원 인라인 page.html(이미지/CSS를 base64 인라인. 1차 버전은 스타일시트와
-      이미지까지만, 폰트는 M5). `extract.py` — 본문 텍스트 추출(DOM 가시 텍스트,
-      2026-06 trafilatura 에서 교체 — 기사·게시글 제목/본문 유실 때문) + 정규화. `cli.py`의 `add` 연결. 실제 URL 1개로 수동 검증.
-- [x] **M3 히스토리/diff**: `differ.py` — difflib unified + side-by-side 데이터,
-      변경 요약(추가/삭제 줄 수). `cli.py`의 `history`, `diff`, `list` 연결.
-- [x] **M4 대시보드**: `web/app.py` + 템플릿 4종. 재아카이빙 버튼은
-      BackgroundTasks로 코어 호출.
-- [x] **M5 고도화**: 스크린샷 픽셀 diff(Pillow), 폰트 인라인, 도메인별 정규화
-      룰(셀렉터 제거 목록) 설정 파일, robots.txt 무시.
-- [x] **A1 인증 코어**: users/sessions 스키마, `auth.py`(argon2·세션·TOTP).
-- [x] **A2 로그인/가입**: `web/auth_routes.py`, 인증·CSRF 미들웨어, 라우트 보호.
-- [x] **A3 TOTP 2FA**: QR 등록/해제, 2단계 로그인 (패스워드 로그인에만 적용).
-- [x] **A4 OIDC SSO**: `oidc.py` — Authentik Authorization Code Flow, 계정 연결.
-- [x] **A5 외부 노출 준비**: `serve --host`, auth-off×외부 바인딩 거부, 보안 헤더.
-- [x] **A7 최초 구동 부트스트랩**: 사용자 0명이면 `WCCG_ADMIN_*` 환경변수로
-      관리자 자동 등록, 없으면 `/setup` 등록 페이지 (등록 후 페이지·API 차단).
-- [x] **A8 패스키 2FA**: WebAuthn 자격증명 등록/삭제(`/settings/passkey`),
-      2단계 로그인에서 TOTP 와 병행 (둘 중 하나만 있어도 2단계 발동).
-- [x] **M6 백업/복원**: `backup.py` — 전체 백업/복원(`wccg backup`/`restore`:
-      DB 일관 복사 + sites + rules.json 을 tar.gz 로, 인증 데이터 포함, 복원은
-      루트 전체 교체). 아카이브 데이터만 내보내기/가져오기(`wccg export`/
-      `import --mode merge|overwrite`: pages·snapshots·checks + 스냅샷 파일만 —
-      인증 테이블·실행 로그 제외, merge 는 dir_name 기준 중복 스킵).
-      대시보드 시스템 메뉴(`/system`, 관리자 전용)에서도 동일 기능 제공.
-- [x] **M7 주기적 재아카이빙**: `scheduler.py` — 페이지별 반복 주기(최소 1시간
-      ~ 최대 1개월) 등록, `schedules` 테이블. CLI `wccg schedule
-      add/list/next/remove/run`, serve 프로세스의 백그라운드 폴링 스레드
-      (`WCCG_SCHEDULER=off` 로 비활성), 대시보드 타임라인에서 설정/해제 +
-      다음 실행 시각 직접 변경.
-      실행은 pipeline 공유 (archive_logs source='schedule').
-- [x] **A9 사용자 권한**: `users.role`(admin/archiver/viewer/blocked) +
-      `is_founder`(최초 관리자 — 권한 변경 불가). 신규 가입·SSO 자동 생성은
-      viewer(이후 A10 에서 설정 가능한 초기 권한으로 대체 — 기본 pending).
-      viewer 는 아카이빙 트리거·아카이브 삭제 403 (삭제는 admin/
-      archiver 만 가능), blocked 는 로그인 거부 + 기존
-      세션도 미들웨어가 차단. 관리자 전용 사용자 관리 화면(`/system/users`)
-      에서 권한 조정 (차단 시 대상 세션 즉시 삭제). 권한 판정은
-      `web/permissions.py` 헬퍼로 일원화 (라우트 가드·템플릿 노출 공용).
-- [x] **M8 웹 UI 다국어**: `web/i18n.py` — ko/en 카탈로그(한국어 원문 키),
-      쿠키(`wccg_lang`) + Accept-Language 로케일 결정, 헤더 언어 선택
-      (`POST /lang`), 주기 표기 로케일화(`i18n.format_interval`). 템플릿 전체
-      `_()` 적용 + 라우트 메시지 `i18n.t()` 번역. 향후 언어 추가 = dict 추가.
-- [x] **A10 가입 승인**: `users.role` 에 pending(권한없음 — 가입 승인 대기)
-      추가. pending 계정은 로그인 후 `/pending` 안내 페이지·로그아웃·언어
-      전환만 가능 (미들웨어가 그 외 전부 `/pending` 으로 리다이렉트).
-      `settings` 테이블(key-value) 신설 — 시스템 화면의 가입 설정에서 회원
-      가입 허용(`signup_enabled`, off 면 `/signup` 차단 + 로그인 화면 가입
-      링크 숨김, 초대 가입은 허용)과 가입 초기 권한(`signup_default_role`:
-      pending/viewer/archiver, 기본 pending) 관리. SSO 자동 프로비저닝도
-      같은 초기 권한을 따른다 (승인 절차 우회 방지). 승인 = 관리자가
-      사용자 관리에서 권한 부여.
-
-각 마일스톤 완료 시: 테스트 통과 확인 → 위 체크박스 갱신 → 커밋.
+M1~M8, A1~A10 전 마일스톤 완료 — 상세 내역은 `docs/ROADMAP.md` 참조.
+새 마일스톤은 진행 중인 항목만 여기에 두고, 완료되면 ROADMAP.md 로 내린다.
+각 마일스톤 완료 시: 테스트 통과 확인 → 체크박스 갱신 → 커밋.
