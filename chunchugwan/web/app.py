@@ -607,11 +607,29 @@ def timeline(
             if page["network_tag_id"] else None
         )
         site = db.get_site(conn, page["site_id"]) if page["site_id"] else None
+        snap_logs = db.list_snapshot_archive_logs(conn, page_id)
 
+    log_by_snap = {row["snapshot_id"]: row for row in snap_logs}
     items = []
     for i, s in enumerate(snaps, 1):
         badge = "new" if i == 1 else _BADGES[s["changed"]]
-        items.append({"idx": i, "snap": s, "badge": badge})
+        # 상세 펼침용 — (불변) 스냅샷 디렉토리의 파일 목록 + 실행 로그의 단계
+        files = storage.snapshot_files(
+            storage.page_dir(page["domain"], page["slug"]) / s["dir_name"]
+        )
+        log = log_by_snap.get(s["id"])
+        steps: list = []
+        if log is not None and log["steps"]:
+            try:
+                steps = json.loads(log["steps"])
+            except ValueError:
+                steps = []
+        items.append({
+            "idx": i, "snap": s, "badge": badge,
+            "files": files,
+            "total_bytes": sum(f["bytes"] for f in files) if files else None,
+            "steps": steps, "log": log,
+        })
     items.reverse()  # 최신 먼저
     return templates.TemplateResponse(
         request, "timeline.html",

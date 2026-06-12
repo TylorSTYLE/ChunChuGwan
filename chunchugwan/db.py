@@ -898,6 +898,23 @@ def count_archive_logs(
     return row[0]
 
 
+def list_snapshot_archive_logs(
+    conn: sqlite3.Connection, page_id: int
+) -> list[sqlite3.Row]:
+    """페이지의 스냅샷 생성 실행 로그 (snapshot_id 가 있는 행만).
+
+    타임라인 화면이 스냅샷별 단계 소요·오류를 펼쳐 보이는 데 쓴다.
+    """
+    return conn.execute(
+        """
+        SELECT * FROM archive_logs
+        WHERE page_id = ? AND snapshot_id IS NOT NULL
+        ORDER BY id
+        """,
+        (page_id,),
+    ).fetchall()
+
+
 def list_log_domains(conn: sqlite3.Connection) -> list[str]:
     """로그에 등장한 도메인 목록 (대시보드 필터 드롭다운용)."""
     rows = conn.execute(

@@ -162,6 +162,24 @@ def test_timeline_404(client):
     assert client.get("/page/999").status_code == 404
 
 
+def test_timeline_detail_shows_files_and_steps(client):
+    """타임라인의 상세 펼침 — 스냅샷 파일 목록 + 실행 로그의 단계 소요."""
+    with db.connect() as conn:
+        db.insert_archive_log(
+            conn, url="https://example.com/post", domain="example.com",
+            page_id=1, snapshot_id=2, source="web", status="changed",
+            started_at="2026-06-02T00:00:00+00:00", duration_ms=1500,
+            steps='[{"step": "capture", "ms": 900, "detail": "fixture-step"}]',
+        )
+    res = client.get("/page/1")
+    assert res.status_code == 200
+    assert "상세" in res.text            # 펼침 버튼
+    assert "content.md" in res.text      # 파일 목록
+    assert "fixture-step" in res.text    # 로그의 단계 내용
+    # 스냅샷 행에 용량 컬럼이 보인다
+    assert "용량" in res.text
+
+
 def test_snapshot_view_sandboxed_iframe(client):
     """렌더링 iframe 의 허용 토큰은 allow-top-navigation-by-user-activation 하나뿐.
 
