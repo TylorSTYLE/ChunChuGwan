@@ -88,6 +88,12 @@ _BROWSER_ICON_PATHS = {
     "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png",
 }
 
+# 승인 대기(pending — 권한없음) 계정에게 허용하는 경로. 그 외는 전부
+# /pending 안내 페이지로 보낸다 — 어떤 서비스 기능도 쓸 수 없어야 한다.
+_PENDING_ALLOWED_PATHS = {
+    "/pending", "/logout", "/lang", "/healthz",
+} | _BROWSER_ICON_PATHS
+
 
 @app.middleware("http")
 async def auth_gate(request: Request, call_next):
@@ -144,6 +150,13 @@ async def auth_gate(request: Request, call_next):
                 return PlainTextResponse(
                     t(request, "차단된 계정입니다. 관리자에게 문의하세요."), status_code=403
                 )
+            # 승인 대기(권한없음) 계정 — 안내 페이지·로그아웃·언어 전환만 허용
+            if (
+                request.state.user is not None
+                and request.state.user["role"] == "pending"
+                and path not in _PENDING_ALLOWED_PATHS
+            ):
+                return RedirectResponse("/pending", status_code=302)
             # /resource/ 는 인증 예외 — 샌드박스된 page.html(불투명 출처)의
             # 하위 자원 요청에는 SameSite 쿠키가 붙지 않아 세션 인증이
             # 불가능하다. 이름이 콘텐츠 sha256 그 자체라 추측 불가능하고,

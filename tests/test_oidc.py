@@ -68,15 +68,30 @@ def test_callback_provisions_new_user(client):
     with db.connect() as conn:
         user = db.get_user_by_email(conn, "sso@example.com")
         assert user is not None and user["password_hash"] is None  # SSO 전용
+        # 자동 프로비저닝도 가입 초기 권한 설정(기본 권한없음)을 따른다
+        assert user["role"] == "pending"
         ident = db.get_identity(conn, "authentik", "ak-user-1")
         assert ident["user_id"] == user["id"]
-    # 세션 쿠키로 보호 라우트 접근 가능
+    # 세션은 발급되지만 승인 전이라 안내 페이지로만 보내진다
     assert client.get("/healthz").status_code == 200
+    res = client.get("/", follow_redirects=False)
+    assert res.status_code == 302 and res.headers["location"] == "/pending"
+
+
+def test_callback_provision_role_follows_setting(client):
+    """가입 초기 권한을 보기 전용으로 바꾸면 SSO 자동 생성도 따라간다."""
+    with db.connect() as conn:
+        db.set_setting(conn, db.SIGNUP_DEFAULT_ROLE_KEY, "viewer")
+    state = start_login(client)
+    client.get(f"/auth/oidc/callback?code=abc&state={state}")
+    with db.connect() as conn:
+        assert db.get_user_by_email(conn, "sso@example.com")["role"] == "viewer"
     assert client.get("/", follow_redirects=False).status_code == 200
 
 
 def test_callback_existing_sub_reuses_user(client):
     for _ in range(2):
+        client.cookies.clear()  # 이전 로그인의 (pending) 세션을 끊고 재로그인
         state = start_login(client)
         client.get(f"/auth/oidc/callback?code=abc&state={state}")
     with db.connect() as conn:

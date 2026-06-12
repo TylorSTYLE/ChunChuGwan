@@ -41,7 +41,8 @@
       실행은 pipeline 공유 (archive_logs source='schedule').
 - [x] **A9 사용자 권한**: `users.role`(admin/archiver/viewer/blocked) +
       `is_founder`(최초 관리자 — 권한 변경 불가). 신규 가입·SSO 자동 생성은
-      viewer. viewer 는 아카이빙 트리거·아카이브 삭제 403 (삭제는 admin/
+      viewer(이후 A10 에서 설정 가능한 초기 권한으로 대체 — 기본 pending).
+      viewer 는 아카이빙 트리거·아카이브 삭제 403 (삭제는 admin/
       archiver 만 가능), blocked 는 로그인 거부 + 기존
       세션도 미들웨어가 차단. 관리자 전용 사용자 관리 화면(`/system/users`)
       에서 권한 조정 (차단 시 대상 세션 즉시 삭제). 권한 판정은
@@ -50,3 +51,12 @@
       쿠키(`wccg_lang`) + Accept-Language 로케일 결정, 헤더 언어 선택
       (`POST /lang`), 주기 표기 로케일화(`i18n.format_interval`). 템플릿 전체
       `_()` 적용 + 라우트 메시지 `i18n.t()` 번역. 향후 언어 추가 = dict 추가.
+- [x] **A10 가입 승인**: `users.role` 에 pending(권한없음 — 가입 승인 대기)
+      추가. pending 계정은 로그인 후 `/pending` 안내 페이지·로그아웃·언어
+      전환만 가능 (미들웨어가 그 외 전부 `/pending` 으로 리다이렉트).
+      `settings` 테이블(key-value) 신설 — 시스템 화면의 가입 설정에서 회원
+      가입 허용(`signup_enabled`, off 면 `/signup` 차단 + 로그인 화면 가입
+      링크 숨김, 초대 가입은 허용)과 가입 초기 권한(`signup_default_role`:
+      pending/viewer/archiver, 기본 pending) 관리. SSO 자동 프로비저닝도
+      같은 초기 권한을 따른다 (승인 절차 우회 방지). 승인 = 관리자가
+      사용자 관리에서 권한 부여.

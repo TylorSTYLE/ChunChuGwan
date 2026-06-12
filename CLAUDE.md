@@ -120,9 +120,15 @@ archive/
   1일 단위 주기는 `run_at_time` HH:MM 으로 실행 시각 지정 — 서버 로컬 시간)
 - `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
   서버사이드 세션, OIDC state 1회용 기록). `users.role` 은
-  admin(관리자)/archiver(아카이빙 가능)/viewer(보기 전용)/blocked(차단) —
-  신규 가입·SSO 자동 생성은 viewer, `users.is_founder` 는 최초 등록 관리자로
-  권한 변경 불가
+  admin(관리자)/archiver(아카이빙 가능)/viewer(보기 전용)/pending(권한없음 —
+  가입 승인 대기, 로그인은 되지만 `/pending` 안내 페이지 외 접근 불가)/
+  blocked(차단). 신규 가입·SSO 자동 생성의 초기 권한은 `settings` 의
+  `signup_default_role` (pending/viewer/archiver, 기본 pending — 관리자가
+  사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
+  관리자로 권한 변경 불가
+- `settings` — 대시보드에서 변경하는 key-value 런타임 설정. 현재 가입 설정
+  (`signup_enabled` on/off 기본 on — off 면 `/signup` 차단 + 로그인 화면
+  가입 링크 숨김(초대 가입은 허용), `signup_default_role`)
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
 - `api_keys` — 외부 소프트웨어용 API 키 (`/api/v1` REST API 인증).
   관리자만 발급, 모든 관리자가 공동 관리. 키마다 보기/아카이브 권한과
@@ -152,6 +158,6 @@ archive/
 
 ## 구현 로드맵
 
-M1~M8, A1~A9 전 마일스톤 완료 — 상세 내역은 `docs/ROADMAP.md` 참조.
+M1~M8, A1~A10 전 마일스톤 완료 — 상세 내역은 `docs/ROADMAP.md` 참조.
 새 마일스톤은 진행 중인 항목만 여기에 두고, 완료되면 ROADMAP.md 로 내린다.
 각 마일스톤 완료 시: 테스트 통과 확인 → 체크박스 갱신 → 커밋.

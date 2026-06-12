@@ -288,14 +288,15 @@ def test_force_logout_requires_admin(client):
     assert client.post(f"/system/users/{uid}/logout").status_code == 403
 
 
-def test_signup_defaults_to_viewer(client):
+def test_signup_defaults_to_pending(client):
+    """가입 초기 권한 설정이 없으면 권한없음(pending) — 관리자 승인 대기."""
     res = client.post(
         "/signup", data={"email": "new@test.co", "password": "password1234"},
         follow_redirects=False,
     )
     assert res.status_code == 303
     user = _user("new@test.co")
-    assert user["role"] == "viewer" and user["is_founder"] == 0
+    assert user["role"] == "pending" and user["is_founder"] == 0
 
 
 # ---- 인증 off (loopback) ----

@@ -87,6 +87,7 @@ _EN: dict[str, str] = {
     "관리자": "Admin",
     "아카이브": "Archiver",
     "보기 전용": "Viewer",
+    "권한없음": "No access",
     "차단됨": "Blocked",
     # ---- 목록 (index) ----
     "아카이브 목록": "Archived pages",
@@ -310,11 +311,25 @@ _EN: dict[str, str] = {
         "Import complete [{mode}]: pages +{pages}, snapshots +{snapshots} "
         "(skipped {skipped}), checks +{checks}",
     "알 수 없는 모드: {mode}": "Unknown mode: {mode}",
+    # ---- 가입 설정 (system) ----
+    "가입 설정": "Sign-up settings",
+    "로그인 화면의 회원 가입 기능과 가입 계정의 초기 권한을 설정합니다 (SSO 자동 생성 계정에도 적용). '권한없음'으로 가입한 사용자는 관리자가 사용자 관리에서 권한을 부여할 때까지 서비스를 이용할 수 없습니다.":
+        "Controls the sign-up feature on the login screen and the initial role of "
+        "newly signed-up accounts (also applies to auto-provisioned SSO accounts). "
+        "Users who sign up with 'No access' cannot use the service until an "
+        "administrator grants them a role in user management.",
+    "로그인 화면에서 회원 가입 허용": "Allow sign-up on the login screen",
+    "가입 초기 권한": "Initial role for sign-ups",
+    "가입 설정을 저장했습니다.": "Sign-up settings saved.",
+    "가입 초기 권한으로 쓸 수 없는 역할: {role}":
+        "Role cannot be used as the initial sign-up role: {role}",
     # ---- 사용자 관리 (users) ----
     "사용자 관리": "User management",
-    "관리자=전체 관리, 아카이브=아카이빙 가능, 보기 전용=열람만, 차단됨=접근 불가. 차단하면 해당 사용자의 모든 세션이 즉시 로그아웃됩니다. 최초 등록된 관리자의 권한은 변경할 수 없습니다.":
-        "Admin = full control, Archiver = can archive, Viewer = read-only, Blocked = "
-        "no access. Blocking logs out all of the user's sessions immediately. The "
+    "관리자=전체 관리, 아카이브=아카이빙 가능, 보기 전용=열람만, 권한없음=가입 승인 대기(안내 페이지 외 접근 불가), 차단됨=접근 불가. 권한없음 사용자는 권한을 부여해 승인합니다. 차단하면 해당 사용자의 모든 세션이 즉시 로그아웃됩니다. 최초 등록된 관리자의 권한은 변경할 수 없습니다.":
+        "Admin = full control, Archiver = can archive, Viewer = read-only, "
+        "No access = awaiting sign-up approval (nothing but the notice page), "
+        "Blocked = no access. Approve a 'No access' user by granting them a role. "
+        "Blocking logs out all of the user's sessions immediately. The "
         "founder admin's role cannot be changed.",
     "활성 세션": "Active sessions",
     "가입일": "Joined",
@@ -466,6 +481,14 @@ _EN: dict[str, str] = {
         "will be created with the '{role}' role. Set a password.",
     "이미 가입된 이메일입니다.": "This email is already registered.",
     "이미 가입된 이메일입니다. 로그인하세요.": "This email is already registered. Log in instead.",
+    "회원 가입이 비활성화되어 있습니다.": "Sign-up is disabled.",
+    # ---- 가입 승인 대기 (pending) ----
+    "가입 승인 대기 중": "Awaiting approval",
+    "가입해 주셔서 감사합니다. 현재 계정은 관리자의 승인을 기다리고 있습니다.":
+        "Thank you for signing up. Your account is awaiting administrator approval.",
+    "관리자가 권한을 부여하면 바로 이용할 수 있습니다. 잠시 후 다시 방문해 주세요.":
+        "You can start using the service as soon as an administrator grants you "
+        "a role. Please check back later.",
     # ---- 2단계 로그인 / TOTP / 패스키 ----
     "등록된 패스키로 본인 확인을 완료하세요.": "Verify with a registered passkey.",
     "패스키로 인증": "Authenticate with a passkey",
