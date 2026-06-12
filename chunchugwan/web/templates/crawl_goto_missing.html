@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ _("아카이브에 없는 페이지") }} — {{ _("춘추관") }}{% endblock %}
+{% block content %}
+<h2>{{ _("아카이브에 없는 페이지") }}</h2>
+<p>{{ _("이 링크의 페이지는 아카이브되지 않았습니다 — 크롤 범위 밖이거나 아직/끝내 저장되지 않았습니다.") }}</p>
+<table style="max-width:760px; margin-bottom:16px">
+  <tbody>
+    <tr><th>URL</th><td class="mono">{{ url }}</td></tr>
+    <tr><th>{{ _("크롤") }}</th>
+      <td><a href="/crawls/{{ crawl['id'] }}" class="mono">{{ crawl['start_url'] }}</a></td></tr>
+  </tbody>
+</table>
+<p>
+  <a href="{{ url }}" rel="noopener noreferrer">{{ _("원본 페이지 열기 (라이브 사이트)") }}</a>
+</p>
+{% endblock %}

@@ -7,6 +7,10 @@
 .archive-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .archive-form .hint { font-size: 12px; color: var(--muted); }
 .archive-form button[type=submit] { align-self: flex-start; padding: 5px 16px; }
+.archive-form label.check { flex-direction: row; align-items: center; gap: 6px; }
+.crawl-options { display: flex; gap: 12px; flex-wrap: wrap;
+                 border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
+.crawl-options label { flex: 1; min-width: 120px; }
 </style>
 {% if error %}
 <div class="error">{{ error }}</div>
@@ -19,11 +23,45 @@
            placeholder="{{ _('https:// 생략 가능') }}">
     <span class="hint">{{ _("트래킹 파라미터(utm_* 등)는 자동으로 제거된 정규화 URL 로 저장됩니다.") }}</span>
   </label>
-  <label>{{ _("자동 재아카이빙 주기") }}
+  <label class="check">
+    <input type="checkbox" name="site" id="site-checkbox" value="on">
+    {{ _("사이트 전체 아카이브") }}
+  </label>
+  <div id="crawl-section" style="display:none">
+    <span class="hint">{{ _("같은 호스트에서 시작 URL 의 경로 프리픽스 이하 페이지를 링크를 따라가며 차례로 아카이빙합니다. 페이지 간 간격을 두어 대상 서버에 부담을 주지 않고, 실패한 페이지는 잠시 후 자동 재시도됩니다.") }}</span>
+    <div class="crawl-options" style="margin-top:8px">
+      <label>{{ _("최대 페이지 수") }}
+        <input type="number" name="crawl_max_pages" value="{{ crawl_defaults['max_pages'] }}"
+               min="1" max="{{ crawl_limits['max_pages'] }}">
+      </label>
+      <label>{{ _("최대 깊이") }}
+        <input type="number" name="crawl_max_depth" value="{{ crawl_defaults['max_depth'] }}"
+               min="0" max="{{ crawl_limits['max_depth'] }}">
+      </label>
+      <label>{{ _("페이지 간 간격(초)") }}
+        <input type="number" name="crawl_delay" value="{{ crawl_defaults['delay'] }}"
+               min="{{ crawl_limits['min_delay'] }}" max="{{ crawl_limits['max_delay'] }}">
+      </label>
+    </div>
+  </div>
+  <label id="interval-section">{{ _("자동 재아카이빙 주기") }}
     {{ interval_field(allow_off=True) }}
     <span class="hint">{{ _("주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다. 직접 입력은 1시간~1개월 범위, 1일 단위 주기는 실행 시각(서버 시간)도 지정할 수 있습니다. 타임라인 화면에서 언제든 변경/해제할 수 있습니다.") }}</span>
   </label>
   <button type="submit">{{ _("아카이빙 시작") }}</button>
 </form>
 {{ interval_field_js() }}
+<script>
+/* 사이트 전체 아카이브 체크 시 크롤 옵션을 펴고, 페이지 단위 기능인
+   자동 재아카이빙 주기는 숨긴다 (서버는 site 체크 시 주기를 무시한다) */
+(function () {
+  var check = document.getElementById("site-checkbox");
+  function apply() {
+    document.getElementById("crawl-section").style.display = check.checked ? "" : "none";
+    document.getElementById("interval-section").style.display = check.checked ? "none" : "";
+  }
+  check.addEventListener("change", apply);
+  apply();
+})();
+</script>
 {% endblock %}

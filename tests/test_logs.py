@@ -96,7 +96,7 @@ def test_insert_log_rejects_unknown_column(archive_env):
 
 
 def _fake_capture(html: str):
-    def fake(url, out_dir, remove_selectors=()):
+    def fake(url, out_dir, remove_selectors=(), link_rewriter=None):
         return capture.CaptureResult(
             final_url=url, http_status=200, title="제목",
             raw_html=html, content_html=html,
@@ -139,7 +139,7 @@ def test_pipeline_writes_success_log(archive_env, monkeypatch):
 
 def _https_only_fails(html: str):
     """https 는 CaptureError, http 는 성공하는 가짜 capture (HTTP 전용 사이트 흉내)."""
-    def fake(url, out_dir, remove_selectors=()):
+    def fake(url, out_dir, remove_selectors=(), link_rewriter=None):
         if url.startswith("https://"):
             raise capture.CaptureError(f"{url} 캡처 실패: Timeout 30000ms exceeded.")
         return capture.CaptureResult(
@@ -175,7 +175,7 @@ def test_pipeline_http_fallback_for_explicit_https_on_connect_error(
 ):
     html = "<html><body><p>본문</p></body></html>"
 
-    def fake(url, out_dir, remove_selectors=()):
+    def fake(url, out_dir, remove_selectors=(), link_rewriter=None):
         if url.startswith("https://"):
             raise capture.CaptureConnectError(f"{url} 캡처 실패: 연결 불가")
         return capture.CaptureResult(
@@ -211,7 +211,7 @@ def test_pipeline_no_http_fallback_for_explicit_https(archive_env, monkeypatch):
 
 
 def test_pipeline_writes_error_log(archive_env, monkeypatch):
-    def boom(url, out_dir, remove_selectors=()):
+    def boom(url, out_dir, remove_selectors=(), link_rewriter=None):
         raise capture.CaptureError("페이지 로드 실패")
 
     monkeypatch.setattr(pipeline.capture, "capture", boom)
@@ -352,7 +352,7 @@ def test_logs_limit_select(client):
 
 def _fake_capture_with_files(html: str):
     """캡처 산출물(raw/page/screenshot)을 실제로 기록하는 fake."""
-    def fake(url, out_dir, remove_selectors=()):
+    def fake(url, out_dir, remove_selectors=(), link_rewriter=None):
         (out_dir / "raw.html").write_text(html, encoding="utf-8")
         (out_dir / "page.html").write_text(html * 2, encoding="utf-8")
         (out_dir / "screenshot.png").write_bytes(b"\x89PNG" + b"0" * 2048)

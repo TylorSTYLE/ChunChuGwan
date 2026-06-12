@@ -38,6 +38,19 @@ DOCUMENT_FETCH_TIMEOUT_SECONDS = 30
 # URL 정규화 시 제거할 트래킹 파라미터 prefix
 TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")
 
+# ---- 사이트 전체 아카이브 (crawler.py) ----
+CRAWL_DEFAULT_MAX_PAGES = 100
+CRAWL_MAX_PAGES_LIMIT = 2000
+CRAWL_DEFAULT_MAX_DEPTH = 5
+CRAWL_MAX_DEPTH_LIMIT = 20
+CRAWL_DEFAULT_DELAY_SECONDS = 5      # 페이지 간 최소 간격 (대상 서버 부담 방지)
+CRAWL_MIN_DELAY_SECONDS = 1
+CRAWL_MAX_DELAY_SECONDS = 3600
+CRAWL_MAX_ATTEMPTS = 3               # 페이지당 최대 시도 횟수
+CRAWL_RETRY_BACKOFF_SECONDS = (300, 900)   # 1·2차 실패 후 재시도 대기
+CRAWL_STALE_CLAIM_SECONDS = 600      # 이보다 오래된 in_progress 는 중단으로 보고 복구
+CRAWLER_POLL_SECONDS = 2             # serve 크롤러 폴링 간격
+
 # 기본 127.0.0.1 (localhost 전용). 컨테이너 등에서만 WCCG_HOST=0.0.0.0 으로 오버라이드.
 DASHBOARD_HOST = os.environ.get("WCCG_HOST", "127.0.0.1")
 DASHBOARD_PORT = 8765

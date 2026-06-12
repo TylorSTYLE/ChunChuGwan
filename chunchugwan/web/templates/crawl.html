@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}{{ _("사이트 아카이브") }} — {{ crawl['start_url'] }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h2 style="margin:0">{{ crawl['start_url'] }}</h2>
+  <span class="spacer"></span>
+  {% if can_archive %}
+  {% if crawl['status'] == 'running' %}
+  <form class="inline" method="post" action="/crawls/{{ crawl['id'] }}/cancel">
+    <button>{{ _("취소") }}</button>
+  </form>
+  {% endif %}
+  {% if counts['failed'] %}
+  <form class="inline" method="post" action="/crawls/{{ crawl['id'] }}/retry">
+    <button>{{ _("실패 일괄 재시도") }}</button>
+  </form>
+  {% endif %}
+  {% endif %}
+  <a href="/crawls">{{ _("사이트 아카이브 목록으로") }}</a>
+</div>
+
+<table style="max-width:760px; margin-bottom:16px">
+  <tbody>
+    <tr><th>{{ _("상태") }}</th><td>
+      {% if crawl['status'] == 'running' %}<span class="badge running">{{ _("진행 중") }}</span>
+      {% elif crawl['status'] == 'done' %}<span class="badge new">{{ _("완료됨") }}</span>
+      {% else %}<span class="badge same">{{ _("취소됨") }}</span>{% endif %}
+    </td></tr>
+    <tr><th>{{ _("범위") }}</th>
+      <td class="mono">{{ crawl['scope_host'] }}{{ crawl['scope_path'] }}</td></tr>
+    <tr><th>{{ _("옵션") }}</th>
+      <td class="mono">{{ _("최대 페이지 수") }} {{ crawl['max_pages'] }} ·
+          {{ _("최대 깊이") }} {{ crawl['max_depth'] }} ·
+          {{ _("페이지 간 간격(초)") }} {{ crawl['delay_seconds'] }}</td></tr>
+    <tr><th>{{ _("등록 시각") }}</th><td>{{ crawl['created_at'] | ts }}</td></tr>
+    {% if crawl['finished_at'] %}
+    <tr><th>{{ _("종료 시각") }}</th><td>{{ crawl['finished_at'] | ts }}</td></tr>
+    {% endif %}
+  </tbody>
+</table>
+
+<div class="stat-grid" style="max-width:760px">
+  <div class="stat-card"><div class="label">{{ _("전체") }}</div>
+    <div class="value" id="count-total">{{ counts['total'] }}</div></div>
+  <div class="stat-card"><div class="label">{{ _("완료") }}</div>
+    <div class="value" id="count-done">{{ counts['done'] }}</div></div>
+  <div class="stat-card"><div class="label">{{ _("대기") }}</div>
+    <div class="value" id="count-pending">{{ counts['pending'] + counts['in_progress'] }}</div></div>
+  <div class="stat-card"><div class="label">{{ _("실패") }}</div>
+    <div class="value" id="count-failed">{{ counts['failed'] }}</div></div>
+</div>
+
+<h3>{{ _("페이지") }}</h3>
+<table>
+  <thead>
+    <tr>
+      <th>URL</th>
+      <th style="text-align:right">{{ _("깊이") }}</th>
+      <th>{{ _("상태") }}</th>
+      <th style="text-align:right">{{ _("시도") }}</th>
+      <th>{{ _("결과") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for p in pages %}
+    <tr>
+      <td class="mono">{{ p['url'] }}</td>
+      <td class="mono" style="text-align:right">{{ p['depth'] }}</td>
+      <td>
+        {% if p['status'] == 'done' %}<span class="badge new">{{ _("완료") }}</span>
+        {% elif p['status'] == 'failed' %}<span class="badge error">{{ _("실패") }}</span>
+        {% elif p['status'] == 'in_progress' %}<span class="badge running">{{ _("아카이빙 중") }}</span>
+        {% elif p['next_attempt_at'] %}<span class="badge changed">{{ _("재시도 대기") }}</span>
+        {% else %}<span class="badge same">{{ _("대기") }}</span>{% endif %}
+      </td>
+      <td class="mono" style="text-align:right">{{ p['attempts'] or '-' }}</td>
+      <td>
+        {% if p['snapshot_id'] %}
+        <a href="/snapshot/{{ p['snapshot_id'] }}">{{ _("스냅샷", ctx="one") }}</a>
+        {% if p['snapshot_page_id'] %}
+        · <a href="/page/{{ p['snapshot_page_id'] }}">{{ _("타임라인") }}</a>
+        {% endif %}
+        {% elif p['error'] %}
+        <span class="mono muted">{{ p['error'] }}</span>
+        {% if p['next_attempt_at'] %}
+        <span class="muted">— {{ _("재시도") }} {{ p['next_attempt_at'] | ts }}</span>
+        {% endif %}
+        {% else %}-{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% if crawl['status'] == 'running' %}
+<script>
+/* 진행 중이면 5초마다 상태를 폴링해 변화가 있으면 화면을 새로 그린다 */
+(function () {
+  var last = JSON.stringify({{ counts | tojson }});
+  function poll() {
+    fetch("/crawls/{{ crawl['id'] }}/status").then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.status !== "running" || JSON.stringify(data.counts) !== last) {
+          location.reload();
+        }
+      })
+      .catch(function () { /* 일시적 네트워크 오류는 다음 폴링에서 회복 */ });
+  }
+  setInterval(poll, 5000);
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -51,13 +51,44 @@ CREATE TABLE IF NOT EXISTS schedules (
 );
 CREATE INDEX IF NOT EXISTS idx_schedules_next ON schedules(next_run_at);
 
+CREATE TABLE IF NOT EXISTS crawls (
+    id             INTEGER PRIMARY KEY,
+    start_url      TEXT NOT NULL,      -- 정규화된 시작 URL
+    scope_host     TEXT NOT NULL,      -- 범위: 같은 호스트(netloc)만
+    scope_path     TEXT NOT NULL,      -- 범위: 이 경로 프리픽스 이하 ('/' 로 끝남)
+    status         TEXT NOT NULL DEFAULT 'running',  -- running|done|cancelled
+    max_pages      INTEGER NOT NULL,
+    max_depth      INTEGER NOT NULL,
+    delay_seconds  INTEGER NOT NULL,   -- 페이지 간 최소 간격 (대상 서버 부담 방지)
+    source         TEXT NOT NULL DEFAULT 'web',      -- 'web' | 'cli'
+    created_at     TEXT NOT NULL,
+    finished_at    TEXT,
+    next_page_at   TEXT NOT NULL       -- 다음 페이지 처리 가능 시각 (ISO 8601 UTC)
+);
+CREATE INDEX IF NOT EXISTS idx_crawls_status ON crawls(status, next_page_at);
+
+CREATE TABLE IF NOT EXISTS crawl_pages (
+    id              INTEGER PRIMARY KEY,
+    crawl_id        INTEGER NOT NULL REFERENCES crawls(id),
+    url             TEXT NOT NULL,      -- 정규화 URL
+    depth           INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'pending', -- pending|in_progress|done|failed
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,               -- 재시도 대기 시각 (NULL = 즉시 가능)
+    claimed_at      TEXT,               -- in_progress 시작 시각 (중단 복구 판정용)
+    snapshot_id     INTEGER REFERENCES snapshots(id),  -- 이 크롤에서 확인된 스냅샷
+    error           TEXT,               -- 마지막 실패 사유
+    UNIQUE (crawl_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_crawl_pages_status ON crawl_pages(crawl_id, status);
+
 CREATE TABLE IF NOT EXISTS archive_logs (
     id           INTEGER PRIMARY KEY,
     url          TEXT NOT NULL,          -- 정규화 URL (정규화 실패 시 입력 원본)
     domain       TEXT NOT NULL DEFAULT '',
     page_id      INTEGER REFERENCES pages(id),      -- 페이지 생성 전 실패면 NULL
     snapshot_id  INTEGER REFERENCES snapshots(id),  -- 새 스냅샷을 만든 경우에만
-    source       TEXT NOT NULL DEFAULT 'cli',       -- 'cli' | 'web' | 'schedule' | 'api'
+    source       TEXT NOT NULL DEFAULT 'cli',       -- 'cli'|'web'|'schedule'|'api'|'crawl'
     status       TEXT NOT NULL,          -- new|changed|unchanged|forced_same|error
     started_at   TEXT NOT NULL,          -- ISO 8601 UTC
     duration_ms  INTEGER NOT NULL DEFAULT 0,
@@ -308,6 +339,10 @@ def delete_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> bool:
         "UPDATE archive_logs SET snapshot_id = NULL WHERE snapshot_id = ?",
         (snapshot_id,),
     )
+    conn.execute(
+        "UPDATE crawl_pages SET snapshot_id = NULL WHERE snapshot_id = ?",
+        (snapshot_id,),
+    )
     conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
     if nxt is not None:
         changed = 1 if prev is None else int(prev["content_hash"] != nxt["content_hash"])
@@ -333,6 +368,13 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
     )
     conn.execute(
         "UPDATE archive_logs SET page_id = NULL WHERE page_id = ?", (page_id,)
+    )
+    conn.execute(
+        """
+        UPDATE crawl_pages SET snapshot_id = NULL
+        WHERE snapshot_id IN (SELECT id FROM snapshots WHERE page_id = ?)
+        """,
+        (page_id,),
     )
     conn.execute("DELETE FROM checks WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM schedules WHERE page_id = ?", (page_id,))
@@ -606,6 +648,270 @@ def mark_schedule_run(
         "UPDATE schedules SET last_run_at = ?, next_run_at = ? WHERE id = ?",
         (last_run_at, next_run_at, schedule_id),
     )
+
+
+# ---- 사이트 전체 아카이브 (크롤) ----
+
+
+def insert_crawl(
+    conn: sqlite3.Connection,
+    *,
+    start_url: str,
+    scope_host: str,
+    scope_path: str,
+    max_pages: int,
+    max_depth: int,
+    delay_seconds: int,
+    source: str,
+) -> int:
+    """크롤 row 생성 후 id 반환. next_page_at 은 지금 — 즉시 시작 가능."""
+    now = _utcnow()
+    cur = conn.execute(
+        """
+        INSERT INTO crawls
+            (start_url, scope_host, scope_path, max_pages, max_depth,
+             delay_seconds, source, created_at, next_page_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (start_url, scope_host, scope_path, max_pages, max_depth,
+         delay_seconds, source, now, now),
+    )
+    return cur.lastrowid
+
+
+def get_crawl(conn: sqlite3.Connection, crawl_id: int) -> sqlite3.Row | None:
+    """크롤 row 조회 (없으면 None)."""
+    return conn.execute("SELECT * FROM crawls WHERE id = ?", (crawl_id,)).fetchone()
+
+
+def list_crawls(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
+    """크롤 목록 (최신 순) + 상태별 페이지 수 집계 (목록 화면용)."""
+    return conn.execute(
+        """
+        SELECT c.*,
+               COUNT(cp.id) AS total_count,
+               COALESCE(SUM(cp.status = 'done'), 0) AS done_count,
+               COALESCE(SUM(cp.status = 'failed'), 0) AS failed_count,
+               COALESCE(SUM(cp.status IN ('pending', 'in_progress')), 0) AS pending_count
+        FROM crawls c LEFT JOIN crawl_pages cp ON cp.crawl_id = c.id
+        GROUP BY c.id ORDER BY c.id DESC LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def crawl_page_counts(conn: sqlite3.Connection, crawl_id: int) -> dict[str, int]:
+    """크롤의 상태별 페이지 수 (집계 키: pending/in_progress/done/failed/total)."""
+    counts = {"pending": 0, "in_progress": 0, "done": 0, "failed": 0}
+    for row in conn.execute(
+        "SELECT status, COUNT(*) AS c FROM crawl_pages WHERE crawl_id = ? GROUP BY status",
+        (crawl_id,),
+    ):
+        counts[row["status"]] = row["c"]
+    counts["total"] = sum(counts.values())
+    return counts
+
+
+def list_crawl_pages(conn: sqlite3.Connection, crawl_id: int) -> list[sqlite3.Row]:
+    """크롤의 페이지 목록 (발견 순) + 스냅샷의 page_id (타임라인 링크용)."""
+    return conn.execute(
+        """
+        SELECT cp.*, s.page_id AS snapshot_page_id
+        FROM crawl_pages cp LEFT JOIN snapshots s ON s.id = cp.snapshot_id
+        WHERE cp.crawl_id = ? ORDER BY cp.id
+        """,
+        (crawl_id,),
+    ).fetchall()
+
+
+def insert_crawl_page(
+    conn: sqlite3.Connection, crawl_id: int, url: str, depth: int
+) -> bool:
+    """크롤 큐에 URL 추가. 이미 있는 URL 이면 False (UNIQUE 무시)."""
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO crawl_pages (crawl_id, url, depth)
+        VALUES (?, ?, ?)
+        """,
+        (crawl_id, url, depth),
+    )
+    return cur.rowcount == 1
+
+
+def count_crawl_pages(conn: sqlite3.Connection, crawl_id: int) -> int:
+    """크롤 큐의 전체 URL 수 (max_pages 한도 판정용)."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM crawl_pages WHERE crawl_id = ?", (crawl_id,)
+    ).fetchone()["c"]
+
+
+def claim_due_crawl_page(
+    conn: sqlite3.Connection, now_iso: str, crawl_id: int | None = None
+) -> sqlite3.Row | None:
+    """기한이 된 크롤에서 대기 페이지 하나를 원자적으로 클레임.
+
+    조건: 크롤이 running 이고 next_page_at(페이지 간 간격)이 지났으며,
+    페이지가 pending 이고 재시도 대기(next_attempt_at)가 끝났을 것.
+    클레임과 동시에 크롤의 next_page_at 을 delay 만큼 미뤄 같은 크롤의
+    다른 페이지가 간격 안에 잡히지 않게 한다. UPDATE 의 status 조건이
+    멀티 프로세스(serve 폴링 + CLI) 경합을 막는다 — 경합 시 None.
+    """
+    sql = """
+        SELECT cp.*, c.scope_host, c.scope_path, c.max_pages, c.max_depth,
+               c.delay_seconds
+        FROM crawl_pages cp JOIN crawls c ON c.id = cp.crawl_id
+        WHERE c.status = 'running' AND c.next_page_at <= ?
+          AND cp.status = 'pending'
+          AND (cp.next_attempt_at IS NULL OR cp.next_attempt_at <= ?)
+    """
+    params: list[object] = [now_iso, now_iso]
+    if crawl_id is not None:
+        sql += " AND c.id = ?"
+        params.append(crawl_id)
+    sql += " ORDER BY cp.crawl_id, cp.depth, cp.id LIMIT 1"
+    row = conn.execute(sql, params).fetchone()
+    if row is None:
+        return None
+    cur = conn.execute(
+        """
+        UPDATE crawl_pages SET status = 'in_progress', claimed_at = ?
+        WHERE id = ? AND status = 'pending'
+        """,
+        (now_iso, row["id"]),
+    )
+    if cur.rowcount != 1:
+        return None
+    conn.execute(
+        "UPDATE crawls SET next_page_at = ? WHERE id = ?",
+        (_later(row["delay_seconds"]), row["crawl_id"]),
+    )
+    return row
+
+
+def release_crawl_page(conn: sqlite3.Connection, crawl_page_id: int) -> None:
+    """클레임 반납 (in_progress → pending, 시도 수 미증가) — 다음 폴링에서 재시도."""
+    conn.execute(
+        """
+        UPDATE crawl_pages SET status = 'pending', claimed_at = NULL
+        WHERE id = ? AND status = 'in_progress'
+        """,
+        (crawl_page_id,),
+    )
+
+
+def recover_stale_crawl_pages(conn: sqlite3.Connection, cutoff_iso: str) -> int:
+    """클레임 후 오래 방치된 in_progress 를 pending 으로 복구 (프로세스 중단 대비)."""
+    cur = conn.execute(
+        """
+        UPDATE crawl_pages SET status = 'pending', claimed_at = NULL
+        WHERE status = 'in_progress' AND claimed_at <= ?
+        """,
+        (cutoff_iso,),
+    )
+    return cur.rowcount
+
+
+def finish_crawl_page(
+    conn: sqlite3.Connection, crawl_page_id: int, snapshot_id: int | None
+) -> None:
+    """페이지 처리 성공 기록 — done + 이 크롤에서 확인된 스냅샷 참조."""
+    conn.execute(
+        """
+        UPDATE crawl_pages
+        SET status = 'done', snapshot_id = ?, error = NULL,
+            next_attempt_at = NULL, claimed_at = NULL
+        WHERE id = ?
+        """,
+        (snapshot_id, crawl_page_id),
+    )
+
+
+def fail_crawl_page(
+    conn: sqlite3.Connection,
+    crawl_page_id: int,
+    *,
+    attempts: int,
+    error: str,
+    next_attempt_at: str | None,
+) -> None:
+    """페이지 처리 실패 기록 — 재시도 시각이 있으면 pending 으로 돌리고, 없으면 failed."""
+    status = "pending" if next_attempt_at else "failed"
+    conn.execute(
+        """
+        UPDATE crawl_pages
+        SET status = ?, attempts = ?, error = ?, next_attempt_at = ?, claimed_at = NULL
+        WHERE id = ?
+        """,
+        (status, attempts, error, next_attempt_at, crawl_page_id),
+    )
+
+
+def finish_crawl_if_done(conn: sqlite3.Connection, crawl_id: int) -> bool:
+    """처리할 페이지가 안 남았으면 크롤을 done 으로 마감. 마감했으면 True."""
+    cur = conn.execute(
+        """
+        UPDATE crawls SET status = 'done', finished_at = ?
+        WHERE id = ? AND status = 'running' AND NOT EXISTS (
+            SELECT 1 FROM crawl_pages
+            WHERE crawl_id = ? AND status IN ('pending', 'in_progress')
+        )
+        """,
+        (_utcnow(), crawl_id, crawl_id),
+    )
+    return cur.rowcount == 1
+
+
+def cancel_crawl(conn: sqlite3.Connection, crawl_id: int) -> bool:
+    """진행 중 크롤 취소. running 이 아니었으면 False. 처리 중 페이지는
+    현재 건만 마치고 멈춘다 (클레임 시 status='running' 조건)."""
+    cur = conn.execute(
+        """
+        UPDATE crawls SET status = 'cancelled', finished_at = ?
+        WHERE id = ? AND status = 'running'
+        """,
+        (_utcnow(), crawl_id),
+    )
+    return cur.rowcount == 1
+
+
+def retry_failed_crawl_pages(conn: sqlite3.Connection, crawl_id: int) -> int:
+    """failed 페이지를 일괄 재시도 대상으로 되돌리고, 크롤을 다시 연다.
+
+    cancelled 크롤이면 남은 pending 도 함께 재개된다. 반환은 되돌린 페이지 수.
+    """
+    cur = conn.execute(
+        """
+        UPDATE crawl_pages
+        SET status = 'pending', attempts = 0, next_attempt_at = NULL, error = NULL
+        WHERE crawl_id = ? AND status = 'failed'
+        """,
+        (crawl_id,),
+    )
+    conn.execute(
+        """
+        UPDATE crawls SET status = 'running', finished_at = NULL, next_page_at = ?
+        WHERE id = ? AND status IN ('done', 'cancelled') AND EXISTS (
+            SELECT 1 FROM crawl_pages
+            WHERE crawl_id = ? AND status IN ('pending', 'in_progress')
+        )
+        """,
+        (_utcnow(), crawl_id, crawl_id),
+    )
+    return cur.rowcount
+
+
+def find_crawl_snapshot(
+    conn: sqlite3.Connection, crawl_id: int, url: str
+) -> int | None:
+    """크롤 세트 안에서 URL 의 스냅샷 id 조회 (없으면 None) — 링크 리졸버용."""
+    row = conn.execute(
+        """
+        SELECT snapshot_id FROM crawl_pages
+        WHERE crawl_id = ? AND url = ? AND snapshot_id IS NOT NULL
+        """,
+        (crawl_id, url),
+    ).fetchone()
+    return row["snapshot_id"] if row else None
 
 
 # ---- 사용자 ----

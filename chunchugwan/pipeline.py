@@ -13,7 +13,7 @@ import shutil
 import sqlite3
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -34,6 +34,11 @@ class ArchiveOutcome:
     http_status: int | None
     title: str | None
     documents: int = 0         # 함께 저장된 문서 파일 수
+    # 이 실행으로 확인된 스냅샷 id — 새로 만든 스냅샷 또는 (unchanged 시)
+    # 내용이 같았던 직전 스냅샷. 크롤러가 크롤 세트에 기록한다.
+    snapshot_id: int | None = None
+    # 페이지의 앵커 href (절대 URL) — 크롤러의 링크 추적용
+    page_links: list[str] = field(default_factory=list)
 
 
 class _RunLog:
@@ -96,22 +101,34 @@ def _log_failure(run: _RunLog, exc: Exception) -> None:
         logger.exception("archive_logs 기록 실패: %s", run.url)
 
 
-def archive_url(url: str, force: bool = False, source: str = "cli") -> ArchiveOutcome:
+def archive_url(
+    url: str,
+    force: bool = False,
+    source: str = "cli",
+    link_rewriter: capture.LinkRewriter | None = None,
+) -> ArchiveOutcome:
     """URL 아카이빙 전체 흐름.
 
     잘못된 URL은 ValueError, 캡처 실패는 capture.CaptureError 를 던진다.
     해시가 직전 스냅샷과 같으면 checks 기록만 남긴다 (force 시 예외).
-    source 는 실행 주체('cli' | 'web' | 'schedule' | 'api') — archive_logs 에 기록된다.
+    source 는 실행 주체('cli' | 'web' | 'schedule' | 'api' | 'crawl') —
+    archive_logs 에 기록된다. link_rewriter 는 사이트 전체 아카이브용
+    page.html 앵커 재작성 (capture 참조).
     """
     run = _RunLog(url, source)
     try:
-        return _archive_url(url, force, run)
+        return _archive_url(url, force, run, link_rewriter)
     except Exception as e:
         _log_failure(run, e)
         raise
 
 
-def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
+def _archive_url(
+    url: str,
+    force: bool,
+    run: _RunLog,
+    link_rewriter: capture.LinkRewriter | None = None,
+) -> ArchiveOutcome:
     norm = storage.normalize_url(url)
     domain = urlsplit(norm).hostname or ""
     slug = storage.url_to_slug(norm)
@@ -128,6 +145,7 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
             result = capture.capture(
                 norm, tmp_dir,
                 remove_selectors=tuple(rules.get("remove_selectors") or ()),
+                link_rewriter=link_rewriter,
             )
         except capture.CaptureError as e:
             # HTTP 전용 사이트(443 닫힘 등)일 수 있으므로 http 로 한 번 더 시도한다:
@@ -145,6 +163,7 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
             result = capture.capture(
                 norm, tmp_dir,
                 remove_selectors=tuple(rules.get("remove_selectors") or ()),
+                link_rewriter=link_rewriter,
             )
         run.step(
             "capture",
@@ -175,6 +194,7 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
                     snapshot_dir=None, taken_at=None,
                     last_taken_at=prev["taken_at"],
                     http_status=result.http_status, title=result.title,
+                    snapshot_id=prev["id"], page_links=result.page_links,
                 )
 
             # 저장이 확정된 뒤에만 문서 다운로드 — unchanged 면 받지 않는다
@@ -234,6 +254,7 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
                 last_taken_at=prev["taken_at"] if prev else None,
                 http_status=result.http_status, title=result.title,
                 documents=len(doc_manifest),
+                snapshot_id=snapshot_id, page_links=result.page_links,
             )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

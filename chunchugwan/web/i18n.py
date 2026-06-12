@@ -83,6 +83,45 @@ _EN: dict[str, str] = {
     "이름": "Name",
     "CSRF 검증 실패": "CSRF validation failed",
     "차단된 계정입니다. 관리자에게 문의하세요.": "This account is blocked. Contact an administrator.",
+    # ---- 사이트 전체 아카이브 (크롤) ----
+    "사이트": "Sites",
+    "사이트 아카이브": "Site archives",
+    "사이트 전체 아카이브": "Archive entire site",
+    "같은 호스트에서 시작 URL 의 경로 프리픽스 이하 페이지를 링크를 따라가며 차례로 아카이빙합니다. 페이지 간 간격을 두어 대상 서버에 부담을 주지 않고, 실패한 페이지는 잠시 후 자동 재시도됩니다.":
+        "Follows links on the same host under the start URL's path prefix and "
+        "archives each page in turn. Pages are fetched with a delay to avoid "
+        "stressing the target server, and failed pages are retried after a while.",
+    "최대 페이지 수": "Max pages",
+    "최대 깊이": "Max depth",
+    "페이지 간 간격(초)": "Delay between pages (s)",
+    "아직 사이트 전체 아카이브가 없습니다.": "No site archives yet.",
+    "새 아카이빙에서 '사이트 전체 아카이브'를 선택해 시작하세요.":
+        "Start one by checking 'Archive entire site' on the New archive screen.",
+    "시작 URL": "Start URL",
+    "범위": "Scope",
+    "진행 중": "Running",
+    "완료됨": "Done",
+    "취소됨": "Cancelled",
+    "완료": "Done",
+    "대기": "Pending",
+    "재시도 대기": "Awaiting retry",
+    "재시도": "Retry at",
+    "등록 시각": "Created",
+    "종료 시각": "Finished",
+    "옵션": "Options",
+    "깊이": "Depth",
+    "시도": "Attempts",
+    "결과": "Result",
+    "실패 일괄 재시도": "Retry all failed",
+    "사이트 아카이브 목록으로": "Back to site archives",
+    "아카이브에 없는 페이지": "Page not in the archive",
+    "이 링크의 페이지는 아카이브되지 않았습니다 — 크롤 범위 밖이거나 아직/끝내 저장되지 않았습니다.":
+        "The linked page was not archived — it is outside the crawl scope, "
+        "or was not (yet) saved.",
+    "크롤": "Crawl",
+    "크롤 없음": "Crawl not found",
+    "잘못된 URL": "Invalid URL",
+    "원본 페이지 열기 (라이브 사이트)": "Open original page (live site)",
     # ---- 역할 라벨 (db.ROLE_LABELS) ----
     "관리자": "Admin",
     "아카이브": "Archiver",

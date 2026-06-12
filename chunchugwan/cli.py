@@ -11,7 +11,9 @@ import click
 
 from . import backup as backup_mod
 from . import capture as capture_mod
-from . import config, db, deletion, differ, pipeline, resources, scheduler, storage
+from . import (
+    config, crawler, db, deletion, differ, pipeline, resources, scheduler, storage,
+)
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
 
@@ -275,6 +277,108 @@ def schedule_run() -> None:
         return
     for r in results:
         click.echo(f"{r.url} — {r.status}" + (f" ({r.error})" if r.error else ""))
+
+
+@main.group()
+def crawl() -> None:
+    """사이트 전체 아카이브 — 같은 호스트, 시작 URL 경로 프리픽스 이하."""
+
+
+_CRAWL_STATUS_LABELS = {
+    "new": "신규", "changed": "변경", "unchanged": "동일", "forced_same": "동일(강제)",
+    "retry": "재시도 대기", "failed": "실패", "skipped": "건너뜀",
+}
+
+
+@crawl.command("add")
+@click.argument("url")
+@click.option(
+    "--max-pages", default=config.CRAWL_DEFAULT_MAX_PAGES, show_default=True,
+    help=f"수집할 최대 페이지 수 (1 ~ {config.CRAWL_MAX_PAGES_LIMIT})",
+)
+@click.option(
+    "--max-depth", default=config.CRAWL_DEFAULT_MAX_DEPTH, show_default=True,
+    help=f"시작 URL 로부터의 최대 링크 깊이 (0 ~ {config.CRAWL_MAX_DEPTH_LIMIT})",
+)
+@click.option(
+    "--delay", default=config.CRAWL_DEFAULT_DELAY_SECONDS, show_default=True,
+    help="페이지 간 최소 간격(초) — 대상 서버 부담 방지",
+)
+@click.option(
+    "--no-wait", is_flag=True,
+    help="등록만 하고 종료 — 실행은 serve 의 크롤러가 큐를 소비",
+)
+def crawl_add(url: str, max_pages: int, max_depth: int, delay: int, no_wait: bool) -> None:
+    """사이트 전체 아카이브를 등록하고 (기본) 완료될 때까지 실행한다."""
+    try:
+        row = crawler.start_crawl(
+            url, max_pages=max_pages, max_depth=max_depth,
+            delay_seconds=delay, source="cli",
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    click.echo(
+        f"크롤 #{row['id']} 등록: {row['start_url']} "
+        f"(범위 {row['scope_host']}{row['scope_path']}, "
+        f"최대 {max_pages}페이지 · 깊이 {max_depth} · 간격 {delay}s)"
+    )
+    if no_wait:
+        return
+
+    def _echo(step: crawler.CrawlStep) -> None:
+        label = _CRAWL_STATUS_LABELS.get(step.status, step.status)
+        line = f"  {step.url} — {label}"
+        if step.enqueued:
+            line += f" (+링크 {step.enqueued}개)"
+        if step.error:
+            line += f" ({step.error})"
+        click.echo(line)
+
+    result = crawler.run_crawl(row["id"], on_step=_echo)
+    with db.connect() as conn:
+        counts = db.crawl_page_counts(conn, row["id"])
+    click.echo(
+        f"크롤 종료 [{result['status']}]: 완료 {counts['done']}개 · "
+        f"실패 {counts['failed']}개 · 전체 {counts['total']}개"
+    )
+
+
+@crawl.command("list")
+def crawl_list() -> None:
+    """크롤 목록 (최신 순)."""
+    with db.connect() as conn:
+        rows = db.list_crawls(conn)
+    if not rows:
+        click.echo("등록된 크롤이 없습니다.")
+        return
+    click.echo(f"{'ID':>4}  {'상태':<10}  {'완료':>5}  {'실패':>5}  {'대기':>5}  시작 URL")
+    for r in rows:
+        click.echo(
+            f"{r['id']:>4}  {r['status']:<10}  {r['done_count']:>5}  "
+            f"{r['failed_count']:>5}  {r['pending_count']:>5}  {r['start_url']}"
+        )
+
+
+@crawl.command("run")
+def crawl_run() -> None:
+    """기한이 된 크롤 페이지를 처리하고 종료 (cron 용 — serve 중에는 자동 실행됨).
+
+    크롤마다 페이지 간 간격이 강제되므로 한 번 실행에 크롤당 한 페이지꼴로
+    처리된다. 간격보다 짧은 주기의 cron 으로 돌리면 큐가 계속 소비된다.
+    """
+    ran = 0
+    while True:
+        step = crawler.process_next()
+        if step is None:
+            break
+        ran += 1
+        label = _CRAWL_STATUS_LABELS.get(step.status, step.status)
+        click.echo(f"[#{step.crawl_id}] {step.url} — {label}"
+                   + (f" ({step.error})" if step.error else ""))
+        if step.crawl_done:
+            click.echo(f"크롤 #{step.crawl_id} 완료")
+    if ran == 0:
+        click.echo("처리할 크롤 페이지가 없습니다.")
 
 
 def _fmt_mb(n: int) -> str:

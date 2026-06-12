@@ -14,6 +14,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Sequence
 from urllib.parse import urldefrag, urljoin
 
 from . import config, documents
@@ -133,6 +134,36 @@ _DOC_LINK_JS = """
 }
 """
 
+# 페이지 링크 수집 — a.href 프로퍼티는 브라우저가 절대 URL 로 해석해 준다.
+_PAGE_LINK_JS = """
+() => Array.from(document.querySelectorAll("a[href]"), (a) => a.href)
+"""
+
+# 크롤 캡처용 링크 재작성 — map(원본 절대 URL → 리졸버 URL)에 있는 앵커를
+# 치환하고 target="_top" 을 붙인다 (샌드박스 iframe 안에서 사용자 클릭 시
+# 뷰어 전체가 다음 스냅샷으로 이동 — allow-top-navigation-by-user-activation).
+# 문서 내 앵커(#...)는 그대로 둔다. 치환이 있었으면 <base> 를 제거한다 —
+# 루트 상대(/crawl/...) 링크가 원본 사이트 기준으로 해석되는 것을 막기
+# 위해서이며, 원본 DOM 은 raw.html 이 보존한다.
+_REWRITE_LINKS_JS = """
+(map) => {
+  let rewritten = 0;
+  for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+    const attr = a.getAttribute("href") || "";
+    if (attr.startsWith("#")) continue;
+    const to = map[a.href];
+    if (!to) continue;
+    a.setAttribute("href", to);
+    a.setAttribute("target", "_top");
+    rewritten += 1;
+  }
+  if (rewritten) {
+    document.querySelectorAll("base").forEach((b) => b.remove());
+  }
+  return rewritten;
+}
+"""
+
 # 도메인 룰의 셀렉터에 걸리는 노드를 제거한 HTML 생성. 잘못된 셀렉터는 무시.
 # 라이브 DOM 대신 raw_html 문자열을 DOMParser 로 파싱해 작업한다 —
 # 저장 산출물(page.html)을 오염시키지 않고, _inline_resources 이후의
@@ -162,15 +193,26 @@ class CaptureResult:
     content_html: str  # raw_html 에서 도메인 룰 셀렉터를 제거한 추출용 HTML (룰 없으면 raw와 동일)
     # 페이지가 링크한 문서 파일 URL (절대 URL, fragment 제거·중복 제거)
     document_links: list[str] = field(default_factory=list)
+    # 페이지의 모든 앵커 href (절대 URL, 중복 제거) — 크롤러의 링크 추적용
+    page_links: list[str] = field(default_factory=list)
+
+
+# 앵커 절대 URL 목록 → {원본 href: 재작성 href}. 비거나 None 이면 재작성 없음.
+LinkRewriter = Callable[[Sequence[str]], dict[str, str]]
 
 
 def capture(
-    url: str, out_dir: Path, remove_selectors: tuple[str, ...] = ()
+    url: str,
+    out_dir: Path,
+    remove_selectors: tuple[str, ...] = (),
+    link_rewriter: LinkRewriter | None = None,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
 
     remove_selectors 가 있으면 저장 산출물에는 손대지 않고, 본문 추출용
     content_html 에서만 해당 노드를 제거한다.
+    link_rewriter 가 있으면(사이트 전체 아카이브) page.html 의 앵커를
+    반환된 매핑대로 재작성한다 — raw.html/content_html 은 원본 유지.
     """
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -199,6 +241,7 @@ def capture(
                 raw_html = page.content()
                 (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
                 document_links = _collect_document_links(page)
+                page_links = _collect_page_links(page)
 
                 # 추출용 content_html 은 인라인 전의 raw_html 기준으로 만든다 —
                 # 인라인 후 DOM 에는 base64 데이터가 섞여 extract 가 느려진다.
@@ -208,6 +251,9 @@ def capture(
                         _REMOVE_JS, [raw_html, list(remove_selectors)]
                     )
                     logger.info("도메인 룰로 노드 %d개 제거: %s", removed, url)
+
+                if link_rewriter is not None:
+                    _rewrite_links(page, link_rewriter, page_links)
 
                 page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
                 (out_dir / "page.html").write_text(
@@ -221,6 +267,7 @@ def capture(
                     raw_html=raw_html,
                     content_html=content_html,
                     document_links=document_links,
+                    page_links=page_links,
                 )
             finally:
                 browser.close()
@@ -244,6 +291,30 @@ def _collect_document_links(page) -> list[str]:
     return list(dict.fromkeys(
         urldefrag(u).url for u in urls if documents.is_document_url(u)
     ))
+
+
+def _collect_page_links(page) -> list[str]:
+    """DOM 의 모든 앵커 href 를 절대 URL 로 수집 (중복 제거, 순서 보존).
+
+    수집 실패가 캡처 자체를 막아서는 안 되므로 실패 시 빈 목록을 반환한다.
+    """
+    try:
+        urls: list[str] = page.evaluate(_PAGE_LINK_JS)
+    except Exception as e:
+        logger.warning("페이지 링크 수집 실패, 건너뜀: %s", e)
+        return []
+    return list(dict.fromkeys(u for u in urls if u))
+
+
+def _rewrite_links(page, link_rewriter: LinkRewriter, page_links: list[str]) -> None:
+    """링크 재작성 적용 — 실패해도 캡처 자체는 유효 (원본 링크 유지)."""
+    try:
+        mapping = link_rewriter(page_links)
+        if mapping:
+            rewritten = page.evaluate(_REWRITE_LINKS_JS, mapping)
+            logger.info("링크 %d개 재작성: %s", rewritten, page.url)
+    except Exception as e:
+        logger.warning("링크 재작성 실패, 원본 링크 유지: %s", e)
 
 
 def _inline_resources(page, raw_html: str) -> str:
