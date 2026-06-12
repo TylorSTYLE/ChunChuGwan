@@ -46,7 +46,7 @@ def test_crawls_redirects_to_archives(client):
 def test_archives_lists_crawl_with_pages(client):
     """통합 목록에 크롤 행이 페이지 행과 함께 보인다 — 유형 구분·상태 뱃지 포함."""
     make_snapshot("https://example.com/post")
-    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     res = client.get("/archives")
     assert res.status_code == 200
     # 페이지 행과 크롤 행이 한 화면에
@@ -62,7 +62,7 @@ def test_archives_lists_crawl_with_pages(client):
 
 def test_archives_shows_finished_crawl_status(client):
     """끝난 크롤은 폴링 없이 상태 뱃지(취소됨)로 보인다."""
-    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     with db.connect() as conn:
         db.cancel_crawl(conn, crawl["id"])
     res = client.get("/archives")
@@ -99,6 +99,25 @@ def test_post_archive_site_creates_crawl(client):
     assert [p["url"] for p in pages] == ["https://example.com/docs/"]
 
 
+def test_post_archive_site_merges_into_running_crawl(client):
+    """같은 시작 URL 의 크롤이 진행 중이면 그 진행 화면으로 병합 알림과 함께 보낸다."""
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
+    res = client.post(
+        "/archive",
+        data={"url": "example.com/docs/", "site": "on"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"] == f"/crawls/{crawl['id']}?merged=1"
+    with db.connect() as conn:
+        assert len(db.list_crawls(conn)) == 1  # 새 크롤이 만들어지지 않는다
+
+    page = client.get(res.headers["location"])
+    assert "병합되었습니다" in page.text
+    # 병합 파라미터 없이 열면 알림이 없다
+    assert "병합되었습니다" not in client.get(f"/crawls/{crawl['id']}").text
+
+
 def test_post_archive_site_rejects_bad_options(client):
     res = client.post(
         "/archive",
@@ -112,7 +131,7 @@ def test_post_archive_site_rejects_bad_options(client):
 
 
 def test_crawl_detail_and_status(client):
-    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     res = client.get(f"/crawls/{crawl['id']}")
     assert res.status_code == 200
     assert "https://example.com/docs/" in res.text
@@ -126,7 +145,7 @@ def test_crawl_detail_and_status(client):
 
 
 def test_crawl_cancel_and_retry(client):
-    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     res = client.post(f"/crawls/{crawl['id']}/cancel", follow_redirects=False)
     assert res.status_code == 303
     with db.connect() as conn:
@@ -145,7 +164,7 @@ def test_crawl_cancel_and_retry(client):
 def test_goto_redirects_to_crawl_snapshot(client):
     url = "https://example.com/docs/a"
     _, snap_id = make_snapshot(url)
-    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     with db.connect() as conn:
         db.insert_crawl_page(conn, crawl["id"], url, 1)
         page = [p for p in db.list_crawl_pages(conn, crawl["id"]) if p["url"] == url][0]
@@ -161,7 +180,7 @@ def test_goto_falls_back_to_latest_snapshot(client):
     """크롤 세트에 없는 URL 은 해당 URL 의 최신 스냅샷으로 폴백한다."""
     url = "https://example.com/elsewhere"
     _, snap_id = make_snapshot(url)
-    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     res = client.get(
         f"/crawl/{crawl['id']}/goto", params={"url": url}, follow_redirects=False
     )
@@ -170,7 +189,7 @@ def test_goto_falls_back_to_latest_snapshot(client):
 
 
 def test_goto_missing_shows_original_link(client):
-    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     res = client.get(
         f"/crawl/{crawl['id']}/goto",
         params={"url": "https://example.com/docs/none"},
@@ -266,7 +285,7 @@ def test_crawl_detail_shows_retry_backoff(client):
     """크롤 진행 화면에 실패 재시도 대기(시스템 설정)가 표시된다."""
     with db.connect() as conn:
         db.set_setting(conn, db.CRAWL_RETRY_BACKOFF_KEY, "60,120")
-    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     res = client.get(f"/crawls/{crawl['id']}")
     assert "실패 재시도" in res.text
     assert "1분 → 2분" in res.text
@@ -322,7 +341,7 @@ def test_goto_normalizes_url(client):
     """리졸버는 정규화된 URL 로 조회한다 (트래킹 파라미터 제거 등)."""
     url = "https://example.com/docs/a"
     _, snap_id = make_snapshot(url)
-    crawl = crawler.start_crawl("https://example.com/docs/", source="web")
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
     with db.connect() as conn:
         db.insert_crawl_page(conn, crawl["id"], url, 1)
         page = [p for p in db.list_crawl_pages(conn, crawl["id"]) if p["url"] == url][0]
