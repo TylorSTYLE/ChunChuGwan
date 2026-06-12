@@ -413,7 +413,7 @@ uv run pytest                            # 테스트 (네트워크 불필요, ~1
 | `chunchugwan/storage.py` | URL 정규화, slug, 스냅샷 파일시스템 레이아웃 |
 | `chunchugwan/db.py` | SQLite 인덱스 (모든 DB 접근의 단일 창구) |
 | `chunchugwan/capture.py` | Playwright 렌더링, 자원 인라인, 셀렉터 제거 |
-| `chunchugwan/extract.py` | 본문 추출(trafilatura) + 정규화 |
+| `chunchugwan/extract.py` | 본문 추출(DOM 가시 텍스트 덤프) + 정규화 |
 | `chunchugwan/differ.py` | 텍스트 diff + 스크린샷 픽셀 diff |
 | `chunchugwan/pipeline.py` | 아카이빙 흐름 (CLI/대시보드 공용 쓰기 진입점) |
 | `chunchugwan/auth.py` | 인증 코어 — argon2 해싱, 세션 토큰, TOTP |

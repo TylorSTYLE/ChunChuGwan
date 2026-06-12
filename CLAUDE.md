@@ -167,8 +167,8 @@ archive/
       URL 정규화(쿼리 정렬, fragment 제거, 트래킹 파라미터 utm_* 제거 등) 포함.
 - [x] **M2 캡처**: `capture.py` — Playwright로 렌더링 → raw.html, 전체 스크린샷,
       자원 인라인 page.html(이미지/CSS를 base64 인라인. 1차 버전은 스타일시트와
-      이미지까지만, 폰트는 M5). `extract.py` — 본문 텍스트 추출(trafilatura) +
-      정규화. `cli.py`의 `add` 연결. 실제 URL 1개로 수동 검증.
+      이미지까지만, 폰트는 M5). `extract.py` — 본문 텍스트 추출(DOM 가시 텍스트,
+      2026-06 trafilatura 에서 교체 — 기사·게시글 제목/본문 유실 때문) + 정규화. `cli.py`의 `add` 연결. 실제 URL 1개로 수동 검증.
 - [x] **M3 히스토리/diff**: `differ.py` — difflib unified + side-by-side 데이터,
       변경 요약(추가/삭제 줄 수). `cli.py`의 `history`, `diff`, `list` 연결.
 - [x] **M4 대시보드**: `web/app.py` + 템플릿 4종. 재아카이빙 버튼은
