@@ -236,6 +236,7 @@ _EN: dict[str, str] = {
     "1일 단위 주기에서 실행할 시각 (서버 시간 기준, 비우면 등록 시점 기준)":
         "Time of day for daily+ intervals (server time; leave empty to run "
         "relative to registration)",
+    "24시간제 HH:MM (예: 09:00, 23:30)": "24-hour HH:MM (e.g. 09:00, 23:30)",
     # ---- 새 아카이빙 (archive_new) ----
     "https:// 생략 가능": "https:// can be omitted",
     "트래킹 파라미터(utm_* 등)는 자동으로 제거된 정규화 URL 로 저장됩니다.":
