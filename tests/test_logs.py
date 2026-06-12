@@ -352,6 +352,85 @@ def test_logs_limit_select(client):
     assert '<option value="200" selected>200줄</option>' in res.text
 
 
+# ---- 실패 로그 재시도 ----
+
+
+def _error_log_id() -> int:
+    with db.connect() as conn:
+        return conn.execute(
+            "SELECT id FROM archive_logs WHERE status = 'error'"
+        ).fetchone()["id"]
+
+
+def test_logs_error_row_shows_retry_button(client):
+    page = client.get("/logs").text
+    assert f"/logs/{_error_log_id()}/retry" in page
+    # 실패 행에만 — 성공 로그(new)에는 재시도 폼이 없다
+    assert page.count("/retry") == 1
+
+
+def test_retry_queues_archive(client, monkeypatch):
+    calls = []
+
+    def fake_archive(url, **kwargs):
+        calls.append(url)
+        return type("Outcome", (), {"status": "new"})()
+
+    monkeypatch.setattr(pipeline, "archive_url", fake_archive)
+    res = client.post(
+        f"/logs/{_error_log_id()}/retry",
+        data={"next": "/logs?status=error"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    # 필터를 유지한 채 복귀 + 알림 플래그 (TestClient 는 백그라운드 작업을 응답 후 즉시 실행)
+    assert res.headers["location"] == "/logs?status=error&retry=queued"
+    assert calls == ["https://b.com/y"]
+    assert not web_app._active_jobs  # 완료 후 진행 목록에서 해제
+
+
+def test_retry_rejects_non_error_or_missing_log(client):
+    with db.connect() as conn:
+        ok_id = conn.execute(
+            "SELECT id FROM archive_logs WHERE status = 'new'"
+        ).fetchone()["id"]
+    assert client.post(f"/logs/{ok_id}/retry").status_code == 400
+    assert client.post("/logs/9999/retry").status_code == 404
+
+
+def test_retry_ignores_external_next(client, monkeypatch):
+    monkeypatch.setattr(
+        pipeline, "archive_url",
+        lambda url, **kw: type("Outcome", (), {"status": "new"})(),
+    )
+    res = client.post(
+        f"/logs/{_error_log_id()}/retry",
+        data={"next": "https://evil.com/"},
+        follow_redirects=False,
+    )
+    assert res.headers["location"] == "/logs?retry=queued"
+
+
+def test_retry_active_when_already_running(client):
+    assert web_app._register_job("https://b.com/y")
+    try:
+        res = client.post(f"/logs/{_error_log_id()}/retry", follow_redirects=False)
+        assert res.headers["location"] == "/logs?retry=active"
+    finally:
+        web_app._unregister_job("https://b.com/y")
+
+
+def test_logs_retry_notice(client):
+    page = client.get("/logs?retry=queued").text
+    assert "재시도가 백그라운드에서 시작되었습니다" in page
+    page = client.get("/logs?retry=active").text
+    assert "이미 같은 URL 의 아카이빙이 진행 중입니다" in page
+    # 알 수 없는 값은 무시
+    page = client.get("/logs?retry=evil").text
+    assert "재시도가 백그라운드에서" not in page
+    assert "이미 같은 URL" not in page
+
+
 # ---- 저장 파일 목록/용량 표시 ----
 
 

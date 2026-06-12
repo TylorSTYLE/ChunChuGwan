@@ -150,8 +150,11 @@ button.danger:hover { background: var(--red-hover); }
   <a href="/archive/new" style="font-size:12px">{{ _("새 아카이빙") }}</a>
   {% endif %}
   <a href="/schedules" style="font-size:12px">{{ _("스케줄") }}</a>
-  <a href="/logs" style="font-size:12px">{{ _("로그") }}</a>
+  {% if can_view_logs %}
+  <a href="/logs" style="font-size:12px">{{ _("아카이빙 로그") }}</a>
+  {% endif %}
   {% if system_allowed %}
+  <a href="/system/logs" style="font-size:12px">{{ _("시스템 로그") }}</a>
   <a href="/system/users" style="font-size:12px">{{ _("사용자") }}</a>
   <a href="/system" style="font-size:12px">{{ _("시스템") }}</a>
   {% endif %}

@@ -36,7 +36,8 @@ _EN: dict[str, str] = {
     "목록": "Archives",
     "새 아카이빙": "New archive",
     "스케줄": "Schedules",
-    "로그": "Logs",
+    "아카이빙 로그": "Archive logs",
+    "시스템 로그": "System logs",
     "사용자": "Users",
     "시스템": "System",
     "계정": "Account",
@@ -304,8 +305,22 @@ _EN: dict[str, str] = {
     "이전 스크린샷": "Before screenshot",
     "이후 스크린샷": "After screenshot",
     "픽셀 diff 하이라이트": "Pixel diff highlight",
-    # ---- 로그 (logs) ----
-    "아카이브 로그": "Archive logs",
+    # ---- 로그 (logs / system logs) ----
+    "로그 열람 권한이 없습니다": "You do not have permission to view logs",
+    # "action|재시도" 는 사이트 상세(실패한 작업) 절에 이미 있다
+    "재시도가 백그라운드에서 시작되었습니다. 잠시 후 새로고침하세요.":
+        "Retry started in the background. Refresh shortly.",
+    "이미 같은 URL 의 아카이빙이 진행 중입니다.":
+        "Archiving for this URL is already in progress.",
+    "로그 없음": "Log not found",
+    "실패한 로그만 재시도할 수 있습니다": "Only failed runs can be retried",
+    "레벨": "Level",
+    "모든 레벨": "All levels",
+    "모든 출처": "All sources",
+    "로거": "Logger",
+    "메시지": "Message",
+    "시스템 로그가 없습니다. 앱(대시보드·워커·CLI)의 동작 기록이 여기에 쌓입니다.":
+        "No system logs yet. Application activity (dashboard, worker, CLI) is recorded here.",
     "페이지:": "Page:",
     "스냅샷:": "Snapshot:",
     "필터 해제": "Clear filter",

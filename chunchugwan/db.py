@@ -202,6 +202,17 @@ CREATE TABLE IF NOT EXISTS archive_logs (
 CREATE INDEX IF NOT EXISTS idx_archive_logs_page ON archive_logs(page_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_archive_logs_domain ON archive_logs(domain, started_at);
 
+CREATE TABLE IF NOT EXISTS system_logs (
+    id         INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,            -- ISO 8601 UTC
+    level      TEXT NOT NULL,            -- INFO|WARNING|ERROR|CRITICAL
+    logger     TEXT NOT NULL,            -- 로거 이름 (chunchugwan.capture 등)
+    source     TEXT NOT NULL DEFAULT 'serve',  -- 적재 프로세스 ('serve'|'worker'|'cli')
+    message    TEXT NOT NULL,
+    traceback  TEXT                      -- 예외 로그(logger.exception)의 트레이스백
+);
+CREATE INDEX IF NOT EXISTS idx_system_logs_time ON system_logs(created_at);
+
 CREATE TABLE IF NOT EXISTS users (
     id                  INTEGER PRIMARY KEY,
     email               TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -378,18 +389,19 @@ def connect() -> Iterator[sqlite3.Connection]:
     정전 시 마지막 트랜잭션만 잃을 수 있다 (DB 손상 없음).
     """
     config.ensure_dirs()
+    db_path = config.DB_PATH  # 한 번만 읽는다 — 커넥션과 스키마 캐시 키가 같은 파일을 봐야 한다
     try:
-        conn = sqlite3.connect(config.DB_PATH, timeout=_BUSY_TIMEOUT_SECONDS)
+        conn = sqlite3.connect(db_path, timeout=_BUSY_TIMEOUT_SECONDS)
     except sqlite3.OperationalError as e:
         raise sqlite3.OperationalError(
-            f"DB 파일을 열 수 없습니다: {config.DB_PATH} — 아카이브 디렉토리의 "
+            f"DB 파일을 열 수 없습니다: {db_path} — 아카이브 디렉토리의 "
             "쓰기 권한을 확인하세요 (도커 바인드 마운트라면 호스트 디렉토리 "
             "소유자가 컨테이너 사용자 uid 1000 과 다른 경우)"
         ) from e
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA synchronous = NORMAL")
-    _ensure_schema(conn)
+    _ensure_schema(conn, db_path)
     try:
         yield conn
         conn.commit()
@@ -397,9 +409,13 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-def _ensure_schema(conn: sqlite3.Connection) -> None:
-    """프로세스에서 처음 보는 DB 파일이면 WAL 전환 + 스키마 생성·마이그레이션."""
-    key = str(config.DB_PATH)
+def _ensure_schema(conn: sqlite3.Connection, db_path) -> None:
+    """프로세스에서 처음 보는 DB 파일이면 WAL 전환 + 스키마 생성·마이그레이션.
+
+    db_path 는 conn 을 연 경로 — config.DB_PATH 를 다시 읽으면 다른 스레드가
+    경로를 바꿨을 때(테스트 등) 엉뚱한 키가 '준비됨'으로 오염될 수 있다.
+    """
+    key = str(db_path)
     with _schema_lock:
         if key in _schema_ready:
             return
@@ -820,6 +836,13 @@ def insert_archive_log(conn: sqlite3.Connection, **fields) -> int:
     return cur.lastrowid
 
 
+def get_archive_log(conn: sqlite3.Connection, log_id: int) -> sqlite3.Row | None:
+    """아카이브 로그 한 행 조회 (없으면 None) — 행 단위 동작(재시도)용."""
+    return conn.execute(
+        "SELECT * FROM archive_logs WHERE id = ?", (log_id,)
+    ).fetchone()
+
+
 def _archive_log_where(
     *,
     domain: str | None,
@@ -928,6 +951,101 @@ def list_log_domains(conn: sqlite3.Connection) -> list[str]:
         "SELECT DISTINCT domain FROM archive_logs WHERE domain != '' ORDER BY domain"
     ).fetchall()
     return [r["domain"] for r in rows]
+
+
+# ---- 시스템 로그 (system_logs — system_log.py 의 logging 핸들러가 적재) ----
+
+SYSTEM_LOG_LEVELS = ("INFO", "WARNING", "ERROR", "CRITICAL")
+SYSTEM_LOG_SOURCES = ("serve", "worker", "cli")
+
+
+def insert_system_log(
+    conn: sqlite3.Connection,
+    *,
+    created_at: str,
+    level: str,
+    logger: str,
+    source: str,
+    message: str,
+    traceback: str | None = None,
+) -> int:
+    """시스템 로그 한 행 삽입 후 id 반환."""
+    cur = conn.execute(
+        "INSERT INTO system_logs (created_at, level, logger, source, message, traceback)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (created_at, level, logger, source, message, traceback),
+    )
+    return cur.lastrowid
+
+
+def _system_log_where(
+    *,
+    level: str | None,
+    source: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str, list[object]]:
+    """system_logs 필터 WHERE 절 조립 (list/count 공용). 날짜 의미는 archive_logs 와 동일."""
+    where: list[str] = []
+    params: list[object] = []
+    for cond, value in (
+        ("level = ?", level),
+        ("source = ?", source),
+        ("created_at >= ?", date_from),
+        ("created_at < DATE(?, '+1 day')", date_to),
+    ):
+        if value is not None:
+            where.append(cond)
+            params.append(value)
+    return (" WHERE " + " AND ".join(where)) if where else "", params
+
+
+def list_system_logs(
+    conn: sqlite3.Connection,
+    *,
+    level: str | None = None,
+    source: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """시스템 로그 (최신 순). 레벨/출처/기간으로 필터."""
+    where_sql, params = _system_log_where(
+        level=level, source=source, date_from=date_from, date_to=date_to,
+    )
+    sql = (
+        "SELECT * FROM system_logs" + where_sql
+        + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+    )
+    return conn.execute(sql, params + [limit, offset]).fetchall()
+
+
+def count_system_logs(
+    conn: sqlite3.Connection,
+    *,
+    level: str | None = None,
+    source: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """필터 조건에 맞는 시스템 로그 총 건수 (페이징용)."""
+    where_sql, params = _system_log_where(
+        level=level, source=source, date_from=date_from, date_to=date_to,
+    )
+    row = conn.execute("SELECT COUNT(*) FROM system_logs" + where_sql, params).fetchone()
+    return row[0]
+
+
+def prune_system_logs(conn: sqlite3.Connection, keep: int) -> int:
+    """최신 keep 건만 남기고 오래된 시스템 로그 삭제. 삭제 건수 반환."""
+    cur = conn.execute(
+        "DELETE FROM system_logs WHERE id < ("
+        " SELECT COALESCE(MIN(id), 0) FROM ("
+        "  SELECT id FROM system_logs ORDER BY id DESC LIMIT ?))",
+        (keep,),
+    )
+    return cur.rowcount
 
 
 def list_pages(conn: sqlite3.Connection) -> list[sqlite3.Row]:

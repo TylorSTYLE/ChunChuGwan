@@ -13,9 +13,10 @@ import shutil
 import smtplib
 import tarfile
 import tempfile
+from datetime import date
 from pathlib import Path
 from typing import Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -84,6 +85,82 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "documents_bytes": _dir_bytes(config.DOCUMENTS_DIR),
             "optimize_pending": sum(optimize.pending_counts()),
             "notice": notice, "error": error,
+        },
+    )
+
+
+_SYSLOG_PAGE_SIZES = (25, 50, 100, 200)
+_SYSLOG_PAGE_SIZE_DEFAULT = 50
+
+
+def _clean_date(value: str | None) -> str | None:
+    """날짜 입력을 YYYY-MM-DD 로 정규화, 파싱 불가면 None (필터 무시)."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
+
+
+@router.get("/logs", response_class=HTMLResponse)
+def system_logs_view(
+    request: Request,
+    level: str | None = None,
+    source: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    page: int = 1,
+    limit: int = _SYSLOG_PAGE_SIZE_DEFAULT,
+):
+    """시스템 로그 — 앱(serve·worker·CLI)의 logging 레코드. 관리자 전용 (라우터 가드)."""
+    if limit not in _SYSLOG_PAGE_SIZES:
+        limit = _SYSLOG_PAGE_SIZE_DEFAULT
+    if level not in db.SYSTEM_LOG_LEVELS:
+        level = None
+    if source not in db.SYSTEM_LOG_SOURCES:
+        source = None
+    date_from = _clean_date(date_from)
+    date_to = _clean_date(date_to)
+    if date_from and date_to and date_from > date_to:
+        date_from, date_to = date_to, date_from
+    filters = {
+        "level": level, "source": source,
+        "date_from": date_from, "date_to": date_to,
+    }
+    with db.connect() as conn:
+        total = db.count_system_logs(conn, **filters)
+        total_pages = max(1, -(-total // limit))  # ceil
+        page = max(1, min(page, total_pages))
+        logs = db.list_system_logs(
+            conn, **filters, limit=limit, offset=(page - 1) * limit,
+        )
+
+    # 페이징 링크 — 현재 필터를 유지한 채 page 만 바꾼다
+    qs_base = [
+        (k, v) for k, v in (
+            ("level", level), ("source", source),
+            ("date_from", date_from), ("date_to", date_to),
+        ) if v is not None
+    ]
+    if limit != _SYSLOG_PAGE_SIZE_DEFAULT:
+        qs_base.append(("limit", limit))
+
+    def _page_url(n: int) -> str:
+        params = qs_base + ([("page", n)] if n > 1 else [])
+        return "/system/logs" + ("?" + urlencode(params) if params else "")
+
+    return templates.TemplateResponse(
+        request, "system_logs.html",
+        {
+            "logs": logs,
+            "level": level or "", "source": source or "",
+            "date_from": date_from or "", "date_to": date_to or "",
+            "levels": db.SYSTEM_LOG_LEVELS, "sources": db.SYSTEM_LOG_SOURCES,
+            "limit": limit, "limits": _SYSLOG_PAGE_SIZES,
+            "total": total, "total_pages": total_pages, "page_num": page,
+            "prev_url": _page_url(page - 1) if page > 1 else None,
+            "next_url": _page_url(page + 1) if page < total_pages else None,
         },
     )
 

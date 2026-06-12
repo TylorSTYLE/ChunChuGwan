@@ -19,7 +19,7 @@ tr.steps-row > td { background: var(--bg-soft); padding: 10px 14px 14px; }
 <div class="toolbar">
   <h2 style="margin:0">{{ page['url'] }}</h2>
   <span class="spacer"></span>
-  <a href="/logs?page_id={{ page['id'] }}">{{ _("로그") }}</a>
+  <a href="/logs?page_id={{ page['id'] }}">{{ _("아카이빙 로그") }}</a>
   {% if can_archive %}
   <form class="inline" method="post" action="/page/{{ page['id'] }}/rearchive" style="display:flex; gap:6px; align-items:center">
     <label class="muted" title="{{ _('콘텐츠가 동일해도 새 스냅샷을 저장합니다') }}" style="display:flex; gap:4px; align-items:center">
