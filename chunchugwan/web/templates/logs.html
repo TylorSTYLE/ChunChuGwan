@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% block title %}{{ _("로그") }} — {{ _("춘추관") }}{% endblock %}
+{% from "_snapshot_detail.html" import snapshot_detail with context %}
+{% block title %}{{ _("아카이빙 로그") }} — {{ _("춘추관") }}{% endblock %}
 {% block head %}
 <style>
 tr.steps-row { display: none; }
@@ -23,21 +24,15 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
                       'forced_same': 'same', 'error': 'error'} %}
 {% set status_label = {'new': _('신규'), 'changed': _('변경'), 'unchanged': _('동일'),
                        'forced_same': _('동일(강제)'), 'error': _('실패')} %}
-{% set file_desc = {'page.html': _('자원 인라인 단일 HTML'),
-                    'page.html.gz': _('단일 HTML (gzip, 공유 자원 참조)'),
-                    'raw.html': _('렌더링 후 DOM 소스'),
-                    'raw.html.gz': _('렌더링 후 DOM 소스 (gzip)'),
-                    'content.md': _('추출·정규화 텍스트'),
-                    'screenshot.png': _('전체 페이지 스크린샷'),
-                    'screenshot.webp': _('전체 페이지 스크린샷'),
-                    'meta.json': _('캡처 메타 정보')} %}
-{# 실제 파일명 → /snapshot/{id}/file/ 서빙 논리 이름 (app._ALLOWED_FILES 와 일치) #}
-{% set file_view_route = {'page.html': 'page.html', 'page.html.gz': 'page.html',
-                          'screenshot.png': 'screenshot', 'screenshot.webp': 'screenshot',
-                          'content.md': 'content.md'} %}
+
+{% if retry == 'queued' %}
+<div class="notice">{{ _("재시도가 백그라운드에서 시작되었습니다. 잠시 후 새로고침하세요.") }}</div>
+{% elif retry == 'active' %}
+<div class="notice">{{ _("이미 같은 URL 의 아카이빙이 진행 중입니다.") }}</div>
+{% endif %}
 
 <div class="toolbar">
-  <h2 style="margin:0">{{ _("아카이브 로그") }}</h2>
+  <h2 style="margin:0">{{ _("아카이빙 로그") }}</h2>
   {% if filter_page %}
   <span class="mono muted">{{ _("페이지:") }} <a href="/page/{{ filter_page['id'] }}">{{ filter_page['url'] }}</a></span>
   {% endif %}
@@ -116,6 +111,11 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
       <td>
         {% if log['snapshot_id'] %}
         <a href="/snapshot/{{ log['snapshot_id'] }}">{{ _("보기") }}</a>
+        {% elif log['status'] == 'error' and can_archive %}
+        <form class="inline" method="post" action="/logs/{{ log['id'] }}/retry">
+          <input type="hidden" name="next" value="{{ current_url }}">
+          <button type="submit">{{ _("재시도", ctx="action") }}</button>
+        </form>
         {% endif %}
       </td>
       <td>
@@ -126,46 +126,8 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
     </tr>
     <tr class="steps-row" id="steps-{{ log['id'] }}">
       <td colspan="10">
-        {% if log['error'] %}<div class="error mono">{{ log['error'] }}</div>{% endif %}
-        {% if it.files %}
-        <table class="steps-table">
-          <thead><tr><th>{{ _("파일") }}</th><th>{{ _("용량") }}</th><th>{{ _("설명") }}</th></tr></thead>
-          <tbody>
-          {% for f in it.files %}
-            <tr>
-              <td class="mono">
-                {% if f['name'] in file_view_route %}
-                <a href="/snapshot/{{ log['snapshot_id'] }}/file/{{ file_view_route[f['name']] }}">{{ f['name'] }}</a>
-                {% else %}
-                {{ f['name'] }}
-                {% endif %}
-              </td>
-              <td class="num mono">{{ f['bytes']|filesize }}</td>
-              <td class="muted">{{ file_desc.get(f['name'], '') }}</td>
-            </tr>
-          {% endfor %}
-            <tr>
-              <td class="mono">{{ _("합계 ({n}개)", n=it.files|length) }}</td>
-              <td class="num mono">{{ it.total_bytes|filesize }}</td>
-              <td></td>
-            </tr>
-          </tbody>
-        </table>
-        {% endif %}
-        {% if it.steps %}
-        <table class="steps-table" {% if it.files %}style="margin-top:10px"{% endif %}>
-          <thead><tr><th>{{ _("단계") }}</th><th>{{ _("소요") }}</th><th>{{ _("내용") }}</th></tr></thead>
-          <tbody>
-          {% for s in it.steps %}
-            <tr>
-              <td class="mono">{{ s['step'] }}</td>
-              <td class="num mono">{{ s['ms'] }}ms</td>
-              <td class="mono">{{ s['detail'] }}</td>
-            </tr>
-          {% endfor %}
-          </tbody>
-        </table>
-        {% endif %}
+        {{ snapshot_detail(it.files, it.total_bytes, it.steps,
+                           error=log['error'], snapshot_id=log['snapshot_id']) }}
       </td>
     </tr>
   {% endfor %}

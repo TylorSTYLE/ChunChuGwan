@@ -156,3 +156,23 @@ def test_finalize_snapshot_moves_files_dir(tmp_path, monkeypatch):
 
     names = [f["name"] for f in storage.snapshot_files(snap_dir)]
     assert "files/r-12345678.pdf" in names  # 용량 집계/로그 목록에 포함된다
+
+
+def test_finalize_snapshot_moves_webp_skip_marker(tmp_path, monkeypatch):
+    """캡처 단계에서 PNG 유지가 확정된 마커도 스냅샷으로 옮겨진다."""
+    from datetime import datetime, timezone
+    from chunchugwan import config
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+
+    tmp_dir = tmp_path / "capture"
+    tmp_dir.mkdir()
+    (tmp_dir / "screenshot.png").write_bytes(b"\x89PNG huge")
+    (tmp_dir / storage.WEBP_SKIP_MARKER).touch()
+
+    snap_dir = storage.finalize_snapshot(
+        tmp_dir, "example.com", "root-deadbeef", _meta(), "본문",
+        datetime(2026, 6, 11, tzinfo=timezone.utc),
+    )
+    assert (snap_dir / storage.WEBP_SKIP_MARKER).is_file()
+    from chunchugwan import resources
+    assert not resources.needs_compaction(snap_dir)

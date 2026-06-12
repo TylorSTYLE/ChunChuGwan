@@ -67,6 +67,10 @@ CRAWLER_POLL_SECONDS = 2             # serve·워커 크롤러 폴링 간격
 CRAWL_WORKERS = int(os.environ.get("WCCG_CRAWL_WORKERS", "2"))
 CRAWL_WORKERS_LIMIT = 8
 
+# ---- 시스템 로그 (system_log.py — DB 적재, 대시보드 /system/logs 에서 열람) ----
+# 보관 한도 행 수 — 핸들러가 적재 중 주기적으로 한도를 넘는 오래된 행을 정리한다.
+SYSTEM_LOG_MAX_ROWS = int(os.environ.get("WCCG_SYSTEM_LOG_MAX_ROWS", "20000"))
+
 # 기본 127.0.0.1 (localhost 전용). 컨테이너 등에서만 WCCG_HOST=0.0.0.0 으로 오버라이드.
 DASHBOARD_HOST = os.environ.get("WCCG_HOST", "127.0.0.1")
 DASHBOARD_PORT = 8765

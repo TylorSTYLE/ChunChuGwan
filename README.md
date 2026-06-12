@@ -254,7 +254,8 @@ archive/
     │                       #   작은 자원(<4KB)은 data URI 인라인 유지
     ├── raw.html.gz         # 렌더링 후 DOM 소스 (gzip)
     ├── content.md          # 추출+정규화 텍스트 (해시/diff 기준)
-    ├── screenshot.webp     # 전체 페이지 (WebP 변환 실패 시 screenshot.png 유지)
+    ├── screenshot.webp     # 전체 페이지 (WebP 한도 초과·용량 역효과면
+    │                       #   screenshot.png 유지 + screenshot.png.keep 마커)
     └── meta.json           # url, final_url, 시각, 해시, http 정보,
                             #   documents 목록 (문서 CAS 참조 — 출처 URL·해시)
 ```
@@ -305,11 +306,18 @@ uv run wccg compact          # 1회성 마이그레이션 (내용 보존 변환,
 스크립트가 대시보드 컨텍스트에서 실행되지 않는다. 재아카이빙 버튼은
 백그라운드로 코어 파이프라인을 호출한다.
 
-`/logs` 페이지에서 아카이브 실행 로그를 볼 수 있다. 모든 실행은 성공/실패와
-관계없이 단계별(normalize → capture → extract → hash → store) 소요시간과
-함께 기록되며, 도메인·페이지·스냅샷·상태(신규/변경/동일/실패)로 필터할 수
-있다. 타임라인의 "로그" 링크는 해당 페이지의 로그를, 스냅샷 뷰어의 "로그"
-링크는 해당 버전을 만든 실행 기록을 보여준다.
+**아카이빙 로그**(`/logs`)에서 아카이브 실행 로그를 볼 수 있다 (viewer 이상).
+모든 실행은 성공/실패와 관계없이 단계별(normalize → capture → extract →
+hash → store) 소요시간과 함께 기록되며, 도메인·페이지·스냅샷·상태
+(신규/변경/동일/실패)로 필터할 수 있다. 타임라인의 "아카이빙 로그" 링크는
+해당 페이지의 로그를, 스냅샷 뷰어의 같은 링크는 해당 버전을 만든 실행
+기록을 보여준다.
+
+**시스템 로그**(`/system/logs`, 관리자 전용)는 아카이빙 결과가 아니라 앱
+자체의 동작 기록이다 — serve·worker·CLI 프로세스의 경고/오류와 캡처·워커
+단계의 INFO 로그가 DB(`system_logs`)에 쌓이며, 레벨·출처·기간으로 필터할
+수 있다. 보관 한도(기본 2만 행, `WCCG_SYSTEM_LOG_MAX_ROWS`)를 넘는 오래된
+기록은 자동 정리된다.
 
 ### 다국어 (i18n)
 
@@ -440,6 +448,7 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 2단계를 건너뛴다.
 | `WCCG_INVITE_TTL_DAYS` | `7` | 초대 링크 수명 (일) |
 | `WCCG_SCHEDULER` | `on` | `off` 면 serve 가 스케줄·크롤을 실행하지 않음 — `wccg worker` 나 cron 으로 대체 |
 | `WCCG_CRAWL_WORKERS` | `2` | `wccg worker` 의 크롤 스레드 수 = 동시 진행 크롤(사이트) 수 (1~8) |
+| `WCCG_SYSTEM_LOG_MAX_ROWS` | `20000` | 시스템 로그(`/system/logs`) 보관 한도 행 수 — 초과분은 오래된 것부터 자동 정리 |
 
 OIDC 변수 3개가 모두 설정되면 로그인 페이지에 "Authentik으로 로그인" 버튼이
 나타난다. HTTPS 종료(HSTS 포함)는 리버스 프록시 책임이다.

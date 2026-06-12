@@ -4,7 +4,7 @@
 <div class="toolbar">
   <h2 style="margin:0">{{ title or snap['page_url'] }}</h2>
   <span class="spacer"></span>
-  <a href="/logs?snapshot_id={{ snap['id'] }}">{{ _("로그") }}</a>
+  <a href="/logs?snapshot_id={{ snap['id'] }}">{{ _("아카이빙 로그") }}</a>
   <a href="/page/{{ snap['page_id'] }}">{{ _("타임라인으로") }}</a>
 </div>
 
@@ -45,7 +45,9 @@
 
 <div class="toolbar">
   <button type="button" class="tab active" data-target="view-render">{{ _("렌더링") }}</button>
+  {% if has_screenshot %}
   <button type="button" class="tab" data-target="view-shot">{{ _("스크린샷") }}</button>
+  {% endif %}
   <button type="button" class="tab" data-target="view-text">{{ _("텍스트") }}</button>
 </div>
 
@@ -57,10 +59,12 @@
   <iframe sandbox="allow-top-navigation-by-user-activation" src="{{ page_html_url }}"
           style="width:100%; height:80vh; border:1px solid var(--border); background:#fff;"></iframe>
 </div>
+{% if has_screenshot %}
 <div id="view-shot" style="display:none">
   <img src="{{ screenshot_url }}" alt="{{ _('전체 페이지 스크린샷') }}"
        style="max-width:100%; border:1px solid var(--border);">
 </div>
+{% endif %}
 <div id="view-text" style="display:none">
   <iframe sandbox="" src="{{ content_url }}"
           style="width:100%; height:80vh; border:1px solid var(--border); background:#fff;"></iframe>
@@ -71,7 +75,8 @@ document.querySelectorAll('button.tab').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('button.tab').forEach((b) => b.classList.toggle('active', b === btn));
     ['view-render', 'view-shot', 'view-text'].forEach((id) => {
-      document.getElementById(id).style.display = id === btn.dataset.target ? '' : 'none';
+      const el = document.getElementById(id);  // view-shot 은 스크린샷 없으면 미렌더
+      if (el) el.style.display = id === btn.dataset.target ? '' : 'none';
     });
   });
 });

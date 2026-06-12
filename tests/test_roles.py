@@ -87,6 +87,31 @@ def test_viewer_cannot_trigger_archive(client):
     assert 'href="/archive/new"' not in page
 
 
+def _seed_error_log() -> int:
+    with db.connect() as conn:
+        return db.insert_archive_log(
+            conn, url="https://x.co/a", domain="x.co", source="web",
+            status="error", started_at="2026-06-13T00:00:00+00:00",
+            duration_ms=10, error="boom",
+        )
+
+
+def test_viewer_cannot_retry_log(client):
+    """실패 로그 재시도도 아카이빙 트리거 — viewer 는 403, 버튼도 숨김."""
+    log_id = _seed_error_log()
+    _login(client, "viewer@test.co")
+    assert client.post(f"/logs/{log_id}/retry").status_code == 403
+    page = client.get("/logs").text
+    assert "/retry" not in page
+
+
+def test_archiver_sees_retry_button(client):
+    log_id = _seed_error_log()
+    _login(client, "archiver@test.co")
+    page = client.get("/logs").text
+    assert f"/logs/{log_id}/retry" in page
+
+
 def test_viewer_cannot_manage_schedule(client):
     """주기적 재아카이빙 설정/해제도 아카이빙 트리거 — viewer 는 403."""
     _login(client, "viewer@test.co")

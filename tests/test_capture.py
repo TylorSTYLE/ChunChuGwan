@@ -249,6 +249,39 @@ def test_browser_session_reuses_and_relaunches(site_url, tmp_path):
     assert session._browser is None  # __exit__ 가 정리
 
 
+def test_capture_download_url_raises_download_error(tmp_path):
+    """탐색이 파일 다운로드로 전환되면 CaptureDownloadError (download.php 등).
+
+    Content-Disposition: attachment 는 PDF 뷰어 유무와 무관하게 항상
+    다운로드를 강제하므로 브라우저 버전에 안정적인 픽스처다.
+    """
+    from http.server import BaseHTTPRequestHandler
+
+    class _AttachmentHandler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 (http.server 규약)
+            body = b"%PDF-1.4 fixture"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Disposition", "attachment; filename=report.pdf")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _AttachmentHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/download.php?file=report.pdf"
+        with pytest.raises(capture.CaptureDownloadError):
+            capture.capture(url, tmp_path)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_capture_connect_error_on_closed_port(tmp_path):
     # 아무도 리슨하지 않는 포트 → ERR_CONNECTION_REFUSED → CaptureConnectError
     import socket

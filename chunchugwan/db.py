@@ -86,8 +86,10 @@ CREATE TABLE IF NOT EXISTS snapshots (
     http_status   INTEGER,
     changed       INTEGER NOT NULL DEFAULT 1,  -- 직전 스냅샷 대비 변경 여부
     note          TEXT,
-    resources_indexed INTEGER NOT NULL DEFAULT 0  -- 자원 참조(snapshot_resources) 기록 여부.
+    resources_indexed INTEGER NOT NULL DEFAULT 0, -- 자원 참조(snapshot_resources) 기록 여부.
                                                   --   0 이면 저장공간 최적화의 백필 대상
+    css_externalized INTEGER NOT NULL DEFAULT 0   -- 인라인 <style> 의 CAS 추출 여부.
+                                                  --   0 이면 저장공간 최적화의 추출 대상
 );
 
 CREATE TABLE IF NOT EXISTS checks (
@@ -199,6 +201,17 @@ CREATE TABLE IF NOT EXISTS archive_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_archive_logs_page ON archive_logs(page_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_archive_logs_domain ON archive_logs(domain, started_at);
+
+CREATE TABLE IF NOT EXISTS system_logs (
+    id         INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,            -- ISO 8601 UTC
+    level      TEXT NOT NULL,            -- INFO|WARNING|ERROR|CRITICAL
+    logger     TEXT NOT NULL,            -- 로거 이름 (chunchugwan.capture 등)
+    source     TEXT NOT NULL DEFAULT 'serve',  -- 적재 프로세스 ('serve'|'worker'|'cli')
+    message    TEXT NOT NULL,
+    traceback  TEXT                      -- 예외 로그(logger.exception)의 트레이스백
+);
+CREATE INDEX IF NOT EXISTS idx_system_logs_time ON system_logs(created_at);
 
 CREATE TABLE IF NOT EXISTS users (
     id                  INTEGER PRIMARY KEY,
@@ -329,6 +342,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN resources_indexed INTEGER NOT NULL DEFAULT 0"
         )
+    # 인라인 <style> 추출 여부 — 0 인 스냅샷은 저장공간 최적화가 추출한다
+    if cols and "css_externalized" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN css_externalized INTEGER NOT NULL DEFAULT 0"
+        )
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -371,18 +389,19 @@ def connect() -> Iterator[sqlite3.Connection]:
     정전 시 마지막 트랜잭션만 잃을 수 있다 (DB 손상 없음).
     """
     config.ensure_dirs()
+    db_path = config.DB_PATH  # 한 번만 읽는다 — 커넥션과 스키마 캐시 키가 같은 파일을 봐야 한다
     try:
-        conn = sqlite3.connect(config.DB_PATH, timeout=_BUSY_TIMEOUT_SECONDS)
+        conn = sqlite3.connect(db_path, timeout=_BUSY_TIMEOUT_SECONDS)
     except sqlite3.OperationalError as e:
         raise sqlite3.OperationalError(
-            f"DB 파일을 열 수 없습니다: {config.DB_PATH} — 아카이브 디렉토리의 "
+            f"DB 파일을 열 수 없습니다: {db_path} — 아카이브 디렉토리의 "
             "쓰기 권한을 확인하세요 (도커 바인드 마운트라면 호스트 디렉토리 "
             "소유자가 컨테이너 사용자 uid 1000 과 다른 경우)"
         ) from e
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA synchronous = NORMAL")
-    _ensure_schema(conn)
+    _ensure_schema(conn, db_path)
     try:
         yield conn
         conn.commit()
@@ -390,9 +409,13 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-def _ensure_schema(conn: sqlite3.Connection) -> None:
-    """프로세스에서 처음 보는 DB 파일이면 WAL 전환 + 스키마 생성·마이그레이션."""
-    key = str(config.DB_PATH)
+def _ensure_schema(conn: sqlite3.Connection, db_path) -> None:
+    """프로세스에서 처음 보는 DB 파일이면 WAL 전환 + 스키마 생성·마이그레이션.
+
+    db_path 는 conn 을 연 경로 — config.DB_PATH 를 다시 읽으면 다른 스레드가
+    경로를 바꿨을 때(테스트 등) 엉뚱한 키가 '준비됨'으로 오염될 수 있다.
+    """
+    key = str(db_path)
     with _schema_lock:
         if key in _schema_ready:
             return
@@ -663,7 +686,7 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed"}
+     "note", "resources_indexed", "css_externalized"}
 )
 
 
@@ -813,6 +836,13 @@ def insert_archive_log(conn: sqlite3.Connection, **fields) -> int:
     return cur.lastrowid
 
 
+def get_archive_log(conn: sqlite3.Connection, log_id: int) -> sqlite3.Row | None:
+    """아카이브 로그 한 행 조회 (없으면 None) — 행 단위 동작(재시도)용."""
+    return conn.execute(
+        "SELECT * FROM archive_logs WHERE id = ?", (log_id,)
+    ).fetchone()
+
+
 def _archive_log_where(
     *,
     domain: str | None,
@@ -898,12 +928,124 @@ def count_archive_logs(
     return row[0]
 
 
+def list_snapshot_archive_logs(
+    conn: sqlite3.Connection, page_id: int
+) -> list[sqlite3.Row]:
+    """페이지의 스냅샷 생성 실행 로그 (snapshot_id 가 있는 행만).
+
+    타임라인 화면이 스냅샷별 단계 소요·오류를 펼쳐 보이는 데 쓴다.
+    """
+    return conn.execute(
+        """
+        SELECT * FROM archive_logs
+        WHERE page_id = ? AND snapshot_id IS NOT NULL
+        ORDER BY id
+        """,
+        (page_id,),
+    ).fetchall()
+
+
 def list_log_domains(conn: sqlite3.Connection) -> list[str]:
     """로그에 등장한 도메인 목록 (대시보드 필터 드롭다운용)."""
     rows = conn.execute(
         "SELECT DISTINCT domain FROM archive_logs WHERE domain != '' ORDER BY domain"
     ).fetchall()
     return [r["domain"] for r in rows]
+
+
+# ---- 시스템 로그 (system_logs — system_log.py 의 logging 핸들러가 적재) ----
+
+SYSTEM_LOG_LEVELS = ("INFO", "WARNING", "ERROR", "CRITICAL")
+SYSTEM_LOG_SOURCES = ("serve", "worker", "cli")
+
+
+def insert_system_log(
+    conn: sqlite3.Connection,
+    *,
+    created_at: str,
+    level: str,
+    logger: str,
+    source: str,
+    message: str,
+    traceback: str | None = None,
+) -> int:
+    """시스템 로그 한 행 삽입 후 id 반환."""
+    cur = conn.execute(
+        "INSERT INTO system_logs (created_at, level, logger, source, message, traceback)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (created_at, level, logger, source, message, traceback),
+    )
+    return cur.lastrowid
+
+
+def _system_log_where(
+    *,
+    level: str | None,
+    source: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str, list[object]]:
+    """system_logs 필터 WHERE 절 조립 (list/count 공용). 날짜 의미는 archive_logs 와 동일."""
+    where: list[str] = []
+    params: list[object] = []
+    for cond, value in (
+        ("level = ?", level),
+        ("source = ?", source),
+        ("created_at >= ?", date_from),
+        ("created_at < DATE(?, '+1 day')", date_to),
+    ):
+        if value is not None:
+            where.append(cond)
+            params.append(value)
+    return (" WHERE " + " AND ".join(where)) if where else "", params
+
+
+def list_system_logs(
+    conn: sqlite3.Connection,
+    *,
+    level: str | None = None,
+    source: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """시스템 로그 (최신 순). 레벨/출처/기간으로 필터."""
+    where_sql, params = _system_log_where(
+        level=level, source=source, date_from=date_from, date_to=date_to,
+    )
+    sql = (
+        "SELECT * FROM system_logs" + where_sql
+        + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+    )
+    return conn.execute(sql, params + [limit, offset]).fetchall()
+
+
+def count_system_logs(
+    conn: sqlite3.Connection,
+    *,
+    level: str | None = None,
+    source: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """필터 조건에 맞는 시스템 로그 총 건수 (페이징용)."""
+    where_sql, params = _system_log_where(
+        level=level, source=source, date_from=date_from, date_to=date_to,
+    )
+    row = conn.execute("SELECT COUNT(*) FROM system_logs" + where_sql, params).fetchone()
+    return row[0]
+
+
+def prune_system_logs(conn: sqlite3.Connection, keep: int) -> int:
+    """최신 keep 건만 남기고 오래된 시스템 로그 삭제. 삭제 건수 반환."""
+    cur = conn.execute(
+        "DELETE FROM system_logs WHERE id < ("
+        " SELECT COALESCE(MIN(id), 0) FROM ("
+        "  SELECT id FROM system_logs ORDER BY id DESC LIMIT ?))",
+        (keep,),
+    )
+    return cur.rowcount
 
 
 def list_pages(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -933,13 +1075,13 @@ def count_pages(conn: sqlite3.Connection) -> int:
 
 
 def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """모든 스냅샷의 시각·디렉토리 위치 (id, taken_at, domain, slug, dir_name).
+    """모든 스냅샷의 시각·디렉토리 위치 (id, taken_at, site_id, domain, slug, dir_name).
 
-    현황 대시보드가 기간별 스냅샷 수와 디렉토리 용량을 집계하는 데 쓴다.
+    현황 대시보드의 기간별 집계와 아카이브 목록의 사이트별 용량 합산에 쓴다.
     """
     return conn.execute(
         """
-        SELECT s.id, s.taken_at, p.domain, p.slug, s.dir_name
+        SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         """
     ).fetchall()
@@ -1056,6 +1198,36 @@ def mark_snapshot_resources_indexed(
     """스냅샷의 자원 참조 기록 완료 표시 — 이후 백필 대상에서 제외된다."""
     conn.execute(
         "UPDATE snapshots SET resources_indexed = 1 WHERE id = ?", (snapshot_id,)
+    )
+
+
+def count_css_pending_snapshots(conn: sqlite3.Connection) -> int:
+    """인라인 <style> 추출이 아직 안 된 스냅샷 수 — 최적화 대상."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots WHERE css_externalized = 0"
+    ).fetchone()["c"]
+
+
+def list_css_pending_snapshots(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """인라인 <style> 추출 대상 스냅샷 (+ 디렉토리 위치) — 저장공간 최적화용.
+
+    final_url 은 상대 CSS 참조 절대화 기준으로 함께 내려준다.
+    """
+    return conn.execute(
+        """
+        SELECT s.id, p.domain, p.slug, s.dir_name, s.final_url
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.css_externalized = 0 ORDER BY s.id
+        """
+    ).fetchall()
+
+
+def mark_snapshot_css_externalized(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> None:
+    """스냅샷의 인라인 <style> 추출 완료 표시 — 이후 추출 대상에서 제외된다."""
+    conn.execute(
+        "UPDATE snapshots SET css_externalized = 1 WHERE id = ?", (snapshot_id,)
     )
 
 
@@ -1565,18 +1737,181 @@ def find_running_crawl(conn: sqlite3.Connection, start_url: str) -> sqlite3.Row 
     ).fetchone()
 
 
-def list_site_pages(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
-    """사이트 소속 페이지 목록 + 스냅샷 수·마지막 캡처 시각 (사이트 상세/삭제용)."""
-    return conn.execute(
-        """
+def list_site_pages(
+    conn: sqlite3.Connection,
+    site_id: int,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """사이트 소속 페이지 목록 + 스냅샷 수·마지막 캡처 시각 (사이트 상세/삭제용).
+
+    limit 을 주면 offset 부터 그만큼만 반환한다 (사이트 상세 페이징용).
+    """
+    sql = """
         SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
         FROM pages p LEFT JOIN snapshots s ON s.page_id = p.id
         WHERE p.site_id = ?
         GROUP BY p.id
         ORDER BY last_taken_at DESC NULLS LAST, p.url
+        """
+    params: list[object] = [site_id]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    return conn.execute(sql, params).fetchall()
+
+
+def site_page_totals(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row:
+    """사이트 소속 페이지·스냅샷 총수 (사이트 상세 헤더·페이징용)."""
+    return conn.execute(
+        """
+        SELECT COUNT(DISTINCT p.id) AS page_count, COUNT(s.id) AS snapshot_count
+        FROM pages p LEFT JOIN snapshots s ON s.page_id = p.id
+        WHERE p.site_id = ?
+        """,
+        (site_id,),
+    ).fetchone()
+
+
+def list_site_snapshot_dirs(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트 소속 스냅샷의 시각·디렉토리 위치 (page_id, taken_at, domain, slug, dir_name).
+
+    사이트 상세가 페이지별·사이트 전체 저장 용량 합산과 최신 스냅샷의
+    타이틀 조회에 쓴다.
+    """
+    return conn.execute(
+        """
+        SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE p.site_id = ?
         """,
         (site_id,),
     ).fetchall()
+
+
+def list_site_failed_logs(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트 소속 페이지 중 최근 실행이 실패인 로그 목록 (+ 페이지 url, 최신 순).
+
+    URL 별 최신 archive_logs 행이 status='error' 인 것만 — 이후 실행이
+    성공하면 최신 행이 바뀌어 목록에서 자연히 사라진다. 페이지 행이 생기기
+    전에 실패한 신규 URL(page_id NULL)은 소속 사이트를 알 수 없어 포함하지
+    않는다 (크롤 중 실패한 신규 URL 은 크롤 진행 화면이 보여준다).
+    """
+    return conn.execute(
+        """
+        SELECT al.*, p.url AS page_url
+        FROM archive_logs al
+        JOIN pages p ON p.id = al.page_id
+        JOIN (
+            SELECT al2.url AS url, MAX(al2.id) AS max_id
+            FROM archive_logs al2
+            JOIN pages p2 ON p2.id = al2.page_id
+            WHERE p2.site_id = ?
+            GROUP BY al2.url
+        ) last ON al.id = last.max_id
+        WHERE al.status = 'error'
+        ORDER BY al.started_at DESC, al.id DESC
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def get_site_failed_log(
+    conn: sqlite3.Connection, site_id: int, log_id: int
+) -> sqlite3.Row | None:
+    """사이트 소속 실패 로그 행 조회 (+ 페이지 url) — 재시도 검증용.
+
+    소속이 아니거나 실패 로그가 아니면 None.
+    """
+    return conn.execute(
+        """
+        SELECT al.*, p.url AS page_url
+        FROM archive_logs al JOIN pages p ON p.id = al.page_id
+        WHERE al.id = ? AND p.site_id = ? AND al.status = 'error'
+        """,
+        (log_id, site_id),
+    ).fetchone()
+
+
+def list_site_failed_crawl_pages(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트 소속 크롤에서 마지막 시도가 실패인 크롤 페이지 목록 (URL 별 최신 행).
+
+    URL 별 최신 crawl_pages 행이 failed 인 것만 — 이후 크롤에서 성공하면
+    최신 행이 바뀌어 목록에서 자연히 사라진다. 크롤 실패 후 직접 아카이빙이
+    성공한 URL(최신 archive_logs 가 성공)도 제외한다. 페이지 행이 생기기 전에
+    실패한 신규 URL 을 사이트 상세의 실패 목록에 보여주는 용도 —
+    list_site_failed_logs 가 못 다루는 빈틈을 메운다. failed_at 은 그 URL 의
+    최신 아카이브 로그 시각 (크롤 페이지 행에는 실패 시각이 없다, 없으면 NULL).
+    """
+    return conn.execute(
+        """
+        SELECT cp.*, c.start_url,
+               (SELECT al.started_at FROM archive_logs al
+                WHERE al.url = cp.url ORDER BY al.id DESC LIMIT 1) AS failed_at
+        FROM crawl_pages cp
+        JOIN crawls c ON c.id = cp.crawl_id
+        JOIN (
+            SELECT cp2.url AS url, MAX(cp2.id) AS max_id
+            FROM crawl_pages cp2
+            JOIN crawls c2 ON c2.id = cp2.crawl_id
+            WHERE c2.site_id = ?
+            GROUP BY cp2.url
+        ) last ON cp.id = last.max_id
+        WHERE cp.status = 'failed'
+          AND COALESCE((
+              SELECT al.status FROM archive_logs al
+              WHERE al.url = cp.url ORDER BY al.id DESC LIMIT 1
+          ), 'error') = 'error'
+        ORDER BY failed_at DESC NULLS LAST, cp.id DESC
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def get_site_failed_crawl_page(
+    conn: sqlite3.Connection, site_id: int, crawl_page_id: int
+) -> sqlite3.Row | None:
+    """사이트 소속 실패 크롤 페이지 행 조회 — 재시도 검증용.
+
+    소속이 아니거나 실패 상태가 아니면 None.
+    """
+    return conn.execute(
+        """
+        SELECT cp.* FROM crawl_pages cp JOIN crawls c ON c.id = cp.crawl_id
+        WHERE cp.id = ? AND c.site_id = ? AND cp.status = 'failed'
+        """,
+        (crawl_page_id, site_id),
+    ).fetchone()
+
+
+def retry_failed_crawl_page(conn: sqlite3.Connection, crawl_page_id: int) -> None:
+    """실패 크롤 페이지 하나를 재시도 대상으로 되돌리고, 끝난 크롤이면 다시 연다.
+
+    retry_failed_crawl_pages(일괄)의 단건 버전 — 크롤러가 큐에서 다시 집어간다.
+    """
+    conn.execute(
+        """
+        UPDATE crawl_pages
+        SET status = 'pending', attempts = 0, next_attempt_at = NULL, error = NULL
+        WHERE id = ? AND status = 'failed'
+        """,
+        (crawl_page_id,),
+    )
+    conn.execute(
+        """
+        UPDATE crawls SET status = 'running', finished_at = NULL, next_page_at = ?
+        WHERE id = (SELECT crawl_id FROM crawl_pages WHERE id = ?)
+          AND status IN ('done', 'cancelled')
+        """,
+        (_utcnow(), crawl_page_id),
+    )
 
 
 def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:

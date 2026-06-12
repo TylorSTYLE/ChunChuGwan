@@ -66,6 +66,10 @@ h3.danger-heading { color: var(--red); }
     <div class="label">{{ _("사용자") }}</div>
     <div class="value">{{ counts.users }}</div>
   </div>
+  <div class="stat-card">
+    <div class="label">{{ _("버전") }}</div>
+    <div class="value mono">v{{ version }}</div>
+  </div>
 </div>
 
 <h3>{{ _("저장 공간") }}</h3>
@@ -97,7 +101,7 @@ h3.danger-heading { color: var(--red); }
       {% else %}<span class="badge same">{{ _("대상 없음") }}</span>{% endif %}
     </h4>
     <p>
-      {{ _("구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP + 문서 파일 공유 저장소 이전)로 변환하고, 자원 참조를 인덱스한 뒤 어떤 스냅샷도 참조하지 않는 공유 자원을 삭제합니다. 내용 보존이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축·인덱스됩니다.") }}
+      {{ _("구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP + 문서 파일 공유 저장소 이전)로 변환하고, 사이트 공통 인라인 스타일을 공유 자원으로 추출하고, 자원 참조를 인덱스한 뒤 어떤 스냅샷도 참조하지 않는 공유 자원을 삭제합니다. 내용 보존이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축·인덱스됩니다.") }}
     </p>
     <div class="actions">
       {% if optimize_pending %}
