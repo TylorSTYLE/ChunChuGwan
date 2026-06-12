@@ -42,6 +42,21 @@ def client(tmp_path, monkeypatch):
             )
         db.insert_check(conn, page_id, storage.content_sha256(contents[1]))
 
+    # 첫 스냅샷에는 함께 저장된 문서 파일 + documents 목록을 가진 meta.json
+    snap1_dir = storage.page_dir(domain, slug) / dir_names[0]
+    (snap1_dir / "files").mkdir()
+    (snap1_dir / "files" / "report-12345678.pdf").write_bytes(b"%PDF-1.4 fixture")
+    (snap1_dir / "files" / "unlisted.pdf").write_bytes(b"%PDF-1.4 manifest-bayuk")
+    storage.write_meta(snap1_dir, storage.SnapshotMeta(
+        url=url, final_url=url, taken_at="2026-06-01T00:00:00+00:00",
+        content_hash=storage.content_sha256(contents[0]), http_status=200,
+        title="픽스처 글", documents=[{
+            "url": "https://example.com/files/report.pdf",
+            "file": "report-12345678.pdf", "bytes": 16,
+            "sha256": "ab" * 32, "content_type": "application/pdf",
+        }],
+    ))
+
     web_app._active_jobs.clear()  # 다른 테스트의 진행 목록 잔재 제거
     yield TestClient(web_app.app)
     web_app._active_jobs.clear()
@@ -92,6 +107,44 @@ def test_theme_toggle_present(client):
     assert "wccg-theme" in res.text  # localStorage 키 (사용자 선택 기억)
 
 
+def test_time_toggle_present(client):
+    """모든 화면(base.html)에 시간 표시(로컬/UTC) 토글·변환 스크립트가 있다."""
+    res = client.get("/")
+    assert res.status_code == 200
+    assert 'id="time-toggle"' in res.text  # 헤더 토글 버튼
+    assert "wccg-time" in res.text  # localStorage 키 (사용자 선택 기억)
+    assert "time.ts" in res.text  # 변환 대상 셀렉터
+
+
+def test_timestamps_rendered_as_time_elements(client):
+    """타임스탬프는 <time class="ts" datetime=UTC ISO> 로 렌더링된다 (JS 토글용)."""
+    res = client.get("/page/1")
+    assert (
+        '<time class="ts" data-fmt="datetime" '
+        'datetime="2026-06-01T00:00:00+00:00">2026-06-01 00:00:00</time>'
+    ) in res.text
+
+
+def test_ts_filter():
+    """ts 필터 — UTC 정규화, date 포맷, 빈 값/비정상 입력 처리."""
+    from chunchugwan.web.templating import ts
+
+    assert ts("2026-06-01T12:34:56+00:00") == (
+        '<time class="ts" data-fmt="datetime" '
+        'datetime="2026-06-01T12:34:56+00:00">2026-06-01 12:34:56</time>'
+    )
+    # 타임존 없는 값은 UTC 로 간주
+    assert 'datetime="2026-06-01T12:34:56+00:00"' in ts("2026-06-01T12:34:56")
+    # date 포맷 — 날짜만 표시
+    assert ts("2026-06-01T12:34:56+00:00", "date") == (
+        '<time class="ts" data-fmt="date" '
+        'datetime="2026-06-01T12:34:56+00:00">2026-06-01</time>'
+    )
+    assert ts(None) == "-"
+    assert ts("") == "-"
+    assert ts("이상한 값") == "이상한 값"  # 파싱 불가 시 원문 유지
+
+
 def test_snapshot_file_whitelist(client):
     ok = client.get("/snapshot/1/file/content.md")
     assert ok.status_code == 200 and "첫 줄" in ok.text
@@ -100,6 +153,35 @@ def test_snapshot_file_whitelist(client):
     assert page.headers["content-security-policy"] == "sandbox"
     assert client.get("/snapshot/1/file/meta.json").status_code == 404
     assert client.get("/snapshot/1/file/..%2F..%2Findex.db").status_code == 404
+
+
+def test_snapshot_view_lists_documents(client):
+    res = client.get("/snapshot/1")
+    assert res.status_code == 200
+    assert "첨부 문서" in res.text
+    assert "/snapshot/1/doc/report-12345678.pdf" in res.text
+    # 문서가 없는 스냅샷(meta 없음)에는 섹션 자체가 안 보인다
+    res2 = client.get("/snapshot/2")
+    assert res2.status_code == 200
+    assert "첨부 문서" not in res2.text
+
+
+def test_snapshot_document_download(client):
+    res = client.get("/snapshot/1/doc/report-12345678.pdf")
+    assert res.status_code == 200
+    assert res.content == b"%PDF-1.4 fixture"
+    # 브라우저 안에서 렌더링되지 않도록 항상 첨부파일 다운로드
+    assert res.headers["content-type"].startswith("application/octet-stream")
+    assert "attachment" in res.headers["content-disposition"]
+    assert res.headers["content-security-policy"] == "sandbox"
+
+
+def test_snapshot_document_rejects_unlisted_names(client):
+    """meta.json 의 documents 목록에 없는 이름은 파일이 있어도 404."""
+    assert client.get("/snapshot/1/doc/unlisted.pdf").status_code == 404
+    assert client.get("/snapshot/1/doc/..%2Fmeta.json").status_code == 404
+    # meta.json 자체가 없는 스냅샷도 404
+    assert client.get("/snapshot/2/doc/report-12345678.pdf").status_code == 404
 
 
 def test_diff_default_latest_two(client):

@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ _("스케줄") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
+<style>
+/* URL 컬럼이 내용 길이대로 과점하지 않도록 폭 제한 — 긴 URL 은 줄바꿈 */
+#schedules th:first-child { width: 35%; }
+/* 주기·실행 시각·버튼은 한 줄 유지 */
+#schedules td:not(:first-child) { white-space: nowrap; }
+</style>
 <div class="toolbar">
   <h2 style="margin:0">{{ _("자동 재아카이빙") }}</h2>
   <span class="muted">{{ _("주기 최소 1시간 ~ 최대 1주일") }}</span>
@@ -24,8 +30,8 @@
     <tr data-url="{{ s['url']|lower }}">
       <td><a href="/page/{{ s['page_id'] }}">{{ s['url'] }}</a></td>
       <td class="mono">{{ it['label'] }}</td>
-      <td class="mono">{{ s['next_run_at'] }}</td>
-      <td class="mono">{{ s['last_run_at'] or '-' }}</td>
+      <td class="mono">{{ s['next_run_at'] | ts }}</td>
+      <td class="mono">{{ s['last_run_at'] | ts }}</td>
       {% if can_archive %}
       <td>
         <form class="inline" method="post" action="/page/{{ s['page_id'] }}/schedule"

@@ -49,6 +49,9 @@ _EN: dict[str, str] = {
     "테마: 자동": "Theme: auto",
     "테마: 라이트": "Theme: light",
     "테마: 다크": "Theme: dark",
+    "시간 표시 전환 (로컬 ↔ UTC)": "Switch time display (local ↔ UTC)",
+    "시간: UTC": "Time: UTC",
+    "시간: 로컬": "Time: local",
     "시각": "Time",
     "상태": "Status",
     "용량": "Size",
@@ -95,7 +98,7 @@ _EN: dict[str, str] = {
     "명령을 사용하세요.": "command.",
     "마지막 캡처": "Last capture",
     "자동": "Auto",
-    "{t} 시작": "started {t}",
+    "시작": "started",
     "아카이빙 중": "Archiving",
     "재아카이빙": "Re-archive",
     "스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
@@ -175,6 +178,10 @@ _EN: dict[str, str] = {
     "스크린샷": "Screenshot",
     "텍스트": "Text",
     "전체 페이지 스크린샷": "Full-page screenshot",
+    "첨부 문서 ({n})": "Attached documents ({n})",
+    "원본 URL": "Source URL",
+    "크기": "Size",
+    "메타데이터 없음": "Metadata not found",
     # ---- diff 뷰어 ----
     "비교": "Compare",
     "두 스냅샷의 정규화 텍스트가 같습니다.": "The normalized text of both snapshots is identical.",
@@ -216,46 +223,51 @@ _EN: dict[str, str] = {
     "캡처 메타 정보": "Capture metadata",
     # ---- 시스템 (system) ----
     "아카이브 루트": "Archive root",
-    "페이지 / 스냅샷 / 확인 기록": "Pages / snapshots / checks",
-    "DB / 스냅샷 파일 / 공유 자원 용량": "DB / snapshot files / shared resources",
+    "저장 공간": "Storage",
+    "페이지": "Pages",
+    "확인 기록": "Checks",
+    "스냅샷 파일": "Snapshot files",
+    "공유 자원": "Shared resources",
+    "합계": "Total",
+    "유지 관리": "Maintenance",
     "저장 공간 압축": "Storage compaction",
-    "구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP)로 변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축되므로 압축 도입 이전의 스냅샷이 있을 때 한 번 실행하면 됩니다.":
+    "대상 {n}개": "{n} pending",
+    "대상 없음": "None pending",
+    "구형 스냅샷을 압축 저장 형태(공유 자원 추출 + HTML gzip + 스크린샷 WebP)로 변환합니다. 내용 보존 변환이라 스냅샷이 담는 정보는 그대로이며, 여러 번 실행해도 안전합니다(멱등). 새 스냅샷은 저장 시점에 자동으로 압축됩니다.":
         "Converts legacy snapshots to the compact storage form (shared-resource "
         "extraction + gzipped HTML + WebP screenshots). The conversion preserves "
         "content — snapshots keep exactly the same information — and is idempotent, "
-        "so running it multiple times is safe. New snapshots are compacted on save, "
-        "so this is only needed once for snapshots created before compaction existed.",
+        "so running it multiple times is safe. New snapshots are compacted on save.",
     "기존 스냅샷 파일을 압축 저장 형태로 변환합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?":
         "Convert existing snapshot files to the compact storage form? "
         "With many snapshots this can take a while.",
-    "저장 공간 압축 실행 — 대상 {n}개": "Run compaction — {n} snapshots",
-    "저장 공간 압축 실행": "Run compaction",
-    "압축할 스냅샷이 없습니다 — 모든 스냅샷이 이미 압축 형태입니다.":
-        "Nothing to compact — all snapshots are already in compact form.",
-    "전체 백업/복원": "Full backup / restore",
-    "DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 입니다. 복원하면 현재 데이터가 모두 백업 시점 상태로 교체됩니다.":
-        "A tar.gz containing the entire DB (including auth data such as users and "
-        "sessions), snapshot files, and rules.json. Restoring replaces all current "
-        "data with the backup.",
+    "압축 실행": "Run compaction",
+    "전체 백업": "Full backup",
+    "DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.":
+        "Downloads a tar.gz containing the entire DB (including auth data such as "
+        "users and sessions), snapshot files, and rules.json. It can be restored "
+        "as-is via Full restore below.",
     "전체 백업 다운로드": "Download full backup",
     "전체 복원": "Full restore",
-    "현재 데이터(인증 포함)를 모두 지우고 백업 시점으로 되돌립니다. 되돌릴 수 없습니다. 세션도 백업 시점으로 돌아가므로 복원 후 다시 로그인해야 할 수 있습니다.":
-        "Erases all current data (including auth) and reverts to the backup. This "
-        "cannot be undone. Sessions also revert, so you may need to log in again "
-        "after restoring.",
+    "현재 데이터(인증 포함)를 모두 지우고 업로드한 전체 백업 시점으로 되돌립니다. 되돌릴 수 없습니다. 세션도 백업 시점으로 돌아가므로 복원 후 다시 로그인해야 할 수 있습니다.":
+        "Erases all current data (including auth) and reverts to the uploaded "
+        "backup. This cannot be undone. Sessions also revert, so you may need to "
+        "log in again after restoring.",
     "정말 복원할까요? 현재 데이터가 모두 백업 시점으로 교체됩니다.":
         "Really restore? All current data is replaced with the backup.",
     "복원": "Restore",
-    "아카이브 데이터 내보내기/가져오기": "Export / import archive data",
-    "페이지·스냅샷·확인 기록과 스냅샷 파일만 다룹니다 (인증 데이터·실행 로그 제외) — 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.":
-        "Covers only pages, snapshots, checks, and snapshot files (no auth data or "
-        "run logs) — use this to move or merge archives between instances.",
+    "위험 구역": "Danger zone",
+    "아카이브 내보내기": "Archive export",
+    "페이지·스냅샷·확인 기록과 스냅샷 파일만 담습니다 (인증 데이터·실행 로그 제외). 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.":
+        "Contains only pages, snapshots, checks, and snapshot files (no auth data "
+        "or run logs). Use this to move or merge archives between instances.",
     "내보내기 다운로드": "Download export",
+    "아카이브 가져오기": "Archive import",
     "가져오기": "Import",
-    "merge — 기존 유지, 같은 스냅샷은 스킵 (여러 번 실행해도 안전)":
-        "merge — keep existing data, skip duplicate snapshots (safe to run repeatedly)",
-    "overwrite — 기존 아카이브 데이터를 지우고 가져오기 (인증 데이터는 유지)":
-        "overwrite — erase existing archive data, then import (auth data is kept)",
+    "기존 유지, 같은 스냅샷은 스킵 (여러 번 실행해도 안전)":
+        "keep existing data, skip duplicate snapshots (safe to run repeatedly)",
+    "기존 아카이브 데이터를 지우고 가져오기 (인증 데이터는 유지)":
+        "erase existing archive data, then import (auth data is kept)",
     "overwrite 모드: 기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. 계속할까요?":
         "overwrite mode: erases all existing archive data (pages, snapshots, checks, "
         "files) before importing. Continue?",

@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import capture, config, db, extract, resources, storage
+from . import capture, config, db, documents, extract, resources, storage
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ class ArchiveOutcome:
     last_taken_at: str | None  # 직전 스냅샷 시각 (없으면 None)
     http_status: int | None
     title: str | None
+    documents: int = 0         # 함께 저장된 문서 파일 수
 
 
 class _RunLog:
@@ -176,6 +177,22 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
                     http_status=result.http_status, title=result.title,
                 )
 
+            # 저장이 확정된 뒤에만 문서 다운로드 — unchanged 면 받지 않는다
+            # (주기적 재아카이빙에서 변경 없는 페이지의 문서를 매번 다시
+            # 받는 낭비 방지). 다운로드 실패는 아카이빙을 막지 않는다.
+            doc_manifest: list[dict] = []
+            if result.document_links:
+                doc_manifest, doc_failed = documents.download_documents(
+                    result.document_links, tmp_dir / "files",
+                    referer=result.final_url,
+                )
+                run.step(
+                    "documents",
+                    f"문서 링크 {len(result.document_links)}개 → "
+                    f"{len(doc_manifest)}개 저장"
+                    + (f" · 실패 {len(doc_failed)}개" if doc_failed else ""),
+                )
+
             # 저장이 확정된 뒤에만 압축 변환 — unchanged 면 CAS 에 자원을
             # 남기지 않고 임시 디렉토리째 버려진다
             stats = resources.compact_snapshot_dir(tmp_dir)
@@ -193,6 +210,7 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
                 content_hash=content_hash,
                 http_status=result.http_status,
                 title=result.title,
+                documents=doc_manifest or None,
             )
             snap_dir = storage.finalize_snapshot(
                 tmp_dir, domain, slug, meta, normalized, taken_at
@@ -215,6 +233,7 @@ def _archive_url(url: str, force: bool, run: _RunLog) -> ArchiveOutcome:
                 snapshot_dir=snap_dir, taken_at=meta.taken_at,
                 last_taken_at=prev["taken_at"] if prev else None,
                 http_status=result.http_status, title=result.title,
+                documents=len(doc_manifest),
             )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

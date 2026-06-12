@@ -2,13 +2,6 @@
 {% block title %}{{ _("현황") }} — {{ _("춘추관") }}{% endblock %}
 {% block head %}
 <style>
-.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-             gap: 10px; margin-bottom: 8px; }
-.stat-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; }
-.stat-card .label { font-size: 11px; color: var(--muted); font-weight: 600;
-                    text-transform: uppercase; letter-spacing: .04em; }
-.stat-card .value { font-size: 22px; font-weight: 600; margin-top: 2px;
-                    font-variant-numeric: tabular-nums; }
 .trend-table { max-width: 680px; }
 .trend-bar { height: 12px; border-radius: 3px; background: var(--link); opacity: .35;
              min-width: 0; }
@@ -72,7 +65,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
   <tbody>
   {% for s in recent_snaps %}
     <tr>
-      <td class="mono">{{ s['taken_at'] }}</td>
+      <td class="mono">{{ s['taken_at'] | ts }}</td>
       <td>
         {% if s['is_first'] %}<span class="badge new">{{ _("신규") }}</span>
         {% elif s['changed'] %}<span class="badge changed">{{ _("변경") }}</span>
@@ -96,7 +89,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
   <tbody>
   {% for log in recent_logs %}
     <tr>
-      <td class="mono">{{ log['started_at'] }}</td>
+      <td class="mono">{{ log['started_at'] | ts }}</td>
       <td><span class="badge {{ badge_class[log['status']] }}">{{ status_label[log['status']] }}</span></td>
       <td class="url-cell">
         {% if log['page_id'] %}

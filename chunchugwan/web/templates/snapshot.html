@@ -12,11 +12,27 @@
   <tbody>
     <tr><th>URL</th><td class="mono">{{ snap['page_url'] }}</td></tr>
     <tr><th>{{ _("최종 URL") }}</th><td class="mono">{{ snap['final_url'] }}</td></tr>
-    <tr><th>{{ _("캡처 시각") }}</th><td class="mono">{{ snap['taken_at'] }}</td></tr>
+    <tr><th>{{ _("캡처 시각") }}</th><td class="mono">{{ snap['taken_at'] | ts }}</td></tr>
     <tr><th>{{ _("해시") }}</th><td class="mono">{{ snap['content_hash'] }}</td></tr>
     <tr><th>HTTP</th><td class="mono">{{ snap['http_status'] or '-' }}</td></tr>
   </tbody>
 </table>
+
+{% if documents %}
+<h3 style="margin:0 0 8px">{{ _("첨부 문서 ({n})", n=documents|length) }}</h3>
+<table style="max-width:760px; margin-bottom:16px">
+  <thead><tr><th>{{ _("파일") }}</th><th>{{ _("원본 URL") }}</th><th style="text-align:right">{{ _("크기") }}</th></tr></thead>
+  <tbody>
+  {% for d in documents %}
+    <tr>
+      <td><a href="/snapshot/{{ snap['id'] }}/doc/{{ d['file'] }}" download>{{ d['file'] }}</a></td>
+      <td class="mono"><a href="{{ d['url'] }}" rel="noopener noreferrer">{{ d['url'] }}</a></td>
+      <td class="mono" style="text-align:right">{{ d['bytes'] | filesize }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
 
 <div class="toolbar">
   <button type="button" class="tab active" data-target="view-render">{{ _("렌더링") }}</button>

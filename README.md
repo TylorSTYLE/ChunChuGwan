@@ -8,6 +8,8 @@
 - 타임스탬프·상대시각·광고 줄 등 노이즈는 정규화 단계에서 제거 후 비교
 - 이미지/CSS/폰트를 보존하는 단일 page.html — 큰 자원은 스냅샷 간 공유
   저장소(CAS)로 중복 제거, HTML 은 gzip, 스크린샷은 WebP 로 저장 공간 절약
+- 페이지가 링크한 문서 파일(PDF·워드·파워포인트·한글·키노트 등)도 스냅샷에
+  함께 저장 — 스냅샷 뷰어의 "첨부 문서" 목록에서 다운로드
 - 읽기 전용 대시보드 (목록/타임라인/스냅샷 뷰어/diff 뷰어/로그 + 재아카이빙·삭제 버튼)
 - 아카이브 실행 로그 — 모든 실행(성공/실패)을 단계별 소요시간과 함께 DB에 기록
 - 사용자 인증 — 이메일/패스워드(+선택 TOTP 2FA), Authentik OIDC SSO 지원
@@ -173,8 +175,16 @@ archive/
     ├── raw.html.gz         # 렌더링 후 DOM 소스 (gzip)
     ├── content.md          # 추출+정규화 텍스트 (해시/diff 기준)
     ├── screenshot.webp     # 전체 페이지 (WebP 변환 실패 시 screenshot.png 유지)
-    └── meta.json           # url, final_url, 시각, 해시, http 정보
+    ├── files/              # 페이지가 링크한 문서 파일 (PDF·워드·한글 등 —
+    │                       #   문서 링크가 없으면 생기지 않음)
+    └── meta.json           # url, final_url, 시각, 해시, http 정보,
+                            #   documents 목록 (files/ 의 출처 URL·해시)
 ```
+
+문서 파일은 페이지당 최대 20개·개당 50MB 까지 저장하며, 링크 확장자가
+문서 화이트리스트(pdf, doc(x), ppt(x), xls(x), hwp(x), odt/odp/ods, rtf,
+pages, key, numbers, epub)에 있을 때만 받는다. 응답이 HTML(로그인·오류
+페이지)이면 건너뛰고, 다운로드 실패는 페이지 아카이빙을 막지 않는다.
 
 스냅샷 디렉토리는 불변이다. 변경 = 새 스냅샷. 아카이브 위치는 환경변수
 `WCCG_ROOT`로 변경할 수 있다 (기본 `./archive`).

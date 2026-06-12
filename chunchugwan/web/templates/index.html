@@ -35,7 +35,7 @@
       <td><span class="mono">{{ j['url'] }}</span></td>
       <td class="mono">{{ j['domain'] }}</td>
       <td class="num">-</td>
-      <td class="mono">{{ _("{t} 시작", t=j['started_at']) }}</td>
+      <td class="mono">{{ j['started_at'] | ts }} {{ _("시작") }}</td>
       <td class="muted">-</td>
       <td><span class="badge running">{{ _("아카이빙 중") }}</span></td>
     </tr>
@@ -45,7 +45,7 @@
       <td><a href="/page/{{ p['id'] }}">{{ p['url'] }}</a></td>
       <td class="mono">{{ p['domain'] }}</td>
       <td class="num">{{ p['snapshot_count'] }}</td>
-      <td class="mono">{{ p['last_taken_at'] or '-' }}</td>
+      <td class="mono">{{ p['last_taken_at'] | ts }}</td>
       <td>
         {% if p['id'] in schedule_labels %}
         <span class="mono">{{ schedule_labels[p['id']] }}</span>

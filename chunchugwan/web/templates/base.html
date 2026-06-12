@@ -93,6 +93,13 @@ form.inline { display: inline; }
           padding: 6px 12px; margin-bottom: 12px; font-size: 13px; }
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
            flex-wrap: wrap; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+             gap: 10px; margin-bottom: 8px; }
+.stat-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; }
+.stat-card .label { font-size: 11px; color: var(--muted); font-weight: 600;
+                    text-transform: uppercase; letter-spacing: .04em; }
+.stat-card .value { font-size: 22px; font-weight: 600; margin-top: 2px;
+                    font-variant-numeric: tabular-nums; }
 .toolbar .spacer { flex: 1; }
 header .spacer { flex: 1; }
 .auth-card { max-width: 360px; margin: 48px auto; border: 1px solid var(--border);
@@ -141,6 +148,7 @@ button.danger:hover { background: var(--red-hover); }
       {% endfor %}
     </select>
   </form>
+  <button type="button" id="time-toggle" title="{{ _('시간 표시 전환 (로컬 ↔ UTC)') }}"></button>
   <button type="button" id="theme-toggle" title="{{ _('테마 전환 (자동 → 라이트 → 다크)') }}"></button>
   {% if user %}
   <span class="mono muted">{{ user['display_name'] or user['email'] }}</span>
@@ -168,6 +176,43 @@ button.danger:hover { background: var(--red-hover); }
     render();
   });
   render();
+})();
+/* 시간 표시 토글 — time.ts 요소를 로컬/UTC 로 변환, localStorage 에 기억 (기본 로컬) */
+(function () {
+  var KEY = "wccg-time";
+  var btn = document.getElementById("time-toggle");
+  function stored() {
+    try { var v = localStorage.getItem(KEY); } catch (e) { return null; }
+    return v === "utc" || v === "local" ? v : null;
+  }
+  function mode() { return stored() || "local"; }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function fmt(d, dateOnly, utc) {
+    var s = (utc ? d.getUTCFullYear() : d.getFullYear())
+      + "-" + pad((utc ? d.getUTCMonth() : d.getMonth()) + 1)
+      + "-" + pad(utc ? d.getUTCDate() : d.getDate());
+    if (dateOnly) return s;
+    return s + " " + pad(utc ? d.getUTCHours() : d.getHours())
+      + ":" + pad(utc ? d.getUTCMinutes() : d.getMinutes())
+      + ":" + pad(utc ? d.getUTCSeconds() : d.getSeconds());
+  }
+  function apply() {
+    var utc = mode() === "utc";
+    document.querySelectorAll("time.ts").forEach(function (el) {
+      var iso = el.getAttribute("datetime");
+      var d = new Date(iso);
+      if (isNaN(d)) return;
+      el.textContent = fmt(d, el.dataset.fmt === "date", utc);
+      el.title = iso;  /* 마우스 오버 시 원본 UTC ISO 표기 */
+    });
+    if (btn) btn.textContent = utc ? {{ _("시간: UTC")|tojson }} : {{ _("시간: 로컬")|tojson }};
+  }
+  if (btn) btn.addEventListener("click", function () {
+    try { localStorage.setItem(KEY, mode() === "utc" ? "local" : "utc"); }
+    catch (e) { /* localStorage 불가 환경에서는 전환이 유지되지 않음 */ }
+    apply();
+  });
+  apply();
 })();
 </script>
 </body>
