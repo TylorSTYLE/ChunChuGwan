@@ -1,6 +1,6 @@
-{% extends "base.html" %}
+{% extends "auth_base.html" %}
 {% block title %}{{ _("로그인") }} — {{ _("춘추관") }}{% endblock %}
-{% block content %}
+{% block card %}
 <div class="auth-card">
   <h2>{{ _("로그인") }}</h2>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}

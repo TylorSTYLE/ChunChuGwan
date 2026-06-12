@@ -1,9 +1,11 @@
+{% from "_logo.html" import logo %}
 <!doctype html>
 <html lang="{{ locale }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}{{ _("춘추관") }}{% endblock %}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <script>
 /* 테마 적용 — 저장값(light|dark) 없으면 시스템 설정. 첫 페인트 전에 실행해 깜빡임 방지 */
 (function () {
@@ -32,6 +34,7 @@
   --blue: #1e40af;  --blue-bg: #dbeafe;
   --red-bg: #fee2e2; --red: #dc2626; --red-text: #991b1b; --red-hover: #b91c1c;
   --link: #1d4ed8;
+  --seal: #c2410c;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -43,6 +46,7 @@
   --blue: #93c5fd;  --blue-bg: #1e3a5f;
   --red-bg: #3f181b; --red: #dc2626; --red-text: #f87171; --red-hover: #b91c1c;
   --link: #60a5fa;
+  --seal: #ea7c4f;
 }
 * { box-sizing: border-box; }
 body { font-family: system-ui, sans-serif; margin: 0; color: var(--fg); font-size: 14px;
@@ -51,6 +55,7 @@ header { border-bottom: 1px solid var(--border); padding: 8px 16px;
          display: flex; gap: 16px; align-items: baseline; }
 header h1 { font-size: 15px; margin: 0; }
 header h1 a { color: var(--fg); text-decoration: none; }
+header h1 svg.logo { vertical-align: -4px; margin-right: 3px; }
 main { padding: 16px; max-width: 1280px; margin: 0 auto; }
 h2 { font-size: 16px; margin: 0 0 12px; }
 h3 { font-size: 13px; color: var(--muted); margin: 24px 0 8px;
@@ -102,8 +107,16 @@ form.inline { display: inline; }
                     font-variant-numeric: tabular-nums; }
 .toolbar .spacer { flex: 1; }
 header .spacer { flex: 1; }
-.auth-card { max-width: 360px; margin: 48px auto; border: 1px solid var(--border);
-             border-radius: 6px; padding: 20px 24px; }
+/* 인증 화면 (로그인/가입/2단계/초대/최초 설정) — 메뉴 없는 전용 레이아웃 */
+header.auth { border-bottom: none; justify-content: flex-end; align-items: center; }
+.auth-shell { max-width: 392px; margin: 7vh auto 48px; padding: 0 16px; }
+.auth-brand { text-align: center; margin-bottom: 22px; }
+.auth-brand .auth-title { font-size: 21px; font-weight: 700; margin-top: 10px;
+                          letter-spacing: .1em; }
+.auth-brand .auth-tagline { font-size: 12px; margin-top: 3px; color: var(--muted);
+                            letter-spacing: .05em; }
+.auth-card { border: 1px solid var(--border); border-top: 2px solid var(--seal);
+             border-radius: 8px; padding: 20px 24px; background: var(--surface); }
 .auth-card label { display: block; margin-bottom: 10px; font-size: 13px; }
 .auth-card input { display: block; width: 100%; margin-top: 3px; padding: 5px 10px; }
 .auth-card button[type=submit] { width: 100%; margin-top: 4px; padding: 6px; }
@@ -123,8 +136,9 @@ button.danger:hover { background: var(--red-hover); }
 {% block head %}{% endblock %}
 </head>
 <body>
+{% block header %}
 <header>
-  <h1><a href="/">{{ _("춘추관") }}</a></h1>
+  <h1><a href="/">{{ logo(18) }}{{ _("춘추관") }}</a></h1>
   <span class="muted" style="font-size:12px">{{ _("개인 웹 아카이브") }}</span>
   <a href="/dashboard" style="font-size:12px">{{ _("현황") }}</a>
   <a href="/archives" style="font-size:12px">{{ _("목록") }}</a>
@@ -138,16 +152,7 @@ button.danger:hover { background: var(--red-hover); }
   <a href="/system" style="font-size:12px">{{ _("시스템") }}</a>
   {% endif %}
   <span class="spacer"></span>
-  <form class="inline" method="post" action="/lang">
-    <input type="hidden" name="next"
-           value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-    <select name="lang" onchange="this.form.submit()" title="{{ _('언어') }}"
-            aria-label="{{ _('언어') }}">
-      {% for code in locales %}
-      <option value="{{ code }}" {% if code == locale %}selected{% endif %}>{{ locale_names[code] }}</option>
-      {% endfor %}
-    </select>
-  </form>
+  {% include "_lang_form.html" %}
   <button type="button" id="time-toggle" title="{{ _('시간 표시 전환 (로컬 ↔ UTC)') }}"></button>
   <button type="button" id="theme-toggle" title="{{ _('테마 전환 (자동 → 라이트 → 다크)') }}"></button>
   {% if user %}
@@ -156,6 +161,7 @@ button.danger:hover { background: var(--red-hover); }
   <form class="inline" method="post" action="/logout"><button>{{ _("로그아웃") }}</button></form>
   {% endif %}
 </header>
+{% endblock %}
 <main>{% block content %}{% endblock %}</main>
 <script>
 /* 테마 토글 — 자동(시스템) → 라이트 → 다크 순환, localStorage 에 기억 */

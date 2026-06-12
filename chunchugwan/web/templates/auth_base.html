@@ -1,0 +1,20 @@
+{# 인증 화면 공용 레이아웃 — 메뉴 없는 헤더(언어·테마 전환만) + 중앙 로고/카드.
+   로그인 전 화면(로그인/가입/2단계/초대/최초 설정)이 이 레이아웃을 쓴다. #}
+{% extends "base.html" %}
+{% from "_logo.html" import logo %}
+{% block header %}
+<header class="auth">
+  {% include "_lang_form.html" %}
+  <button type="button" id="theme-toggle" title="{{ _('테마 전환 (자동 → 라이트 → 다크)') }}"></button>
+</header>
+{% endblock %}
+{% block content %}
+<div class="auth-shell">
+  <div class="auth-brand">
+    {{ logo(60) }}
+    <div class="auth-title">{{ _("춘추관") }}</div>
+    <div class="auth-tagline">{{ _("개인 웹 아카이브") }}</div>
+  </div>
+  {% block card %}{% endblock %}
+</div>
+{% endblock %}

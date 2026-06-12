@@ -1,6 +1,6 @@
-{% extends "base.html" %}
+{% extends "auth_base.html" %}
 {% block title %}{{ _("초대") }} — {{ _("춘추관") }}{% endblock %}
-{% block content %}
+{% block card %}
 <div class="auth-card">
   <h2>{{ _("초대 수락") }}</h2>
   {% if invite is none %}
