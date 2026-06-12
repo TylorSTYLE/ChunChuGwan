@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
-from . import config
+from . import config, storage
 
 # 쓰기 락 대기 한도(초) — WAL 에서도 쓰기는 한 번에 하나라, 동시 쓰기가
 # 겹치면 이 시간만큼 기다린 뒤 OperationalError.
@@ -35,14 +35,23 @@ CREATE TABLE IF NOT EXISTS network_tags (
     created_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sites (
+    id          INTEGER PRIMARY KEY,
+    site_key    TEXT NOT NULL UNIQUE,   -- 서브도메인 단위 키 (storage.site_key —
+                                        --   www 제거 호스트, 기본 외 포트 포함)
+    created_at  TEXT NOT NULL           -- ISO 8601 UTC
+);
+
 CREATE TABLE IF NOT EXISTS pages (
     id          INTEGER PRIMARY KEY,
     url         TEXT NOT NULL UNIQUE,   -- 정규화된 URL
     domain      TEXT NOT NULL,
     slug        TEXT NOT NULL,          -- 디렉토리명 {slug}-{hash8}
+    site_id     INTEGER REFERENCES sites(id),  -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id),  -- 사설 대역 페이지의 로컬 네트워크 태그
     created_at  TEXT NOT NULL           -- ISO 8601 UTC
 );
+CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id);
 
 CREATE TABLE IF NOT EXISTS snapshots (
     id            INTEGER PRIMARY KEY,
@@ -99,12 +108,14 @@ CREATE TABLE IF NOT EXISTS crawls (
     max_depth      INTEGER NOT NULL,
     delay_seconds  INTEGER NOT NULL,   -- 페이지 간 최소 간격 (대상 서버 부담 방지)
     source         TEXT NOT NULL DEFAULT 'web',      -- 'web' | 'cli'
+    site_id        INTEGER REFERENCES sites(id),     -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id), -- 사설 대역 크롤의 로컬 네트워크 태그
     created_at     TEXT NOT NULL,
     finished_at    TEXT,
     next_page_at   TEXT NOT NULL       -- 다음 페이지 처리 가능 시각 (ISO 8601 UTC)
 );
 CREATE INDEX IF NOT EXISTS idx_crawls_status ON crawls(status, next_page_at);
+CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id);
 
 CREATE TABLE IF NOT EXISTS crawl_pages (
     id              INTEGER PRIMARY KEY,
@@ -131,6 +142,7 @@ CREATE TABLE IF NOT EXISTS crawl_schedules (
     next_run_at      TEXT NOT NULL,         -- ISO 8601 UTC
     last_run_at      TEXT,
     run_at_time      TEXT,                  -- 'HH:MM' 서버 로컬 시간 (1일 단위 주기 전용)
+    site_id          INTEGER REFERENCES sites(id),       -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id   TEXT REFERENCES network_tags(id),  -- 사설 대역 사이트의 로컬 네트워크 태그
     created_at       TEXT NOT NULL
 );
@@ -277,6 +289,33 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN network_tag_id TEXT REFERENCES network_tags(id)"
             )
+    # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
+    for table in ("pages", "crawls", "crawl_schedules"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if cols and "site_id" not in cols:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN site_id INTEGER REFERENCES sites(id)"
+            )
+    _backfill_sites(conn)
+
+
+def _backfill_sites(conn: sqlite3.Connection) -> None:
+    """site_id 가 비어 있는 기존 행을 사이트에 자동 연결 (멱등).
+
+    사이트 도입 전 데이터의 1회성 마이그레이션이지만, 행 단위로 조건을
+    걸어 언제 다시 실행돼도 안전하다. URL 단위 작업이라 수 초면 끝난다.
+    """
+    for table, url_col in (
+        ("pages", "url"), ("crawls", "start_url"), ("crawl_schedules", "start_url"),
+    ):
+        rows = conn.execute(
+            f"SELECT id, {url_col} AS url FROM {table} WHERE site_id IS NULL"
+        ).fetchall()
+        for row in rows:
+            site_id = get_or_create_site(conn, storage.site_key(row["url"]))
+            conn.execute(
+                f"UPDATE {table} SET site_id = ? WHERE id = ?", (site_id, row["id"])
+            )
 
 
 @contextmanager
@@ -357,6 +396,77 @@ def list_checks(conn: sqlite3.Connection, page_id: int, limit: int = 20) -> list
     ).fetchall()
 
 
+# ---- 사이트 (서브도메인 단위 그룹) ----
+# 모든 페이지·크롤·크롤 스케줄은 사이트에 속한다. 키는 storage.site_key —
+# www 와 apex 는 같은 사이트, 다른 서브도메인·포트는 다른 사이트.
+# 사이트 행은 첫 소속 행이 생길 때 자동 생성되고, 마지막 소속 행이
+# 사라지면 자동 삭제된다 (prune_site_if_empty).
+
+
+def get_or_create_site(conn: sqlite3.Connection, site_key: str) -> int:
+    """사이트 키로 site row 를 찾거나 생성하고 id 반환."""
+    row = conn.execute(
+        "SELECT id FROM sites WHERE site_key = ?", (site_key,)
+    ).fetchone()
+    if row is not None:
+        return row["id"]
+    cur = conn.execute(
+        "INSERT INTO sites (site_key, created_at) VALUES (?, ?)",
+        (site_key, _utcnow()),
+    )
+    return cur.lastrowid
+
+
+def get_site(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row | None:
+    """id 로 site row 조회 (없으면 None)."""
+    return conn.execute("SELECT * FROM sites WHERE id = ?", (site_id,)).fetchone()
+
+
+def get_site_by_key(conn: sqlite3.Connection, site_key: str) -> sqlite3.Row | None:
+    """사이트 키로 site row 조회 (없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM sites WHERE site_key = ?", (site_key,)
+    ).fetchone()
+
+
+def prune_site_if_empty(conn: sqlite3.Connection, site_id: int | None) -> bool:
+    """소속 행(페이지·크롤·크롤 스케줄)이 하나도 없으면 사이트 행 삭제.
+
+    페이지·크롤 스케줄 삭제 경로가 호출한다 — 크롤 회차는 개별 삭제가
+    없으므로(사이트 단위 삭제뿐) 회차가 남아 있는 한 사이트도 남는다.
+    """
+    if site_id is None:
+        return False
+    cur = conn.execute(
+        """
+        DELETE FROM sites WHERE id = ?
+          AND NOT EXISTS (SELECT 1 FROM pages WHERE site_id = sites.id)
+          AND NOT EXISTS (SELECT 1 FROM crawls WHERE site_id = sites.id)
+          AND NOT EXISTS (SELECT 1 FROM crawl_schedules WHERE site_id = sites.id)
+        """,
+        (site_id,),
+    )
+    return cur.rowcount == 1
+
+
+def prune_empty_sites(conn: sqlite3.Connection) -> int:
+    """소속 행이 하나도 없는 사이트 행 일괄 삭제 (가져오기 overwrite 등 정리용)."""
+    cur = conn.execute(
+        """
+        DELETE FROM sites WHERE
+          NOT EXISTS (SELECT 1 FROM pages WHERE site_id = sites.id)
+          AND NOT EXISTS (SELECT 1 FROM crawls WHERE site_id = sites.id)
+          AND NOT EXISTS (SELECT 1 FROM crawl_schedules WHERE site_id = sites.id)
+        """
+    )
+    return cur.rowcount
+
+
+def count_sites(conn: sqlite3.Connection) -> int:
+    """전체 사이트 수 (현황 대시보드용)."""
+    return conn.execute("SELECT COUNT(*) AS c FROM sites").fetchone()["c"]
+
+
 def get_or_create_page(
     conn: sqlite3.Connection,
     url: str,
@@ -366,6 +476,8 @@ def get_or_create_page(
 ) -> int:
     """정규화 URL로 page row를 찾거나 생성하고 id 반환.
 
+    소속 사이트(site_id)는 URL 에서 계산해 자동 연결한다 — 같은 서브도메인의
+    사이트가 있으면 거기 속하고, 없으면 사이트가 함께 만들어진다.
     network_tag_id 를 주면 기존 페이지의 태그도 갱신한다 — 태그 없이
     만들어진 사설 대역 페이지를 새 아카이빙 폼에서 태그를 골라 다시
     제출하는 것이 태그 지정/변경 경로다.
@@ -380,12 +492,13 @@ def get_or_create_page(
                 (network_tag_id, row["id"]),
             )
         return row["id"]
+    site_id = get_or_create_site(conn, storage.site_key(url))
     cur = conn.execute(
         """
-        INSERT INTO pages (url, domain, slug, network_tag_id, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO pages (url, domain, slug, site_id, network_tag_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (url, domain, slug, network_tag_id, _utcnow()),
+        (url, domain, slug, site_id, network_tag_id, _utcnow()),
     )
     return cur.lastrowid
 
@@ -472,8 +585,10 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
     """페이지와 종속 데이터(스냅샷·확인 기록·스케줄)를 일괄 삭제. 없으면 False.
 
     archive_logs 는 실행 이력으로 보존하되 page_id/snapshot_id 참조만 해제한다.
+    사이트의 마지막 소속 행이었다면 사이트 행도 함께 삭제된다.
     """
-    if get_page_by_id(conn, page_id) is None:
+    page = get_page_by_id(conn, page_id)
+    if page is None:
         return False
     conn.execute(
         """
@@ -503,6 +618,7 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
     conn.execute("DELETE FROM schedules WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM snapshots WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM pages WHERE id = ?", (page_id,))
+    prune_site_if_empty(conn, page["site_id"])
     return True
 
 
@@ -910,17 +1026,21 @@ def insert_crawl(
     source: str,
     network_tag_id: str | None = None,
 ) -> int:
-    """크롤 row 생성 후 id 반환. next_page_at 은 지금 — 즉시 시작 가능."""
+    """크롤 row 생성 후 id 반환. next_page_at 은 지금 — 즉시 시작 가능.
+
+    소속 사이트(site_id)는 시작 URL 에서 계산해 자동 연결한다.
+    """
     now = _utcnow()
+    site_id = get_or_create_site(conn, storage.site_key(start_url))
     cur = conn.execute(
         """
         INSERT INTO crawls
             (start_url, scope_host, scope_path, max_pages, max_depth,
-             delay_seconds, source, network_tag_id, created_at, next_page_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             delay_seconds, source, site_id, network_tag_id, created_at, next_page_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (start_url, scope_host, scope_path, max_pages, max_depth,
-         delay_seconds, source, network_tag_id, now, now),
+         delay_seconds, source, site_id, network_tag_id, now, now),
     )
     return cur.lastrowid
 
@@ -1179,6 +1299,61 @@ def find_running_crawl(conn: sqlite3.Connection, start_url: str) -> sqlite3.Row 
     ).fetchone()
 
 
+def list_site_pages(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
+    """사이트 소속 페이지 목록 + 스냅샷 수·마지막 캡처 시각 (사이트 상세/삭제용)."""
+    return conn.execute(
+        """
+        SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
+        FROM pages p LEFT JOIN snapshots s ON s.page_id = p.id
+        WHERE p.site_id = ?
+        GROUP BY p.id
+        ORDER BY last_taken_at DESC NULLS LAST, p.url
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
+    """사이트 소속 크롤 회차 목록 (최신 순) + 상태별 페이지 수 집계."""
+    return conn.execute(
+        """
+        SELECT c.*,
+               COUNT(cp.id) AS total_count,
+               COALESCE(SUM(cp.status = 'done'), 0) AS done_count,
+               COALESCE(SUM(cp.status = 'failed'), 0) AS failed_count,
+               COALESCE(SUM(cp.status IN ('pending', 'in_progress')), 0) AS pending_count
+        FROM crawls c LEFT JOIN crawl_pages cp ON cp.crawl_id = c.id
+        WHERE c.site_id = ?
+        GROUP BY c.id ORDER BY c.id DESC
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def delete_site_crawls(conn: sqlite3.Connection, site_id: int) -> int:
+    """사이트 소속 크롤 회차와 페이지 큐를 일괄 삭제. 반환은 삭제된 크롤 수.
+
+    사이트 단위 삭제 전용 — 크롤 회차의 개별 삭제 경로는 없다.
+    """
+    conn.execute(
+        """
+        DELETE FROM crawl_pages
+        WHERE crawl_id IN (SELECT id FROM crawls WHERE site_id = ?)
+        """,
+        (site_id,),
+    )
+    cur = conn.execute("DELETE FROM crawls WHERE site_id = ?", (site_id,))
+    return cur.rowcount
+
+
+def delete_site_crawl_schedules(conn: sqlite3.Connection, site_id: int) -> int:
+    """사이트 소속 크롤 스케줄 일괄 삭제. 반환은 삭제된 스케줄 수."""
+    cur = conn.execute(
+        "DELETE FROM crawl_schedules WHERE site_id = ?", (site_id,)
+    )
+    return cur.rowcount
+
+
 # ---- 사이트 아카이브 스케줄 (주기적 재크롤) ----
 
 
@@ -1227,13 +1402,17 @@ def upsert_crawl_schedule(
     run_at_time: str | None = None,
     network_tag_id: str | None = None,
 ) -> None:
-    """시작 URL 의 크롤 스케줄 등록 (이미 있으면 옵션·주기·다음 실행 시각 교체)."""
+    """시작 URL 의 크롤 스케줄 등록 (이미 있으면 옵션·주기·다음 실행 시각 교체).
+
+    소속 사이트(site_id)는 시작 URL 에서 계산해 자동 연결한다.
+    """
+    site_id = get_or_create_site(conn, storage.site_key(start_url))
     conn.execute(
         """
         INSERT INTO crawl_schedules
-            (start_url, max_pages, max_depth, delay_seconds,
-             interval_seconds, next_run_at, run_at_time, network_tag_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (start_url, max_pages, max_depth, delay_seconds, interval_seconds,
+             next_run_at, run_at_time, site_id, network_tag_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(start_url) DO UPDATE SET
             max_pages = excluded.max_pages,
             max_depth = excluded.max_depth,
@@ -1241,10 +1420,11 @@ def upsert_crawl_schedule(
             interval_seconds = excluded.interval_seconds,
             next_run_at = excluded.next_run_at,
             run_at_time = excluded.run_at_time,
+            site_id = excluded.site_id,
             network_tag_id = excluded.network_tag_id
         """,
-        (start_url, max_pages, max_depth, delay_seconds,
-         interval_seconds, next_run_at, run_at_time, network_tag_id, _utcnow()),
+        (start_url, max_pages, max_depth, delay_seconds, interval_seconds,
+         next_run_at, run_at_time, site_id, network_tag_id, _utcnow()),
     )
 
 
@@ -1260,9 +1440,16 @@ def set_crawl_schedule_next_run(
 
 
 def delete_crawl_schedule(conn: sqlite3.Connection, schedule_id: int) -> bool:
-    """크롤 스케줄 해제. 등록이 없었으면 False."""
-    cur = conn.execute("DELETE FROM crawl_schedules WHERE id = ?", (schedule_id,))
-    return cur.rowcount == 1
+    """크롤 스케줄 해제. 등록이 없었으면 False.
+
+    사이트의 마지막 소속 행이었다면 사이트 행도 함께 삭제된다.
+    """
+    sched = get_crawl_schedule_by_id(conn, schedule_id)
+    if sched is None:
+        return False
+    conn.execute("DELETE FROM crawl_schedules WHERE id = ?", (schedule_id,))
+    prune_site_if_empty(conn, sched["site_id"])
+    return True
 
 
 def claim_crawl_schedule(

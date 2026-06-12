@@ -61,13 +61,18 @@ def scope_of(start_url: str) -> tuple[str, str]:
 
 
 def in_scope(url: str, scope_host: str, scope_path: str) -> bool:
-    """정규화 URL 이 크롤 범위(같은 호스트 + 경로 프리픽스 이하)인지.
+    """정규화 URL 이 크롤 범위(같은 사이트 호스트 + 경로 프리픽스 이하)인지.
 
     스킴은 비교하지 않는다 — https 추정 보완·http 폴백(pipeline 참조)으로
-    스킴이 갈리는 경우를 같은 페이지로 취급한다.
+    스킴이 갈리는 경우를 같은 페이지로 취급한다. 호스트는 사이트 키
+    기준으로 비교한다 — www 와 apex 를 혼용하는 사이트의 내부 링크가
+    범위 밖으로 버려지지 않게 한다 (다른 서브도메인은 여전히 범위 밖).
     """
     parts = urlsplit(url)
-    return parts.netloc == scope_host and (parts.path or "/").startswith(scope_path)
+    return (
+        storage.netloc_site_key(parts.netloc) == storage.netloc_site_key(scope_host)
+        and (parts.path or "/").startswith(scope_path)
+    )
 
 
 def _validate_range(name: str, value: int, lo: int, hi: int) -> None:

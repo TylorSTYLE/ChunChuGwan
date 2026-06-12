@@ -32,7 +32,8 @@ uv run wccg list                         # 전체 아카이브 현황
 uv run wccg history <url>                # 해당 URL 스냅샷 목록
 uv run wccg diff <url>                   # 최신 2개 스냅샷 비교
 uv run wccg diff <url> --from 1 --to 3
-uv run wccg delete <url>                 # 아카이브 전체 삭제 (--snapshot N 으로 하나만)
+uv run wccg delete <url>                 # 아카이브 전체 삭제 (--snapshot N 으로 하나만,
+                                         #   --site 로 사이트 전체 — 페이지·크롤·스케줄 일괄)
 uv run wccg schedule add <url> --every 12h  # 주기적 재아카이빙 등록 (1h ~ 1mo)
 uv run wccg schedule add <url> --every 1d --at 09:00  # 1일 단위 주기는 실행 시각(서버 로컬) 지정 가능
 uv run wccg schedule next <url> <시각>       # 다음 실행 시각 변경 (ISO, 타임존 없으면 로컬)
@@ -137,6 +138,13 @@ archive/
 ## DB 스키마
 
 `chunchugwan/db.py`의 `SCHEMA` 참조. 핵심 테이블:
+- `sites` — 서브도메인 단위 그룹 (site_key UNIQUE = `storage.site_key` —
+  www 제거 호스트 + 기본 외 포트, IP 는 그대로). 모든 페이지·크롤·크롤
+  스케줄은 사이트에 속한다 (`site_id` FK — 생성 시 자동 연결, 기존 데이터는
+  `db._migrate` 의 `_backfill_sites` 가 자동 백필). www 와 apex 는 같은
+  사이트, 다른 서브도메인은 다른 사이트. 마지막 소속 행이 사라지면 사이트
+  행도 자동 삭제(prune). 사이트 단위 삭제는 `deletion.delete_site`
+  (`wccg delete <url> --site`) — 소속 페이지·크롤 회차·크롤 스케줄 일괄
 - `pages` — 정규화된 URL 단위 (1 URL = 1 row). 사설 대역 페이지는
   `network_tag_id` 로 로컬 네트워크 태그를 참조 (crawls·crawl_schedules 도
   같은 컬럼 보유 — 크롤 페이지·스케줄 재실행에 태그가 이어진다)
@@ -153,8 +161,9 @@ archive/
   출처 cli/web/schedule/api/crawl)
 - `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1개월, 다음 실행 시각,
   1일 단위 주기는 `run_at_time` HH:MM 으로 실행 시각 지정 — 서버 로컬 시간)
-- `crawls` / `crawl_pages` — 사이트 전체 아카이브. 크롤(범위 host+path
-  프리픽스, 옵션, 상태)과 페이지 큐(pending/in_progress/done/failed,
+- `crawls` / `crawl_pages` — 사이트 전체 아카이브의 실행 회차. 크롤(범위
+  host+path 프리픽스 — 호스트 비교는 사이트 키 기준이라 www↔apex 를
+  넘나든다, 옵션, 상태)과 페이지 큐(pending/in_progress/done/failed,
   시도 횟수·재시도 시각, 확인된 snapshot_id 참조). 큐가 DB 에 있어 재시작
   후에도 이어지고, 클레임은 원자적 UPDATE 라 serve/워커/CLI 동시 실행에
   안전. 같은 크롤은 한 번에 한 페이지만 처리(클레임이 in_progress 배제 +
@@ -221,3 +230,14 @@ archive/
 M1~M8, A1~A10 전 마일스톤 완료 — 상세 내역은 `docs/ROADMAP.md` 참조.
 새 마일스톤은 진행 중인 항목만 여기에 두고, 완료되면 ROADMAP.md 로 내린다.
 각 마일스톤 완료 시: 테스트 통과 확인 → 체크박스 갱신 → 커밋.
+
+### A11 — 사이트 단위 아카이브 구조 (진행 중)
+
+- [x] 사이트 논리 모델 — sites 테이블, site_key(www 통합·포트 포함),
+  자동 마이그레이션(백필), in_scope www 통합, 사이트 단위 삭제(CLI `--site`)
+- [ ] 대시보드 사이트 재편 — /archives 사이트 그룹핑, 사이트 상세 화면 신설,
+  /documents·타임라인·검색 사이트 기준, 사이트 삭제 UI
+- [ ] 자원 참조 추적 — snapshot_resources(url 포함), 캡처 시 기록, 삭제 시
+  고아 자원 GC, 인라인 실패 시 같은 URL 의 과거 캡처본 재사용
+- [ ] 저장공간 최적화 — compact 에 참조 백필 + 고아 sweep 단계 추가,
+  시스템 메뉴 라벨 "저장공간 최적화"로 변경 (CLI 명령명은 유지)

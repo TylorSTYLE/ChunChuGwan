@@ -150,13 +150,22 @@ def diff(url: str, from_idx: int | None, to_idx: int | None) -> None:
     "--snapshot", "snapshot_idx", type=int, default=None,
     help="history 번호의 스냅샷 하나만 삭제 (생략 시 페이지 전체)",
 )
+@click.option(
+    "--site", "whole_site", is_flag=True,
+    help="URL 이 속한 사이트(서브도메인) 전체 삭제 — 페이지·크롤 회차·크롤 스케줄 포함",
+)
 @click.option("--yes", is_flag=True, help="확인 없이 진행")
-def delete(url: str, snapshot_idx: int | None, yes: bool) -> None:
-    """아카이브 삭제 — 페이지 전체 또는 단일 스냅샷 (--snapshot N).
+def delete(url: str, snapshot_idx: int | None, whole_site: bool, yes: bool) -> None:
+    """아카이브 삭제 — 페이지 전체, 단일 스냅샷(--snapshot N), 사이트 전체(--site).
 
     단일 스냅샷 삭제 시 다음 스냅샷의 변경 표시는 새 직전 스냅샷 기준으로
     자동 보정된다. 실행 로그(archive_logs)는 이력으로 남는다.
     """
+    if whole_site:
+        if snapshot_idx is not None:
+            raise click.ClickException("--site 와 --snapshot 은 함께 쓸 수 없습니다")
+        _delete_site(url, yes)
+        return
     with db.connect() as conn:
         page = _find_page(conn, url)
         snaps = db.list_snapshots(conn, page["id"])
@@ -185,6 +194,28 @@ def delete(url: str, snapshot_idx: int | None, yes: bool) -> None:
         )
     deletion.delete_snapshot(snap["id"])
     click.echo(f"삭제됨: {snap['dir_name']}")
+
+
+def _delete_site(url: str, yes: bool) -> None:
+    """URL 이 속한 사이트 전체 삭제 (delete --site 본체)."""
+    key = storage.site_key(storage.normalize_url(url))
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, key)
+        if site is None:
+            raise click.ClickException(f"사이트 아카이브가 없습니다: {key}")
+        pages = db.list_site_pages(conn, site["id"])
+        crawls = db.list_site_crawls(conn, site["id"])
+    if not yes:
+        click.confirm(
+            f"{key} — 페이지 {len(pages)}개, 크롤 회차 {len(crawls)}개를 포함한 "
+            "사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다. 계속할까요?",
+            abort=True,
+        )
+    result = deletion.delete_site(site["id"])
+    click.echo(
+        f"삭제됨: {result.site_key} (페이지 {result.pages_deleted}개, "
+        f"스냅샷 {result.snapshots_deleted}개, 크롤 {result.crawls_deleted}개)"
+    )
 
 
 @main.group()

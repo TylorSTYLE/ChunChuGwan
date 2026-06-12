@@ -65,6 +65,49 @@ def delete_snapshot(snapshot_id: int) -> DeleteResult | None:
     return DeleteResult(url=snap["page_url"], snapshots_deleted=1)
 
 
+@dataclass
+class DeleteSiteResult:
+    site_key: str           # 삭제된 사이트 키
+    pages_deleted: int      # 함께 삭제된 페이지 수
+    snapshots_deleted: int  # 함께 삭제된 스냅샷 수
+    crawls_deleted: int     # 함께 삭제된 크롤 회차 수
+
+
+def delete_site(site_id: int) -> DeleteSiteResult | None:
+    """사이트와 소속 데이터 전체를 삭제. 없는 id 면 None.
+
+    소속 페이지(스냅샷·확인 기록·스케줄 포함)·크롤 회차·크롤 스케줄을
+    한 트랜잭션에서 지우고, 파일(스냅샷 디렉토리·고아 문서 CAS)은 커밋 후
+    삭제한다. 사이트 행 자체는 마지막 소속 행이 사라질 때
+    db.prune_site_if_empty 가 지운다.
+    """
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            return None
+        pages = db.list_site_pages(conn, site_id)
+        snapshot_ids: list[int] = []
+        for page in pages:
+            snapshot_ids += [s["id"] for s in db.list_snapshots(conn, page["id"])]
+        doomed = _doomed_document_refs(conn, snapshot_ids)
+        crawls_deleted = db.delete_site_crawls(conn, site_id)
+        db.delete_site_crawl_schedules(conn, site_id)
+        for page in pages:
+            db.delete_page(conn, page["id"])
+        db.prune_site_if_empty(conn, site_id)
+        orphans = _orphaned_cas_names(conn, doomed)
+    for page in pages:
+        storage.delete_page_dir(page["domain"], page["slug"])
+    documents.delete_cas(orphans)
+    differ.purge_shotdiff_cache(snapshot_ids)
+    return DeleteSiteResult(
+        site_key=site["site_key"],
+        pages_deleted=len(pages),
+        snapshots_deleted=len(snapshot_ids),
+        crawls_deleted=crawls_deleted,
+    )
+
+
 def delete_page(page_id: int) -> DeleteResult | None:
     """페이지 전체(모든 스냅샷·확인 기록·스케줄)를 삭제. 없는 id 면 None."""
     with db.connect() as conn:
