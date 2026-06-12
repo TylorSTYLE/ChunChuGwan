@@ -726,6 +726,37 @@ _EN: dict[str, str] = {
         "The tag '{name}' is in use and cannot be deleted ({n} reference(s)).",
     "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.":
         "Deleted local network tag '{name}'.",
+    # 사이트(서브도메인) 단위 아카이브 — 목록·사이트 상세
+    "사이트 {n}개": "{n} site(s)",
+    "사이트 필터…": "Filter sites…",
+    "아카이브는 사이트(서브도메인) 단위로 묶입니다 — www 와 도메인 자체는 같은 사이트입니다. 사이트를 누르면 페이지·크롤 회차 목록이 보입니다.":
+        "Archives are grouped by site (subdomain) — www and the bare domain are "
+        "the same site. Click a site to see its pages and crawl runs.",
+    "크롤 회차": "Crawl runs",
+    "크롤 진행 중": "Crawling",
+    "페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개":
+        "{p} page(s) · {s} snapshot(s) · {c} crawl run(s)",
+    "사이트 삭제": "Delete site",
+    "페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
+        "This deletes the entire site archive including {p} page(s) and {c} "
+        "crawl run(s). This cannot be undone.",
+    "이 사이트(서브도메인)에 속한 페이지 아카이브와 크롤 회차입니다. www 와 도메인 자체는 같은 사이트로 취급됩니다.":
+        "Page archives and crawl runs that belong to this site (subdomain). "
+        "www and the bare domain are treated as the same site.",
+    "아직 페이지가 없습니다 — 크롤이 진행되면 여기에 쌓입니다.":
+        "No pages yet — they will appear here as crawls make progress.",
+    "크롤 회차가 없습니다 — 새 아카이빙에서 '사이트 전체 아카이브'를 선택하면 만들어집니다.":
+        "No crawl runs — select 'Archive entire site' on the new archive "
+        "screen to create one.",
+    "크롤 스케줄": "Crawl schedules",
+    "스케줄 관리(해제·시각 변경)는": "Manage schedules (remove, change time) on the",
+    "화면에서 합니다.": "screen.",
+    "사이트 없음": "Site not found",
+    "아카이빙·크롤이 진행 중인 사이트입니다 — 완료 후 다시 시도하세요":
+        "Archiving or crawling is in progress for this site — try again after "
+        "it finishes",
+    "사이트 삭제됨: {key} (페이지 {p}개, 스냅샷 {s}개, 크롤 {c}개)":
+        "Site deleted: {key} ({p} page(s), {s} snapshot(s), {c} crawl(s))",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

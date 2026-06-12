@@ -81,7 +81,12 @@ def client(tmp_path, monkeypatch):
 def test_index(client):
     res = client.get("/archives")
     assert res.status_code == 200
-    assert "https://example.com/post" in res.text
+    # 목록은 사이트(서브도메인) 단위 — 페이지 URL 은 사이트 상세에 보인다
+    assert "example.com" in res.text
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert f'href="/sites/{site["id"]}"' in res.text
+    assert "https://example.com/post" in client.get(f"/sites/{site['id']}").text
     # 새 아카이빙 폼은 목록에서 별도 메뉴(/archive/new)로 분리됐다
     assert 'action="/archive"' not in res.text
     assert 'href="/archive/new"' in res.text  # 헤더 메뉴
@@ -478,14 +483,17 @@ def test_active_job_cleared_even_on_failure(client, monkeypatch):
 
 
 def test_index_shows_active_jobs(client):
-    web_app._register_job("https://example.com/post")       # 기존 페이지 재아카이빙
-    web_app._register_job("https://example.com/brand-new")  # 아직 pages 행 없는 신규 URL
+    web_app._register_job("https://example.com/post")     # 기존 사이트의 재아카이빙
+    web_app._register_job("https://brand-new.test/page")  # 사이트 행이 없는 신규 URL
     res = client.get("/archives")
     assert res.status_code == 200
+    # 기존 사이트 행 + 신규 URL 의 임시 사이트 행이 모두 진행 중으로 보인다
     assert res.text.count("아카이빙 중") == 2
-    assert "https://example.com/brand-new" in res.text
-    # 진행 중인 페이지에는 재아카이빙 버튼을 숨긴다
-    assert "재아카이빙" not in res.text
+    assert "brand-new.test" in res.text
+    # 진행 중인 페이지에는 재아카이빙 버튼을 숨긴다 (사이트 상세)
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert "재아카이빙" not in client.get(f"/sites/{site['id']}").text
 
 
 def test_archive_active_endpoint_sorted(client):
@@ -585,8 +593,9 @@ def test_schedule_set_and_shown(client):
     assert "자동 재아카이빙" in timeline.text
     assert "1시간" in timeline.text and "다음 실행" in timeline.text
 
-    index = client.get("/archives")
-    assert "1시간" in index.text  # 목록의 '자동' 컬럼
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert "1시간" in client.get(f"/sites/{site['id']}").text  # 사이트 상세의 '자동' 컬럼
 
     with db.connect() as conn:
         sched = db.get_schedule(conn, 1)

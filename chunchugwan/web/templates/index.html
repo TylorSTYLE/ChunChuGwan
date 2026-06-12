@@ -2,11 +2,8 @@
 {% block title %}{{ _("목록") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <style>
-/* URL 컬럼이 내용 길이대로 과점하지 않도록 폭 제한 — 긴 URL 은 줄바꿈 */
+/* 사이트 컬럼이 내용 길이대로 과점하지 않도록 폭 제한 */
 #items th:first-child { width: 35%; }
-/* 유형 필터 칩 — 칩 안의 건수는 흐리게 */
-.kind-filter button .n { color: var(--muted); font-weight: 400; margin-left: 5px;
-                         font-variant-numeric: tabular-nums; }
 </style>
 {% if queued %}
 <div class="notice">{{ _("아카이빙이 백그라운드에서 시작되었습니다") }}: <span class="mono">{{ queued }}</span> — {{ _("완료되면 목록이 자동 갱신됩니다.") }}</div>
@@ -20,14 +17,13 @@
 
 <div class="toolbar">
   <h2 style="margin:0">{{ _("아카이브 목록") }}</h2>
-  <span class="kind-filter" id="kind-filter">
-    <button type="button" data-kind="" class="active">{{ _("전체") }}<span class="n">{{ items|length }}</span></button>
-    <button type="button" data-kind="page">{{ _("페이지") }}<span class="n">{{ page_count }}</span></button>
-    <button type="button" data-kind="site">{{ _("사이트") }}<span class="n">{{ site_count }}</span></button>
-  </span>
+  <span class="muted" style="font-size:13px">{{ _("사이트 {n}개", n=items|length) }}</span>
   <span class="spacer"></span>
-  <input type="text" id="q" placeholder="{{ _('URL 필터…') }}" autocomplete="off">
+  <input type="text" id="q" placeholder="{{ _('사이트 필터…') }}" autocomplete="off">
 </div>
+<p class="muted" style="font-size:13px">
+  {{ _("아카이브는 사이트(서브도메인) 단위로 묶입니다 — www 와 도메인 자체는 같은 사이트입니다. 사이트를 누르면 페이지·크롤 회차 목록이 보입니다.") }}
+</p>
 
 {% if not items %}
 <p class="muted">{{ _("아카이브된 페이지가 없습니다.") }}
@@ -35,102 +31,52 @@
 {% else %}
 <table id="items">
   <thead>
-    <tr><th>URL</th><th>{{ _("도메인 / 범위") }}</th><th>{{ _("스냅샷") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
+    <tr><th>{{ _("사이트") }}</th><th class="num">{{ _("페이지") }}</th><th class="num">{{ _("스냅샷") }}</th><th class="num">{{ _("크롤 회차") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
   </thead>
   <tbody>
   {% for it in items %}
-    {% if it['kind'] == 'site' %}
-    <tr data-kind="site" data-url="{{ it['url']|lower }}">
-      <td><span class="badge site">{{ _("사이트", ctx="one") }}</span>
-        <a href="/crawls/{{ it['crawl_id'] }}">{{ it['url'] }}</a></td>
-      <td class="mono muted">{{ it['domain'] }}</td>
-      <td class="num">{{ it['done'] }}{% if it['total'] != it['done'] %} <span class="muted">/ {{ it['total'] }}</span>{% endif %}</td>
-      <td class="mono">{{ it['activity_at'] | ts }}</td>
+    <tr data-url="{{ it['site_key']|lower }}">
       <td>
-        {% if it['schedule'] %}
-        <span class="mono">{{ it['schedule'] }}</span>
+        {% if it['site_id'] %}
+        <a href="/sites/{{ it['site_id'] }}" class="mono">{{ it['site_key'] }}</a>
+        {% else %}
+        <span class="mono">{{ it['site_key'] }}</span>
+        {% endif %}
+      </td>
+      <td class="num">{{ it['page_count'] or '-' }}</td>
+      <td class="num">{{ it['snapshot_count'] or '-' }}</td>
+      <td class="num">{{ it['crawl_count'] or '-' }}</td>
+      <td class="mono">{% if it['activity_at'] %}{{ it['activity_at'] | ts }}{% else %}-{% endif %}</td>
+      <td>
+        {% if it['schedule_count'] %}
+        <span class="mono">{{ it['schedule_count'] }}</span>
         {% else %}
         <span class="muted">-</span>
         {% endif %}
       </td>
       <td>
-        {% if it['status'] == 'running' %}
-        <span class="badge running">{{ _("진행 중") }}</span>
-        {% if it['waiting'] %}<span class="muted">{{ _("대기") }} {{ it['waiting'] }}</span>{% endif %}
-        {% elif it['status'] == 'done' %}
-        <span class="badge new">{{ _("완료됨") }}</span>
-        {% else %}
-        <span class="badge same">{{ _("취소됨") }}</span>
-        {% endif %}
-        {% if it['failed'] %}<span class="badge error">{{ _("실패") }} {{ it['failed'] }}</span>{% endif %}
-      </td>
-    </tr>
-    {% elif it['page_id'] %}
-    <tr data-kind="page" data-url="{{ it['url']|lower }}">
-      <td><a href="/page/{{ it['page_id'] }}">{{ it['url'] }}</a></td>
-      <td class="mono">{{ it['domain'] }}</td>
-      <td class="num">{{ it['snapshot_count'] }}</td>
-      <td class="mono">{{ it['activity_at'] | ts }}</td>
-      <td>
-        {% if it['schedule'] %}
-        <span class="mono">{{ it['schedule'] }}</span>
-        {% else %}
-        <span class="muted">-</span>
-        {% endif %}
-      </td>
-      <td>
-        {% if it['active'] %}
+        {% if it['crawling'] %}
+        <span class="badge running">{{ _("크롤 진행 중") }}</span>
+        {% elif it['active'] %}
         <span class="badge running">{{ _("아카이빙 중") }}</span>
-        {% else %}
-        {% if can_archive %}
-        <form class="inline" method="post" action="/page/{{ it['page_id'] }}/rearchive">
-          <button type="submit">{{ _("재아카이빙") }}</button>
-        </form>
-        {% endif %}
-        {% if can_delete %}
-        <form class="inline" method="post" action="/page/{{ it['page_id'] }}/delete"
-              onsubmit="return confirm({{ (it['url'] ~ '\n\n' ~ _('스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', n=it['snapshot_count']))|tojson }})">
-          <button type="submit" class="danger">{{ _("삭제") }}</button>
-        </form>
-        {% endif %}
         {% endif %}
       </td>
     </tr>
-    {% else %}
-    {# 아직 pages 행이 없는 신규 URL 진행 건 #}
-    <tr data-kind="page" data-url="{{ it['url']|lower }}">
-      <td><span class="mono">{{ it['url'] }}</span></td>
-      <td class="mono">{{ it['domain'] }}</td>
-      <td class="num">-</td>
-      <td class="mono">{{ it['activity_at'] | ts }} {{ _("시작") }}</td>
-      <td><span class="muted">-</span></td>
-      <td><span class="badge running">{{ _("아카이빙 중") }}</span></td>
-    </tr>
-    {% endif %}
   {% endfor %}
   </tbody>
 </table>
 {% endif %}
 
 <script>
-// 필터 — 유형 칩(전체/페이지/사이트)과 URL 텍스트 필터를 함께 적용
+// 사이트 텍스트 필터
 (function () {
   const q = document.getElementById('q');
-  const chips = document.querySelectorAll('#kind-filter button');
-  let kind = '';
-  function apply() {
-    const text = (q ? q.value : '').toLowerCase();
+  q?.addEventListener('input', () => {
+    const text = q.value.toLowerCase();
     document.querySelectorAll('#items tbody tr').forEach((tr) => {
-      const show = (!kind || tr.dataset.kind === kind) && tr.dataset.url.includes(text);
-      tr.style.display = show ? '' : 'none';
+      tr.style.display = tr.dataset.url.includes(text) ? '' : 'none';
     });
-  }
-  q?.addEventListener('input', apply);
-  chips.forEach((b) => b.addEventListener('click', () => {
-    kind = b.dataset.kind;
-    chips.forEach((x) => x.classList.toggle('active', x === b));
-    apply();
-  }));
+  });
 })();
 
 // 진행 중 작업이 있으면 폴링하다가 목록이 바뀌는 순간 새로고침

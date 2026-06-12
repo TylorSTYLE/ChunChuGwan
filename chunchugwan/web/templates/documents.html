@@ -36,6 +36,7 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
       <th>{{ _("문서명") }}</th>
       <th>{{ _("형식") }}</th>
       <th style="text-align:right">{{ _("용량") }}</th>
+      <th>{{ _("사이트") }}</th>
       <th>{{ _("출처 페이지") }}</th>
       <th style="text-align:right">{{ _("참조 스냅샷") }}</th>
       <th>{{ _("마지막 저장") }}</th>
@@ -50,6 +51,9 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
       </td>
       <td class="mono">{{ g['file'].rsplit('.', 1)[1] | upper if '.' in g['file'] else '-' }}</td>
       <td class="mono" style="text-align:right">{{ g['bytes'] | filesize }}</td>
+      <td class="mono">
+        {% if g['site_id'] %}<a href="/sites/{{ g['site_id'] }}">{{ g['site_key'] }}</a>{% else %}-{% endif %}
+      </td>
       <td class="url-cell">
         <a href="/page/{{ g['page_id'] }}" title="{{ g['page_url'] }}">{{ g['page_url'] }}</a>
         {%- if g['page_count'] > 1 %}

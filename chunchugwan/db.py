@@ -467,6 +467,38 @@ def count_sites(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) AS c FROM sites").fetchone()["c"]
 
 
+def list_sites_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """사이트 목록 + 페이지·스냅샷·크롤 회차·스케줄 집계 (아카이브 목록 화면용).
+
+    last_activity_at 은 마지막 스냅샷과 마지막 크롤 활동(완료 또는 생성) 중
+    더 최근 시각 — 목록 정렬 기준이다.
+    """
+    return conn.execute(
+        """
+        SELECT st.*,
+               (SELECT COUNT(*) FROM pages p WHERE p.site_id = st.id) AS page_count,
+               (SELECT COUNT(*) FROM snapshots s JOIN pages p ON p.id = s.page_id
+                 WHERE p.site_id = st.id) AS snapshot_count,
+               (SELECT COUNT(*) FROM crawls c WHERE c.site_id = st.id) AS crawl_count,
+               (SELECT COUNT(*) FROM crawls c
+                 WHERE c.site_id = st.id AND c.status = 'running') AS running_crawl_count,
+               (SELECT COUNT(*) FROM schedules sc JOIN pages p ON p.id = sc.page_id
+                 WHERE p.site_id = st.id)
+                 + (SELECT COUNT(*) FROM crawl_schedules cs
+                    WHERE cs.site_id = st.id) AS schedule_count,
+               MAX(
+                   COALESCE((SELECT MAX(s.taken_at) FROM snapshots s
+                             JOIN pages p ON p.id = s.page_id
+                             WHERE p.site_id = st.id), ''),
+                   COALESCE((SELECT MAX(COALESCE(c.finished_at, c.created_at))
+                             FROM crawls c WHERE c.site_id = st.id), '')
+               ) AS last_activity_at
+        FROM sites st
+        ORDER BY last_activity_at DESC, st.site_key
+        """
+    ).fetchall()
+
+
 def get_or_create_page(
     conn: sqlite3.Connection,
     url: str,
@@ -889,7 +921,7 @@ def list_document_groups(
         """
         SELECT g.sha256, g.snapshot_count, g.page_count, g.first_seen, g.last_seen,
                d.file, d.url, d.bytes, d.content_type, d.snapshot_id,
-               s.page_id, p.url AS page_url
+               s.page_id, p.url AS page_url, p.site_id, st.site_key
         FROM (
             SELECT d2.sha256 AS sha256, MAX(d2.id) AS doc_id,
                    COUNT(*) AS snapshot_count,
@@ -901,6 +933,7 @@ def list_document_groups(
         JOIN snapshot_documents d ON d.id = g.doc_id
         JOIN snapshots s ON s.id = d.snapshot_id
         JOIN pages p ON p.id = s.page_id
+        LEFT JOIN sites st ON st.id = p.site_id
         ORDER BY g.last_seen DESC, g.sha256
         LIMIT ? OFFSET ?
         """,
@@ -1326,6 +1359,27 @@ def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row
         WHERE c.site_id = ?
         GROUP BY c.id ORDER BY c.id DESC
         """,
+        (site_id,),
+    ).fetchall()
+
+
+def list_site_schedules(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
+    """사이트 소속 페이지들의 재아카이빙 스케줄 (+ 페이지 url) — 사이트 상세용."""
+    return conn.execute(
+        """
+        SELECT sc.*, p.url FROM schedules sc JOIN pages p ON p.id = sc.page_id
+        WHERE p.site_id = ? ORDER BY sc.next_run_at, sc.id
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def list_site_crawl_schedules(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트 소속 크롤 스케줄 목록 — 사이트 상세용."""
+    return conn.execute(
+        "SELECT * FROM crawl_schedules WHERE site_id = ? ORDER BY next_run_at, id",
         (site_id,),
     ).fetchall()
 
