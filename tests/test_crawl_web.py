@@ -180,6 +180,81 @@ def test_crawl_cancel_and_retry(client):
         assert db.list_crawl_pages(conn, crawl["id"])[0]["status"] == "pending"
 
 
+def _add_failed_page(crawl_id: int, url: str) -> int:
+    """크롤에 실패(failed) 페이지 한 줄 추가 후 crawl_page id 반환."""
+    with db.connect() as conn:
+        db.insert_crawl_page(conn, crawl_id, url, 1)
+        page = [p for p in db.list_crawl_pages(conn, crawl_id) if p["url"] == url][0]
+        db.fail_crawl_page(
+            conn, page["id"], attempts=3, error="boom", next_attempt_at=None
+        )
+    return page["id"]
+
+
+def test_crawl_detail_status_filter(client):
+    """페이지 목록은 ?status= 로 상태별 필터링된다 (잘못된 값은 전체)."""
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
+    _add_failed_page(crawl["id"], "https://example.com/docs/fail")
+    pending_cell = '<td class="mono">https://example.com/docs/</td>'
+
+    res = client.get(f"/crawls/{crawl['id']}", params={"status": "failed"})
+    assert res.status_code == 200
+    assert "https://example.com/docs/fail" in res.text
+    assert pending_cell not in res.text
+    assert f'href="/crawls/{crawl["id"]}?status=pending"' in res.text  # 필터 링크
+
+    res = client.get(f"/crawls/{crawl['id']}", params={"status": "pending"})
+    assert "https://example.com/docs/fail" not in res.text
+    assert pending_cell in res.text
+
+    # 잘못된 값은 전체 목록
+    res = client.get(f"/crawls/{crawl['id']}", params={"status": "nope"})
+    assert "https://example.com/docs/fail" in res.text
+    assert pending_cell in res.text
+
+
+def test_crawl_page_retry_single(client):
+    """실패 페이지 하나만 재시도 — pending 복귀, 끝난 크롤은 다시 열린다."""
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
+    cp_id = _add_failed_page(crawl["id"], "https://example.com/docs/fail")
+    with db.connect() as conn:
+        ok_page = [
+            p for p in db.list_crawl_pages(conn, crawl["id"])
+            if p["url"] == "https://example.com/docs/"
+        ][0]
+        db.finish_crawl_page(conn, ok_page["id"], None)
+        assert db.finish_crawl_if_done(conn, crawl["id"])
+
+    # 진행 화면의 실패 행에 재시도 버튼이 보인다
+    res = client.get(f"/crawls/{crawl['id']}")
+    assert f"/crawls/{crawl['id']}/pages/{cp_id}/retry" in res.text
+
+    res = client.post(
+        f"/crawls/{crawl['id']}/pages/{cp_id}/retry",
+        params={"status": "failed"}, follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith(f"/crawls/{crawl['id']}?")
+    assert "status=failed" in res.headers["location"]  # 필터 유지
+    assert "notice=" in res.headers["location"]
+    with db.connect() as conn:
+        row = [
+            p for p in db.list_crawl_pages(conn, crawl["id"]) if p["id"] == cp_id
+        ][0]
+        assert row["status"] == "pending"
+        assert row["attempts"] == 0 and row["error"] is None
+        # 끝난 크롤이 다시 열린다. done 페이지는 그대로
+        assert db.get_crawl(conn, crawl["id"])["status"] == "running"
+        assert db.crawl_page_counts(conn, crawl["id"])["done"] == 1
+
+    # 실패 상태가 아닌 페이지·없는 페이지·없는 크롤은 404
+    assert client.post(
+        f"/crawls/{crawl['id']}/pages/{ok_page['id']}/retry"
+    ).status_code == 404
+    assert client.post(f"/crawls/{crawl['id']}/pages/9999/retry").status_code == 404
+    assert client.post(f"/crawls/999/pages/{cp_id}/retry").status_code == 404
+
+
 def test_goto_redirects_to_crawl_snapshot(client):
     url = "https://example.com/docs/a"
     _, snap_id = make_snapshot(url)

@@ -65,10 +65,14 @@
   pipeline.upgrade_http_to_https).
 - **사이트 아카이브 진행** (crawl) — `/crawls/{id}`. 상태 카드(실패 재시도
   대기 — 시스템 설정값 표시) + 페이지 목록(상태 뱃지, 시도 횟수, 오류,
-  스냅샷/타임라인 링크). 진행 중이면
+  스냅샷/타임라인 링크). 목록은 `?status=` (pending/in_progress/done/failed,
+  잘못된 값은 전체)로 상태별 필터링 — 테이블 위 필터 링크에 상태별 개수
+  표기. 진행 중이면
   `/crawls/{id}/status` JSON 을 5초 폴링해 자동 갱신. 취소(`POST
-  /crawls/{id}/cancel`)·실패 일괄 재시도(`POST /crawls/{id}/retry`)는
-  admin/archiver 전용. 링크 리졸버 `GET /crawl/{id}/goto?url=` 은 크롤
+  /crawls/{id}/cancel`)·실패 일괄 재시도(`POST /crawls/{id}/retry`)·실패
+  페이지 단건 재시도(`POST /crawls/{id}/pages/{crawl_page_id}/retry` —
+  실패 행의 버튼, 끝난 크롤이면 다시 열고 ?status 필터를 유지한 채
+  복귀)는 admin/archiver 전용. 링크 리졸버 `GET /crawl/{id}/goto?url=` 은 크롤
   세트의 스냅샷 → 그 URL 의 최신 스냅샷 → 미아카이브 안내(404) 순으로
   처리한다 — 크롤로 저장된 page.html 의 재작성 링크(`target="_top"`)가
   여기로 온다.

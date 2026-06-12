@@ -1581,23 +1581,32 @@ def crawls_view():
     return RedirectResponse("/archives", status_code=301)
 
 
+_CRAWL_PAGE_STATUSES = ("pending", "in_progress", "done", "failed")
+
+
 @app.get("/crawls/{crawl_id}", response_class=HTMLResponse)
-def crawl_view(request: Request, crawl_id: int, merged: int = 0):
+def crawl_view(
+    request: Request, crawl_id: int, merged: int = 0,
+    status: str = "", notice: str = "",
+):
     """크롤 진행 화면 — 상태별 집계와 페이지 목록, 취소·재시도.
 
     merged=1 이면 같은 사이트 아카이브가 이미 진행 중이라 이 크롤로
     병합되었다는 알림을 띄운다 (등록 직후 리다이렉트에서만 붙는다).
+    status 로 페이지 목록을 상태별 필터링한다 (잘못된 값은 전체).
     실패 재시도 대기(시스템 설정, 진행 중 크롤에도 적용)도 함께 보여준다.
     """
     crawl = _load_crawl(request, crawl_id)
+    status_filter = status if status in _CRAWL_PAGE_STATUSES else ""
     with db.connect() as conn:
         counts = db.crawl_page_counts(conn, crawl_id)
-        pages = db.list_crawl_pages(conn, crawl_id)
+        pages = db.list_crawl_pages(conn, crawl_id, status=status_filter or None)
         backoff = crawler.retry_backoff(conn)
     return templates.TemplateResponse(
         request, "crawl.html",
         {
             "crawl": crawl, "counts": counts, "pages": pages, "merged": merged,
+            "status_filter": status_filter, "notice": notice,
             "retry_backoff_labels": [
                 i18n.interval_label(request, s) for s in backoff
             ],
@@ -1633,6 +1642,27 @@ def crawl_retry(request: Request, crawl_id: int):
     with db.connect() as conn:
         db.retry_failed_crawl_pages(conn, crawl_id)
     return RedirectResponse(f"/crawls/{crawl_id}", status_code=303)
+
+
+@app.post("/crawls/{crawl_id}/pages/{crawl_page_id}/retry")
+def crawl_page_retry(
+    request: Request, crawl_id: int, crawl_page_id: int, status: str = ""
+):
+    """실패한 크롤 페이지 하나 재시도 (끝난 크롤이면 다시 연다). admin/archiver 전용.
+
+    status 는 진행 화면의 페이지 필터 — 재시도 후 같은 필터로 돌아간다.
+    """
+    _require_archiver(request)
+    _load_crawl(request, crawl_id)
+    with db.connect() as conn:
+        row = db.get_failed_crawl_page(conn, crawl_id, crawl_page_id)
+        if row is None:
+            raise HTTPException(404, t(request, "실패 기록 없음"))
+        db.retry_failed_crawl_page(conn, crawl_page_id)
+    params = {"notice": t(request, "재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.")}
+    if status in _CRAWL_PAGE_STATUSES:
+        params["status"] = status
+    return RedirectResponse(f"/crawls/{crawl_id}?{urlencode(params)}", status_code=303)
 
 
 # ---- 사이트 아카이브 스케줄 (주기적 재크롤) ----
