@@ -31,7 +31,7 @@ services:
     ports:
       - "127.0.0.1:8765:8765"       # localhost 전용 원칙 유지. 외부 노출은 리버스 프록시를 앞단에 둘 것.
     volumes:
-      - ./archive:/data/archive
+      - ./archive:/data/archive     # 소유자가 달라도 기동 시 uid 1000 으로 자동 보정
     shm_size: 1gb                   # 재아카이빙 버튼이 chromium 을 띄우므로 /dev/shm 확보
     init: true                      # 좀비 chromium 프로세스 회수
     restart: unless-stopped

@@ -118,7 +118,14 @@ def oidc_enabled() -> bool:
 
 def ensure_dirs() -> None:
     """아카이브 루트 디렉토리 생성."""
-    SITES_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        SITES_DIR.mkdir(parents=True, exist_ok=True)
+    except PermissionError as e:
+        raise PermissionError(
+            f"아카이브 디렉토리를 만들 수 없습니다: {ARCHIVE_ROOT} — 쓰기 권한을 "
+            "확인하세요 (도커 바인드 마운트라면 호스트 디렉토리 소유자가 "
+            "컨테이너 사용자 uid 1000 과 다른 경우)"
+        ) from e
 
 
 def load_domain_rules(domain: str) -> dict:

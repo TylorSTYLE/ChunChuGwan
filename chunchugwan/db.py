@@ -218,7 +218,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
 def connect() -> Iterator[sqlite3.Connection]:
     """스키마가 보장된 커넥션을 컨텍스트로 제공."""
     config.ensure_dirs()
-    conn = sqlite3.connect(config.DB_PATH)
+    try:
+        conn = sqlite3.connect(config.DB_PATH)
+    except sqlite3.OperationalError as e:
+        raise sqlite3.OperationalError(
+            f"DB 파일을 열 수 없습니다: {config.DB_PATH} — 아카이브 디렉토리의 "
+            "쓰기 권한을 확인하세요 (도커 바인드 마운트라면 호스트 디렉토리 "
+            "소유자가 컨테이너 사용자 uid 1000 과 다른 경우)"
+        ) from e
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)

@@ -200,8 +200,10 @@ docker run --rm --init --shm-size 1g \
   (`WCCG_AUTH=off` 는 loopback 바인딩 전용). 첫 접속 시 `/setup` 에서 관리자를
   등록하거나, `WCCG_ADMIN_EMAIL`/`WCCG_ADMIN_PASSWORD` 로 자동 등록한다.
 - 컨테이너는 비루트(uid 1000)로 실행되어 chromium 샌드박스가 활성 상태로 동작한다.
-  Linux 호스트에서 `./archive` 권한 오류가 나면 디렉토리 소유자를 uid 1000 에 맞출 것
-  (macOS Docker Desktop 은 해당 없음).
+  호스트의 `./archive` 소유자가 달라도(예: docker 가 root 로 자동 생성) 기동 시
+  엔트리포인트가 소유자를 uid 1000 으로 보정한 뒤 비루트로 전환하므로 별도
+  조치가 필요 없다. 호스트에서 같은 디렉토리를 `uv run wccg` 로 함께 쓰는
+  경우에만 파일이 uid 1000 소유가 된다는 점을 참고.
 - 최초 빌드는 chromium 다운로드를 포함해 수 분 걸린다 (이미지 약 1.5GB).
 
 ## 저장 구조
