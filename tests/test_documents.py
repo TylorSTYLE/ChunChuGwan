@@ -77,12 +77,26 @@ class _DocHandler(BaseHTTPRequestHandler):
     """확장자는 .pdf 지만 응답 성격이 다른 경로들을 서빙하는 픽스처 서버."""
 
     def do_GET(self):  # noqa: N802 (http.server 규약)
+        if self.path.startswith("/direct.php"):
+            # download.php 류 — 확장자 없는 경로 + Content-Disposition 파일명
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header(
+                "Content-Disposition",
+                "attachment; filename*=UTF-8''"
+                "%EB%8D%B0%EC%9D%B4%ED%84%B0%20%EC%8B%9C%ED%8A%B8.pdf",  # 데이터 시트.pdf
+            )
+            self.send_header("Content-Length", str(len(_PDF_BYTES)))
+            self.end_headers()
+            self.wfile.write(_PDF_BYTES)
+            return
         routes = {
             "/ok.pdf": ("application/pdf", _PDF_BYTES, 200),
             "/second.pdf": ("application/pdf", _PDF_BYTES * 2, 200),
             "/login.pdf": ("text/html; charset=utf-8", b"<html>login</html>", 200),
             "/big.pdf": ("application/pdf", b"x" * 4096, 200),
             "/missing.pdf": ("application/pdf", b"", 404),
+            "/blob": ("application/zip", b"PK-not-a-document", 200),
         }
         if self.path not in routes:
             self.send_error(404)
@@ -160,6 +174,91 @@ def test_download_documents_dedupes_links(doc_server, tmp_path):
     assert len(manifest) == 1
 
 
+# ---- direct_filename (URL 자체가 파일 다운로드인 경우의 파일명 결정) ----
+
+def test_direct_filename_from_content_disposition():
+    url = "https://example.com/files/download.php?file=x"
+    name = documents.direct_filename(
+        url, url, 'attachment; filename="annual report.pdf"', "application/octet-stream"
+    )
+    assert name.startswith("annual-report-") and name.endswith(".pdf")
+
+
+def test_direct_filename_rfc2231_korean():
+    cd = ("attachment; filename*=UTF-8''"
+          "%EB%8D%B0%EC%9D%B4%ED%84%B0%20%EC%8B%9C%ED%8A%B8.pdf")
+    url = "https://example.com/d.php"
+    name = documents.direct_filename(url, url, cd, None)
+    assert name.startswith("데이터-시트-") and name.endswith(".pdf")
+
+
+def test_direct_filename_euckr_mojibake_repaired():
+    """EUC-KR 원시 바이트 파일명(구형 한국 서버)이 latin-1 모지바케로 들어와도 복구한다."""
+    mojibake = "데이터 시트.pdf".encode("euc-kr").decode("latin-1")
+    url = "https://example.com/download.php?id=76"
+    name = documents.direct_filename(url, url, f'attachment; filename="{mojibake}"', None)
+    assert name is not None and name.startswith("데이터-시트-") and name.endswith(".pdf")
+
+
+def test_direct_filename_cd_sanitizes_traversal():
+    url = "https://example.com/d"
+    name = documents.direct_filename(
+        url, url, 'attachment; filename="../../etc/passwd.pdf"', None
+    )
+    assert "/" not in name and "\\" not in name and ".." not in name
+
+
+def test_direct_filename_cd_bad_ext_falls_back_to_path():
+    url = "https://example.com/docs/report.pdf"
+    name = documents.direct_filename(url, url, 'attachment; filename="run.exe"', None)
+    assert name.startswith("report-") and name.endswith(".pdf")
+
+
+def test_direct_filename_from_query_value():
+    url = ("https://example.com/files/download.php"
+           "?file=%2Ffiles%2Fproduct.1%2F76_U9500H_%EB%8D%B0%EC%9D%B4%ED%84%B0"
+           "+%EC%8B%9C%ED%8A%B8.pdf")
+    name = documents.direct_filename(url, url, None, "application/octet-stream")
+    assert name is not None and name.endswith(".pdf")
+    assert "U9500H" in name
+
+
+def test_direct_filename_content_type_fallback():
+    url = "https://example.com/download?id=3"
+    name = documents.direct_filename(url, url, None, "application/pdf")
+    assert name.startswith("document-") and name.endswith(".pdf")
+
+
+def test_direct_filename_undecidable():
+    url = "https://example.com/download?id=3"
+    assert documents.direct_filename(url, url, None, "application/zip") is None
+
+
+# ---- download_direct (로컬 HTTP 서버) ----
+
+def test_download_direct_uses_content_disposition(doc_server, tmp_path):
+    url = f"{doc_server}/direct.php?file=anything"
+    dl = documents.download_direct(url, tmp_path / "files")
+    assert dl.http_status == 200
+    entry = dl.entry
+    assert str(entry["file"]).startswith("데이터-시트-")
+    assert str(entry["file"]).endswith(".pdf")
+    assert entry["bytes"] == len(_PDF_BYTES)
+    assert entry["sha256"] == hashlib.sha256(_PDF_BYTES).hexdigest()
+    assert (tmp_path / "files" / str(entry["file"])).read_bytes() == _PDF_BYTES
+
+
+def test_download_direct_rejects_html(doc_server, tmp_path):
+    with pytest.raises(ValueError, match="HTML"):
+        documents.download_direct(f"{doc_server}/login.pdf", tmp_path / "files")
+
+
+def test_download_direct_undecidable_extension(doc_server, tmp_path):
+    with pytest.raises(ValueError, match="화이트리스트"):
+        documents.download_direct(f"{doc_server}/blob", tmp_path / "files")
+    assert list((tmp_path / "files").iterdir()) == []
+
+
 # ---- 파이프라인 통합 (캡처는 가짜, 문서 다운로드는 로컬 서버) ----
 
 def test_pipeline_archives_linked_documents(doc_server, tmp_path, monkeypatch):
@@ -217,6 +316,64 @@ def test_pipeline_archives_linked_documents(doc_server, tmp_path, monkeypatch):
     # 내용이 같으면 unchanged — 문서를 다시 받지 않는다 (스냅샷도 없음)
     second = pipeline.archive_url("https://example.com/post")
     assert second.status == "unchanged" and second.documents == 0
+
+
+def test_pipeline_archives_direct_download_url(doc_server, tmp_path, monkeypatch):
+    """URL 자체가 파일 다운로드(CaptureDownloadError)면 문서 스냅샷으로 저장된다."""
+    import json
+
+    from chunchugwan import capture, db, netcheck, pipeline, storage
+
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "RULES_PATH", tmp_path / "rules.json")
+    monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
+    # 픽스처 서버가 127.0.0.1 이라 루프백 게이트를 공인 취급으로 우회한다
+    monkeypatch.setattr(netcheck, "classify_host", lambda host: netcheck.PUBLIC)
+
+    def fake_capture(url, out_dir, **kwargs):
+        raise capture.CaptureDownloadError(f"{url} 은 파일 다운로드 URL")
+
+    monkeypatch.setattr(pipeline.capture, "capture", fake_capture)
+    url = f"{doc_server}/direct.php?file=sheet.pdf"
+    outcome = pipeline.archive_url(url)
+    assert outcome.status == "new"
+    assert outcome.documents == 1
+    assert outcome.title and str(outcome.title).endswith(".pdf")
+
+    meta = storage.read_meta(outcome.snapshot_dir)
+    assert meta.documents is not None and len(meta.documents) == 1
+    entry = meta.documents[0]
+    assert meta.title == entry["file"]
+
+    # 파일 본체는 문서 CAS 에 저장된다
+    name = documents.cas_name(str(entry["sha256"]), str(entry["file"]))
+    assert name is not None
+    assert documents.cas_path(name).read_bytes() == _PDF_BYTES
+    assert not (outcome.snapshot_dir / "files").exists()
+
+    # 산출물: page.html(.gz)·content.md 는 있고, 페이지가 아니라 스크린샷은 없다
+    files = {f["name"] for f in storage.snapshot_files(outcome.snapshot_dir)}
+    assert "content.md" in files
+    assert "page.html.gz" in files or "page.html" in files
+    assert not any(n.startswith("screenshot") for n in files)
+    content = (outcome.snapshot_dir / "content.md").read_text(encoding="utf-8")
+    assert str(entry["sha256"]) in content
+
+    with db.connect() as conn:
+        row = db.get_snapshot_document(conn, outcome.snapshot_id, str(entry["file"]))
+        assert row is not None and row["sha256"] == entry["sha256"]
+        log = db.list_archive_logs(conn)[0]
+    steps = [s["step"] for s in json.loads(log["steps"])]
+    assert "download" in steps and "store" in steps
+
+    # 같은 파일이면 unchanged — 새 스냅샷을 만들지 않는다
+    second = pipeline.archive_url(url)
+    assert second.status == "unchanged"
+    assert second.snapshot_id == outcome.snapshot_id
 
 
 # ---- 문서 CAS ----

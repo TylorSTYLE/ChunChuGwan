@@ -140,6 +140,15 @@ archive/
 `wccg compact` 이전의 구형 스냅샷(page.html / raw.html / screenshot.png)도
 그대로 읽힌다 — 대시보드 파일 라우트가 신/구 이름을 모두 해석한다.
 
+URL 자체가 파일 다운로드(download.php?file=...pdf 등)면 페이지 캡처 대신
+**문서 스냅샷**으로 저장된다 (capture 가 `CaptureDownloadError` 로 감지 →
+pipeline `_archive_document_url` → `documents.download_direct`). 파일 본체는
+문서 CAS 에, 스냅샷 디렉토리에는 생성된 안내 page.html.gz + 문서 메타데이터
+content.md(파일 sha256 포함 — 같은 파일이면 unchanged) + meta.json 만 남고
+raw.html·스크린샷은 없다 (뷰어는 스크린샷 탭을 숨긴다). 파일명은
+Content-Disposition(EUC-KR 모지바케 복구 포함) → URL 경로 → 쿼리 값 →
+content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 정하면 실패.
+
 ## DB 스키마
 
 `chunchugwan/db.py`의 `SCHEMA` 참조. 핵심 테이블:
