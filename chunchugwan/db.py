@@ -1059,14 +1059,19 @@ def claim_crawl_schedule(
 # 기존 테이블에 컬럼을 추가하는 변경은 별도 마이그레이션이 필요하다.
 
 # 권한 역할. admin=관리자, archiver=아카이빙 가능, viewer=보기만,
-# pending=권한없음(가입 승인 대기 — 안내 페이지 외 접근 불가), blocked=차단
-ROLES = ("admin", "archiver", "viewer", "pending", "blocked")
+# pending=권한없음(가입 승인 대기 — 안내 페이지 외 접근 불가), blocked=차단,
+# withdrawn=탈퇴(본인 탈퇴로만 진입 — 로그인 거부, 관리자가 계정 정보를
+# 삭제해야 같은 이메일로 다시 가입/초대할 수 있다)
+ROLES = ("admin", "archiver", "viewer", "pending", "blocked", "withdrawn")
+# 관리자가 부여할 수 있는 역할 — 탈퇴는 본인 탈퇴로만 진입한다
+ASSIGNABLE_ROLES = ("admin", "archiver", "viewer", "pending", "blocked")
 ROLE_LABELS = {
     "admin": "관리자",
     "archiver": "아카이브",
     "viewer": "보기 전용",
     "pending": "권한없음",
     "blocked": "차단됨",
+    "withdrawn": "탈퇴",
 }
 
 
@@ -1174,8 +1179,21 @@ def set_password_hash(conn: sqlite3.Connection, user_id: int, password_hash: str
     )
 
 
+def withdraw_user(conn: sqlite3.Connection, user_id: int) -> None:
+    """계정 탈퇴 — 권한을 탈퇴 상태로 바꾸고 모든 세션을 무효화.
+
+    계정 정보는 남는다(이메일 UNIQUE 유지 — 재가입 불가). 관리자가
+    delete_user 로 계정 정보를 삭제해야 같은 이메일로 다시 가입/초대할 수 있다.
+    """
+    conn.execute(
+        "UPDATE users SET role = 'withdrawn' WHERE id = ? AND is_founder = 0",
+        (user_id,),
+    )
+    conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+
+
 def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
-    """사용자와 종속 데이터(세션·OIDC 연결·패스키)를 일괄 삭제 (계정 탈퇴)."""
+    """사용자와 종속 데이터(세션·OIDC 연결·패스키)를 일괄 삭제 (관리자의 계정 정보 삭제)."""
     conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM identities WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM webauthn_credentials WHERE user_id = ?", (user_id,))

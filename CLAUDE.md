@@ -142,7 +142,10 @@ archive/
   서버사이드 세션, OIDC state 1회용 기록). `users.role` 은
   admin(관리자)/archiver(아카이빙 가능)/viewer(보기 전용)/pending(권한없음 —
   가입 승인 대기, 로그인은 되지만 `/pending` 안내 페이지 외 접근 불가)/
-  blocked(차단). 신규 가입·SSO 자동 생성의 초기 권한은 `settings` 의
+  blocked(차단)/withdrawn(탈퇴 — 본인 탈퇴로만 진입, 로그인 거부.
+  관리자가 부여하거나 되돌릴 수 없고, 사용자 관리에서 계정 정보를
+  삭제(대상 이메일 입력 확인)해야 같은 이메일 재가입·초대가 풀린다).
+  신규 가입·SSO 자동 생성의 초기 권한은 `settings` 의
   `signup_default_role` (pending/viewer/archiver, 기본 pending — 관리자가
   사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
   관리자로 권한 변경 불가

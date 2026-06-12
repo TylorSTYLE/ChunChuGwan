@@ -155,16 +155,19 @@ async def auth_gate(request: Request, call_next):
             if path not in ("/setup", "/healthz", "/lang") and path not in _BROWSER_ICON_PATHS:
                 return RedirectResponse("/setup", status_code=302)
         else:
-            # 차단된 계정 — 로그아웃 외 모든 접근 거부 (세션은 차단 시점에
-            # 삭제되지만, 그 사이 발급된 세션이 있어도 여기서 막힌다)
+            # 차단·탈퇴된 계정 — 로그아웃 외 모든 접근 거부 (세션은 차단/탈퇴
+            # 시점에 삭제되지만, 그 사이 발급된 세션이 있어도 여기서 막힌다)
             if (
                 request.state.user is not None
-                and request.state.user["role"] == "blocked"
+                and request.state.user["role"] in ("blocked", "withdrawn")
                 and path != "/logout"
             ):
-                return PlainTextResponse(
-                    t(request, "차단된 계정입니다. 관리자에게 문의하세요."), status_code=403
+                message = (
+                    "차단된 계정입니다. 관리자에게 문의하세요."
+                    if request.state.user["role"] == "blocked"
+                    else "탈퇴한 계정입니다."
                 )
+                return PlainTextResponse(t(request, message), status_code=403)
             # 승인 대기(권한없음) 계정 — 안내 페이지·로그아웃·언어 전환만 허용
             if (
                 request.state.user is not None
