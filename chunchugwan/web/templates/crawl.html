@@ -19,6 +19,9 @@
   <a href="/archives">{{ _("목록으로") }}</a>
 </div>
 
+{% if notice %}
+<div class="notice">{{ notice }}</div>
+{% endif %}
 {% if merged %}
 <div class="notice">{{ _("같은 사이트의 아카이브가 이미 진행 중이라 이 크롤에 병합되었습니다 (기존 옵션 유지).") }}</div>
 {% endif %}
@@ -58,6 +61,20 @@
 </div>
 
 <h3>{{ _("페이지") }}</h3>
+<p class="muted" style="margin:0 0 8px">
+  {{ _("필터") }}:
+  {% for value, label in [
+      ("", _("전체")), ("pending", _("대기")), ("in_progress", _("아카이빙 중")),
+      ("done", _("완료")), ("failed", _("실패"))] -%}
+  {% if not loop.first %} · {% endif -%}
+  {% set n = counts[value] if value else counts['total'] -%}
+  {% if status_filter == value -%}
+  <strong>{{ label }} {{ n }}</strong>
+  {%- else -%}
+  <a href="/crawls/{{ crawl['id'] }}{% if value %}?status={{ value }}{% endif %}">{{ label }} {{ n }}</a>
+  {%- endif %}
+  {%- endfor %}
+</p>
 <div class="table-wrap">
 <table>
   <thead>
@@ -92,6 +109,12 @@
         <span class="mono muted">{{ p['error'] }}</span>
         {% if p['next_attempt_at'] %}
         <span class="muted">— {{ _("재시도") }} {{ p['next_attempt_at'] | ts }}</span>
+        {% endif %}
+        {% if can_archive and p['status'] == 'failed' %}
+        <form class="inline" method="post"
+              action="/crawls/{{ crawl['id'] }}/pages/{{ p['id'] }}/retry{% if status_filter %}?status={{ status_filter }}{% endif %}">
+          <button type="submit">{{ _("재시도", ctx="action") }}</button>
+        </form>
         {% endif %}
         {% else %}-{% endif %}
       </td>

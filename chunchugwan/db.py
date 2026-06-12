@@ -1516,16 +1516,24 @@ def crawl_page_counts(conn: sqlite3.Connection, crawl_id: int) -> dict[str, int]
     return counts
 
 
-def list_crawl_pages(conn: sqlite3.Connection, crawl_id: int) -> list[sqlite3.Row]:
-    """크롤의 페이지 목록 (발견 순) + 스냅샷의 page_id (타임라인 링크용)."""
-    return conn.execute(
-        """
+def list_crawl_pages(
+    conn: sqlite3.Connection, crawl_id: int, status: str | None = None
+) -> list[sqlite3.Row]:
+    """크롤의 페이지 목록 (발견 순) + 스냅샷의 page_id (타임라인 링크용).
+
+    status 를 주면 해당 상태(pending/in_progress/done/failed)만 추린다.
+    """
+    sql = """
         SELECT cp.*, s.page_id AS snapshot_page_id
         FROM crawl_pages cp LEFT JOIN snapshots s ON s.id = cp.snapshot_id
-        WHERE cp.crawl_id = ? ORDER BY cp.id
-        """,
-        (crawl_id,),
-    ).fetchall()
+        WHERE cp.crawl_id = ?
+    """
+    params: list[object] = [crawl_id]
+    if status is not None:
+        sql += " AND cp.status = ?"
+        params.append(status)
+    sql += " ORDER BY cp.id"
+    return conn.execute(sql, params).fetchall()
 
 
 def insert_crawl_page(
@@ -1708,6 +1716,19 @@ def retry_failed_crawl_pages(conn: sqlite3.Connection, crawl_id: int) -> int:
         (_utcnow(), crawl_id, crawl_id),
     )
     return cur.rowcount
+
+
+def get_failed_crawl_page(
+    conn: sqlite3.Connection, crawl_id: int, crawl_page_id: int
+) -> sqlite3.Row | None:
+    """크롤 소속 실패 페이지 행 조회 — 단건 재시도 검증용.
+
+    소속이 아니거나 실패 상태가 아니면 None.
+    """
+    return conn.execute(
+        "SELECT * FROM crawl_pages WHERE id = ? AND crawl_id = ? AND status = 'failed'",
+        (crawl_page_id, crawl_id),
+    ).fetchone()
 
 
 def find_crawl_snapshot(
