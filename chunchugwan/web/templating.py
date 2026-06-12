@@ -20,6 +20,7 @@ def _auth_context(request: Request) -> dict:
         "system_allowed": permissions.system_allowed(user),
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
+        "can_view_logs": permissions.can_view_logs(user),
     }
 
 

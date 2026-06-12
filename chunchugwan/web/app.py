@@ -34,7 +34,7 @@ from fastapi.responses import (
 
 from .. import (
     auth, config, crawler, db, deletion, differ, documents, netcheck, pipeline,
-    resources, scheduler, storage,
+    resources, scheduler, storage, system_log,
 )
 from . import api_routes, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -51,6 +51,9 @@ async def _lifespan(app: FastAPI):
     같은 URL 이 동시에 돌지 않게 한다. 크롤러는 사이트 전체 아카이브 큐
     (crawl_pages)를 소비한다 — 페이지 간 간격이 짧아 별도 폴링 주기를 쓴다.
     """
+    # 시스템 로그 DB 적재 — `wccg serve` 가 이미 설치했으면 중복 설치 무시.
+    # uvicorn 으로 직접 띄우는 경우를 위해 여기서도 보장한다.
+    system_log.install("serve")
     stop = threading.Event()
     threads: list[threading.Thread] = []
     if config.SCHEDULER_ENABLED:
@@ -1146,8 +1149,15 @@ def logs_view(
     date_to: str | None = None,
     page: int = 1,
     limit: int = _LOG_PAGE_SIZE_DEFAULT,
+    retry: str | None = None,
 ):
-    """아카이브 실행 로그. 도메인/페이지/스냅샷/상태/기간 필터 + 페이징."""
+    """아카이빙 로그. 도메인/페이지/스냅샷/상태/기간 필터 + 페이징.
+
+    viewer 이상(admin/archiver/viewer)만 열람 — pending 은 미들웨어가
+    이미 차단하지만, 권한 정책을 라우트에서도 명시적으로 강제한다.
+    """
+    if not permissions.can_view_logs(request.state.user):
+        raise HTTPException(403, t(request, "로그 열람 권한이 없습니다"))
     if limit not in _LOG_PAGE_SIZES:
         limit = _LOG_PAGE_SIZE_DEFAULT
     if status not in _LOG_STATUSES:
@@ -1216,6 +1226,9 @@ def logs_view(
             "total": total, "total_pages": total_pages, "page_num": page,
             "prev_url": _page_url(page - 1) if page > 1 else None,
             "next_url": _page_url(page + 1) if page < total_pages else None,
+            # 재시도 폼의 복귀 경로(필터 유지)와 결과 알림 (queued|active)
+            "current_url": _page_url(page),
+            "retry": retry if retry in ("queued", "active") else None,
         },
     )
 
@@ -1437,6 +1450,36 @@ def rearchive(
         raise HTTPException(404, t(request, "페이지 없음"))
     _queue_archive(background, page["url"], force=force)
     return RedirectResponse(url=f"/page/{page_id}?queued=1", status_code=303)
+
+
+@app.post("/logs/{log_id}/retry")
+def log_retry(
+    request: Request,
+    log_id: int,
+    background: BackgroundTasks,
+    next_url: str = Form("/logs", alias="next"),
+):
+    """실패 로그의 URL 재시도 — 같은 URL 을 백그라운드로 다시 아카이빙.
+
+    페이지가 안 만들어진 실패(page_id NULL)도 로그의 url 로 다시 시도할 수
+    있다. 사설 대역 페이지의 네트워크 태그는 pipeline 이 기존 페이지에서
+    물려받는다 (_resolve_network_tag).
+    """
+    _require_archiver(request)
+    with db.connect() as conn:
+        log = db.get_archive_log(conn, log_id)
+    if log is None:
+        raise HTTPException(404, t(request, "로그 없음"))
+    if log["status"] != "error":
+        raise HTTPException(400, t(request, "실패한 로그만 재시도할 수 있습니다"))
+    queued = _queue_archive(background, log["url"])
+    # 필터를 유지한 채 로그 화면으로 복귀 — 내부 /logs 경로만 허용 (open redirect 방지)
+    if not next_url.startswith("/logs"):
+        next_url = "/logs"
+    sep = "&" if "?" in next_url else "?"
+    return RedirectResponse(
+        f"{next_url}{sep}retry={'queued' if queued else 'active'}", status_code=303
+    )
 
 
 _BUSY_MSG = "아카이빙이 진행 중인 페이지입니다 — 완료 후 다시 시도하세요"

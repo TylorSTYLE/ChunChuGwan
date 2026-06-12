@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}{{ _("시스템 로그") }} — {{ _("춘추관") }}{% endblock %}
+{% block head %}
+<style>
+tr.trace-row { display: none; }
+tr.trace-row.open { display: table-row; }
+tr.trace-row > td { background: var(--bg-soft); padding: 10px 14px 14px; }
+tr.trace-row pre { margin: 0; font-size: 12px; white-space: pre-wrap;
+                   word-break: break-all; }
+td.msg-cell { max-width: 560px; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; }
+input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
+                   border: 1px solid var(--border); border-radius: 4px;
+                   background: var(--surface); color: var(--fg); }
+.date-range { display: inline-flex; gap: 4px; align-items: center; }
+.pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
+         font-size: 13px; }
+.pager .spacer { flex: 1; }
+</style>
+{% endblock %}
+{% block content %}
+{% set badge_class = {'INFO': 'same', 'WARNING': 'changed',
+                      'ERROR': 'error', 'CRITICAL': 'error'} %}
+
+<div class="toolbar">
+  <h2 style="margin:0">{{ _("시스템 로그") }}</h2>
+  <span class="spacer"></span>
+  <form method="get" action="/system/logs" class="toolbar" style="margin:0">
+    <select name="level" aria-label="{{ _('레벨') }}">
+      <option value="">{{ _("모든 레벨") }}</option>
+      {% for l in levels %}
+      <option value="{{ l }}" {% if l == level %}selected{% endif %}>{{ l }}</option>
+      {% endfor %}
+    </select>
+    <select name="source" aria-label="{{ _('출처') }}">
+      <option value="">{{ _("모든 출처") }}</option>
+      {% for s in sources %}
+      <option value="{{ s }}" {% if s == source %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    <span class="date-range">
+      <input type="date" name="date_from" value="{{ date_from }}" aria-label="{{ _('시작일') }}">
+      <span class="muted">~</span>
+      <input type="date" name="date_to" value="{{ date_to }}" aria-label="{{ _('종료일') }}">
+    </span>
+    <select name="limit" aria-label="{{ _('표시 줄 수') }}">
+      {% for n in limits %}
+      <option value="{{ n }}" {% if n == limit %}selected{% endif %}>{{ _("{n}줄", n=n) }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">{{ _("필터") }}</button>
+  </form>
+</div>
+
+{% if not logs %}
+  {% if level or source or date_from or date_to %}
+<p class="muted">{{ _("조건에 맞는 로그가 없습니다.") }}</p>
+  {% else %}
+<p class="muted">{{ _("시스템 로그가 없습니다. 앱(대시보드·워커·CLI)의 동작 기록이 여기에 쌓입니다.") }}</p>
+  {% endif %}
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>{{ _("시각") }}</th><th>{{ _("레벨") }}</th><th>{{ _("출처") }}</th>
+      <th>{{ _("로거") }}</th><th>{{ _("메시지") }}</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for log in logs %}
+    <tr>
+      <td class="mono">{{ log['created_at'] | ts }}</td>
+      <td><span class="badge {{ badge_class.get(log['level'], 'same') }}">{{ log['level'] }}</span></td>
+      <td class="mono muted">{{ log['source'] }}</td>
+      <td class="mono muted">{{ log['logger'] }}</td>
+      <td class="msg-cell mono" title="{{ log['message'] }}">{{ log['message'] }}</td>
+      <td>
+        {% if log['traceback'] %}
+        <button type="button" class="toggle" data-target="trace-{{ log['id'] }}">{{ _("상세") }}</button>
+        {% endif %}
+      </td>
+    </tr>
+    {% if log['traceback'] %}
+    <tr class="trace-row" id="trace-{{ log['id'] }}">
+      <td colspan="6"><pre class="mono">{{ log['traceback'] }}</pre></td>
+    </tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+<div class="pager">
+  <span class="muted">{{ _("총 {n}건", n=total) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
+  <span class="spacer"></span>
+  {% if prev_url %}<a href="{{ prev_url }}">&larr; {{ _("이전") }}</a>{% endif %}
+  {% if next_url %}<a href="{{ next_url }}">{{ _("다음") }} &rarr;</a>{% endif %}
+</div>
+{% endif %}
+
+<script>
+document.querySelectorAll('button.toggle').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.getElementById(btn.dataset.target).classList.toggle('open');
+    btn.classList.toggle('active');
+  });
+});
+</script>
+{% endblock %}
