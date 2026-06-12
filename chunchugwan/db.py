@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     interval_seconds INTEGER NOT NULL,   -- 3600(1시간) ~ 604800(1주일), scheduler 가 검증
     next_run_at      TEXT NOT NULL,      -- ISO 8601 UTC
     last_run_at      TEXT,
+    run_at_time      TEXT,               -- 'HH:MM' 서버 로컬 시간 (1일 단위 주기 전용)
     created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_schedules_next ON schedules(next_run_at);
@@ -171,6 +172,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
     if cols and "webauthn_challenge" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN webauthn_challenge TEXT")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(schedules)")}
+    if cols and "run_at_time" not in cols:
+        conn.execute("ALTER TABLE schedules ADD COLUMN run_at_time TEXT")
 
 
 @contextmanager
@@ -551,18 +555,23 @@ def list_due_schedules(conn: sqlite3.Connection, now_iso: str) -> list[sqlite3.R
 
 
 def upsert_schedule(
-    conn: sqlite3.Connection, page_id: int, interval_seconds: int, next_run_at: str
+    conn: sqlite3.Connection,
+    page_id: int,
+    interval_seconds: int,
+    next_run_at: str,
+    run_at_time: str | None = None,
 ) -> None:
-    """페이지 스케줄 등록 (이미 있으면 주기·다음 실행 시각만 교체)."""
+    """페이지 스케줄 등록 (이미 있으면 주기·실행 시각·다음 실행 시각만 교체)."""
     conn.execute(
         """
-        INSERT INTO schedules (page_id, interval_seconds, next_run_at, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO schedules (page_id, interval_seconds, next_run_at, run_at_time, created_at)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(page_id) DO UPDATE SET
             interval_seconds = excluded.interval_seconds,
-            next_run_at = excluded.next_run_at
+            next_run_at = excluded.next_run_at,
+            run_at_time = excluded.run_at_time
         """,
-        (page_id, interval_seconds, next_run_at, _utcnow()),
+        (page_id, interval_seconds, next_run_at, run_at_time, _utcnow()),
     )
 
 

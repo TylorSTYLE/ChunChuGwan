@@ -194,15 +194,19 @@ def schedule() -> None:
     "--every", required=True,
     help="반복 주기 — 1h ~ 1w (예: 1h, 90m, 12h, 3d, 1w)",
 )
-def schedule_add(url: str, every: str) -> None:
+@click.option(
+    "--at", "at_time", default=None,
+    help="실행 시각 HH:MM (서버 로컬 시간) — 1일 단위 주기에서만 (예: --every 1d --at 09:00)",
+)
+def schedule_add(url: str, every: str, at_time: str | None) -> None:
     """URL에 반복 주기를 등록/변경한다. 다음 실행은 지금 + 주기."""
     try:
         seconds = scheduler.parse_interval(every)
-        row = scheduler.set_schedule(url, seconds)
+        row = scheduler.set_schedule(url, seconds, run_at=at_time)
     except ValueError as e:
         raise click.ClickException(str(e))
     click.echo(
-        f"스케줄 등록: {row['url']} — {scheduler.format_interval(seconds)} 주기, "
+        f"스케줄 등록: {row['url']} — {scheduler.format_schedule(seconds, at_time)} 주기, "
         f"다음 실행 {row['next_run_at']}"
     )
 
@@ -215,10 +219,11 @@ def schedule_list() -> None:
     if not rows:
         click.echo("등록된 스케줄이 없습니다.")
         return
-    click.echo(f"{'주기':<12}  {'다음 실행':<25}  {'마지막 실행':<25}  URL")
+    click.echo(f"{'주기':<14}  {'다음 실행':<25}  {'마지막 실행':<25}  URL")
     for r in rows:
+        label = scheduler.format_schedule(r["interval_seconds"], r["run_at_time"])
         click.echo(
-            f"{scheduler.format_interval(r['interval_seconds']):<12}  "
+            f"{label:<14}  "
             f"{r['next_run_at']:<25}  {r['last_run_at'] or '-':<25}  {r['url']}"
         )
 
