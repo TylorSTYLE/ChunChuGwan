@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
 {% block title %}{{ _("사이트 아카이브") }} — {{ crawl['start_url'] }}{% endblock %}
 {% block content %}
 <div class="toolbar">
@@ -35,6 +36,10 @@
     </td></tr>
     <tr><th>{{ _("범위") }}</th>
       <td class="mono">{{ crawl['scope_host'] }}{{ crawl['scope_path'] }}</td></tr>
+    {% if network_tag %}
+    <tr><th>{{ _("로컬 네트워크 태그") }}</th>
+      <td>{{ network_tag_badge(network_tag['name'], network_tag['description'], network_tag['id']) }}</td></tr>
+    {% endif %}
     <tr><th>{{ _("옵션") }}</th>
       <td class="mono">{{ _("최대 페이지 수") }} {{ crawl['max_pages'] }} ·
           {{ _("최대 깊이") }} {{ crawl['max_depth'] }} ·

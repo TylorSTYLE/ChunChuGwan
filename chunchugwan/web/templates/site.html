@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
 {% block title %}{{ site['site_key'] }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <style>
@@ -17,6 +18,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 
 <div class="toolbar">
   <h2 style="margin:0" class="mono">{{ site['site_key'] }}</h2>
+  {% for tag in network_tags %}{{ network_tag_badge(tag['name'], tag['description'], tag['id']) }}{% endfor %}
   {% if site_title %}<span class="site-title" title="{{ site_title }}">{{ site_title }}</span>{% endif %}
   <span class="muted" style="font-size:13px">
     {{ _("페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개 · 용량 {size}", p=page_count, s=snapshot_total, c=crawls|length, size=site_bytes|filesize) }}
@@ -43,7 +45,8 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   <tbody>
   {% for p in pages %}
     <tr>
-      <td><a href="/page/{{ p['id'] }}">{{ p['url'] }}</a></td>
+      <td><a href="/page/{{ p['id'] }}">{{ p['url'] }}</a>
+        {%- if p['network_tag_name'] %} {{ network_tag_badge(p['network_tag_name'], p['network_tag_description'], p['network_tag_id']) }}{% endif %}</td>
       <td class="num">{{ p['snapshot_count'] }}</td>
       <td class="num mono">{% if page_bytes.get(p['id']) %}{{ page_bytes[p['id']] | filesize }}{% else %}-{% endif %}</td>
       <td class="mono">{% if p['last_taken_at'] %}{{ p['last_taken_at'] | ts }}{% else %}-{% endif %}</td>
@@ -151,7 +154,8 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   <tbody>
   {% for c in crawls %}
     <tr>
-      <td><a href="/crawls/{{ c['id'] }}">{{ c['start_url'] }}</a></td>
+      <td><a href="/crawls/{{ c['id'] }}">{{ c['start_url'] }}</a>
+        {%- if c['network_tag_name'] %} {{ network_tag_badge(c['network_tag_name'], c['network_tag_description'], c['network_tag_id']) }}{% endif %}</td>
       <td class="mono muted">{{ c['scope_host'] }}{{ c['scope_path'] }}</td>
       <td class="num">{{ c['done_count'] }}{% if c['total_count'] != c['done_count'] %} <span class="muted">/ {{ c['total_count'] }}</span>{% endif %}</td>
       <td class="mono">{{ c['created_at'] | ts }}</td>

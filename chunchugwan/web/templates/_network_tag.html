@@ -1,0 +1,5 @@
+{# 로컬 네트워크 태그 뱃지 — 같은 IP 대역의 다른 사설 네트워크를 이름으로 구분한다.
+   설명·태그 ID 는 툴팁(title)으로 보여준다. import 는 with context (_ 필요). #}
+{% macro network_tag_badge(name, description=None, tag_id=None) -%}
+<span class="badge changed" title="{{ _('로컬 네트워크 태그') }}{% if description %} — {{ description }}{% endif %}{% if tag_id %} (ID: {{ tag_id }}){% endif %}">{{ name }}</span>
+{%- endmacro %}

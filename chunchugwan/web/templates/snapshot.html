@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
 {% block title %}{{ _("스냅샷", ctx="one") }} — {{ snap['page_url'] }}{% endblock %}
 {% block head %}
 <style>
@@ -19,6 +20,10 @@
   <tbody>
     <tr><th>URL</th><td class="mono">{{ snap['page_url'] }}</td></tr>
     <tr><th>{{ _("최종 URL") }}</th><td class="mono">{{ snap['final_url'] }}</td></tr>
+    {% if network_tag %}
+    <tr><th>{{ _("로컬 네트워크 태그") }}</th>
+      <td>{{ network_tag_badge(network_tag['name'], network_tag['description'], network_tag['id']) }}</td></tr>
+    {% endif %}
     <tr><th>{{ _("캡처 시각") }}</th><td class="mono">{{ snap['taken_at'] | ts }}</td></tr>
     <tr><th>{{ _("해시") }}</th><td class="mono">{{ snap['content_hash'] }}</td></tr>
     <tr><th>HTTP</th><td class="mono">{{ snap['http_status'] or '-' }}</td></tr>
