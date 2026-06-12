@@ -58,6 +58,7 @@
 </div>
 
 <h3>{{ _("페이지") }}</h3>
+<div class="table-wrap">
 <table>
   <thead>
     <tr>
@@ -98,6 +99,7 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 
 {% if crawl['status'] == 'running' %}
 <script>

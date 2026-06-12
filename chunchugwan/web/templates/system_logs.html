@@ -13,9 +13,6 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
                    border: 1px solid var(--border); border-radius: 4px;
                    background: var(--surface); color: var(--fg); }
 .date-range { display: inline-flex; gap: 4px; align-items: center; }
-.pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
-         font-size: 13px; }
-.pager .spacer { flex: 1; }
 </style>
 {% endblock %}
 {% block content %}
@@ -59,6 +56,7 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
 <p class="muted">{{ _("시스템 로그가 없습니다. 앱(대시보드·워커·CLI)의 동작 기록이 여기에 쌓입니다.") }}</p>
   {% endif %}
 {% else %}
+<div class="table-wrap wide">
 <table>
   <thead>
     <tr>
@@ -88,6 +86,7 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
   {% endfor %}
   </tbody>
 </table>
+</div>
 <div class="pager">
   <span class="muted">{{ _("총 {n}건", n=total) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
   <span class="spacer"></span>

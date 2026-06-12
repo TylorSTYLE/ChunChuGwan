@@ -31,6 +31,7 @@
 <p class="muted">{{ _("아카이브된 페이지가 없습니다.") }}
   {{ _("시작하려면") }} {% if can_archive %}<a href="/archive/new">{{ _("새 아카이빙") }}</a> {{ _("메뉴나") }} {% endif %}<span class="mono">wccg add &lt;url&gt;</span> {{ _("명령을 사용하세요.") }}</p>
 {% else %}
+<div class="table-wrap">
 <table id="items">
   <thead>
     <tr><th>{{ _("사이트") }}</th><th class="num">{{ _("페이지") }}</th><th class="num">{{ _("스냅샷") }}</th><th class="num">{{ _("용량") }}</th><th class="num">{{ _("크롤 회차") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
@@ -71,6 +72,7 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 <script>

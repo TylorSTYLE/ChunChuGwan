@@ -6,8 +6,6 @@ td.url-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
               white-space: nowrap; }
 td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
                white-space: nowrap; }
-.pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
-         font-size: 13px; }
 </style>
 {% endblock %}
 {% block content %}
@@ -30,6 +28,7 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
 {% endif %}
 
 {% if groups %}
+<div class="table-wrap wide">
 <table>
   <thead>
     <tr>
@@ -68,6 +67,7 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="muted">{{ _("아직 저장된 문서가 없습니다.") }}</p>
 {% endif %}

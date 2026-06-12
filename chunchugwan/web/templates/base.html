@@ -52,10 +52,31 @@
 body { font-family: system-ui, sans-serif; margin: 0; color: var(--fg); font-size: 14px;
        background: var(--bg); }
 header { border-bottom: 1px solid var(--border); padding: 8px 16px;
-         display: flex; gap: 16px; align-items: baseline; }
+         display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; }
 header h1 { font-size: 15px; margin: 0; }
 header h1 a { color: var(--fg); text-decoration: none; }
 header h1 svg.logo { vertical-align: -4px; margin-right: 3px; }
+/* 메뉴 — 넓은 화면에서는 헤더 한 줄에 펼치고(display:contents),
+   좁은 화면(태블릿·모바일)에서는 햄버거 버튼으로 여닫는 세로 패널 */
+header nav { display: contents; }
+header .tagline, header nav a { font-size: 12px; }
+#nav-toggle { display: none; }
+@media (max-width: 1023px) {
+  header { align-items: center; }
+  #nav-toggle { display: inline-block; margin-left: auto; }
+  header nav { display: none; width: 100%; flex-direction: column;
+               align-items: stretch; gap: 2px; padding: 8px 0 4px; }
+  header nav.open { display: flex; }
+  header nav a { font-size: 13px; padding: 7px 4px; }
+  header nav .spacer { flex: none; border-top: 1px solid var(--border);
+                       margin: 6px 0; }
+  header nav .nav-user { padding: 2px 4px 6px; }
+  header nav form.inline { display: block; }
+  header nav button { width: 100%; text-align: left; padding: 7px 10px; }
+}
+@media (max-width: 599px) {
+  header .tagline { display: none; }
+}
 main { padding: 16px; max-width: 1280px; margin: 0 auto; }
 h2 { font-size: 16px; margin: 0 0 12px; }
 h3 { font-size: 13px; color: var(--muted); margin: 24px 0 8px;
@@ -68,7 +89,9 @@ th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--bor
 td, h2, .notice { overflow-wrap: anywhere; }
 th { color: var(--muted); font-weight: 600; font-size: 11px;
      text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
-td.num { text-align: right; color: var(--muted); }
+/* 숫자·짧은 보조 셀은 좁은 화면에서도 단어 중간에서 꺾이지 않게 한 줄 유지 */
+td.num { text-align: right; color: var(--muted); white-space: nowrap; }
+td.mono.muted { white-space: nowrap; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .muted { color: var(--muted); }
 .badge { display: inline-block; font-size: 11px; font-weight: 600;
@@ -110,6 +133,26 @@ form.inline { display: inline; }
                     font-variant-numeric: tabular-nums; }
 .toolbar .spacer { flex: 1; }
 header .spacer { flex: 1; }
+/* 다열 데이터 테이블 — 좁은 화면에서 열이 뭉개지지 않도록 최소 폭을 지키고
+   가로 스크롤. 넓은 화면에서는 min-width 가 컨테이너보다 작아 영향 없음 */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-wrap > table { min-width: 640px; }
+.table-wrap.wide > table { min-width: 920px; }
+.pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
+         font-size: 13px; flex-wrap: wrap; }
+.pager .spacer { flex: 1; }
+@media (max-width: 599px) {
+  main { padding: 12px; }
+  .stat-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+  .stat-card .value { font-size: 19px; }
+}
+/* 터치 화면 — 버튼·입력의 터치 타겟 확대 */
+@media (pointer: coarse) {
+  button, select, input[type=number], input[type=text], input[type=url],
+  input[type=email], input[type=password], input[type=datetime-local] {
+    padding: 6px 12px;
+  }
+}
 /* 인증 화면 (로그인/가입/2단계/초대/최초 설정) — 메뉴 없는 전용 레이아웃 */
 header.auth { border-bottom: none; justify-content: flex-end; align-items: center; }
 .auth-shell { max-width: 392px; margin: 7vh auto 48px; padding: 0 16px; }
@@ -142,33 +185,48 @@ button.danger:hover { background: var(--red-hover); }
 {% block header %}
 <header>
   <h1><a href="/">{{ logo(18) }}{{ _("춘추관") }}</a></h1>
-  <span class="muted" style="font-size:12px">{{ _("개인 웹 아카이브") }}</span>
-  <a href="/dashboard" style="font-size:12px">{{ _("현황") }}</a>
-  <a href="/archives" style="font-size:12px">{{ _("목록") }}</a>
-  <a href="/documents" style="font-size:12px">{{ _("문서") }}</a>
-  {% if can_archive %}
-  <a href="/archive/new" style="font-size:12px">{{ _("새 아카이빙") }}</a>
-  {% endif %}
-  <a href="/schedules" style="font-size:12px">{{ _("스케줄") }}</a>
-  {% if can_view_logs %}
-  <a href="/logs" style="font-size:12px">{{ _("아카이빙 로그") }}</a>
-  {% endif %}
-  {% if system_allowed %}
-  <a href="/system/logs" style="font-size:12px">{{ _("시스템 로그") }}</a>
-  <a href="/system/users" style="font-size:12px">{{ _("사용자") }}</a>
-  <a href="/system" style="font-size:12px">{{ _("시스템") }}</a>
-  {% endif %}
-  <span class="spacer"></span>
-  <button type="button" id="theme-toggle" title="{{ _('테마 전환 (자동 → 라이트 → 다크)') }}"></button>
-  {% if user %}
-  <span class="mono muted">{{ user['display_name'] or user['email'] }}</span>
-  <a href="/settings/account" style="font-size:12px">{{ _("계정") }}</a>
-  <form class="inline" method="post" action="/logout"><button>{{ _("로그아웃") }}</button></form>
-  {% endif %}
+  <span class="muted tagline">{{ _("개인 웹 아카이브") }}</span>
+  <button type="button" id="nav-toggle" aria-controls="site-nav" aria-expanded="false"
+          title="{{ _('메뉴') }}">☰</button>
+  <nav id="site-nav">
+    <a href="/dashboard">{{ _("현황") }}</a>
+    <a href="/archives">{{ _("목록") }}</a>
+    <a href="/documents">{{ _("문서") }}</a>
+    {% if can_archive %}
+    <a href="/archive/new">{{ _("새 아카이빙") }}</a>
+    {% endif %}
+    <a href="/schedules">{{ _("스케줄") }}</a>
+    {% if can_view_logs %}
+    <a href="/logs">{{ _("아카이빙 로그") }}</a>
+    {% endif %}
+    {% if system_allowed %}
+    <a href="/system/logs">{{ _("시스템 로그") }}</a>
+    <a href="/system/users">{{ _("사용자") }}</a>
+    <a href="/system">{{ _("시스템") }}</a>
+    {% endif %}
+    <span class="spacer"></span>
+    <button type="button" id="theme-toggle" title="{{ _('테마 전환 (자동 → 라이트 → 다크)') }}"></button>
+    {% if user %}
+    <span class="mono muted nav-user">{{ user['display_name'] or user['email'] }}</span>
+    <a href="/settings/account">{{ _("계정") }}</a>
+    <form class="inline" method="post" action="/logout"><button>{{ _("로그아웃") }}</button></form>
+    {% endif %}
+  </nav>
 </header>
 {% endblock %}
 <main>{% block content %}{% endblock %}</main>
 <script>
+/* 메뉴 토글 — 좁은 화면에서 헤더 메뉴 패널 여닫기 (인증 화면 헤더에는 없음) */
+(function () {
+  var btn = document.getElementById("nav-toggle");
+  var nav = document.getElementById("site-nav");
+  if (!btn || !nav) return;
+  btn.addEventListener("click", function () {
+    var open = nav.classList.toggle("open");
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.classList.toggle("active", open);
+  });
+})();
 /* 테마 토글 — 자동(시스템) → 라이트 → 다크 순환, localStorage 에 기억 */
 (function () {
   var btn = document.getElementById("theme-toggle");
