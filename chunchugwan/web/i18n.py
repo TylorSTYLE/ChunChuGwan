@@ -330,6 +330,7 @@ _EN: dict[str, str] = {
     "추출·정규화 텍스트": "Extracted & normalized text",
     "캡처 메타 정보": "Capture metadata",
     # ---- 시스템 (system) ----
+    "버전": "Version",
     "아카이브 루트": "Archive root",
     "저장 공간": "Storage",
     "페이지": "Pages",
