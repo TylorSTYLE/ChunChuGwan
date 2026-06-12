@@ -23,8 +23,8 @@
 <div class="toolbar" style="margin-bottom:12px">
   <span class="muted">자동 재아카이빙</span>
   {% if schedule %}
-  <span><strong>{{ schedule_label }}</strong> 주기 · 다음 실행 <span class="mono">{{ schedule['next_run_at'] }}</span>
-    {%- if schedule['last_run_at'] %} · 마지막 실행 <span class="mono">{{ schedule['last_run_at'] }}</span>{% endif %}</span>
+  <span><strong>{{ schedule_label }}</strong> 주기 · 다음 실행 <span class="mono">{{ schedule['next_run_at'] | ts }}</span>
+    {%- if schedule['last_run_at'] %} · 마지막 실행 <span class="mono">{{ schedule['last_run_at'] | ts }}</span>{% endif %}</span>
   {% else %}
   <span class="muted">미설정 (최소 1시간 ~ 최대 1주일)</span>
   {% endif %}
@@ -56,7 +56,7 @@
   {% for it in items %}
     <tr>
       <td class="num">{{ it.idx }}</td>
-      <td class="mono"><a href="/snapshot/{{ it.snap['id'] }}">{{ it.snap['taken_at'] }}</a></td>
+      <td class="mono"><a href="/snapshot/{{ it.snap['id'] }}">{{ it.snap['taken_at'] | ts }}</a></td>
       <td class="mono">{{ it.snap['content_hash'][:12] }}</td>
       <td><span class="badge {{ it.badge }}">{{ {'new': '신규', 'changed': '변경', 'same': '동일'}[it.badge] }}</span></td>
       <td class="num">{{ it.snap['http_status'] or '-' }}</td>
@@ -83,7 +83,7 @@
   <tbody>
   {% for c in checks %}
     <tr>
-      <td class="mono">{{ c['checked_at'] }}</td>
+      <td class="mono">{{ c['checked_at'] | ts }}</td>
       <td class="mono muted">{{ c['content_hash'][:12] }}</td>
       <td><span class="badge same">동일</span></td>
     </tr>

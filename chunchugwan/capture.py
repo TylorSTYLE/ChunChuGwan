@@ -133,16 +133,22 @@ _DOC_LINK_JS = """
 }
 """
 
-# 도메인 룰의 셀렉터에 걸리는 노드 제거. 잘못된 셀렉터는 무시.
+# 도메인 룰의 셀렉터에 걸리는 노드를 제거한 HTML 생성. 잘못된 셀렉터는 무시.
+# 라이브 DOM 대신 raw_html 문자열을 DOMParser 로 파싱해 작업한다 —
+# 저장 산출물(page.html)을 오염시키지 않고, _inline_resources 이후의
+# base64 데이터가 추출용 HTML 에 섞이는 것도 막는다. DOMParser 는 스크립트
+# 실행/자원 로드를 하지 않으며, 셀렉터 엔진은 live querySelectorAll 과 동일.
 _REMOVE_JS = """
-(selectors) => {
+([html, selectors]) => {
+  const doc = new DOMParser().parseFromString(html, "text/html");
   let removed = 0;
   for (const sel of selectors) {
     try {
-      document.querySelectorAll(sel).forEach((el) => { el.remove(); removed += 1; });
+      doc.querySelectorAll(sel).forEach((el) => { el.remove(); removed += 1; });
     } catch (e) { /* 잘못된 셀렉터 무시 */ }
   }
-  return removed;
+  const doctype = doc.doctype ? "<!DOCTYPE " + doc.doctype.name + ">" : "";
+  return [doctype + doc.documentElement.outerHTML, removed];
 }
 """
 
@@ -153,7 +159,7 @@ class CaptureResult:
     http_status: int | None
     title: str | None
     raw_html: str
-    content_html: str  # 도메인 룰 셀렉터 제거 후 DOM (추출용, 룰 없으면 raw와 동일)
+    content_html: str  # raw_html 에서 도메인 룰 셀렉터를 제거한 추출용 HTML (룰 없으면 raw와 동일)
     # 페이지가 링크한 문서 파일 URL (절대 URL, fragment 제거·중복 제거)
     document_links: list[str] = field(default_factory=list)
 
@@ -193,16 +199,20 @@ def capture(
                 raw_html = page.content()
                 (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
                 document_links = _collect_document_links(page)
+
+                # 추출용 content_html 은 인라인 전의 raw_html 기준으로 만든다 —
+                # 인라인 후 DOM 에는 base64 데이터가 섞여 extract 가 느려진다.
+                content_html = raw_html
+                if remove_selectors:
+                    content_html, removed = page.evaluate(
+                        _REMOVE_JS, [raw_html, list(remove_selectors)]
+                    )
+                    logger.info("도메인 룰로 노드 %d개 제거: %s", removed, url)
+
                 page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
                 (out_dir / "page.html").write_text(
                     _inline_resources(page, raw_html), encoding="utf-8"
                 )
-
-                content_html = raw_html
-                if remove_selectors:
-                    removed = page.evaluate(_REMOVE_JS, list(remove_selectors))
-                    logger.info("도메인 룰로 노드 %d개 제거: %s", removed, url)
-                    content_html = page.content()
 
                 return CaptureResult(
                     final_url=page.url,

@@ -94,7 +94,7 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
   {% for it in items %}
     {% set log = it.log %}
     <tr>
-      <td class="mono">{{ log['started_at'] }}</td>
+      <td class="mono">{{ log['started_at'] | ts }}</td>
       <td><span class="badge {{ badge_class[log['status']] }}">{{ status_label[log['status']] }}</span></td>
       <td class="url-cell">
         {% if log['page_id'] %}

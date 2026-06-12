@@ -6,6 +6,7 @@ import pytest
 from chunchugwan import extract
 
 FIXTURE = Path(__file__).parent / "fixtures" / "article.html"
+BOARD_FIXTURE = Path(__file__).parent / "fixtures" / "board_list.html"
 
 
 @pytest.fixture
@@ -18,6 +19,26 @@ def test_extract_text_main_content(article_html):
     assert "웹 아카이빙 시스템의 설계 원칙" in text
     assert "정규화 단계의 중요성" in text
     assert "이 스크립트는 추출되면 안 된다" not in text
+
+
+def test_extract_text_keeps_link_titles_on_board_list():
+    """게시판/목록형 페이지에서 글 제목(<a> 안 텍스트)이 잘리지 않는다.
+
+    trafilatura 의 link-density 필터가 링크 비중 높은 목록 블록을 통째로
+    버리는 회귀 — fixture 는 실제 게시판 목록 페이지를 축소한 것으로,
+    <a> detag 없이 추출하면 제목이 전부 사라진다.
+    """
+    html = BOARD_FIXTURE.read_text(encoding="utf-8")
+    text = extract.extract_text(html, "https://www.clien.net/service/board/news")
+    assert "구글 플레이스토어서 엑스 '청소년 이용불가'…등급 상향 조치" in text
+    assert "macOS 27은 이제 울트라와이드 모니터를 기본적으로 지원합니다" in text
+    assert "Apple, 서비스 전반에 걸쳐 여러 혁신적인 기능과 지능 경험 공개" in text
+
+
+def test_detag_links_converts_anchors():
+    out = extract._detag_links('<html><body><p><a href="/x">제목 링크</a> 본문</p></body></html>')
+    assert "<a" not in out
+    assert "제목 링크" in out
 
 
 def test_extract_text_fallback_when_trafilatura_fails(monkeypatch):
