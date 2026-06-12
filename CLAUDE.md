@@ -27,6 +27,7 @@ uv run wccg diff <url>                   # 최신 2개 스냅샷 비교
 uv run wccg diff <url> --from 1 --to 3
 uv run wccg delete <url>                 # 아카이브 전체 삭제 (--snapshot N 으로 하나만)
 uv run wccg schedule add <url> --every 12h  # 주기적 재아카이빙 등록 (1h ~ 1w)
+uv run wccg schedule add <url> --every 1d --at 09:00  # 1일 단위 주기는 실행 시각(서버 로컬) 지정 가능
 uv run wccg schedule list                # 스케줄 목록 / remove <url> 로 해제
 uv run wccg schedule run                 # 기한이 된 스케줄 1회 실행 (cron 용)
 uv run wccg serve                        # 대시보드 (127.0.0.1:8765)
@@ -101,7 +102,8 @@ archive/
 - `checks` — 중복으로 저장 생략된 확인 기록
 - `archive_logs` — 아카이브 실행 로그 (성공/실패, 단계별 소요시간 JSON,
   출처 cli/web/schedule)
-- `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1주일, 다음 실행 시각)
+- `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1주일, 다음 실행 시각,
+  1일 단위 주기는 `run_at_time` HH:MM 으로 실행 시각 지정 — 서버 로컬 시간)
 - `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
   서버사이드 세션, OIDC state 1회용 기록). `users.role` 은
   admin(관리자)/archiver(아카이빙 가능)/viewer(보기 전용)/blocked(차단) —
@@ -127,7 +129,9 @@ archive/
   주기 등록은 백그라운드 작업 말미에 수행)
   / 스케줄(schedules — `/schedules`, 헤더 메뉴 "스케줄". 자동 재아카이빙
   등록 목록 + 주기 변경·해제. 변경/해제는 admin/archiver 만, viewer 는
-  읽기 전용) / 타임라인(timeline)
+  읽기 전용. 주기 입력은 프리셋 + 직접 입력(분/시간/일) + 1일 단위 주기의
+  실행 시각 — `_schedule_field.html` 매크로를 타임라인·새 아카이빙과 공용)
+  / 타임라인(timeline)
   / 스냅샷 뷰어(snapshot) / diff 뷰어(diff)
   / 로그(logs — 실행 기록, 도메인·페이지·스냅샷·상태 필터 + 단계별 상세 펼침)
   / 시스템(system — 백업/복원·내보내기/가져오기·저장 공간 압축(`wccg compact`

@@ -214,6 +214,43 @@ def test_archive_with_interval_sets_schedule(client, monkeypatch):
     assert sched is not None and sched["interval_seconds"] == 3600
 
 
+def test_archive_with_custom_interval_and_run_at(client, monkeypatch):
+    """직접 입력 주기(2일) + 실행 시각이 스케줄에 반영된다."""
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": None,
+    )
+    res = client.post(
+        "/archive",
+        data={
+            "url": "https://example.com/post", "interval": "custom",
+            "custom_value": "2", "custom_unit": "d", "run_at": "09:00",
+        },
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        sched = db.get_schedule(conn, 1)
+    assert sched["interval_seconds"] == 2 * 86400
+    assert sched["run_at_time"] == "09:00"
+
+
+def test_archive_rejects_run_at_for_hourly_interval(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(
+        web_app.pipeline, "archive_url",
+        lambda url, force=False, source="cli": calls.append(url),
+    )
+    res = client.post(
+        "/archive",
+        data={"url": "https://example.com/post", "interval": "3600", "run_at": "09:00"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith("/archive/new?error=")
+    assert calls == []
+
+
 def test_archive_without_interval_no_schedule(client, monkeypatch):
     monkeypatch.setattr(
         web_app.pipeline, "archive_url",
@@ -407,6 +444,77 @@ def test_schedule_set_and_shown(client):
     with db.connect() as conn:
         sched = db.get_schedule(conn, 1)
     assert sched["interval_seconds"] == 3600
+
+
+def test_schedule_set_custom_interval(client):
+    """직접 입력 주기 — custom_value × 단위가 초로 변환되어 등록된다."""
+    res = client.post(
+        "/page/1/schedule",
+        data={"interval": "custom", "custom_value": "2", "custom_unit": "h"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        sched = db.get_schedule(conn, 1)
+    assert sched["interval_seconds"] == 2 * 3600
+
+    # 90분도 직접 입력 가능
+    client.post(
+        "/page/1/schedule",
+        data={"interval": "custom", "custom_value": "90", "custom_unit": "m"},
+    )
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1)["interval_seconds"] == 5400
+
+    # 프리셋에 없는 주기는 목록·타임라인에서 직접 입력으로 프리필된다
+    for path in ("/schedules", "/page/1"):
+        res = client.get(path)
+        assert res.status_code == 200
+        assert 'value="90"' in res.text  # custom_value 프리필
+        assert "1시간 30분" in res.text  # 주기 라벨
+
+
+def test_schedule_set_with_run_at(client):
+    res = client.post(
+        "/page/1/schedule",
+        data={"interval": "86400", "run_at": "09:00"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        sched = db.get_schedule(conn, 1)
+    assert sched["run_at_time"] == "09:00"
+
+    res = client.get("/schedules")
+    assert "1일 · 09:00" in res.text
+
+    # 시간 단위 주기에 실행 시각은 400
+    res = client.post(
+        "/page/1/schedule", data={"interval": "3600", "run_at": "09:00"}
+    )
+    assert res.status_code == 400
+
+
+def test_schedule_rejects_bad_custom_interval(client):
+    # 범위 밖 (30분 < 최소 1시간)
+    res = client.post(
+        "/page/1/schedule",
+        data={"interval": "custom", "custom_value": "30", "custom_unit": "m"},
+    )
+    assert res.status_code == 400
+    # 숫자가 아닌 값·잘못된 단위
+    res = client.post(
+        "/page/1/schedule",
+        data={"interval": "custom", "custom_value": "abc", "custom_unit": "h"},
+    )
+    assert res.status_code == 400
+    res = client.post(
+        "/page/1/schedule",
+        data={"interval": "custom", "custom_value": "2", "custom_unit": "w"},
+    )
+    assert res.status_code == 400
+    with db.connect() as conn:
+        assert db.get_schedule(conn, 1) is None
 
 
 def test_schedule_rejects_out_of_range_interval(client):
