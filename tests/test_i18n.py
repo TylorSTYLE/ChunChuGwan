@@ -115,39 +115,12 @@ def test_unsupported_accept_language_falls_back(client):
     assert "아카이브 목록" in res.text
 
 
-# ---- 언어 전환 (/lang) ----
+# ---- 언어 설정 (/settings/account/language) ----
 
 
-def test_lang_switch_sets_cookie_and_redirects(client):
-    res = client.post(
-        "/lang", data={"lang": "en", "next": "/archives"}, follow_redirects=False
-    )
-    assert res.status_code == 303
-    assert res.headers["location"] == "/archives"
-    assert client.cookies.get(i18n.LANG_COOKIE) == "en"
-
-    res = client.get("/archives")
-    assert "Archived pages" in res.text
-
-
-def test_lang_cookie_overrides_accept_language(client):
-    client.cookies.set(i18n.LANG_COOKIE, "ko")
-    res = client.get("/archives", headers={"Accept-Language": "en"})
-    assert "아카이브 목록" in res.text
-
-
-def test_lang_rejects_unsupported(client):
-    res = client.post("/lang", data={"lang": "zz", "next": "/"})
-    assert res.status_code == 400
-
-
-def test_lang_rejects_open_redirect(client):
-    res = client.post(
-        "/lang", data={"lang": "en", "next": "https://evil.example"},
-        follow_redirects=False,
-    )
-    assert res.status_code == 303
-    assert res.headers["location"] == "/"
+def test_lang_no_route(client):
+    """/lang 엔드포인트는 제거되었다."""
+    assert client.post("/lang", data={"lang": "en", "next": "/"}).status_code == 404
 
 
 # ---- 화면별 영어 렌더링 스모크 ----

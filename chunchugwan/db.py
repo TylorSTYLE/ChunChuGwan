@@ -234,6 +234,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )
     if cols and "timezone" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'")
+    if cols and "locale" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT 'ko'")
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
     if cols and "webauthn_challenge" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN webauthn_challenge TEXT")
@@ -1322,6 +1324,11 @@ def set_display_name(conn: sqlite3.Connection, user_id: int, name: str | None) -
 def set_user_timezone(conn: sqlite3.Connection, user_id: int, tz_name: str) -> None:
     """사용자 타임존 변경 (IANA 이름, 예: Asia/Seoul)."""
     conn.execute("UPDATE users SET timezone = ? WHERE id = ?", (tz_name, user_id))
+
+
+def set_user_locale(conn: sqlite3.Connection, user_id: int, locale: str) -> None:
+    """사용자 표시 언어 변경 (예: ko, en)."""
+    conn.execute("UPDATE users SET locale = ? WHERE id = ?", (locale, user_id))
 
 
 def set_password_hash(conn: sqlite3.Connection, user_id: int, password_hash: str) -> None:

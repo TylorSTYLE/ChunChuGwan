@@ -102,11 +102,8 @@ def test_pending_page_shows_polite_message(client):
     assert "new@test.co" in res.text
 
 
-def test_pending_user_can_logout_and_switch_language(client):
+def test_pending_user_can_logout(client):
     _signup(client)
-    assert client.post(
-        "/lang", data={"lang": "en", "next": "/pending"}, follow_redirects=False
-    ).status_code == 303
     assert client.post("/logout", follow_redirects=False).status_code == 303
     # 로그아웃 후엔 보호 경로가 로그인으로 보낸다
     res = client.get("/pending", follow_redirects=False)

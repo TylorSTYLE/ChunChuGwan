@@ -18,6 +18,7 @@ from fastapi.responses import (
 )
 
 from .. import auth, config, db, oidc
+from . import i18n
 from .i18n import t
 from .templating import templates
 
@@ -487,6 +488,9 @@ def _account_ctx(
         "passkey_count": passkey_count,
         "timezone": user["timezone"] or "UTC",
         "timezone_groups": TIMEZONE_GROUPS,
+        "locale": user["locale"] or i18n.DEFAULT_LOCALE,
+        "locales": i18n.SUPPORTED_LOCALES,
+        "locale_names": i18n.LOCALE_NAMES,
         "error": error,
         "notice": notice,
     }
@@ -499,12 +503,25 @@ def account_page(request: Request, ok: str | None = None):
         "name": "사용자 이름을 변경했습니다.",
         "password": "패스워드를 변경했습니다. 다른 기기의 세션은 로그아웃되었습니다.",
         "timezone": "시간대를 변경했습니다.",
+        "language": "언어를 변경했습니다.",
     }.get(ok or "")
     if notice:
         notice = t(request, notice)
     return templates.TemplateResponse(
         request, "account.html", _account_ctx(user, notice=notice)
     )
+
+
+@router.post("/settings/account/language", response_class=HTMLResponse)
+def change_language(request: Request, language: str = Form(...)):
+    user = request.state.user
+    lang = language.strip()
+    if lang not in i18n.SUPPORTED_LOCALES:
+        ctx = _account_ctx(user, error=t(request, "지원하지 않는 언어입니다."))
+        return templates.TemplateResponse(request, "account.html", ctx, status_code=400)
+    with db.connect() as conn:
+        db.set_user_locale(conn, user["id"], lang)
+    return RedirectResponse(url="/settings/account?ok=language", status_code=303)
 
 
 @router.post("/settings/account/timezone", response_class=HTMLResponse)
