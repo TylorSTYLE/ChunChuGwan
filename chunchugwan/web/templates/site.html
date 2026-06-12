@@ -3,6 +3,9 @@
 {% block content %}
 <style>
 #pages th:first-child { width: 45%; }
+.pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
+         font-size: 13px; }
+.pager .spacer { flex: 1; }
 </style>
 {% if error %}
 <div class="error">{{ error }}</div>
@@ -14,12 +17,12 @@
 <div class="toolbar">
   <h2 style="margin:0" class="mono">{{ site['site_key'] }}</h2>
   <span class="muted" style="font-size:13px">
-    {{ _("페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개", p=pages|length, s=snapshot_total, c=crawls|length) }}
+    {{ _("페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개 · 용량 {size}", p=page_count, s=snapshot_total, c=crawls|length, size=site_bytes|filesize) }}
   </span>
   <span class="spacer"></span>
   {% if can_delete %}
   <form class="inline" method="post" action="/sites/{{ site['id'] }}/delete"
-        onsubmit="return confirm({{ (site['site_key'] ~ '\n\n' ~ _('페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', p=pages|length, c=crawls|length))|tojson }})">
+        onsubmit="return confirm({{ (site['site_key'] ~ '\n\n' ~ _('페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', p=page_count, c=crawls|length))|tojson }})">
     <button type="submit" class="danger">{{ _("사이트 삭제") }}</button>
   </form>
   {% endif %}
@@ -32,13 +35,14 @@
 {% if pages %}
 <table id="pages">
   <thead>
-    <tr><th>URL</th><th class="num">{{ _("스냅샷") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
+    <tr><th>URL</th><th class="num">{{ _("스냅샷") }}</th><th class="num">{{ _("용량") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
   </thead>
   <tbody>
   {% for p in pages %}
     <tr>
       <td><a href="/page/{{ p['id'] }}">{{ p['url'] }}</a></td>
       <td class="num">{{ p['snapshot_count'] }}</td>
+      <td class="num mono">{% if page_bytes.get(p['id']) %}{{ page_bytes[p['id']] | filesize }}{% else %}-{% endif %}</td>
       <td class="mono">{% if p['last_taken_at'] %}{{ p['last_taken_at'] | ts }}{% else %}-{% endif %}</td>
       <td>
         {% if schedule_labels.get(p['id']) %}
@@ -68,6 +72,12 @@
   {% endfor %}
   </tbody>
 </table>
+<div class="pager">
+  <span class="muted">{{ _("총 {n}건", n=page_count) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
+  <span class="spacer"></span>
+  {% if prev_url %}<a href="{{ prev_url }}">&larr; {{ _("이전") }}</a>{% endif %}
+  {% if next_url %}<a href="{{ next_url }}">{{ _("다음") }} &rarr;</a>{% endif %}
+</div>
 {% else %}
 <p class="muted">{{ _("아직 페이지가 없습니다 — 크롤이 진행되면 여기에 쌓입니다.") }}</p>
 {% endif %}

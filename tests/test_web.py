@@ -92,6 +92,57 @@ def test_index(client):
     assert 'href="/archive/new"' in res.text  # 헤더 메뉴
 
 
+def _fixture_total_bytes() -> int:
+    """fixture 스냅샷 전체의 파일 용량 합 — 사이트 용량 표시 기대값."""
+    with db.connect() as conn:
+        rows = db.list_snapshot_dirs(conn)
+    return sum(
+        f["bytes"]
+        for r in rows
+        for f in storage.snapshot_files(
+            storage.page_dir(r["domain"], r["slug"]) / r["dir_name"]
+        )
+    )
+
+
+def test_index_shows_site_size(client):
+    from chunchugwan.web.templating import filesize
+
+    res = client.get("/archives")
+    assert res.status_code == 200
+    assert filesize(_fixture_total_bytes()) in res.text
+
+
+def test_site_shows_page_size_and_total(client):
+    from chunchugwan.web.templating import filesize
+
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert res.status_code == 200
+    # 헤더의 사이트 합계 + 페이지 행 용량 (페이지가 1개라 같은 값이 두 번)
+    assert res.text.count(filesize(_fixture_total_bytes())) >= 2
+
+
+def test_site_pages_pagination(client, monkeypatch):
+    monkeypatch.setattr(web_app, "_SITE_PAGES_PER_PAGE", 1)
+    url2 = "https://example.com/second"
+    with db.connect() as conn:
+        db.get_or_create_page(conn, url2, "example.com", storage.url_to_slug(url2))
+        site = db.get_site_by_key(conn, "example.com")
+    page1 = client.get(f"/sites/{site['id']}")
+    page2 = client.get(f"/sites/{site['id']}?page=2")
+    assert "1/2 페이지" in page1.text
+    assert "2/2 페이지" in page2.text
+    # 스냅샷 있는 기존 페이지가 먼저(NULLS LAST), 새 페이지는 2페이지에
+    assert "https://example.com/post" in page1.text
+    assert url2 not in page1.text
+    assert url2 in page2.text
+    assert "https://example.com/post</a>" not in page2.text
+    # 범위를 넘는 페이지 번호는 마지막 페이지로 보정
+    assert url2 in client.get(f"/sites/{site['id']}?page=99").text
+
+
 def test_root_serves_dashboard(client):
     """첫 페이지(/)는 현황 화면이고, 목록은 /archives 에 있다."""
     res = client.get("/")

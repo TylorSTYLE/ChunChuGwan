@@ -736,8 +736,8 @@ _EN: dict[str, str] = {
         "the same site. Click a site to see its pages and crawl runs.",
     "크롤 회차": "Crawl runs",
     "크롤 진행 중": "Crawling",
-    "페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개":
-        "{p} page(s) · {s} snapshot(s) · {c} crawl run(s)",
+    "페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개 · 용량 {size}":
+        "{p} page(s) · {s} snapshot(s) · {c} crawl run(s) · {size}",
     "사이트 삭제": "Delete site",
     "페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
         "This deletes the entire site archive including {p} page(s) and {c} "

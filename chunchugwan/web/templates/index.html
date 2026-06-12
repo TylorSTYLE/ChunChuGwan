@@ -31,7 +31,7 @@
 {% else %}
 <table id="items">
   <thead>
-    <tr><th>{{ _("사이트") }}</th><th class="num">{{ _("페이지") }}</th><th class="num">{{ _("스냅샷") }}</th><th class="num">{{ _("크롤 회차") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
+    <tr><th>{{ _("사이트") }}</th><th class="num">{{ _("페이지") }}</th><th class="num">{{ _("스냅샷") }}</th><th class="num">{{ _("용량") }}</th><th class="num">{{ _("크롤 회차") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
   </thead>
   <tbody>
   {% for it in items %}
@@ -45,6 +45,7 @@
       </td>
       <td class="num">{{ it['page_count'] or '-' }}</td>
       <td class="num">{{ it['snapshot_count'] or '-' }}</td>
+      <td class="num mono">{% if it['bytes'] %}{{ it['bytes'] | filesize }}{% else %}-{% endif %}</td>
       <td class="num">{{ it['crawl_count'] or '-' }}</td>
       <td class="mono">{% if it['activity_at'] %}{{ it['activity_at'] | ts }}{% else %}-{% endif %}</td>
       <td>

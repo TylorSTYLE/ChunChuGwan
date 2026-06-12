@@ -933,13 +933,13 @@ def count_pages(conn: sqlite3.Connection) -> int:
 
 
 def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """모든 스냅샷의 시각·디렉토리 위치 (id, taken_at, domain, slug, dir_name).
+    """모든 스냅샷의 시각·디렉토리 위치 (id, taken_at, site_id, domain, slug, dir_name).
 
-    현황 대시보드가 기간별 스냅샷 수와 디렉토리 용량을 집계하는 데 쓴다.
+    현황 대시보드의 기간별 집계와 아카이브 목록의 사이트별 용량 합산에 쓴다.
     """
     return conn.execute(
         """
-        SELECT s.id, s.taken_at, p.domain, p.slug, s.dir_name
+        SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         """
     ).fetchall()
@@ -1565,15 +1565,55 @@ def find_running_crawl(conn: sqlite3.Connection, start_url: str) -> sqlite3.Row 
     ).fetchone()
 
 
-def list_site_pages(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
-    """사이트 소속 페이지 목록 + 스냅샷 수·마지막 캡처 시각 (사이트 상세/삭제용)."""
-    return conn.execute(
-        """
+def list_site_pages(
+    conn: sqlite3.Connection,
+    site_id: int,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """사이트 소속 페이지 목록 + 스냅샷 수·마지막 캡처 시각 (사이트 상세/삭제용).
+
+    limit 을 주면 offset 부터 그만큼만 반환한다 (사이트 상세 페이징용).
+    """
+    sql = """
         SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
         FROM pages p LEFT JOIN snapshots s ON s.page_id = p.id
         WHERE p.site_id = ?
         GROUP BY p.id
         ORDER BY last_taken_at DESC NULLS LAST, p.url
+        """
+    params: list[object] = [site_id]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    return conn.execute(sql, params).fetchall()
+
+
+def site_page_totals(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row:
+    """사이트 소속 페이지·스냅샷 총수 (사이트 상세 헤더·페이징용)."""
+    return conn.execute(
+        """
+        SELECT COUNT(DISTINCT p.id) AS page_count, COUNT(s.id) AS snapshot_count
+        FROM pages p LEFT JOIN snapshots s ON s.page_id = p.id
+        WHERE p.site_id = ?
+        """,
+        (site_id,),
+    ).fetchone()
+
+
+def list_site_snapshot_dirs(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트 소속 스냅샷의 디렉토리 위치 (page_id, domain, slug, dir_name).
+
+    사이트 상세가 페이지별·사이트 전체 저장 용량을 합산하는 데 쓴다.
+    """
+    return conn.execute(
+        """
+        SELECT s.page_id, p.domain, p.slug, s.dir_name
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE p.site_id = ?
         """,
         (site_id,),
     ).fetchall()
