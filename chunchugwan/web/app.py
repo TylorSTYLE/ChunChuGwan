@@ -343,6 +343,7 @@ def site_view(request: Request, site_id: int, error: str = "", notice: str = "")
         crawls = db.list_site_crawls(conn, site_id)
         schedules = db.list_site_schedules(conn, site_id)
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
+        certificates = db.list_site_certificates(conn, site_id)
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
         for s in schedules
@@ -354,6 +355,18 @@ def site_view(request: Request, site_id: int, error: str = "", notice: str = "")
             "next_run_at": s["next_run_at"],
         }
         for s in crawl_schedules
+    ]
+    # 인증서 — 호스트별 최신 행이 "현재", 나머지는 이전 버전 (db 가 정렬)
+    current_cert_ids = {}
+    for c in certificates:
+        current_cert_ids.setdefault(c["host"], c["id"])
+    cert_rows = [
+        {
+            "cert": c,
+            "san": json.loads(c["san"] or "[]"),
+            "is_current": current_cert_ids[c["host"]] == c["id"],
+        }
+        for c in certificates
     ]
     snapshot_total = sum(p["snapshot_count"] for p in pages)
     running_crawls = [
@@ -369,9 +382,24 @@ def site_view(request: Request, site_id: int, error: str = "", notice: str = "")
             "schedule_labels": schedule_labels,
             "crawl_schedules": crawl_schedule_labels,
             "snapshot_total": snapshot_total,
+            "certificates": cert_rows,
             "active": active, "running_crawls": running_crawls,
             "error": error, "notice": notice,
         },
+    )
+
+
+@app.get("/sites/{site_id}/certificates/{cert_id}.pem")
+def site_certificate_pem(request: Request, site_id: int, cert_id: int):
+    """보관된 인증서 PEM 다운로드 — 사이트 소속 행만, 항상 첨부파일로."""
+    with db.connect() as conn:
+        cert = db.get_site_certificate(conn, site_id, cert_id)
+    if cert is None:
+        raise HTTPException(404, t(request, "인증서 없음"))
+    filename = f"{cert['host'].replace(':', '_')}-{cert['fingerprint'][:12]}.pem"
+    return PlainTextResponse(
+        cert["pem"],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

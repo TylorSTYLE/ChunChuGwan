@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import capture, config, db, documents, extract, netcheck, resources, storage
+from . import capture, certs, config, db, documents, extract, netcheck, resources, storage
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +306,12 @@ def _archive_url(
             f"http {result.http_status or '-'} · 최종 URL {result.final_url} · "
             f"제목 {result.title or '-'}",
         )
+        # https 사이트의 TLS 인증서 수집 — 갱신되면 새 버전으로 기록된다
+        # (site_certificates). 수집 실패는 아카이빙을 막지 않는다 (None).
+        cert_info = (
+            certs.fetch_certificate_info(norm)
+            if norm.startswith("https://") else None
+        )
         # 리다이렉트가 게이트를 우회하지 못하게 최종 URL 호스트도 판정한다.
         # 요청 자체는 이미 일어났지만 아카이브에는 아무것도 남기지 않는다.
         final_host = urlsplit(result.final_url).hostname or ""
@@ -332,6 +338,19 @@ def _archive_url(
             page_id = db.get_or_create_page(
                 conn, norm, domain, slug, network_tag_id=network_tag_id
             )
+            if cert_info:
+                # 콘텐츠가 동일(unchanged)해도 인증서 갱신은 기록돼야 하므로
+                # 저장 생략 판단 전에 기록한다
+                site_id = db.get_or_create_site(conn, storage.site_key(norm))
+                created = db.upsert_site_certificate(
+                    conn, site_id, cert_info, verified=not insecure_tls
+                )
+                run.step(
+                    "certificate",
+                    ("새 인증서 버전 기록" if created else "기존 인증서 버전 확인")
+                    + f" — {cert_info['fingerprint'][:12]} · "
+                      f"만료 {cert_info['not_after']}",
+                )
             prev = db.last_snapshot(conn, page_id)
 
             if prev and prev["content_hash"] == content_hash and not force:

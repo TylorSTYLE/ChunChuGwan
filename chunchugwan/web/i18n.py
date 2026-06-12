@@ -754,6 +754,23 @@ _EN: dict[str, str] = {
     "스케줄 관리(해제·시각 변경)는": "Manage schedules (remove, change time) on the",
     "화면에서 합니다.": "screen.",
     "사이트 없음": "Site not found",
+    # 사이트 인증서 (site_certificates — 버전 이력)
+    "인증서": "Certificates",
+    "인증서 없음": "Certificate not found",
+    "https 아카이빙 때 받은 서버 인증서의 버전 이력입니다. 인증서가 갱신되면 새 버전으로 기록되고 이전 버전은 남습니다.":
+        "Version history of server certificates collected during https "
+        "archiving. When a certificate is renewed it is recorded as a new "
+        "version and earlier versions are kept.",
+    "호스트": "Host",
+    "주체": "Subject",
+    "유효 기간": "Valid",
+    "확인 기간": "Seen",
+    "지문": "Fingerprint",
+    "현재": "Current",
+    "이전 버전": "Previous",
+    "검증 안 됨": "Unverified",
+    "캡처가 인증서 검증을 통과하지 못했습니다 (자체 서명 등)":
+        "The capture did not pass certificate verification (self-signed, etc.)",
     "아카이빙·크롤이 진행 중인 사이트입니다 — 완료 후 다시 시도하세요":
         "Archiving or crawling is in progress for this site — try again after "
         "it finishes",

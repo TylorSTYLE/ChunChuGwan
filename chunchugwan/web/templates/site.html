@@ -104,6 +104,49 @@
 <p class="muted">{{ _("크롤 회차가 없습니다 — 새 아카이빙에서 '사이트 전체 아카이브'를 선택하면 만들어집니다.") }}</p>
 {% endif %}
 
+{% if certificates %}
+<h3>{{ _("인증서") }}</h3>
+<p class="muted" style="font-size:13px">
+  {{ _("https 아카이빙 때 받은 서버 인증서의 버전 이력입니다. 인증서가 갱신되면 새 버전으로 기록되고 이전 버전은 남습니다.") }}
+</p>
+<table id="certificates">
+  <thead>
+    <tr>
+      <th>{{ _("호스트") }}</th>
+      <th>{{ _("주체") }}</th>
+      <th>{{ _("발급자") }}</th>
+      <th>{{ _("유효 기간") }}</th>
+      <th>{{ _("확인 기간") }}</th>
+      <th>{{ _("상태") }}</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for row in certificates %}
+  {% set c = row['cert'] %}
+    <tr title="{{ _('지문') }} {{ c['fingerprint'] }}{% if row['san'] %} · SAN: {{ row['san']|join(', ') }}{% endif %}{% if c['signature_algorithm'] %} · {{ c['signature_algorithm'] }}{% endif %}">
+      <td class="mono">{{ c['host'] }}</td>
+      <td class="mono" style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="{{ c['subject'] }}">{{ c['subject'] }}</td>
+      <td class="mono" style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="{{ c['issuer'] }}">{{ c['issuer'] }}</td>
+      <td class="mono">{{ c['not_before'] | ts }} ~ {{ c['not_after'] | ts }}</td>
+      <td class="mono">{{ c['first_seen_at'] | ts }}{% if c['last_seen_at'] != c['first_seen_at'] %} ~ {{ c['last_seen_at'] | ts }}{% endif %}</td>
+      <td>
+        {% if row['is_current'] %}
+        <span class="badge new">{{ _("현재") }}</span>
+        {% else %}
+        <span class="badge same">{{ _("이전 버전") }}</span>
+        {% endif %}
+        {% if not c['verified'] %}
+        <span class="badge changed" title="{{ _('캡처가 인증서 검증을 통과하지 못했습니다 (자체 서명 등)') }}">{{ _("검증 안 됨") }}</span>
+        {% endif %}
+      </td>
+      <td><a href="/sites/{{ site['id'] }}/certificates/{{ c['id'] }}.pem" download>PEM</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 {% if crawl_schedules %}
 <h3>{{ _("크롤 스케줄") }}</h3>
 <table>

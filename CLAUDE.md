@@ -160,6 +160,13 @@ archive/
 - `network_tags` — 로컬 네트워크 태그 (id 는 GUID 자동 발급, 이름 유일,
   설명). 사설 IP 대역 아카이빙은 태그 지정이 필수, 루프백은 항상 금지
   (아키텍처 원칙 7 · netcheck.py). 참조 중인 태그는 삭제 거부
+- `site_certificates` — https 아카이빙 때 받은 서버 리프 인증서의 버전
+  이력 (`certs.py` — 캡처와 별도 핸드셰이크로 수집·파싱, 실패해도
+  아카이빙은 진행). 버전 식별은 (site_id, host, DER sha256 지문) — 같은
+  인증서는 last_seen 갱신, 갱신된 인증서는 새 행이 되고 이전 버전은
+  보존된다. PEM 원문 보관(`/sites/{id}/certificates/{cert_id}.pem` 첨부
+  다운로드), verified 는 캡처의 인증서 검증 통과 여부(자체 서명 구분).
+  콘텐츠 동일(unchanged) 실행에서도 기록된다. 사이트 삭제·prune 시 함께 정리
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관
 - `checks` — 중복으로 저장 생략된 확인 기록
 - `snapshot_resources` — 스냅샷이 /resource/ CAS 로 참조하는 공유 자원

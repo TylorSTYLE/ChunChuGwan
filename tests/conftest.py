@@ -1,7 +1,7 @@
 """공용 픽스처."""
 import pytest
 
-from chunchugwan import netcheck, pipeline
+from chunchugwan import certs, netcheck, pipeline
 
 
 @pytest.fixture(autouse=True)
@@ -28,3 +28,13 @@ def _no_https_probe(monkeypatch):
     pipeline._https_supported 를 다시 monkeypatch 한다.
     """
     monkeypatch.setattr(pipeline, "_https_supported", lambda url: False)
+
+
+@pytest.fixture(autouse=True)
+def _no_cert_fetch(monkeypatch):
+    """테스트가 실제 TLS 핸드셰이크(인증서 수집)를 하지 않게 차단한다.
+
+    인증서 기록을 검증하는 테스트는 certs.fetch_certificate_info 를 다시
+    monkeypatch 해 파싱된 dict 를 주입한다.
+    """
+    monkeypatch.setattr(certs, "fetch_certificate_info", lambda url: None)

@@ -42,6 +42,27 @@ CREATE TABLE IF NOT EXISTS sites (
     created_at  TEXT NOT NULL           -- ISO 8601 UTC
 );
 
+CREATE TABLE IF NOT EXISTS site_certificates (
+    id           INTEGER PRIMARY KEY,
+    site_id      INTEGER NOT NULL REFERENCES sites(id),
+    host         TEXT NOT NULL,           -- 인증서를 받은 호스트[:포트] (www 변형 구분)
+    fingerprint  TEXT NOT NULL,           -- DER sha256 hex — 버전 식별자
+    subject      TEXT NOT NULL,
+    issuer       TEXT NOT NULL,
+    serial       TEXT NOT NULL,
+    san          TEXT NOT NULL DEFAULT '[]',  -- SAN 목록 (JSON 배열)
+    not_before   TEXT,
+    not_after    TEXT,
+    signature_algorithm TEXT,
+    verified     INTEGER NOT NULL DEFAULT 1,  -- 캡처가 인증서 검증을 통과했는지
+    pem          TEXT NOT NULL,           -- 인증서 원문 (PEM — 보관·다운로드)
+    first_seen_at TEXT NOT NULL,          -- 이 버전을 처음/마지막으로 본 시각
+    last_seen_at  TEXT NOT NULL,
+    UNIQUE (site_id, host, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_site_certificates_site
+    ON site_certificates(site_id, last_seen_at);
+
 CREATE TABLE IF NOT EXISTS pages (
     id          INTEGER PRIMARY KEY,
     url         TEXT NOT NULL UNIQUE,   -- 정규화된 URL
@@ -447,42 +468,117 @@ def get_site_by_key(conn: sqlite3.Connection, site_key: str) -> sqlite3.Row | No
     ).fetchone()
 
 
+def _site_is_empty(conn: sqlite3.Connection, site_id: int) -> bool:
+    """사이트에 소속 행(페이지·크롤·크롤 스케줄)이 하나도 없는지."""
+    row = conn.execute(
+        """
+        SELECT NOT EXISTS (SELECT 1 FROM pages WHERE site_id = :id)
+           AND NOT EXISTS (SELECT 1 FROM crawls WHERE site_id = :id)
+           AND NOT EXISTS (SELECT 1 FROM crawl_schedules WHERE site_id = :id) AS empty
+        """,
+        {"id": site_id},
+    ).fetchone()
+    return bool(row["empty"])
+
+
 def prune_site_if_empty(conn: sqlite3.Connection, site_id: int | None) -> bool:
     """소속 행(페이지·크롤·크롤 스케줄)이 하나도 없으면 사이트 행 삭제.
 
     페이지·크롤 스케줄 삭제 경로가 호출한다 — 크롤 회차는 개별 삭제가
     없으므로(사이트 단위 삭제뿐) 회차가 남아 있는 한 사이트도 남는다.
+    인증서 이력은 사이트의 부가 기록이라 함께 지운다.
     """
-    if site_id is None:
+    if site_id is None or not _site_is_empty(conn, site_id):
         return False
-    cur = conn.execute(
-        """
-        DELETE FROM sites WHERE id = ?
-          AND NOT EXISTS (SELECT 1 FROM pages WHERE site_id = sites.id)
-          AND NOT EXISTS (SELECT 1 FROM crawls WHERE site_id = sites.id)
-          AND NOT EXISTS (SELECT 1 FROM crawl_schedules WHERE site_id = sites.id)
-        """,
-        (site_id,),
-    )
+    conn.execute("DELETE FROM site_certificates WHERE site_id = ?", (site_id,))
+    cur = conn.execute("DELETE FROM sites WHERE id = ?", (site_id,))
     return cur.rowcount == 1
 
 
 def prune_empty_sites(conn: sqlite3.Connection) -> int:
     """소속 행이 하나도 없는 사이트 행 일괄 삭제 (가져오기 overwrite 등 정리용)."""
-    cur = conn.execute(
-        """
-        DELETE FROM sites WHERE
+    empty_filter = """
           NOT EXISTS (SELECT 1 FROM pages WHERE site_id = sites.id)
           AND NOT EXISTS (SELECT 1 FROM crawls WHERE site_id = sites.id)
           AND NOT EXISTS (SELECT 1 FROM crawl_schedules WHERE site_id = sites.id)
-        """
+    """
+    conn.execute(
+        "DELETE FROM site_certificates WHERE site_id IN "
+        f"(SELECT id FROM sites WHERE {empty_filter})"
     )
+    cur = conn.execute(f"DELETE FROM sites WHERE {empty_filter}")
     return cur.rowcount
 
 
 def count_sites(conn: sqlite3.Connection) -> int:
     """전체 사이트 수 (현황 대시보드용)."""
     return conn.execute("SELECT COUNT(*) AS c FROM sites").fetchone()["c"]
+
+
+_CERT_INFO_COLUMNS = (
+    "fingerprint", "subject", "issuer", "serial", "san",
+    "not_before", "not_after", "signature_algorithm", "pem",
+)
+
+
+def upsert_site_certificate(
+    conn: sqlite3.Connection,
+    site_id: int,
+    info: dict,
+    *,
+    verified: bool,
+) -> bool:
+    """사이트 인증서 기록 — 새 버전이면 행 추가, 같은 버전이면 last_seen 갱신.
+
+    버전 식별은 (site_id, host, fingerprint). 갱신된 인증서는 새 행이 되고
+    이전 행은 남아 버전 이력이 보존된다. info 는 certs.fetch_certificate_info
+    형식. 반환은 새 버전 행을 만들었는지 여부.
+    """
+    now = _utcnow()
+    cur = conn.execute(
+        """
+        UPDATE site_certificates
+        SET last_seen_at = ?, verified = ?
+        WHERE site_id = ? AND host = ? AND fingerprint = ?
+        """,
+        (now, int(verified), site_id, info["host"], info["fingerprint"]),
+    )
+    if cur.rowcount == 1:
+        return False
+    conn.execute(
+        f"""
+        INSERT INTO site_certificates
+            (site_id, host, {', '.join(_CERT_INFO_COLUMNS)},
+             verified, first_seen_at, last_seen_at)
+        VALUES ({', '.join('?' for _ in range(len(_CERT_INFO_COLUMNS) + 5))})
+        """,
+        (site_id, info["host"], *(info[c] for c in _CERT_INFO_COLUMNS),
+         int(verified), now, now),
+    )
+    return True
+
+
+def list_site_certificates(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트의 인증서 버전 이력 (호스트별 최근 확인 순) — 사이트 상세용."""
+    return conn.execute(
+        """
+        SELECT * FROM site_certificates
+        WHERE site_id = ? ORDER BY host, last_seen_at DESC, id DESC
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def get_site_certificate(
+    conn: sqlite3.Connection, site_id: int, cert_id: int
+) -> sqlite3.Row | None:
+    """사이트 소속 인증서 행 조회 (소속이 아니면 None) — PEM 다운로드 검증용."""
+    return conn.execute(
+        "SELECT * FROM site_certificates WHERE id = ? AND site_id = ?",
+        (cert_id, site_id),
+    ).fetchone()
 
 
 def list_sites_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
