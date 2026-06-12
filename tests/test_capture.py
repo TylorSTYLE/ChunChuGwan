@@ -85,6 +85,54 @@ def test_capture_artifacts_and_inlining(site_url, tmp_path):
     assert result.document_links == [f"{base}/report.pdf"]
 
 
+def test_capture_records_resource_url_mapping(site_url, tmp_path):
+    """인라인 성공 자원의 sha256 → 원본 URL 매핑이 기록된다 (보안 컨텍스트)."""
+    out = tmp_path / "out"
+    out.mkdir()
+    result = capture.capture(site_url, out)
+    base = site_url.rsplit("/", 1)[0]
+    assert f"{base}/img.png" in result.resource_urls.values()
+    assert f"{base}/font.woff2" in result.resource_urls.values()
+    # sha 키가 실제 콘텐츠 해시와 일치한다
+    import hashlib
+    from urllib.request import urlopen
+
+    img_sha = hashlib.sha256(urlopen(f"{base}/img.png").read()).hexdigest()
+    assert result.resource_urls.get(img_sha) == f"{base}/img.png"
+
+
+def test_resource_sha_falls_back_to_python_binding(site_url, tmp_path, monkeypatch):
+    """crypto.subtle 이 없는 환경(http 페이지)에서도 sha 매핑이 기록된다.
+
+    127.0.0.1 은 브라우저가 보안 컨텍스트로 취급하므로, JS 의 crypto.subtle
+    분기를 막아 비보안 컨텍스트의 폴백 경로(Python 바인딩)를 재현한다.
+    """
+    monkeypatch.setattr(
+        capture, "_INLINE_JS",
+        capture._INLINE_JS.replace("if (crypto.subtle) {", "if (false) {"),
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+    result = capture.capture(site_url, out)
+    base = site_url.rsplit("/", 1)[0]
+    assert f"{base}/img.png" in result.resource_urls.values()
+    import hashlib
+    from urllib.request import urlopen
+
+    img_sha = hashlib.sha256(urlopen(f"{base}/img.png").read()).hexdigest()
+    assert result.resource_urls.get(img_sha) == f"{base}/img.png"
+
+
+def test_sha256_of_base64_matches_hashlib():
+    import base64
+    import hashlib
+
+    data = b"binding-check"
+    assert capture._sha256_of_base64(
+        base64.b64encode(data).decode("ascii")
+    ) == hashlib.sha256(data).hexdigest()
+
+
 def test_capture_without_rules_keeps_content(site_url, tmp_path):
     out = tmp_path / "out"
     out.mkdir()

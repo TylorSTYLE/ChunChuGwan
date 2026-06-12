@@ -26,33 +26,41 @@ logger = logging.getLogger(__name__)
 # {failed, inlined} 반환 — failed 는 실패 자원 {kind, url, raw?} 목록으로,
 # 페이지 컨텍스트 fetch() 는 CORS 에 막힐 수 있으므로(<img> 렌더링과 달리)
 # Python 쪽 폴백이 재시도한다. inlined 는 성공 자원의 {url, sha256} 목록 —
-# CAS 추출 후 snapshot_resources 에 원본 URL 을 기록하는 근거다 (sha256 은
-# crypto.subtle 이 없는 비보안 컨텍스트(http)에서는 생략된다).
+# CAS 추출 후 snapshot_resources 에 원본 URL 을 기록하는 근거다. sha256 은
+# crypto.subtle(보안 컨텍스트)로 계산하고, http 페이지처럼 없는 환경에서는
+# expose_function 으로 노출된 Python 바인딩(_sha256_of_base64)으로 폴백한다.
 _INLINE_JS = """
 async () => {
   const failed = [];
   const inlined = [];
-  const shaHex = async (blob) => {
-    if (!crypto.subtle) return null;
-    const buf = await blob.arrayBuffer();
-    const digest = await crypto.subtle.digest("SHA-256", buf);
-    return Array.from(new Uint8Array(digest))
-      .map((b) => b.toString(16).padStart(2, "0")).join("");
+  const shaHex = async (blob, dataUrl) => {
+    if (crypto.subtle) {
+      const buf = await blob.arrayBuffer();
+      const digest = await crypto.subtle.digest("SHA-256", buf);
+      return Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+    // 비보안 컨텍스트(http) — Python 바인딩으로 폴백 (hashlib, capture.py)
+    if (window._wccgSha256) {
+      return await window._wccgSha256(dataUrl.slice(dataUrl.indexOf(",") + 1));
+    }
+    return null;
   };
   const toDataUrl = async (url) => {
     const res = await fetch(url, { credentials: "omit" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const blob = await res.blob();
-    try {
-      const sha = await shaHex(blob);
-      if (sha) inlined.push({ url, sha256: sha });
-    } catch (e) { /* 해시 실패는 인라인을 막지 않는다 */ }
-    return await new Promise((resolve, reject) => {
+    const dataUrl = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(blob);
     });
+    try {
+      const sha = await shaHex(blob, dataUrl);
+      if (sha) inlined.push({ url, sha256: sha });
+    } catch (e) { /* 해시 실패는 인라인을 막지 않는다 */ }
+    return dataUrl;
   };
   const FONT_URL_RE = /url\\((['"]?)([^)'"]+?\\.(?:woff2?|ttf|otf|eot)(?:[?#][^)'"]*)?)\\1\\)/gi;
   const inlineFonts = async (cssText, baseUrl) => {
@@ -355,6 +363,7 @@ def _capture_in_browser(
     try:
         page = context.new_page()
         page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
+        _expose_sha256_binding(page)
         try:
             response = page.goto(
                 url, wait_until="networkidle", timeout=config.PAGE_LOAD_TIMEOUT_MS
@@ -443,6 +452,27 @@ def _rewrite_links(page, link_rewriter: LinkRewriter, page_links: list[str]) -> 
             logger.info("링크 %d개 재작성: %s", rewritten, page.url)
     except Exception as e:
         logger.warning("링크 재작성 실패, 원본 링크 유지: %s", e)
+
+
+def _sha256_of_base64(b64: str) -> str:
+    """base64 문자열을 디코딩한 바이트의 sha256 hex.
+
+    _INLINE_JS 의 자원 해시 폴백 — crypto.subtle 이 없는 비보안 컨텍스트
+    (http 페이지)에서 페이지 바인딩(window._wccgSha256)으로 호출된다.
+    데이터는 FileReader 의 data URL 에서 잘라낸 base64 부분이라 항상 유효하다.
+    """
+    return hashlib.sha256(base64.b64decode(b64)).hexdigest()
+
+
+def _expose_sha256_binding(page) -> None:
+    """sha256 페이지 바인딩 등록 — 실패해도 캡처는 계속된다.
+
+    바인딩이 없으면 http 페이지의 자원 URL 매핑만 빠진다 (저장은 정상).
+    """
+    try:
+        page.expose_function("_wccgSha256", _sha256_of_base64)
+    except Exception as e:
+        logger.warning("sha256 바인딩 등록 실패 — http 페이지의 자원 URL 매핑 생략: %s", e)
 
 
 def _inline_resources(

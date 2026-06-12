@@ -157,7 +157,8 @@ archive/
 - `checks` — 중복으로 저장 생략된 확인 기록
 - `snapshot_resources` — 스냅샷이 /resource/ CAS 로 참조하는 공유 자원
   인덱스 (CAS 이름 = sha256+확장자, 원본 url — 모를 수 있음). 캡처가
-  기록하고(인라인 자원의 sha256 은 브라우저 crypto.subtle 로 계산), 삭제 시
+  기록하고(인라인 자원의 sha256 은 crypto.subtle, http 등 비보안 컨텍스트는
+  expose_function 으로 노출된 Python hashlib 바인딩으로 폴백), 삭제 시
   참조가 0 이 된 CAS 파일은 deletion.py 가 GC 한다. 자원 인라인 실패 시
   같은 url 의 과거 캡처본을 재사용하는 폴백(pipeline._resource_fallback)의
   조회 인덱스이기도 하다. 참조가 기록되지 않은 구형 스냅샷은 저장공간
