@@ -1838,6 +1838,82 @@ def get_site_failed_log(
     ).fetchone()
 
 
+def list_site_failed_crawl_pages(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트 소속 크롤에서 마지막 시도가 실패인 크롤 페이지 목록 (URL 별 최신 행).
+
+    URL 별 최신 crawl_pages 행이 failed 인 것만 — 이후 크롤에서 성공하면
+    최신 행이 바뀌어 목록에서 자연히 사라진다. 크롤 실패 후 직접 아카이빙이
+    성공한 URL(최신 archive_logs 가 성공)도 제외한다. 페이지 행이 생기기 전에
+    실패한 신규 URL 을 사이트 상세의 실패 목록에 보여주는 용도 —
+    list_site_failed_logs 가 못 다루는 빈틈을 메운다. failed_at 은 그 URL 의
+    최신 아카이브 로그 시각 (크롤 페이지 행에는 실패 시각이 없다, 없으면 NULL).
+    """
+    return conn.execute(
+        """
+        SELECT cp.*, c.start_url,
+               (SELECT al.started_at FROM archive_logs al
+                WHERE al.url = cp.url ORDER BY al.id DESC LIMIT 1) AS failed_at
+        FROM crawl_pages cp
+        JOIN crawls c ON c.id = cp.crawl_id
+        JOIN (
+            SELECT cp2.url AS url, MAX(cp2.id) AS max_id
+            FROM crawl_pages cp2
+            JOIN crawls c2 ON c2.id = cp2.crawl_id
+            WHERE c2.site_id = ?
+            GROUP BY cp2.url
+        ) last ON cp.id = last.max_id
+        WHERE cp.status = 'failed'
+          AND COALESCE((
+              SELECT al.status FROM archive_logs al
+              WHERE al.url = cp.url ORDER BY al.id DESC LIMIT 1
+          ), 'error') = 'error'
+        ORDER BY failed_at DESC NULLS LAST, cp.id DESC
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def get_site_failed_crawl_page(
+    conn: sqlite3.Connection, site_id: int, crawl_page_id: int
+) -> sqlite3.Row | None:
+    """사이트 소속 실패 크롤 페이지 행 조회 — 재시도 검증용.
+
+    소속이 아니거나 실패 상태가 아니면 None.
+    """
+    return conn.execute(
+        """
+        SELECT cp.* FROM crawl_pages cp JOIN crawls c ON c.id = cp.crawl_id
+        WHERE cp.id = ? AND c.site_id = ? AND cp.status = 'failed'
+        """,
+        (crawl_page_id, site_id),
+    ).fetchone()
+
+
+def retry_failed_crawl_page(conn: sqlite3.Connection, crawl_page_id: int) -> None:
+    """실패 크롤 페이지 하나를 재시도 대상으로 되돌리고, 끝난 크롤이면 다시 연다.
+
+    retry_failed_crawl_pages(일괄)의 단건 버전 — 크롤러가 큐에서 다시 집어간다.
+    """
+    conn.execute(
+        """
+        UPDATE crawl_pages
+        SET status = 'pending', attempts = 0, next_attempt_at = NULL, error = NULL
+        WHERE id = ? AND status = 'failed'
+        """,
+        (crawl_page_id,),
+    )
+    conn.execute(
+        """
+        UPDATE crawls SET status = 'running', finished_at = NULL, next_page_at = ?
+        WHERE id = (SELECT crawl_id FROM crawl_pages WHERE id = ?)
+          AND status IN ('done', 'cancelled')
+        """,
+        (_utcnow(), crawl_page_id),
+    )
+
+
 def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
     """사이트 소속 크롤 회차 목록 (최신 순) + 상태별 페이지 수 집계."""
     return conn.execute(

@@ -411,6 +411,13 @@ def site_view(
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
         certificates = db.list_site_certificates(conn, site_id)
         failed_logs = db.list_site_failed_logs(conn, site_id)
+        # 크롤 실패는 페이지 행이 없는 신규 URL 까지 포함 — 실패한 작업
+        # 목록(archive_logs 기반)에 이미 있는 URL 은 겹치지 않게 뺀다
+        failed_log_urls = {f["page_url"] for f in failed_logs}
+        failed_crawl_pages = [
+            r for r in db.list_site_failed_crawl_pages(conn, site_id)
+            if r["url"] not in failed_log_urls
+        ]
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
         for s in schedules
@@ -457,6 +464,7 @@ def site_view(
             "site": site, "pages": pages, "crawls": crawls,
             "site_title": _site_title(snap_dirs),
             "failed_logs": failed_logs,
+            "failed_crawl_pages": failed_crawl_pages,
             "schedule_labels": schedule_labels,
             "crawl_schedules": crawl_schedule_labels,
             "page_count": totals["page_count"],
@@ -490,6 +498,22 @@ def site_failed_retry(
         params = {"notice": t(request, "아카이빙이 백그라운드에서 시작되었습니다")}
     else:
         params = {"error": t(request, _BUSY_MSG)}
+    return RedirectResponse(f"/sites/{site_id}?{urlencode(params)}", status_code=303)
+
+
+@app.post("/sites/{site_id}/crawl-failed/{crawl_page_id}/retry")
+def site_crawl_failed_retry(request: Request, site_id: int, crawl_page_id: int):
+    """실패한 크롤 페이지 재시도 — 큐로 되돌려 크롤러가 다시 집어가게 한다.
+
+    admin/archiver 전용. 끝난(done/cancelled) 크롤이면 다시 연다.
+    """
+    _require_archiver(request)
+    with db.connect() as conn:
+        row = db.get_site_failed_crawl_page(conn, site_id, crawl_page_id)
+        if row is None:
+            raise HTTPException(404, t(request, "실패 기록 없음"))
+        db.retry_failed_crawl_page(conn, crawl_page_id)
+    params = {"notice": t(request, "재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.")}
     return RedirectResponse(f"/sites/{site_id}?{urlencode(params)}", status_code=303)
 
 
