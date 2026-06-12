@@ -657,6 +657,8 @@ def shotdiff(
 
 
 _LOG_STATUSES = ("new", "changed", "unchanged", "forced_same", "error")
+_LOG_PAGE_SIZES = (10, 25, 50, 100, 200)
+_LOG_PAGE_SIZE_DEFAULT = 25
 
 
 def _clean_date(value: str | None) -> str | None:
@@ -679,10 +681,11 @@ def logs_view(
     date_from: str | None = None,
     date_to: str | None = None,
     page: int = 1,
-    limit: int = 100,
+    limit: int = _LOG_PAGE_SIZE_DEFAULT,
 ):
     """아카이브 실행 로그. 도메인/페이지/스냅샷/상태/기간 필터 + 페이징."""
-    limit = max(1, min(limit, 500))
+    if limit not in _LOG_PAGE_SIZES:
+        limit = _LOG_PAGE_SIZE_DEFAULT
     if status not in _LOG_STATUSES:
         status = None
     date_from = _clean_date(date_from)
@@ -730,7 +733,7 @@ def logs_view(
             ("date_from", date_from), ("date_to", date_to),
         ) if v is not None
     ]
-    if limit != 100:
+    if limit != _LOG_PAGE_SIZE_DEFAULT:
         qs_base.append(("limit", limit))
 
     def _page_url(n: int) -> str:
@@ -744,6 +747,7 @@ def logs_view(
             "domain": domain or "", "status": status or "",
             "date_from": date_from or "", "date_to": date_to or "",
             "snapshot_id": snapshot_id, "limit": limit,
+            "limits": _LOG_PAGE_SIZES,
             "statuses": _LOG_STATUSES,
             "total": total, "total_pages": total_pages, "page_num": page,
             "prev_url": _page_url(page - 1) if page > 1 else None,

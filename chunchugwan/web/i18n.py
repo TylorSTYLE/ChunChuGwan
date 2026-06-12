@@ -207,6 +207,8 @@ _EN: dict[str, str] = {
     "시작일": "Start date",
     "종료일": "End date",
     "조건에 맞는 로그가 없습니다.": "No logs match the filter.",
+    "표시 줄 수": "Rows per page",
+    "{n}줄": "{n} rows",
     "상세": "Details",
     "파일": "File",
     "설명": "Description",
