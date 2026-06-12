@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
-from .. import auth, backup as backup_mod
+from .. import __version__, auth, backup as backup_mod
 from .. import config, crawler, db, mailer, optimize, resources
 from . import permissions
 from .i18n import t
@@ -62,6 +62,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
     return templates.TemplateResponse(
         request, "system.html",
         {
+            "version": __version__,
             "counts": counts,
             "signup_enabled": signup_enabled,
             "signup_default_role": signup_default_role,

@@ -57,6 +57,15 @@ def test_system_page_and_nav_link(client):
     assert 'href="/system"' in client.get("/").text  # 헤더 메뉴 노출
 
 
+def test_system_page_shows_version(client):
+    from chunchugwan import __version__
+
+    res = client.get("/system")
+    assert res.status_code == 200
+    assert "버전" in res.text
+    assert f"v{__version__}" in res.text
+
+
 def test_backup_download_and_restore_upload(client, tmp_path, monkeypatch):
     res = client.post("/system/backup")
     assert res.status_code == 200
