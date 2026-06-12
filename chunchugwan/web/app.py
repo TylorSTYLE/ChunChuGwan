@@ -376,8 +376,9 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
     )
 
 
-# 사이트 상세의 페이지 목록 페이징 단위
-_SITE_PAGES_PER_PAGE = 100
+# 사이트 상세의 페이지 목록 페이징 단위 — 선택 가능한 표시 개수와 기본값
+_SITE_PAGES_PER_PAGE_CHOICES = (25, 50, 75, 100, 200)
+_SITE_PAGES_PER_PAGE = 25
 
 
 @app.get("/sites/{site_id}", response_class=HTMLResponse)
@@ -387,6 +388,7 @@ def site_view(
     error: str = "",
     notice: str = "",
     page: int = Query(1, ge=1),
+    per_page: int = Query(0),
 ):
     """사이트 상세 — 소속 페이지 목록(페이징) + 크롤 회차 목록 + 스케줄.
 
@@ -394,16 +396,18 @@ def site_view(
     돌았던 실행 기록이다 — 회차 상세(/crawls/{id})는 그대로 유지된다.
     """
     active = _active_snapshot()
+    if per_page not in _SITE_PAGES_PER_PAGE_CHOICES:
+        per_page = _SITE_PAGES_PER_PAGE
     with db.connect() as conn:
         site = db.get_site(conn, site_id)
         if site is None:
             raise HTTPException(404, t(request, "사이트 없음"))
         totals = db.site_page_totals(conn, site_id)
-        total_pages = max(1, -(-totals["page_count"] // _SITE_PAGES_PER_PAGE))  # ceil
+        total_pages = max(1, -(-totals["page_count"] // per_page))  # ceil
         page = min(page, total_pages)
         pages = db.list_site_pages(
             conn, site_id,
-            limit=_SITE_PAGES_PER_PAGE, offset=(page - 1) * _SITE_PAGES_PER_PAGE,
+            limit=per_page, offset=(page - 1) * per_page,
         )
         snap_dirs = db.list_site_snapshot_dirs(conn, site_id)
         crawls = db.list_site_crawls(conn, site_id)
@@ -456,7 +460,12 @@ def site_view(
     ]
 
     def _page_url(n: int) -> str:
-        return f"/sites/{site_id}" + (f"?page={n}" if n > 1 else "")
+        params = []
+        if n > 1:
+            params.append(f"page={n}")
+        if per_page != _SITE_PAGES_PER_PAGE:
+            params.append(f"per_page={per_page}")
+        return f"/sites/{site_id}" + ("?" + "&".join(params) if params else "")
 
     return templates.TemplateResponse(
         request, "site.html",
@@ -472,6 +481,8 @@ def site_view(
             "page_bytes": page_bytes,
             "site_bytes": sum(page_bytes.values()),
             "page_num": page, "total_pages": total_pages,
+            "per_page": per_page,
+            "per_page_choices": _SITE_PAGES_PER_PAGE_CHOICES,
             "prev_url": _page_url(page - 1) if page > 1 else None,
             "next_url": _page_url(page + 1) if page < total_pages else None,
             "certificates": cert_rows,

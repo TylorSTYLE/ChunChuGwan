@@ -79,6 +79,13 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 </table>
 <div class="pager">
   <span class="muted">{{ _("총 {n}건", n=page_count) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
+  <form class="inline" method="get" action="/sites/{{ site['id'] }}">
+    <select name="per_page" aria-label="{{ _('표시 줄 수') }}" onchange="this.form.submit()">
+      {% for n in per_page_choices %}
+      <option value="{{ n }}" {% if n == per_page %}selected{% endif %}>{{ _("{n}줄", n=n) }}</option>
+      {% endfor %}
+    </select>
+  </form>
   <span class="spacer"></span>
   {% if prev_url %}<a href="{{ prev_url }}">&larr; {{ _("이전") }}</a>{% endif %}
   {% if next_url %}<a href="{{ next_url }}">{{ _("다음") }} &rarr;</a>{% endif %}

@@ -317,6 +317,27 @@ def test_site_crawl_failed_retry_unknown(client):
     )
 
 
+def test_site_pages_per_page_choices(client):
+    """페이지 목록 표시 개수 — 기본 25, 25/50/75/100/200 중 선택, 허용 밖은 25."""
+    with db.connect() as conn:
+        for i in range(51):
+            u = f"https://example.com/extra-{i:02d}"
+            db.get_or_create_page(conn, u, "example.com", storage.url_to_slug(u))
+        site = db.get_site_by_key(conn, "example.com")
+    # 52개 → 기본 25개씩 3페이지. 1페이지 = post + extra-00..23
+    page1 = client.get(f"/sites/{site['id']}")
+    assert "1/3 페이지" in page1.text
+    assert 'name="per_page"' in page1.text
+    assert "extra-23" in page1.text and "extra-24" not in page1.text
+    # 50개씩이면 2페이지, 페이징 링크가 표시 개수를 유지한다
+    big = client.get(f"/sites/{site['id']}?per_page=50")
+    assert "1/2 페이지" in big.text
+    assert "extra-48" in big.text
+    assert f"/sites/{site['id']}?page=2&amp;per_page=50" in big.text
+    # 허용 밖 값은 기본(25)으로 보정
+    assert "1/3 페이지" in client.get(f"/sites/{site['id']}?per_page=33").text
+
+
 def test_site_failed_retry_unknown_log(client):
     """없는 로그·실패가 아닌 로그·다른 사이트의 로그는 404."""
     ok_id = _insert_log("changed", started_at="2026-06-04T00:00:00+00:00")
