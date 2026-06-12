@@ -232,13 +232,20 @@ archive/
 - 네트워크 요청에는 타임아웃 필수 (페이지 로드 기본 30s)
 - 새 기능 = 해당 테스트 추가. 네트워크 의존 테스트는 로컬 fixture HTML 사용
 - 커밋은 기능 단위로 작게
-- **PR 생성 시 버전 라벨 필수.** 변경 성격에 맞는 `release:*` 라벨을 하나
-  붙인다 (`gh pr edit <번호> --add-label release:minor`). 머지되면
-  `.github/workflows/release.yml` 이 라벨로 다음 버전을 결정해 pyproject.toml·
-  uv.lock 갱신 + `vX.Y.Z` 태그 + GitHub Release 를 자동 등록한다 (semver:
-  호환 깨짐=major, 기능 추가=minor, 버그수정·문서·리팩터=patch). 버전을
-  올릴 필요가 없으면 라벨을 생략한다 — 릴리스가 스킵된다. 버전 출처는
-  설치 메타데이터(`chunchugwan.__version__` / `wccg --version`)
+- **브랜치 흐름 = gitflow.** 기능 PR 은 `develop` 을 베이스로 머지한다
+  (main 직행 금지). `develop` 에 푸시되면 `docker.yml` 이 `:develop` 이미지를
+  빌드·스모크 테스트한 뒤, 통과하면 `develop → main` 릴리스 PR 을 자동
+  생성/갱신하고 변경 diff 로 `release:*` 라벨을 자동 부여한다 (코드 변경=minor,
+  docs/tests/.md/.github 만=patch, 커밋에 "BREAKING"·"호환 깨" 있으면 major).
+  이 릴리스 PR 을 사람이 검토 후 머지하면 `release.yml` 이 라벨로 버전을
+  결정해 pyproject.toml·uv.lock 갱신 + `vX.Y.Z` 태그 + GitHub Release 를
+  자동 등록하고, develop 를 릴리스 커밋으로 FF 동기화한다. 자동 라벨이
+  맞지 않으면 머지 전에 `gh pr edit <번호> --add-label release:major` 로
+  직접 바꾼다. 버전 출처는 설치 메타데이터(`chunchugwan.__version__` /
+  `wccg --version`). 릴리스 PR(develop→main)은 develop 가 main 의 조상으로
+  남도록 **merge 커밋으로 머지**한다 (squash 면 FF 동기화가 깨진다).
+  도커 이미지 태그: `:latest`·`:main`(main), `:develop`(develop),
+  `:vX.Y.Z`(릴리스 태그)
 
 ## 대시보드 디자인 방향
 
