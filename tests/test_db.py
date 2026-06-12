@@ -66,6 +66,37 @@ def test_list_pages_counts(conn):
     assert pages["https://example.com/y"]["last_taken_at"] is None
 
 
+def test_connect_uses_wal(conn):
+    """WAL 저널 모드 — 쓰기가 대시보드 읽기를 막지 않게 한다."""
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_schema_ensured_once_per_process(tmp_path, monkeypatch):
+    """스키마 보장(_migrate 포함)은 같은 DB 파일에 대해 프로세스당 1회만."""
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
+    calls = []
+    original = db._migrate
+
+    def counting_migrate(c):
+        calls.append(1)
+        original(c)
+
+    monkeypatch.setattr(db, "_migrate", counting_migrate)
+    with db.connect():
+        pass
+    with db.connect():
+        pass
+    assert len(calls) == 1
+
+    # DB 파일 교체(복원 등) 후에는 캐시 무효화로 다시 보장된다
+    db.invalidate_schema_cache()
+    with db.connect():
+        pass
+    assert len(calls) == 2
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root 는 권한 검사를 우회한다")
 def test_connect_unwritable_dir_friendly_error(tmp_path, monkeypatch):
     """아카이브 디렉토리에 쓰기 권한이 없으면 원인을 알려주는 메시지로 실패한다."""
