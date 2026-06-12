@@ -3,9 +3,6 @@
 {% block content %}
 <style>
 #pages th:first-child { width: 45%; }
-.pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
-         font-size: 13px; }
-.pager .spacer { flex: 1; }
 .site-title { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
               white-space: nowrap; }
 td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
@@ -38,6 +35,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 
 <h3>{{ _("페이지") }}</h3>
 {% if pages %}
+<div class="table-wrap">
 <table id="pages">
   <thead>
     <tr><th>URL</th><th class="num">{{ _("스냅샷") }}</th><th class="num">{{ _("용량") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
@@ -77,6 +75,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 <div class="pager">
   <span class="muted">{{ _("총 {n}건", n=page_count) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
   <form class="inline" method="get" action="/sites/{{ site['id'] }}">
@@ -99,6 +98,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 <p class="muted" style="font-size:13px">
   {{ _("최근 실행이 실패로 끝난 페이지입니다. 크롤 중 실패한 페이지도 포함되며, 재시도가 성공하면 목록에서 사라집니다.") }}
 </p>
+<div class="table-wrap">
 <table id="failed">
   <thead>
     <tr><th>URL</th><th>{{ _("시각") }}</th><th>{{ _("출처") }}</th><th>{{ _("오류") }}</th><th></th></tr>
@@ -138,10 +138,12 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 <h3>{{ _("크롤 회차") }}</h3>
 {% if crawls %}
+<div class="table-wrap">
 <table id="crawls">
   <thead>
     <tr><th>{{ _("시작 URL") }}</th><th>{{ _("범위") }}</th><th class="num">{{ _("페이지") }}</th><th>{{ _("시작") }}</th><th>{{ _("상태") }}</th></tr>
@@ -168,6 +170,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="muted">{{ _("크롤 회차가 없습니다 — 새 아카이빙에서 '사이트 전체 아카이브'를 선택하면 만들어집니다.") }}</p>
 {% endif %}
@@ -177,6 +180,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 <p class="muted" style="font-size:13px">
   {{ _("https 아카이빙 때 받은 서버 인증서의 버전 이력입니다. 인증서가 갱신되면 새 버전으로 기록되고 이전 버전은 남습니다.") }}
 </p>
+<div class="table-wrap wide">
 <table id="certificates">
   <thead>
     <tr>
@@ -213,10 +217,12 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 {% if crawl_schedules %}
 <h3>{{ _("크롤 스케줄") }}</h3>
+<div class="table-wrap">
 <table>
   <thead>
     <tr><th>{{ _("시작 URL") }}</th><th>{{ _("주기") }}</th><th>{{ _("다음 실행") }}</th></tr>
@@ -231,6 +237,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 <p class="muted" style="font-size:13px">{{ _("스케줄 관리(해제·시각 변경)는") }} <a href="/schedules">{{ _("스케줄") }}</a> {{ _("화면에서 합니다.") }}</p>
 {% endif %}
 

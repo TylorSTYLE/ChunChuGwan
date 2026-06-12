@@ -410,6 +410,24 @@ def test_theme_toggle_present(client):
     assert "wccg-theme" in res.text  # localStorage 키 (사용자 선택 기억)
 
 
+def test_responsive_layout_present(client):
+    """반응형 레이아웃 — 헤더 메뉴 토글·뷰포트 메타·테이블 가로 스크롤 래퍼."""
+    res = client.get("/archives")
+    assert res.status_code == 200
+    assert 'name="viewport"' in res.text  # 모바일 뷰포트 메타
+    assert 'id="nav-toggle"' in res.text  # 좁은 화면용 메뉴 토글 버튼
+    assert 'id="site-nav"' in res.text  # 토글로 여닫는 메뉴 패널
+    assert '<div class="table-wrap">' in res.text  # 데이터 테이블 가로 스크롤 래퍼
+
+
+def test_responsive_diff_stacks_on_mobile(client):
+    """diff 화면 — 좁은 화면에서 side-by-side 를 상하로 쌓는 미디어 쿼리."""
+    res = client.get("/diff/1")
+    assert res.status_code == 200
+    assert "@media (max-width: 719px)" in res.text
+    assert "tr.d-equal td.r" in res.text  # 동일 행은 한 번만 표시
+
+
 def test_time_display_present(client):
     """모든 화면(base.html)에 타임존 기반 시간 변환 스크립트가 있다."""
     res = client.get("/")

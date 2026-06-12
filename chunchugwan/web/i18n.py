@@ -42,6 +42,7 @@ _EN: dict[str, str] = {
     "시스템": "System",
     "계정": "Account",
     "로그아웃": "Log out",
+    "메뉴": "Menu",
     "테마 전환 (자동 → 라이트 → 다크)": "Switch theme (auto → light → dark)",
     "테마: 자동": "Theme: auto",
     "테마: 라이트": "Theme: light",
