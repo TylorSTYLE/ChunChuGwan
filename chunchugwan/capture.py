@@ -26,13 +26,16 @@ logger = logging.getLogger(__name__)
 # {failed, inlined} 반환 — failed 는 실패 자원 {kind, url, raw?} 목록으로,
 # 페이지 컨텍스트 fetch() 는 CORS 에 막힐 수 있으므로(<img> 렌더링과 달리)
 # Python 쪽 폴백이 재시도한다. fetch 에는 자원별 타임아웃(AbortSignal)을
-# 걸어 응답 없는 호스트가 인라인 단계 전체를 매달지 못하게 한다.
+# 걸어 응답 없는 호스트가 인라인 단계 전체를 매달지 못하게 하고,
+# 자원 단위 작업은 concurrency 개수의 워커로 병렬 실행한다 — 캐시를 못
+# 타는 자원이 많은 페이지에서 직렬 왕복이 쌓이는 것을 막는다 (각 작업이
+# 만지는 노드는 서로 다르므로 동시 실행해도 안전).
 # inlined 는 성공 자원의 {url, sha256} 목록 —
 # CAS 추출 후 snapshot_resources 에 원본 URL 을 기록하는 근거다. sha256 은
 # crypto.subtle(보안 컨텍스트)로 계산하고, http 페이지처럼 없는 환경에서는
 # expose_function 으로 노출된 Python 바인딩(_sha256_of_base64)으로 폴백한다.
 _INLINE_JS = """
-async (timeoutMs) => {
+async ({ timeoutMs, concurrency }) => {
   const failed = [];
   const inlined = [];
   const shaHex = async (blob, dataUrl) => {
@@ -68,52 +71,72 @@ async (timeoutMs) => {
   };
   const FONT_URL_RE = /url\\((['"]?)([^)'"]+?\\.(?:woff2?|ttf|otf|eot)(?:[?#][^)'"]*)?)\\1\\)/gi;
   const inlineFonts = async (cssText, baseUrl) => {
-    const out = [];
-    let last = 0;
-    for (const m of cssText.matchAll(FONT_URL_RE)) {
-      out.push(cssText.slice(last, m.index));
-      let repl = m[0];
+    const matches = Array.from(cssText.matchAll(FONT_URL_RE));
+    if (!matches.length) return cssText;
+    // 한 CSS 안의 폰트는 한꺼번에 받는다 (보통 소수라 바운드 불필요)
+    const repls = await Promise.all(matches.map(async (m) => {
       let abs = null;
       try { abs = new URL(m[2], baseUrl).href; } catch (e) {}
       try {
         if (!abs) throw new Error("URL 해석 실패");
-        repl = "url(" + (await toDataUrl(abs)) + ")";
+        return "url(" + (await toDataUrl(abs)) + ")";
       } catch (e) {
         failed.push({ kind: "font", url: abs, raw: m[0] });
+        return m[0];
       }
-      out.push(repl);
+    }));
+    const out = [];
+    let last = 0;
+    matches.forEach((m, i) => {
+      out.push(cssText.slice(last, m.index), repls[i]);
       last = m.index + m[0].length;
-    }
+    });
     out.push(cssText.slice(last));
     return out.join("");
   };
+  const tasks = [];
+  // <style> 스냅샷은 작업 생성 시점에 뜬다 — 링크 치환으로 새로 생기는
+  // <style> 은 이미 inlineFonts 를 거쳤으므로 다시 처리하지 않는다
   for (const link of Array.from(document.querySelectorAll('link[rel="stylesheet"][href]'))) {
-    try {
-      const res = await fetch(link.href, {
-        credentials: "omit", signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const style = document.createElement("style");
-      style.textContent = await inlineFonts(await res.text(), link.href);
-      link.replaceWith(style);
-    } catch (e) {
-      failed.push({ kind: "css", url: link.href });
-    }
+    tasks.push(async () => {
+      try {
+        const res = await fetch(link.href, {
+          credentials: "omit", signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const style = document.createElement("style");
+        style.textContent = await inlineFonts(await res.text(), link.href);
+        link.replaceWith(style);
+      } catch (e) {
+        failed.push({ kind: "css", url: link.href });
+      }
+    });
   }
   for (const style of Array.from(document.querySelectorAll("style"))) {
-    style.textContent = await inlineFonts(style.textContent, document.baseURI);
+    tasks.push(async () => {
+      style.textContent = await inlineFonts(style.textContent, document.baseURI);
+    });
   }
   for (const img of Array.from(document.querySelectorAll("img[src]"))) {
     const src = img.currentSrc || img.src;
     if (!src || src.startsWith("data:")) continue;
-    try {
-      const dataUrl = await toDataUrl(src);
-      img.removeAttribute("srcset");
-      img.src = dataUrl;
-    } catch (e) {
-      failed.push({ kind: "img", url: src });
-    }
+    tasks.push(async () => {
+      try {
+        const dataUrl = await toDataUrl(src);
+        img.removeAttribute("srcset");
+        img.src = dataUrl;
+      } catch (e) {
+        failed.push({ kind: "img", url: src });
+      }
+    });
   }
+  const queue = tasks.slice();
+  const worker = async () => {
+    while (queue.length) await queue.shift()();
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, tasks.length) }, worker)
+  );
   return { failed, inlined };
 }
 """
@@ -415,28 +438,31 @@ def _capture_in_browser(
         _expose_sha256_binding(page)
         try:
             response = page.goto(
-                url, wait_until="networkidle", timeout=config.PAGE_LOAD_TIMEOUT_MS
+                url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS
             )
-        except PlaywrightTimeoutError as e:
-            if page.url == "about:blank":
-                # 네비게이션이 시작조차 못함(연결 불가) — load 재시도 무의미
-                raise CaptureConnectError(f"{url} 캡처 실패: {e}") from e
-            logger.warning("networkidle 미도달, load 기준으로 재시도: %s", url)
+            # 네트워크가 잠잠해질 때까지 짧게만 더 기다린다 — 분석 스크립트·
+            # 롱폴링이 있는 페이지는 networkidle 에 영영 도달하지 않으므로
+            # 상한을 두고, 미도달이면 현재 상태로 진행한다 (load 는 이미 도달)
             try:
-                response = page.goto(
-                    url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS
+                page.wait_for_load_state(
+                    "networkidle", timeout=config.NETWORK_IDLE_TIMEOUT_MS
                 )
             except PlaywrightTimeoutError:
-                # 응답 없는 하위 자원(죽은 외부 이미지 등)은 load 를 영영
-                # 막는다 — DOM 은 이미 파싱됐으므로 매달린 로드를 끊고
-                # 현재 상태로 진행한다 (http_status 는 알 수 없으므로 None).
-                # window.stop() 없이는 스크린샷의 fonts.ready 대기도 매달린다
-                logger.warning("load 미도달, 현재 DOM 으로 진행: %s", url)
-                try:
-                    page.evaluate("window.stop()")
-                except Exception as stop_err:
-                    logger.warning("window.stop() 실패, 그대로 진행: %s", stop_err)
-                response = None
+                logger.info("networkidle 미도달 — 현재 상태로 진행: %s", url)
+        except PlaywrightTimeoutError as e:
+            if page.url == "about:blank":
+                # 네비게이션이 시작조차 못함(연결 불가) — 재시도 무의미
+                raise CaptureConnectError(f"{url} 캡처 실패: {e}") from e
+            # 응답 없는 하위 자원(죽은 외부 이미지 등)은 load 를 영영
+            # 막는다 — DOM 은 이미 파싱됐으므로 매달린 로드를 끊고
+            # 현재 상태로 진행한다 (http_status 는 알 수 없으므로 None).
+            # window.stop() 없이는 스크린샷의 fonts.ready 대기도 매달린다
+            logger.warning("load 미도달, 현재 DOM 으로 진행: %s", url)
+            try:
+                page.evaluate("window.stop()")
+            except Exception as stop_err:
+                logger.warning("window.stop() 실패, 그대로 진행: %s", stop_err)
+            response = None
 
         raw_html = page.content()
         (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
@@ -553,7 +579,10 @@ def _inline_resources(
     """
     resource_urls: dict[str, str] = {}
     try:
-        result: dict = page.evaluate(_INLINE_JS, config.PAGE_LOAD_TIMEOUT_MS)
+        result: dict = page.evaluate(_INLINE_JS, {
+            "timeoutMs": config.RESOURCE_FETCH_TIMEOUT_MS,
+            "concurrency": config.RESOURCE_FETCH_CONCURRENCY,
+        })
         failed: list[dict] = result["failed"]
         resource_urls = {
             i["sha256"]: i["url"] for i in result["inlined"] if i.get("sha256")
@@ -649,7 +678,7 @@ def _fetch_via_context(page, url: str) -> tuple[str, bytes] | None:
         resp = page.context.request.get(
             url,
             headers={"Referer": page.url},
-            timeout=config.PAGE_LOAD_TIMEOUT_MS,
+            timeout=config.RESOURCE_FETCH_TIMEOUT_MS,
         )
         if not resp.ok:
             return None
