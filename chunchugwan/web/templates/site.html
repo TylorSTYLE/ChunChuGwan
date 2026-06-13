@@ -24,6 +24,11 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
     {{ _("페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개 · 용량 {size}", p=page_count, s=snapshot_total, c=crawls|length, size=site_bytes|filesize) }}
   </span>
   <span class="spacer"></span>
+  {% if can_archive %}
+  <form class="inline" method="post" action="/sites/{{ site['id'] }}/export">
+    <button type="submit" title="{{ _('소속 페이지·스냅샷을 아카이브 내보내기 파일(tar.gz)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.') }}">{{ _("사이트 내보내기") }}</button>
+  </form>
+  {% endif %}
   {% if can_delete %}
   <form class="inline" method="post" action="/sites/{{ site['id'] }}/delete"
         onsubmit="return confirm({{ (site['site_key'] ~ '\n\n' ~ _('페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', p=page_count, c=crawls|length))|tojson }})">

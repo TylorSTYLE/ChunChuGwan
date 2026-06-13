@@ -130,6 +130,47 @@ def test_export_import_includes_documents(roots, tmp_path, monkeypatch):
     assert n == 1
 
 
+def test_export_site_only(roots, tmp_path, monkeypatch):
+    """site_id 한정 내보내기 — 소속 페이지·스냅샷·참조 CAS 만 담긴다."""
+    root_a, root_b = roots
+    used, unused = "a" * 64 + ".png", "b" * 64 + ".png"
+    for name in (used, unused):
+        f = config.RESOURCES_DIR / name[:2] / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(name.encode())
+    with db.connect() as conn:
+        site_id = db.get_site_by_key(conn, storage.site_key(URL_A))["id"]
+        db.insert_snapshot_resources(conn, 1, [{"name": used}])  # URL_A 스냅샷
+        db.insert_snapshot_resources(conn, 3, [{"name": unused}])  # URL_B 스냅샷
+
+    out = backup.export_archive(tmp_path, site_id=site_id)
+    assert out.name.startswith("chunchugwan-export-example.com-")
+    with tarfile.open(out) as tar:
+        names = tar.getnames()
+    assert any(n.startswith("sites/example.com/") for n in names)
+    assert not any("other.org" in n for n in names)
+    assert f"resources/{used[:2]}/{used}" in names
+    assert f"resources/{unused[:2]}/{unused}" not in names
+    assert f"documents/{DOC_SHA[:2]}/{DOC_SHA}.pdf" in names
+
+    # 가져오면 해당 사이트만 복원된다
+    _patch_root(monkeypatch, root_b)
+    backup.import_archive(out, mode="merge")
+    with db.connect() as conn:
+        assert db.get_page(conn, URL_A) is not None
+        assert db.get_page(conn, URL_B) is None
+    assert _counts() == {
+        "pages": 1, "snapshots": 2, "checks": 1, "users": 0, "archive_logs": 0,
+    }
+    assert documents.cas_path(DOC_SHA + ".pdf").read_bytes() == DOC_BODY
+    assert (config.RESOURCES_DIR / used[:2] / used).read_bytes() == used.encode()
+
+
+def test_export_unknown_site_raises(roots, tmp_path):
+    with pytest.raises(ValueError, match="사이트 없음"):
+        backup.export_archive(tmp_path / "x.tar.gz", site_id=9999)
+
+
 def test_import_rejects_bad_document_refs(roots, tmp_path, monkeypatch):
     """archive.json 의 문서 참조가 형식 위반이면 거부 (path traversal)."""
     root_a, root_b = roots

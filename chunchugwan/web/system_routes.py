@@ -159,8 +159,11 @@ def system_logs_view(
     )
 
 
-def _download(make: Callable[[Path], Path], prefix: str) -> FileResponse:
-    """코어 함수로 tar.gz 를 만들어 다운로드로 응답 (전송 후 임시 파일 정리)."""
+def tar_download(make: Callable[[Path], Path], prefix: str) -> FileResponse:
+    """코어 함수로 tar.gz 를 만들어 다운로드로 응답 (전송 후 임시 파일 정리).
+
+    사이트 단위 내보내기(app.site_export)도 같은 헬퍼를 쓴다.
+    """
     tmpdir = Path(tempfile.mkdtemp(prefix=f"wccg-{prefix}-"))
     try:
         out = make(tmpdir)
@@ -176,13 +179,13 @@ def _download(make: Callable[[Path], Path], prefix: str) -> FileResponse:
 @router.post("/backup")
 def system_backup() -> FileResponse:
     """전체 백업 tar.gz 다운로드 (DB·인증 데이터·스냅샷 파일·rules.json)."""
-    return _download(backup_mod.create_backup, "backup")
+    return tar_download(backup_mod.create_backup, "backup")
 
 
 @router.post("/export")
 def system_export() -> FileResponse:
     """아카이브 데이터만 내보내기 다운로드 (인증·로그 제외)."""
-    return _download(backup_mod.export_archive, "export")
+    return tar_download(backup_mod.export_archive, "export")
 
 
 def _save_upload(file: UploadFile) -> Path:

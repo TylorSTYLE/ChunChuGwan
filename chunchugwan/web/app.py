@@ -33,8 +33,8 @@ from fastapi.responses import (
 )
 
 from .. import (
-    auth, config, crawler, db, deletion, differ, documents, netcheck, pipeline,
-    resources, scheduler, storage, system_log,
+    auth, backup, config, crawler, db, deletion, differ, documents, netcheck,
+    pipeline, resources, scheduler, storage, system_log,
 )
 from . import api_routes, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -551,6 +551,22 @@ def site_certificate_pem(request: Request, site_id: int, cert_id: int):
     return PlainTextResponse(
         cert["pem"],
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/sites/{site_id}/export")
+def site_export(request: Request, site_id: int):
+    """사이트 아카이브 내보내기 — 소속 페이지·스냅샷과 참조 자원만 담은 tar.gz.
+
+    파일 형식은 전체 내보내기(/system/export)와 같아 가져오기(웹 화면·
+    wccg import)로 복원할 수 있다. admin/archiver 전용.
+    """
+    _require_archiver(request)
+    with db.connect() as conn:
+        if db.get_site(conn, site_id) is None:
+            raise HTTPException(404, t(request, "사이트 없음"))
+    return system_routes.tar_download(
+        lambda dest: backup.export_archive(dest, site_id=site_id), "export"
     )
 
 
