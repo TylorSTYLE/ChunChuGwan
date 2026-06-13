@@ -10,12 +10,15 @@
 - session    : 브라우저 세션 상태 storage_state (쿠키·localStorage JSON)
 - jwt        : Bearer 토큰(JWT 등) — 캡처 시 Authorization: Bearer 헤더로 주입
 
-다음 단계(캡처 연동)에서 reveal() 로 payload 를 꺼내 Playwright 컨텍스트에
-주입한다 — http_basic→http_credentials, session→storage_state,
-jwt→extra_http_headers. 이 모듈은 아직 캡처를 호출하지 않는다(관리만).
+캡처 연동(reveal_for_capture)에서 payload 를 꺼내 Playwright 컨텍스트에
+주입한다 — http_basic→http_credentials(대상 origin 스코프),
+session→storage_state, jwt→대상 origin 요청에만 Authorization 헤더
+(context.route). 자격증명이 페이지의 서드파티 하위 자원으로 새지 않게 모두
+대상 origin 으로 스코프한다 (capture._context_options 참조).
 """
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 
@@ -132,10 +135,45 @@ def add(
 def reveal(conn: sqlite3.Connection, cred_id: int) -> dict | None:
     """자격증명을 복호화해 payload dict 반환 (없으면 None).
 
-    캡처 연동(다음 단계)에서 쓴다. 복호화 실패는 crypto.SecretDecryptError,
-    키 미설정은 crypto.SecretKeyMissing 이 전파된다.
+    복호화 실패는 crypto.SecretDecryptError, 키 미설정은
+    crypto.SecretKeyMissing 이 전파된다.
     """
     row = db.get_site_credential(conn, cred_id)
     if row is None:
         return None
     return json.loads(crypto.decrypt(row["secret"]))
+
+
+def reveal_for_capture(
+    conn: sqlite3.Connection, cred_id: int
+) -> tuple[str, dict] | None:
+    """캡처 연동용 — (kind, 복호화 payload) 반환 (없으면 None).
+
+    pipeline 이 페이지의 credential_id 로 호출해 capture 컨텍스트에 주입한다.
+    복호화 실패는 crypto.SecretDecryptError, 키 미설정은
+    crypto.SecretKeyMissing 이 전파된다 (호출부가 graceful 처리).
+    """
+    row = db.get_site_credential(conn, cred_id)
+    if row is None:
+        return None
+    return row["kind"], json.loads(crypto.decrypt(row["secret"]))
+
+
+def httpx_auth(kind: str, payload: dict) -> dict:
+    """캡처 외 경로(httpx 문서 다운로드)용 인증 스펙.
+
+    Basic·Bearer 는 Authorization 헤더로 보낸다 — httpx 가 교차 origin
+    리다이렉트 시 Authorization 을 떼므로 누수에 안전하다. 세션은 쿠키 목록
+    으로 돌려주고(documents 가 도메인 스코프 jar 로 변환), 대상 origin 매칭은
+    호출부가 한다. 반환: {"headers": {...}} 또는 {"cookies": [cookie dict...]}.
+    """
+    if kind == KIND_HTTP_BASIC:
+        raw = f"{payload.get('username', '')}:{payload.get('password', '')}"
+        token = base64.b64encode(raw.encode("utf-8")).decode("ascii")
+        return {"headers": {"Authorization": f"Basic {token}"}}
+    if kind == KIND_JWT:
+        return {"headers": {"Authorization": f"Bearer {payload.get('token', '')}"}}
+    if kind == KIND_SESSION:
+        cookies = payload.get("storage_state", {}).get("cookies", [])
+        return {"cookies": cookies} if cookies else {}
+    return {}

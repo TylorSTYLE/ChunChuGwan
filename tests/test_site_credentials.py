@@ -109,6 +109,41 @@ def test_delete_site_with_credentials(tmp_db):
         assert db.count_site_credentials(conn, site_id) == 0
 
 
+def _page_credential(conn, page_id):
+    return conn.execute(
+        "SELECT credential_id FROM pages WHERE id = ?", (page_id,)
+    ).fetchone()["credential_id"]
+
+
+def test_get_or_create_page_links_and_updates_credential(tmp_db):
+    """get_or_create_page 가 credential_id 를 신규 저장하고, 재호출 시 갱신한다."""
+    slug = storage.url_to_slug(URL)
+    with db.connect() as conn:
+        site_id = db.get_or_create_site(conn, SITE_KEY)
+        c1 = credentials.add(conn, site_id, "a", "http_basic",
+                             {"username": "u", "password": "p"}, created_by=None)
+        c2 = credentials.add(conn, site_id, "b", "jwt", {"token": "t.t.t"}, created_by=None)
+        pid = db.get_or_create_page(conn, URL, "example.com", slug, credential_id=c1)
+        assert _page_credential(conn, pid) == c1
+        # 같은 URL 재호출 + 다른 credential_id → 갱신 (재아카이빙으로 연결 변경)
+        assert db.get_or_create_page(conn, URL, "example.com", slug, credential_id=c2) == pid
+        assert _page_credential(conn, pid) == c2
+        # credential_id 안 주면 기존 연결 유지
+        db.get_or_create_page(conn, URL, "example.com", slug)
+        assert _page_credential(conn, pid) == c2
+
+
+def test_delete_credential_nulls_page_link(tmp_db):
+    """자격증명을 삭제하면 연결한 페이지의 credential_id 가 NULL 이 된다 (FK 안전)."""
+    slug = storage.url_to_slug(URL)
+    with db.connect() as conn:
+        site_id = db.get_or_create_site(conn, SITE_KEY)
+        cid = credentials.add(conn, site_id, "a", "jwt", {"token": "t.t.t"}, created_by=None)
+        pid = db.get_or_create_page(conn, URL, "example.com", slug, credential_id=cid)
+        assert db.delete_site_credential(conn, cid) is True
+        assert _page_credential(conn, pid) is None
+
+
 # ---- 코어 모듈 (credentials) ----
 
 
@@ -333,11 +368,11 @@ class _Outcome:
 
 
 def _stub_archive(monkeypatch):
-    """/archive 의 실제 캡처를 가로채고 호출된 URL 을 기록한다."""
+    """/archive 의 실제 캡처를 가로채고 호출 인자(url·credential_id 등)를 기록."""
     calls = []
 
     def fake(url, **kwargs):
-        calls.append(url)
+        calls.append({"url": url, **kwargs})
         return _Outcome()
 
     monkeypatch.setattr(web_app.pipeline, "archive_url", fake)
@@ -347,7 +382,7 @@ def _stub_archive(monkeypatch):
 def _archive_data(**over):
     data = {
         "url": "https://login.example.org/app",
-        "add_credential": "on",
+        "cred_existing_id": "__new__",
         "cred_kind": "http_basic",
         "cred_username": "siteuser",
         "cred_password": "sitepass",
@@ -365,7 +400,7 @@ def _site_id_for(site_key):
 def test_archive_form_shows_credential_section_for_admin(client):
     _login_admin(client)
     html = client.get("/archive/new").text
-    assert 'name="add_credential"' in html
+    assert 'name="cred_existing_id"' in html and 'id="cred-select"' in html
     assert 'name="cred_kind"' in html
     assert 'name="cred_storage_state"' in html
     assert 'name="cred_token"' in html and 'value="jwt"' in html
@@ -378,7 +413,7 @@ def test_archive_form_hides_credential_section_for_archiver(client):
         )
     _login(client, "arch@test.co", "password1234")
     html = client.get("/archive/new").text
-    assert 'name="add_credential"' not in html
+    assert 'name="cred_existing_id"' not in html
 
 
 def test_archive_stores_credential_for_new_site(client, monkeypatch):
@@ -395,7 +430,9 @@ def test_archive_stores_credential_for_new_site(client, monkeypatch):
         assert credentials.reveal(conn, creds[0]["id"]) == {
             "username": "siteuser", "password": "sitepass"
         }
+        new_id = creds[0]["id"]
     assert len(calls) == 1                        # 아카이빙도 트리거됨
+    assert calls[0]["credential_id"] == new_id    # 새 자격증명이 페이지에 연결됨
 
 
 def test_archive_stores_credential_for_existing_site(client, monkeypatch):
@@ -418,7 +455,7 @@ def test_archive_stores_session_credential(client, monkeypatch):
     r = client.post(
         "/archive",
         data={
-            "url": "https://sess.example.org/", "add_credential": "on",
+            "url": "https://sess.example.org/", "cred_existing_id": "__new__",
             "cred_kind": "session", "cred_storage_state": state,
         },
         follow_redirects=False,
@@ -435,7 +472,7 @@ def test_archive_stores_jwt_credential(client, monkeypatch):
     _login_admin(client)
     r = client.post(
         "/archive",
-        data={"url": "https://jwt.example.org/", "add_credential": "on",
+        data={"url": "https://jwt.example.org/", "cred_existing_id": "__new__",
               "cred_kind": "jwt", "cred_token": "eyJ.x.y"},
         follow_redirects=False,
     )
@@ -460,7 +497,7 @@ def test_archive_credential_ignored_for_non_admin(client, monkeypatch):
     assert _site_id_for("login.example.org") is None   # 자격증명 경로는 무시됨
 
 
-def test_archive_without_checkbox_skips_credential(client, monkeypatch):
+def test_archive_without_credential_selection_skips(client, monkeypatch):
     calls = _stub_archive(monkeypatch)
     _login_admin(client)
     r = client.post(
@@ -471,7 +508,8 @@ def test_archive_without_checkbox_skips_credential(client, monkeypatch):
     )
     assert r.status_code == 303
     assert len(calls) == 1
-    assert _site_id_for("nocred.example.org") is None  # 미체크 → 자격증명 미저장
+    assert calls[0].get("credential_id") is None         # 연결 안 함
+    assert _site_id_for("nocred.example.org") is None  # 자격증명 미저장
 
 
 def test_archive_invalid_credential_blocks_and_skips_archive(client, monkeypatch):
@@ -516,3 +554,121 @@ def test_archive_credential_blocked_without_secret_key(client, monkeypatch):
     r = client.post("/archive", data=_archive_data(), follow_redirects=False)
     assert "error=" in r.headers["location"]
     assert _site_id_for("login.example.org") is None
+
+
+# ---- 기존 자격증명 연결 (조회 엔드포인트 + 연결) ----
+
+
+def test_archive_credentials_endpoint(client):
+    _login_admin(client)
+    sid = _sid()
+    with db.connect() as conn:
+        credentials.add(conn, sid, "관리자", "jwt", {"token": "eyJ.x.y"}, created_by=None)
+    # www 변형도 같은 사이트(example.com)로 매핑된다
+    body = client.get(
+        "/archive/credentials", params={"url": "https://www.example.com/p"}
+    ).json()
+    assert body["site_key"] == "example.com"
+    assert len(body["credentials"]) == 1
+    item = body["credentials"][0]
+    assert item["label"] == "관리자" and item["kind"] == "jwt"
+    assert "secret" not in item and "token" not in item    # 비밀은 안 내려간다
+    # 자격증명 없는 도메인·빈 url → 빈 목록
+    assert client.get(
+        "/archive/credentials", params={"url": "https://nope.test/"}
+    ).json()["credentials"] == []
+    assert client.get("/archive/credentials").json()["credentials"] == []
+
+
+def test_archive_credentials_endpoint_admin_only(client):
+    _login(client, "viewer@test.co", "password1234")
+    r = client.get("/archive/credentials", params={"url": "https://example.com/"})
+    assert r.status_code == 403
+
+
+def test_archive_connect_existing_credential(client, monkeypatch):
+    calls = _stub_archive(monkeypatch)
+    _login_admin(client)
+    sid = _sid()
+    with db.connect() as conn:
+        cid = credentials.add(conn, sid, "관리자", "http_basic",
+                              {"username": "u", "password": "p"}, created_by=None)
+    r = client.post(
+        "/archive",
+        data={"url": "https://example.com/x", "cred_existing_id": str(cid)},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert len(calls) == 1
+    assert calls[0]["credential_id"] == cid    # 연결된 자격증명이 아카이브로 전달됨
+    # 새 자격증명을 만들지 않는다
+    with db.connect() as conn:
+        assert db.count_site_credentials(conn, sid) == 1
+
+
+def test_archive_connect_wrong_domain_rejected(client, monkeypatch):
+    calls = _stub_archive(monkeypatch)
+    _login_admin(client)
+    sid = _sid()
+    with db.connect() as conn:
+        cid = credentials.add(conn, sid, "x", "http_basic",
+                              {"username": "u", "password": "p"}, created_by=None)
+    # example.com 의 자격증명을 다른 도메인 아카이빙에 연결 시도 → 거부 + 아카이빙도 안 함
+    r = client.post(
+        "/archive",
+        data={"url": "https://other.org/", "cred_existing_id": str(cid)},
+        follow_redirects=False,
+    )
+    assert "error=" in r.headers["location"]
+    assert calls == []
+
+
+def test_archive_connect_nonexistent_credential_rejected(client, monkeypatch):
+    calls = _stub_archive(monkeypatch)
+    _login_admin(client)
+    r = client.post(
+        "/archive",
+        data={"url": "https://example.com/x", "cred_existing_id": "99999"},
+        follow_redirects=False,
+    )
+    assert "error=" in r.headers["location"]
+    assert calls == []
+
+
+def test_archive_connect_ignored_for_non_admin(client, monkeypatch):
+    calls = _stub_archive(monkeypatch)
+    sid = _sid()
+    with db.connect() as conn:
+        cid = credentials.add(conn, sid, "x", "http_basic",
+                              {"username": "u", "password": "p"}, created_by=None)
+        db.create_user(
+            conn, "arch@test.co", auth.hash_password("password1234"), role="archiver"
+        )
+    _login(client, "arch@test.co", "password1234")
+    # 아카이버가 연결 id 를 보내도 무시되고 아카이빙만 진행 (자격증명은 관리자 전용)
+    r = client.post(
+        "/archive",
+        data={"url": "https://example.com/x", "cred_existing_id": str(cid)},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert len(calls) == 1 and calls[0].get("credential_id") is None
+
+
+def test_archive_crawl_threads_credential(client):
+    """사이트 전체 아카이브(크롤)도 연결한 자격증명을 crawls.credential_id 에 싣는다."""
+    _login_admin(client)
+    sid = _sid()
+    with db.connect() as conn:
+        cid = credentials.add(conn, sid, "c", "http_basic",
+                              {"username": "u", "password": "p"}, created_by=None)
+    r = client.post(
+        "/archive",
+        data={"url": "https://example.com/sec/", "site": "on",
+              "cred_existing_id": str(cid)},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303 and "/crawls/" in r.headers["location"]
+    with db.connect() as conn:
+        crawl = db.find_running_crawl(conn, "https://example.com/sec/")
+        assert crawl is not None and crawl["credential_id"] == cid

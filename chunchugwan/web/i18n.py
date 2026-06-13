@@ -556,10 +556,9 @@ _EN: dict[str, str] = {
     "키 이름에 제어 문자를 쓸 수 없습니다.": "The key name cannot contain control characters.",
     # ---- 사이트 로그인 자격증명 (site_credentials) ----
     "로그인 자격증명": "Login credentials",
-    "이 사이트를 아카이빙할 때 춘추관이 로그인하는 데 쓸 자격증명입니다. 비밀은 WCCG_SECRET_KEY 로 대칭 암호화해 저장하며, 화면에는 다시 표시되지 않습니다. (캡처 연동은 다음 단계)":
+    "이 사이트를 아카이빙할 때 춘추관이 로그인하는 데 쓸 자격증명입니다. 비밀은 WCCG_SECRET_KEY 로 대칭 암호화해 저장하며, 화면에는 다시 표시되지 않습니다.":
         "Credentials ChunChuGwan uses to log in when archiving this site. Secrets are "
-        "stored symmetrically encrypted with WCCG_SECRET_KEY and are never shown again. "
-        "(Capture integration comes next.)",
+        "stored symmetrically encrypted with WCCG_SECRET_KEY and are never shown again.",
     "이 사이트 로그인이 필요한 경우 쓸 자격증명을 관리합니다 (관리자 전용).":
         "Manage credentials to use when this site requires login (admin only).",
     "WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.":
@@ -585,8 +584,8 @@ _EN: dict[str, str] = {
     "세션 쿠키": "Session cookie",
     "JWT (Bearer 토큰)": "JWT (Bearer token)",
     "Bearer 토큰": "Bearer token",
-    "캡처 시 Authorization: Bearer 헤더로 주입됩니다 (다음 단계). 'Bearer ' 접두사 없이 토큰 값만 넣으세요.":
-        "Injected as an Authorization: Bearer header during capture (next step). "
+    "캡처 시 Authorization: Bearer 헤더로 주입됩니다. 'Bearer ' 접두사 없이 토큰 값만 넣으세요.":
+        "Injected as an Authorization: Bearer header during capture. "
         "Enter only the token value, without the 'Bearer ' prefix.",
     "토큰을 입력하세요.": "Enter a token.",
     "토큰에 공백·줄바꿈을 넣을 수 없습니다.":
@@ -601,6 +600,14 @@ _EN: dict[str, str] = {
     "비우면 자동 지정": "Auto-named if left blank",
     "이 사이트에 이미 같은 이름의 자격증명이 있습니다: {name}":
         "This site already has a credential with that name: {name}",
+    "연결 안 함": "Don't connect",
+    "새 자격증명 추가…": "Add new credential…",
+    "이 도메인에 등록된 자격증명이 있으면 골라서 연결하고, 없으면 새로 추가할 수 있습니다. 아카이빙 시 로그인에 사용됩니다 (사이트 상세에서도 관리).":
+        "If this domain has registered credentials you can pick one to connect; "
+        "otherwise add a new one. Used to log in during archiving "
+        "(also managed from the site detail page).",
+    "잘못된 자격증명 선택입니다.": "Invalid credential selection.",
+    "이 도메인에 등록된 자격증명이 아닙니다.": "Not a credential registered for this domain.",
     "이미 있는 이름입니다: {name}": "Name already exists: {name}",
     "자격증명을 등록했습니다.": "Credential added.",
     "자격증명을 삭제했습니다.": "Credential deleted.",

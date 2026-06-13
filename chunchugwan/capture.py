@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 from urllib.parse import urldefrag, urljoin
 
-from . import config, documents, trackers
+from . import config, documents, storage, trackers
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +336,82 @@ class BrowserSession:
         self.close()
 
 
+@dataclass
+class CaptureCredential:
+    """캡처 시 주입할 로그인 자격증명 — pipeline 이 복호화해 만든다.
+
+    origin 은 대상 사이트의 origin(`scheme://host[:port]`) — 자격증명을 이
+    origin 의 요청에만 적용해 페이지의 서드파티 하위 자원(CDN 등)으로
+    Basic 인증·Bearer 토큰이 새는 것을 막는다.
+    """
+    kind: str
+    payload: dict
+    origin: str
+
+
+def _context_options(
+    credential: CaptureCredential | None, insecure_tls: bool
+) -> tuple[dict, str | None]:
+    """new_context() 옵션과, jwt 면 origin-스코프로 붙일 Authorization 값을 만든다.
+
+    - http_basic : http_credentials 를 대상 origin 으로 스코프 (context.request 에도 상속)
+    - session    : storage_state (쿠키는 도메인 스코프라 자체 안전)
+    - jwt        : 컨텍스트 옵션으로는 못 붙인다(extra_http_headers 는 모든 origin
+      으로 새므로). Authorization 헤더 문자열만 돌려주고, 호출부가 context.route 로
+      대상 origin 요청에만 추가한다.
+    반환: (new_context kwargs, jwt Authorization 헤더 또는 None)
+    """
+    kwargs: dict = {
+        "user_agent": config.USER_AGENT,
+        "ignore_https_errors": insecure_tls,
+    }
+    if credential is None:
+        return kwargs, None
+    if credential.kind == "http_basic":
+        kwargs["http_credentials"] = {
+            "username": credential.payload.get("username", ""),
+            "password": credential.payload.get("password", ""),
+            "origin": credential.origin,   # 이 origin 에만 Basic 전송 (누수 차단)
+            "send": "always",
+        }
+        return kwargs, None
+    if credential.kind == "session":
+        state = credential.payload.get("storage_state")
+        if state:
+            kwargs["storage_state"] = state
+        return kwargs, None
+    if credential.kind == "jwt":
+        token = credential.payload.get("token", "")
+        return kwargs, (f"Bearer {token}" if token else None)
+    return kwargs, None
+
+
+def _install_origin_scoped_header(context, origin: str, authorization: str) -> None:
+    """대상 origin 요청에만 Authorization 헤더를 붙이는 라우트를 단다 (jwt 용).
+
+    context.route 는 페이지 네비게이션·하위 자원·페이지 내 fetch 를 가로채므로
+    같은 origin 의 요청에만 토큰을 실어 보낸다 — 서드파티(CDN 등)로는 새지
+    않는다. context.request(자원 인라인 폴백)에는 route 가 안 걸린다 — 같은
+    origin 자원은 보통 페이지 fetch 단계에서 이 헤더로 인라인되지만, 그 fetch
+    가 실패해 폴백으로 떨어지면 그 자원은 인증 없이 시도된다 (인라인 실패 가능,
+    토큰 누수는 없음). http_basic 은 http_credentials 가 context.request 에도
+    상속돼 이 한계가 없다.
+    """
+    def handler(route) -> None:
+        request = route.request
+        if storage.url_origin(request.url) == origin:
+            headers = {
+                k: v for k, v in request.headers.items()
+                if k.lower() != "authorization"
+            }
+            headers["Authorization"] = authorization
+            route.continue_(headers=headers)
+        else:
+            route.continue_()
+
+    context.route("**/*", handler)
+
+
 def capture(
     url: str,
     out_dir: Path,
@@ -344,6 +420,7 @@ def capture(
     session: BrowserSession | None = None,
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
+    credential: CaptureCredential | None = None,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
 
@@ -361,7 +438,7 @@ def capture(
     try:
         return _capture_once(url, out_dir, remove_selectors, link_rewriter,
                              session=session, resource_fallback=resource_fallback,
-                             insecure_tls=insecure_tls)
+                             insecure_tls=insecure_tls, credential=credential)
     except CaptureError as e:
         if "ERR_HTTP2" not in str(e):
             raise
@@ -370,7 +447,7 @@ def capture(
             url, out_dir, remove_selectors, link_rewriter,
             browser_args=("--disable-http2",),
             resource_fallback=resource_fallback,
-            insecure_tls=insecure_tls,
+            insecure_tls=insecure_tls, credential=credential,
         )
 
 
@@ -383,6 +460,7 @@ def _capture_once(
     session: BrowserSession | None = None,
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
+    credential: CaptureCredential | None = None,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
     from playwright.sync_api import Error as PlaywrightError
@@ -392,14 +470,14 @@ def _capture_once(
         if session is not None and not browser_args:
             return _capture_in_browser(
                 session.browser(), url, out_dir, remove_selectors, link_rewriter,
-                resource_fallback, insecure_tls,
+                resource_fallback, insecure_tls, credential,
             )
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=list(browser_args))
             try:
                 return _capture_in_browser(
                     browser, url, out_dir, remove_selectors, link_rewriter,
-                    resource_fallback, insecure_tls,
+                    resource_fallback, insecure_tls, credential,
                 )
             finally:
                 browser.close()
@@ -419,6 +497,7 @@ def _capture_in_browser(
     link_rewriter: LinkRewriter | None,
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
+    credential: CaptureCredential | None = None,
 ) -> CaptureResult:
     """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다.
 
@@ -426,12 +505,15 @@ def _capture_in_browser(
     서빙하는 사이트(사설 NAS 등)의 재시도 경로(pipeline)에서만 켠다.
     컨텍스트 옵션이라 페이지의 하위 자원 요청·context.request 폴백에도
     적용된다.
+    credential 이 있으면 종류별로 컨텍스트에 주입한다 (http_credentials/
+    storage_state) — jwt 는 대상 origin 요청에만 Authorization 헤더를 붙인다.
     """
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-    context = browser.new_context(
-        user_agent=config.USER_AGENT, ignore_https_errors=insecure_tls
-    )
+    context_kwargs, jwt_authorization = _context_options(credential, insecure_tls)
+    context = browser.new_context(**context_kwargs)
+    if jwt_authorization and credential is not None:
+        _install_origin_scoped_header(context, credential.origin, jwt_authorization)
     try:
         page = context.new_page()
         page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
