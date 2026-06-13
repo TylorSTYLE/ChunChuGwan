@@ -4,9 +4,10 @@
   documents/ + rules.json. 복원은 아카이브 루트를 백업 시점 상태로 통째로
   되돌린다 (인증 데이터 포함).
 - 아카이브 내보내기(kind=archive): pages/snapshots/checks/documents(문서
-  참조)와 스냅샷 파일, 공유 자원(resources/)·문서 CAS(documents/)만.
-  가져오기는 merge(기존 유지 + 중복 스킵) / overwrite(아카이브 데이터 교체).
-  인증 테이블(users 등)과 실행 로그(archive_logs)는 건드리지 않는다.
+  참조)·크롤 회차(crawls/crawl_pages)·사이트 인증서(site_certificates)·
+  아카이브 로그(archive_logs)와 스냅샷 파일, 공유 자원(resources/)·문서
+  CAS(documents/). 가져오기는 merge(기존 유지 + 중복 스킵) /
+  overwrite(아카이브 데이터 교체). 인증 테이블(users 등)은 건드리지 않는다.
 
 보안 노트: tar 추출은 filter="data" 로 절대경로/상위탈출/심링크를 차단하고,
 가져온 데이터의 domain/slug/dir_name 과 공유 자원 파일명은 경로 조립 전에
@@ -31,8 +32,10 @@ from . import config, db, documents, resources, storage
 #    스냅샷 파일이 page.html.gz/raw.html.gz/screenshot.webp 일 수 있음.
 # 3: 문서 CAS 도입 — 문서 디렉토리(documents/)와 snapshot_documents 참조
 #    (archive.json 의 documents 목록) 포함.
-#    구버전 백업/내보내기는 그대로 읽을 수 있다.
-FORMAT_VERSION = 3
+# 4: 크롤 회차(crawls — crawl_pages 내장)·사이트 인증서(certificates)·
+#    아카이브 로그(logs) 포함 — 사이트 단위 내보내기가 기록을 온전히 옮긴다.
+#    구버전 백업/내보내기는 그대로 읽을 수 있다 (없는 목록은 빈 것으로 취급).
+FORMAT_VERSION = 4
 MANIFEST_NAME = "manifest.json"
 ARCHIVE_DATA_NAME = "archive.json"
 
@@ -50,6 +53,9 @@ class ImportResult:
     snapshots_added: int = 0
     snapshots_skipped: int = 0
     checks_added: int = 0
+    crawls_added: int = 0
+    certificates_added: int = 0
+    logs_added: int = 0
 
 
 def _utcnow() -> str:
@@ -202,9 +208,13 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
     같아 가져오기(import_archive)로 똑같이 읽힌다. 사이트가 없으면 ValueError.
     """
     config.ensure_dirs()
-    where = "" if site_id is None else " WHERE p.site_id = ?"
     args: tuple = () if site_id is None else (site_id,)
     prefix = "chunchugwan-export"
+
+    def _site_where(alias: str) -> str:
+        return "" if site_id is None else f" WHERE {alias}.site_id = ?"
+
+    where = _site_where("p")
     with db.connect() as conn:
         if site_id is not None:
             site = db.get_site(conn, site_id)
@@ -263,6 +273,89 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 args,
             )
         ]
+        # 크롤 회차 — 페이지 큐(crawl_pages)를 내장. 스냅샷 참조는
+        # (page_url, dir_name)으로 직렬화해 가져올 때 새 id 로 잇는다.
+        # 로컬 네트워크 태그·클레임 상태는 인스턴스 로컬이라 내보내지 않는다.
+        crawls = []
+        for c in conn.execute(
+            f"SELECT * FROM crawls c{_site_where('c')} ORDER BY c.id", args
+        ).fetchall():
+            crawl_pages = [
+                {
+                    "url": r["url"], "depth": r["depth"], "status": r["status"],
+                    "attempts": r["attempts"], "error": r["error"],
+                    "page_url": r["snap_page_url"], "dir_name": r["dir_name"],
+                }
+                for r in conn.execute(
+                    """
+                    SELECT cp.*, s.dir_name, p.url AS snap_page_url
+                    FROM crawl_pages cp
+                    LEFT JOIN snapshots s ON s.id = cp.snapshot_id
+                    LEFT JOIN pages p ON p.id = s.page_id
+                    WHERE cp.crawl_id = ? ORDER BY cp.id
+                    """,
+                    (c["id"],),
+                )
+            ]
+            crawls.append({
+                **{
+                    k: c[k]
+                    for k in (
+                        "start_url", "scope_host", "scope_path", "status",
+                        "max_pages", "max_depth", "delay_seconds", "source",
+                        "created_at", "finished_at",
+                    )
+                },
+                "pages": crawl_pages,
+            })
+        # 사이트 인증서 — 소속 사이트는 site_key 로 직렬화한다
+        certificates = [
+            {
+                k: r[k]
+                for k in (
+                    "site_key", "host", "fingerprint", "subject", "issuer",
+                    "serial", "san", "not_before", "not_after",
+                    "signature_algorithm", "verified", "pem",
+                    "first_seen_at", "last_seen_at",
+                )
+            }
+            for r in conn.execute(
+                f"""
+                SELECT sc.*, st.site_key
+                FROM site_certificates sc JOIN sites st ON st.id = sc.site_id
+                {_site_where("sc")} ORDER BY sc.id
+                """,
+                args,
+            )
+        ]
+        # 아카이브 로그 — page_id/snapshot_id FK 는 (page_url, dir_name)으로
+        # 직렬화. 사이트 한정이면 소속 페이지의 로그만 — 페이지 행이 생기기
+        # 전에 실패한 로그(page_id NULL)는 소속을 알 수 없어 빠진다
+        # (list_site_failed_logs 와 같은 기준).
+        log_rows = [
+            {
+                **{
+                    k: r[k]
+                    for k in (
+                        "url", "domain", "source", "status", "started_at",
+                        "duration_ms", "http_status", "content_hash",
+                        "error", "steps",
+                    )
+                },
+                "page_url": r["page_url"], "dir_name": r["dir_name"],
+            }
+            for r in conn.execute(
+                f"""
+                SELECT al.*, p.url AS page_url, s.dir_name
+                FROM archive_logs al
+                {"JOIN" if site_id is not None else "LEFT JOIN"} pages p
+                    ON p.id = al.page_id
+                LEFT JOIN snapshots s ON s.id = al.snapshot_id
+                {_site_where("p")} ORDER BY al.id
+                """,
+                args,
+            )
+        ]
         # 사이트 한정이면 내보내는 스냅샷이 참조하는 공유 자원만 추린다
         resource_names = None if site_id is None else [
             r["name"]
@@ -289,6 +382,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
     data = {
         "pages": pages, "snapshots": snapshots, "checks": checks,
         "documents": doc_rows,
+        "crawls": crawls, "certificates": certificates, "logs": log_rows,
     }
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
@@ -367,6 +461,22 @@ def _validate_archive_data(data: dict) -> None:
             raise ValueError(f"잘못된 문서 참조: {sha!r}/{fname!r}")
         if not (d.get("page_url") and _DIR_NAME_RE.match(str(d.get("dir_name", "")))):
             raise ValueError(f"문서 참조의 스냅샷 식별자가 잘못됐습니다: {fname!r}")
+    # crawls/certificates/logs 는 v4 부터 — 파일 경로를 만들지 않는 DB 전용
+    # 데이터라 필수 키만 확인한다 (없으면 구버전, 빈 목록 취급)
+    for c in data.get("crawls") or []:
+        if not (c.get("start_url") and c.get("created_at") and c.get("status")):
+            raise ValueError(f"크롤 회차에 필수 값이 없습니다: {c.get('start_url')!r}")
+        if not isinstance(c.get("pages") or [], list):
+            raise ValueError(f"크롤 페이지 목록이 잘못됐습니다: {c['start_url']!r}")
+    for cert in data.get("certificates") or []:
+        if not (
+            _DOMAIN_RE.match(str(cert.get("site_key", "")))
+            and cert.get("host") and cert.get("fingerprint") and cert.get("pem")
+        ):
+            raise ValueError(f"인증서 항목이 잘못됐습니다: {cert.get('host')!r}")
+    for lg in data.get("logs") or []:
+        if not (lg.get("url") and lg.get("started_at") and lg.get("status")):
+            raise ValueError(f"아카이브 로그 항목에 필수 값이 없습니다: {lg.get('url')!r}")
 
 
 def _wipe_archive_data(conn: sqlite3.Connection) -> None:
@@ -431,7 +541,10 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
     - merge: 기존 데이터 유지. 페이지는 URL 로 매칭, 스냅샷은 같은 페이지에
       같은 dir_name 이 있으면 스킵 (멱등). checks 는 동일 행만 스킵.
     - overwrite: 기존 아카이브 데이터(행+파일)를 비우고 가져온다.
-      두 모드 모두 인증 테이블과 archive_logs 행은 건드리지 않는다.
+      두 모드 모두 인증 테이블은 건드리지 않는다.
+
+    크롤 회차·사이트 인증서·아카이브 로그(v4)도 각자의 자연키로 중복을
+    스킵하며 가져온다 — 기존 archive_logs 행은 지우지 않는다.
     """
     if mode not in ("merge", "overwrite"):
         raise ValueError(f"알 수 없는 모드: {mode!r}")
@@ -534,4 +647,118 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     "sha256": d["sha256"],
                     "content_type": d.get("content_type") or "application/octet-stream",
                 }])
+
+            # 크롤 회차 — (start_url, created_at)이 같으면 스킵 (멱등).
+            # 클레임 상태(in_progress)는 인스턴스 로컬이라 pending 으로 되돌리고,
+            # 진행 중(running)이던 회차는 가져온 쪽 크롤러가 이어서 처리한다.
+            # 로컬 네트워크 태그는 인스턴스 설정이라 옮기지 않는다 — 사설 대역
+            # 페이지는 게이트가 거부하므로 태그를 다시 지정해야 이어진다.
+            for cr in data.get("crawls") or []:
+                dup = conn.execute(
+                    "SELECT 1 FROM crawls WHERE start_url = ? AND created_at = ?",
+                    (cr["start_url"], cr["created_at"]),
+                ).fetchone()
+                if dup is not None:
+                    continue
+                crawl_site = db.get_or_create_site(
+                    conn, storage.site_key(cr["start_url"])
+                )
+                cur = conn.execute(
+                    """
+                    INSERT INTO crawls (start_url, scope_host, scope_path,
+                        status, max_pages, max_depth, delay_seconds, source,
+                        site_id, created_at, finished_at, next_page_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (cr["start_url"], cr.get("scope_host") or "",
+                     cr.get("scope_path") or "/", cr["status"],
+                     int(cr.get("max_pages") or 0), int(cr.get("max_depth") or 0),
+                     int(cr.get("delay_seconds") or 0), cr.get("source") or "web",
+                     crawl_site, cr["created_at"], cr.get("finished_at"),
+                     _utcnow()),
+                )
+                crawl_id = cur.lastrowid
+                for cp in cr.get("pages") or []:
+                    if not cp.get("url"):
+                        continue
+                    status = cp.get("status") or "pending"
+                    if status == "in_progress":
+                        status = "pending"
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO crawl_pages
+                            (crawl_id, url, depth, status, attempts,
+                             snapshot_id, error)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (crawl_id, cp["url"], int(cp.get("depth") or 0), status,
+                         int(cp.get("attempts") or 0),
+                         snap_ids.get((cp.get("page_url"), cp.get("dir_name"))),
+                         cp.get("error")),
+                    )
+                result.crawls_added += 1
+
+            # 사이트 인증서 — (site, host, 지문)이 같은 버전은 스킵 (멱등)
+            for cert in data.get("certificates") or []:
+                cert_site = db.get_or_create_site(conn, cert["site_key"])
+                dup = conn.execute(
+                    """
+                    SELECT 1 FROM site_certificates
+                    WHERE site_id = ? AND host = ? AND fingerprint = ?
+                    """,
+                    (cert_site, cert["host"], cert["fingerprint"]),
+                ).fetchone()
+                if dup is not None:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO site_certificates (site_id, host, fingerprint,
+                        subject, issuer, serial, san, not_before, not_after,
+                        signature_algorithm, verified, pem,
+                        first_seen_at, last_seen_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (cert_site, cert["host"], cert["fingerprint"],
+                     cert.get("subject") or "", cert.get("issuer") or "",
+                     cert.get("serial") or "", cert.get("san") or "[]",
+                     cert.get("not_before"), cert.get("not_after"),
+                     cert.get("signature_algorithm"),
+                     int(cert.get("verified", 1)), cert["pem"],
+                     cert.get("first_seen_at") or _utcnow(),
+                     cert.get("last_seen_at") or _utcnow()),
+                )
+                result.certificates_added += 1
+
+            # 아카이브 로그 — (url, started_at)이 같은 행은 스킵하되, overwrite
+            # 가 FK 만 비워둔 기존 행이면 가져온 참조로 되살린다 (멱등)
+            for lg in data.get("logs") or []:
+                page_id = page_ids.get(lg.get("page_url"))
+                snapshot_id = snap_ids.get((lg.get("page_url"), lg.get("dir_name")))
+                dup = conn.execute(
+                    "SELECT id FROM archive_logs WHERE url = ? AND started_at = ?",
+                    (lg["url"], lg["started_at"]),
+                ).fetchone()
+                if dup is not None:
+                    conn.execute(
+                        """
+                        UPDATE archive_logs
+                        SET page_id = COALESCE(page_id, ?),
+                            snapshot_id = COALESCE(snapshot_id, ?)
+                        WHERE id = ?
+                        """,
+                        (page_id, snapshot_id, dup["id"]),
+                    )
+                    continue
+                db.insert_archive_log(
+                    conn,
+                    url=lg["url"], domain=lg.get("domain") or "",
+                    page_id=page_id, snapshot_id=snapshot_id,
+                    source=lg.get("source") or "cli", status=lg["status"],
+                    started_at=lg["started_at"],
+                    duration_ms=int(lg.get("duration_ms") or 0),
+                    http_status=lg.get("http_status"),
+                    content_hash=lg.get("content_hash"),
+                    error=lg.get("error"), steps=lg.get("steps"),
+                )
+                result.logs_added += 1
     return result

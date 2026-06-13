@@ -184,7 +184,7 @@ def system_backup() -> FileResponse:
 
 @router.post("/export")
 def system_export() -> FileResponse:
-    """아카이브 데이터만 내보내기 다운로드 (인증·로그 제외)."""
+    """아카이브 데이터만 내보내기 다운로드 (인증 데이터 제외)."""
     return tar_download(backup_mod.export_archive, "export")
 
 
@@ -683,8 +683,11 @@ def system_import(
         notice=t(
             request,
             "가져오기 완료 [{mode}]: 페이지 +{pages}, 스냅샷 +{snapshots} "
-            "(스킵 {skipped}), 확인 기록 +{checks}",
+            "(스킵 {skipped}), 확인 기록 +{checks}, 크롤 +{crawls}, "
+            "인증서 +{certs}, 로그 +{logs}",
             mode=mode, pages=result.pages_added, snapshots=result.snapshots_added,
             skipped=result.snapshots_skipped, checks=result.checks_added,
+            crawls=result.crawls_added, certs=result.certificates_added,
+            logs=result.logs_added,
         )
     )
