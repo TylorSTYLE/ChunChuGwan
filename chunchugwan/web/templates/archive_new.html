@@ -63,6 +63,52 @@
     {{ interval_field(allow_off=True) }}
     <span class="hint">{{ _("주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다. 직접 입력은 1시간~1개월 범위, 1일 단위 주기는 실행 시각(서버 시간)도 지정할 수 있습니다. 타임라인 화면에서 언제든 변경/해제할 수 있습니다.") }}</span>
   </label>
+  {% if system_allowed %}
+  <label class="check">
+    <input type="checkbox" name="add_credential" id="cred-checkbox" value="on">
+    {{ _("로그인 자격증명 추가") }}
+  </label>
+  <div id="cred-section" style="display:none">
+    <span class="hint">{{ _("이 사이트에 로그인이 필요하면 자격증명을 등록합니다. 비밀은 WCCG_SECRET_KEY 로 암호화 저장되며, 사이트 상세에서도 관리할 수 있습니다.") }}</span>
+    {% if not secret_key_configured %}
+    <div class="error" style="margin-top:8px">{{ _("WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.") }}</div>
+    {% endif %}
+    <div class="crawl-options" style="margin-top:8px; flex-direction:column">
+      <label>{{ _("종류") }}
+        <select name="cred_kind" id="cred-kind">
+          {% for k in credential_kinds %}
+          <option value="{{ k['value'] }}">{{ _(k['label']) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>{{ _("이름") }}
+        <input type="text" name="cred_label" maxlength="50" autocomplete="off"
+               placeholder="{{ _('비우면 자동 지정') }}">
+      </label>
+      <div class="cred-fields" data-kind="http_basic">
+        <label>{{ _("사용자명") }}
+          <input type="text" name="cred_username" autocomplete="off">
+        </label>
+        <label>{{ _("비밀번호") }}
+          <input type="password" name="cred_password" autocomplete="new-password">
+        </label>
+      </div>
+      <div class="cred-fields" data-kind="session" hidden>
+        <label>{{ _("세션 상태 (storage_state JSON)") }}
+          <textarea name="cred_storage_state" rows="6" spellcheck="false"
+                    placeholder='{"cookies": [...], "origins": [...]}'></textarea>
+        </label>
+      </div>
+      <div class="cred-fields" data-kind="jwt" hidden>
+        <label>{{ _("Bearer 토큰") }}
+          <textarea name="cred_token" rows="4" spellcheck="false" autocomplete="off"
+                    placeholder="eyJhbGciOi…"></textarea>
+        </label>
+        <span class="hint">{{ _("캡처 시 Authorization: Bearer 헤더로 주입됩니다 (다음 단계). 'Bearer ' 접두사 없이 토큰 값만 넣으세요.") }}</span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
   <button type="submit">{{ _("아카이빙 시작") }}</button>
 </form>
 {{ interval_field_js() }}
@@ -76,6 +122,23 @@
   }
   check.addEventListener("change", apply);
   apply();
+})();
+/* 로그인 자격증명 추가(관리자) 체크 시 섹션을 펴고, 종류에 맞는 입력만 보인다 */
+(function () {
+  var cb = document.getElementById("cred-checkbox");
+  if (!cb) return;
+  var sec = document.getElementById("cred-section");
+  function applyCb() { sec.style.display = cb.checked ? "" : "none"; }
+  cb.addEventListener("change", applyCb);
+  applyCb();
+  var kindSel = document.getElementById("cred-kind");
+  function applyKind() {
+    document.querySelectorAll("#cred-section .cred-fields").forEach(function (el) {
+      el.hidden = el.getAttribute("data-kind") !== kindSel.value;
+    });
+  }
+  kindSel.addEventListener("change", applyKind);
+  applyKind();
 })();
 </script>
 {% endblock %}

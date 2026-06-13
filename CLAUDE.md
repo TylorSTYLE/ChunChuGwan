@@ -254,10 +254,11 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   관리자만 발급, 모든 관리자가 공동 관리. 키마다 보기/아카이브 권한과
   만료 시각(NULL=영구), 토큰은 SHA-256 해시만 저장 (원문은 발급 시 1회 표시)
 - `site_credentials` — 아카이빙 대상 사이트 로그인용 외부 자격증명 (사이트별,
-  `kind` = http_basic/session, 라벨 UNIQUE). 비밀은 `WCCG_SECRET_KEY` 로 대칭
+  `kind` = http_basic/session/jwt, 라벨 UNIQUE). 비밀은 `WCCG_SECRET_KEY` 로 대칭
   암호화한 암호문(`secret`)만 저장 (`crypto.py` — 원칙 6 예외, replay 위해
-  복원 가능). 관리자 전용 `/sites/{id}/credentials` 에서 관리하고 쓰기는
-  `credentials.py` 코어 모듈을 거친다. 사이트 prune·삭제 시 함께 정리(FK).
+  복원 가능). 관리자 전용 `/sites/{id}/credentials`(+ 새 아카이빙 화면의
+  선택 섹션)에서 관리하고 쓰기는 `credentials.py` 코어 모듈을 거친다.
+  사이트 prune·삭제 시 함께 정리(FK).
   캡처 연동(아카이빙 시 실제 로그인 사용)은 이후 단계
 
 ## 코딩 컨벤션

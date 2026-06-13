@@ -17,7 +17,7 @@ from fastapi import Request
 
 from .. import config
 from ..auth import MAX_API_KEY_NAME_LENGTH, MAX_DISPLAY_NAME_LENGTH
-from ..credentials import MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH
+from ..credentials import MAX_JWT_LENGTH, MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH
 
 DEFAULT_LOCALE = "ko"
 SUPPORTED_LOCALES = ("ko", "en")
@@ -583,9 +583,24 @@ _EN: dict[str, str] = {
     # 종류 라벨 (credentials.KIND_LABELS)
     "HTTP 기본 인증": "HTTP basic auth",
     "세션 쿠키": "Session cookie",
+    "JWT (Bearer 토큰)": "JWT (Bearer token)",
+    "Bearer 토큰": "Bearer token",
+    "캡처 시 Authorization: Bearer 헤더로 주입됩니다 (다음 단계). 'Bearer ' 접두사 없이 토큰 값만 넣으세요.":
+        "Injected as an Authorization: Bearer header during capture (next step). "
+        "Enter only the token value, without the 'Bearer ' prefix.",
+    "토큰을 입력하세요.": "Enter a token.",
+    "토큰에 공백·줄바꿈을 넣을 수 없습니다.":
+        "The token cannot contain spaces or line breaks.",
     # 라우트·검증 메시지
     "자격증명 없음": "Credential not found",
     "잘못된 자격증명 종류입니다.": "Invalid credential type.",
+    "로그인 자격증명 추가": "Add login credentials",
+    "이 사이트에 로그인이 필요하면 자격증명을 등록합니다. 비밀은 WCCG_SECRET_KEY 로 암호화 저장되며, 사이트 상세에서도 관리할 수 있습니다.":
+        "Register credentials if this site requires login. Secrets are stored "
+        "encrypted with WCCG_SECRET_KEY and can also be managed from the site detail page.",
+    "비우면 자동 지정": "Auto-named if left blank",
+    "이 사이트에 이미 같은 이름의 자격증명이 있습니다: {name}":
+        "This site already has a credential with that name: {name}",
     "이미 있는 이름입니다: {name}": "Name already exists: {name}",
     "자격증명을 등록했습니다.": "Credential added.",
     "자격증명을 삭제했습니다.": "Credential deleted.",
@@ -877,6 +892,9 @@ _EN[f"사용자명은 {MAX_USERNAME_LENGTH}자 이하여야 합니다."] = (
 )
 _EN[f"비밀번호는 {MAX_PASSWORD_LENGTH}자 이하여야 합니다."] = (
     f"The password must be at most {MAX_PASSWORD_LENGTH} characters."
+)
+_EN[f"토큰은 {MAX_JWT_LENGTH}자 이하여야 합니다."] = (
+    f"The token must be at most {MAX_JWT_LENGTH} characters."
 )
 
 CATALOGS: dict[str, dict[str, str]] = {"en": _EN}
