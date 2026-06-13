@@ -436,6 +436,7 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 2단계를 건너뛴다.
 | `WCCG_ADMIN_PASSWORD` | (없음) | 최초 구동 시 자동 등록할 관리자 패스워드 (8자 이상) |
 | `WCCG_SESSION_TTL_DAYS` | `14` | 세션 수명 (일) |
 | `WCCG_PUBLIC_URL` | (없음) | 외부 노출 시 공개 URL (예: `https://archive.example.com`) — OIDC redirect_uri 조립, Secure 쿠키 판정, 패스키 RP ID/origin 에 사용 |
+| `WCCG_SECRET_KEY` | (없음) | 사이트 로그인 자격증명 암호화 키(대칭). 설정해야 사이트별 로그인 자격증명을 저장·사용할 수 있다 — 임의 문자열 가능, DB·저장소엔 암호문만 남고 키는 여기에만 둔다. 바꾸면 기존 자격증명을 복호화할 수 없다 |
 | `WCCG_OIDC_ISSUER` | (없음) | Authentik issuer URL (예: `https://auth.example.com/application/o/chunchugwan`) |
 | `WCCG_OIDC_CLIENT_ID` | (없음) | OIDC 클라이언트 ID |
 | `WCCG_OIDC_CLIENT_SECRET` | (없음) | OIDC 클라이언트 시크릿 |
