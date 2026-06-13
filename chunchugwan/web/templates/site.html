@@ -45,7 +45,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 
 <h3>{{ _("페이지") }}</h3>
 {% if pages %}
-<div class="table-wrap">
+<div class="table-wrap cards">
 <table id="pages">
   <thead>
     <tr><th>URL</th><th class="num">{{ _("스냅샷") }}</th><th class="num">{{ _("용량") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
@@ -109,7 +109,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 <p class="muted" style="font-size:13px">
   {{ _("최근 실행이 실패로 끝난 페이지입니다. 크롤 중 실패한 페이지도 포함되며, 재시도가 성공하면 목록에서 사라집니다.") }}
 </p>
-<div class="table-wrap">
+<div class="table-wrap cards">
 <table id="failed">
   <thead>
     <tr><th>URL</th><th>{{ _("시각") }}</th><th>{{ _("출처") }}</th><th>{{ _("오류") }}</th><th></th></tr>
@@ -154,7 +154,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 
 <h3>{{ _("크롤 회차") }}</h3>
 {% if crawls %}
-<div class="table-wrap">
+<div class="table-wrap cards">
 <table id="crawls">
   <thead>
     <tr><th>{{ _("시작 URL") }}</th><th>{{ _("범위") }}</th><th class="num">{{ _("페이지") }}</th><th>{{ _("시작") }}</th><th>{{ _("상태") }}</th></tr>
@@ -192,7 +192,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 <p class="muted" style="font-size:13px">
   {{ _("https 아카이빙 때 받은 서버 인증서의 버전 이력입니다. 인증서가 갱신되면 새 버전으로 기록되고 이전 버전은 남습니다.") }}
 </p>
-<div class="table-wrap wide">
+<div class="table-wrap wide cards">
 <table id="certificates">
   <thead>
     <tr>
@@ -234,7 +234,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 
 {% if crawl_schedules %}
 <h3>{{ _("크롤 스케줄") }}</h3>
-<div class="table-wrap">
+<div class="table-wrap cards">
 <table>
   <thead>
     <tr><th>{{ _("시작 URL") }}</th><th>{{ _("주기") }}</th><th>{{ _("다음 실행") }}</th></tr>

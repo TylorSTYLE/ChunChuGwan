@@ -11,8 +11,12 @@
   {% else %}
   {% if creds %}
   <div class="notice">{{ _("패스키 {n}개 등록됨 — 패스워드 로그인 시 2단계 인증이 요구됩니다.", n=creds|length) }}</div>
-  <table>
+  <div class="table-wrap cards">
+  <table style="min-width:0">
+    <thead>
     <tr><th>{{ _("이름") }}</th><th>{{ _("등록", ctx="th") }}</th><th>{{ _("마지막 사용") }}</th><th></th></tr>
+    </thead>
+    <tbody>
     {% for c in creds %}
     <tr>
       <td>{{ c['name'] }}</td>
@@ -27,7 +31,9 @@
       </td>
     </tr>
     {% endfor %}
+    </tbody>
   </table>
+  </div>
   {% else %}
   <p class="muted">{{ _("등록된 패스키가 없습니다. Touch ID, 보안 키, 휴대폰 등을 패스워드 로그인의 2단계 인증 수단으로 등록할 수 있습니다.") }}</p>
   {% endif %}
