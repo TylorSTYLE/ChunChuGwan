@@ -33,8 +33,8 @@ from fastapi.responses import (
 )
 
 from .. import (
-    auth, backup, config, crawler, db, deletion, differ, documents, netcheck,
-    pipeline, resources, scheduler, storage, system_log,
+    auth, backup, config, crawler, credentials, crypto, db, deletion, differ,
+    documents, netcheck, pipeline, resources, scheduler, storage, system_log,
 )
 from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -613,6 +613,125 @@ def site_delete(request: Request, site_id: int):
         )
     })
     return RedirectResponse(f"/archives?{params}", status_code=303)
+
+
+def _credentials_redirect(
+    site_id: int, *, notice: str = "", error: str = ""
+) -> RedirectResponse:
+    """자격증명 페이지로 PRG 리다이렉트."""
+    params = {"error": error} if error else ({"notice": notice} if notice else {})
+    suffix = f"?{urlencode(params)}" if params else ""
+    return RedirectResponse(
+        f"/sites/{site_id}/credentials{suffix}", status_code=303
+    )
+
+
+@app.get("/sites/{site_id}/credentials", response_class=HTMLResponse)
+def site_credentials_view(
+    request: Request, site_id: int, notice: str = "", error: str = ""
+):
+    """사이트 로그인 자격증명 관리 — 목록 + 등록 폼. 관리자 전용.
+
+    비밀은 표시하지 않는다 (라벨·종류·등록 정보만). 캡처 연동은 다음 단계.
+    """
+    _require_admin(request)
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, t(request, "사이트 없음"))
+        rows = db.list_site_credentials(conn, site_id)
+    cred_rows = [
+        {**dict(c), "kind_label": credentials.kind_label(c["kind"])} for c in rows
+    ]
+    kinds = [
+        {"value": k, "label": credentials.kind_label(k)} for k in credentials.KINDS
+    ]
+    return templates.TemplateResponse(
+        request, "site_credentials.html",
+        {
+            "site": site,
+            "credentials": cred_rows,
+            "kinds": kinds,
+            "secret_key_configured": crypto.is_configured(),
+            "notice": notice,
+            "error": error,
+        },
+    )
+
+
+@app.post("/sites/{site_id}/credentials")
+def site_credentials_create(
+    request: Request,
+    site_id: int,
+    label: str = Form(""),
+    kind: str = Form(""),
+    username: str = Form(""),
+    password: str = Form(""),
+    storage_state: str = Form(""),
+):
+    """로그인 자격증명 등록 — 입력 검증 → 암호화 저장 → 감사 로그. 관리자 전용.
+
+    빈 폼 값은 인코딩에서 누락되므로 모든 필드에 기본값을 둬, 누락도 422 가
+    아니라 검증 메시지(리다이렉트)로 처리한다.
+    """
+    _require_admin(request)
+    if not crypto.is_configured():
+        return _credentials_redirect(
+            site_id,
+            error=t(request, "WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다."),
+        )
+    label = label.strip()
+    label_error = credentials.validate_label(label)
+    if label_error is not None:
+        return _credentials_redirect(site_id, error=t(request, label_error))
+    if kind not in credentials.KINDS:
+        return _credentials_redirect(
+            site_id, error=t(request, "잘못된 자격증명 종류입니다.")
+        )
+    try:
+        payload = credentials.build_payload(
+            kind,
+            {
+                "username": username,
+                "password": password,
+                "storage_state": storage_state,
+            },
+        )
+    except credentials.CredentialError as e:
+        return _credentials_redirect(site_id, error=t(request, str(e)))
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, t(request, "사이트 없음"))
+        if db.get_site_credential_by_label(conn, site_id, label) is not None:
+            return _credentials_redirect(
+                site_id, error=t(request, "이미 있는 이름입니다: {name}", name=label)
+            )
+        credentials.add(
+            conn, site_id, label, kind, payload,
+            created_by=request.state.user["id"] if request.state.user else None,
+        )
+    audit.log(
+        request, "사이트 자격증명 등록: %s '%s' (%s)", site["site_key"], label, kind
+    )
+    return _credentials_redirect(site_id, notice=t(request, "자격증명을 등록했습니다."))
+
+
+@app.post("/sites/{site_id}/credentials/{cred_id}/delete")
+def site_credentials_delete(request: Request, site_id: int, cred_id: int):
+    """로그인 자격증명 삭제. 관리자 전용."""
+    _require_admin(request)
+    with db.connect() as conn:
+        cred = db.get_site_credential(conn, cred_id)
+        if cred is None or cred["site_id"] != site_id:
+            raise HTTPException(404, t(request, "자격증명 없음"))
+        site = db.get_site(conn, site_id)
+        db.delete_site_credential(conn, cred_id)
+    audit.log(
+        request, "사이트 자격증명 삭제: %s '%s'",
+        site["site_key"] if site else f"#{site_id}", cred["label"],
+    )
+    return _credentials_redirect(site_id, notice=t(request, "자격증명을 삭제했습니다."))
 
 
 @app.get("/archive/active")
@@ -1383,6 +1502,12 @@ def _require_deleter(request: Request) -> None:
     """삭제 권한 가드 (admin/archiver). 보기 전용·차단 계정은 403."""
     if not permissions.can_delete(request.state.user):
         raise HTTPException(403, t(request, "삭제 권한이 없습니다"))
+
+
+def _require_admin(request: Request) -> None:
+    """관리자 가드 — 시스템 관리 동작(로그인 자격증명 등). 그 외 계정은 403."""
+    if not permissions.system_allowed(request.state.user):
+        raise HTTPException(403, t(request, "관리자만 접근할 수 있습니다"))
 
 
 @app.get("/archive/new", response_class=HTMLResponse)

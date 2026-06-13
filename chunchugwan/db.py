@@ -280,6 +280,20 @@ CREATE TABLE IF NOT EXISTS api_keys (
     last_used_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS site_credentials (
+    id          INTEGER PRIMARY KEY,
+    site_id     INTEGER NOT NULL REFERENCES sites(id),
+    label       TEXT NOT NULL,           -- 사람이 식별하는 이름 (예: '관리자 계정')
+    kind        TEXT NOT NULL,           -- 종류: http_basic | session (확장형)
+    secret      TEXT NOT NULL,           -- 암호화된 payload (crypto.encrypt — 평문 금지)
+    created_by  INTEGER REFERENCES users(id),  -- 등록한 관리자 (기록용)
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    UNIQUE (site_id, label)
+);
+CREATE INDEX IF NOT EXISTS idx_site_credentials_site
+    ON site_credentials(site_id);
+
 CREATE TABLE IF NOT EXISTS settings (
     key         TEXT PRIMARY KEY,
     value       TEXT NOT NULL,
@@ -513,10 +527,12 @@ def prune_site_if_empty(conn: sqlite3.Connection, site_id: int | None) -> bool:
 
     페이지·크롤 스케줄 삭제 경로가 호출한다 — 크롤 회차는 개별 삭제가
     없으므로(사이트 단위 삭제뿐) 회차가 남아 있는 한 사이트도 남는다.
-    인증서 이력은 사이트의 부가 기록이라 함께 지운다.
+    인증서 이력·로그인 자격증명은 사이트의 부가 기록이라 함께 지운다
+    (자격증명은 FK 로 사이트를 참조하므로 사이트 행 삭제 전에 비워야 한다).
     """
     if site_id is None or not _site_is_empty(conn, site_id):
         return False
+    conn.execute("DELETE FROM site_credentials WHERE site_id = ?", (site_id,))
     conn.execute("DELETE FROM site_certificates WHERE site_id = ?", (site_id,))
     cur = conn.execute("DELETE FROM sites WHERE id = ?", (site_id,))
     return cur.rowcount == 1
@@ -529,6 +545,10 @@ def prune_empty_sites(conn: sqlite3.Connection) -> int:
           AND NOT EXISTS (SELECT 1 FROM crawls WHERE site_id = sites.id)
           AND NOT EXISTS (SELECT 1 FROM crawl_schedules WHERE site_id = sites.id)
     """
+    conn.execute(
+        "DELETE FROM site_credentials WHERE site_id IN "
+        f"(SELECT id FROM sites WHERE {empty_filter})"
+    )
     conn.execute(
         "DELETE FROM site_certificates WHERE site_id IN "
         f"(SELECT id FROM sites WHERE {empty_filter})"
@@ -2643,6 +2663,84 @@ def touch_api_key(conn: sqlite3.Connection, key_id: int) -> None:
 def delete_api_key(conn: sqlite3.Connection, key_id: int) -> bool:
     """API 키 폐기 — 즉시 무효화된다. 없으면 False."""
     cur = conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
+    return cur.rowcount == 1
+
+
+# ---- 사이트 로그인 자격증명 ----
+# 아카이빙 대상 사이트에 춘추관이 로그인하기 위한 외부 자격증명. secret 은
+# 암호문만 저장한다 (crypto 로 대칭 암호화 — CLAUDE.md 원칙 6 예외). 쓰기는
+# credentials.py 코어 모듈을 거친다.
+
+
+def create_site_credential(
+    conn: sqlite3.Connection,
+    site_id: int,
+    label: str,
+    kind: str,
+    secret: str,
+    *,
+    created_by: int | None,
+) -> int:
+    """사이트 자격증명 row 생성 후 id 반환. secret 은 암호문(평문 금지).
+
+    같은 사이트 안에서 label 은 UNIQUE — 호출부가 중복을 먼저 검사한다.
+    """
+    now = _utcnow()
+    cur = conn.execute(
+        """
+        INSERT INTO site_credentials
+            (site_id, label, kind, secret, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (site_id, label, kind, secret, created_by, now, now),
+    )
+    return cur.lastrowid
+
+
+def get_site_credential(
+    conn: sqlite3.Connection, cred_id: int
+) -> sqlite3.Row | None:
+    """자격증명 id 로 조회 (암호문 secret 포함, 없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM site_credentials WHERE id = ?", (cred_id,)
+    ).fetchone()
+
+
+def list_site_credentials(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트의 자격증명 목록 (라벨순, 암호문 secret 제외 — 관리 화면용)."""
+    return conn.execute(
+        """
+        SELECT c.id, c.site_id, c.label, c.kind, c.created_by,
+               c.created_at, c.updated_at, u.email AS creator_email
+        FROM site_credentials c LEFT JOIN users u ON u.id = c.created_by
+        WHERE c.site_id = ? ORDER BY c.label, c.id
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def get_site_credential_by_label(
+    conn: sqlite3.Connection, site_id: int, label: str
+) -> sqlite3.Row | None:
+    """사이트의 라벨로 자격증명 조회 (중복 검사용, 없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM site_credentials WHERE site_id = ? AND label = ?",
+        (site_id, label),
+    ).fetchone()
+
+
+def count_site_credentials(conn: sqlite3.Connection, site_id: int) -> int:
+    """사이트의 자격증명 수 (사이트 상세 표시용)."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM site_credentials WHERE site_id = ?", (site_id,)
+    ).fetchone()["c"]
+
+
+def delete_site_credential(conn: sqlite3.Connection, cred_id: int) -> bool:
+    """자격증명 삭제. 없으면 False."""
+    cur = conn.execute("DELETE FROM site_credentials WHERE id = ?", (cred_id,))
     return cur.rowcount == 1
 
 

@@ -102,6 +102,11 @@ TOTP_ISSUER = "ChunChuGwan"
 PENDING_TOTP_TTL_SECONDS = 600          # 패스워드 통과 후 OTP 입력 제한 시간
 MIN_PASSWORD_LENGTH = 8
 
+# 외부 사이트 로그인 자격증명 암호화 키 (대칭 — CLAUDE.md 원칙 6 예외).
+# 설정 시에만 자격증명 기능이 활성화된다. DB·저장소엔 암호문만 남고 키는
+# 여기(환경변수)에만 둔다. 바꾸면 기존 자격증명을 복호화할 수 없다.
+SECRET_KEY = os.environ.get("WCCG_SECRET_KEY", "")
+
 # 외부 노출 시 공개 URL (OIDC redirect_uri 조립, https 면 Secure 쿠키)
 PUBLIC_URL = os.environ.get("WCCG_PUBLIC_URL", "").rstrip("/")
 COOKIE_SECURE = PUBLIC_URL.startswith("https://")
