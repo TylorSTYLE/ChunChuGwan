@@ -19,7 +19,15 @@ RESOURCES_DIR = ARCHIVE_ROOT / "resources"  # 스냅샷 간 공유 자원 CAS (r
 DOCUMENTS_DIR = ARCHIVE_ROOT / "documents"  # 문서 파일 CAS (documents.py — 인증 라우트 전용)
 
 PAGE_LOAD_TIMEOUT_MS = 30_000
+# load 도달 후 networkidle 추가 대기 상한 — 분석 스크립트·롱폴링이 있는
+# 페이지는 networkidle 에 영영 도달하지 않으므로 짧게 기다리고 진행한다
+NETWORK_IDLE_TIMEOUT_MS = 5_000
+RESOURCE_FETCH_TIMEOUT_MS = 5_000   # 자원(이미지·CSS·폰트) 1개 인라인 fetch 타임아웃
+RESOURCE_FETCH_CONCURRENCY = 6      # 자원 인라인 fetch 동시 실행 수
 HTTPS_PROBE_TIMEOUT_SECONDS = 10  # http URL 등록 시 https 지원 확인(승격 프로브) 타임아웃
+# 인증서 수집 결과의 (host, port) TTL 캐시 — 크롤이 같은 호스트를 페이지마다
+# 핸드셰이크하지 않게 한다 (certs.py)
+CERT_CACHE_TTL_SECONDS = 600
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 # ---- 저장 압축 (resources.py) ----
