@@ -124,7 +124,10 @@
   `system_log.py` 의 DB 핸들러가 `system_logs` 테이블에 적재한 경고/오류와
   INFO 기록. 레벨·출처(serve/worker/cli)·기간 필터 + 트레이스백 펼침.
   보관 한도(`WCCG_SYSTEM_LOG_MAX_ROWS`, 기본 2만 행) 초과분은 적재 중
-  자동 정리.
+  자동 정리. 대시보드·REST API 의 사용자 액션(아카이빙 등록·재시도·삭제·
+  스케줄·시스템 설정·사용자 관리·API 키 등)은 `web/audit.py` 가 요청
+  주체(세션 사용자 이메일 또는 API 키 이름)를 붙여 INFO 로 남긴다 —
+  로거 `chunchugwan.web.audit`, 메시지 끝 `(요청자: …)`.
 - **시스템** (system) — 현황(페이지·스냅샷·확인 기록·사용자 수 + 춘추관
   버전 `chunchugwan.__version__`)·백업/복원·내보내기/가져오기·저장공간 최적화
   (`POST /system/compact`, `wccg compact` 와 동일 — 압축 변환 + 인라인
