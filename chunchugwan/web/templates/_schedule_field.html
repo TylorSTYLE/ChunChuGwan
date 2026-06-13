@@ -32,7 +32,13 @@
   <label class="sched-at" {% if not daily %}hidden{% endif %}
          title="{{ _('1일 단위 주기에서 실행할 시각 (서버 시간 기준, 비우면 등록 시점 기준)') }}"
          style="display:inline-flex; gap:4px; align-items:center">
-    <input type="time" name="run_at" value="{{ run_at or '' }}" {% if not daily %}disabled{% endif %}>
+    {# type="time" 은 브라우저 로케일에 따라 오전/오후로 표시되므로
+       24시간제 고정을 위해 텍스트 입력 + 패턴 검증을 쓴다 (scheduler._RUN_AT_RE 와 동일) #}
+    <input type="text" name="run_at" value="{{ run_at or '' }}" class="mono"
+           placeholder="HH:MM" pattern="([01][0-9]|2[0-3]):[0-5][0-9]" maxlength="5"
+           inputmode="numeric" autocomplete="off" style="width:5.5em"
+           title="{{ _('24시간제 HH:MM (예: 09:00, 23:30)') }}"
+           {% if not daily %}disabled{% endif %}>
   </label>
 </span>
 {% endmacro %}
@@ -53,10 +59,20 @@ function syncSchedField(field) {
   at.hidden = !daily;
   at.querySelector('input').disabled = !daily;  // disabled 면 폼 전송에서 제외
 }
+function normalizeRunAt(input) {
+  // 24시간제 HH:MM 으로 정규화 — '900'/'0900' → '09:00', '9:5' → '09:05'
+  const m = input.value.trim().match(/^(\d{1,2}):?(\d{1,2})$/);
+  if (!m) return;
+  const h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+  if (h > 23 || mi > 59) return;
+  input.value = String(h).padStart(2, '0') + ':' + String(mi).padStart(2, '0');
+}
 document.querySelectorAll('.sched-field').forEach(syncSchedField);
 document.addEventListener('change', (e) => {
   const field = e.target.closest && e.target.closest('.sched-field');
-  if (field) syncSchedField(field);
+  if (!field) return;
+  if (e.target.name === 'run_at') normalizeRunAt(e.target);
+  syncSchedField(field);
 });
 </script>
 {% endmacro %}

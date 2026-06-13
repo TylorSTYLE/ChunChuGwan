@@ -124,11 +124,37 @@ def archive_url(
     """
     run = _RunLog(url, source)
     try:
-        return _archive_url(url, force, run, link_rewriter, browser_session,
-                            network_tag_id)
+        outcome = _archive_url(url, force, run, link_rewriter, browser_session,
+                               network_tag_id)
     except Exception as e:
         _log_failure(run, e)
         raise
+    _resolve_crawl_failures(outcome)
+    return outcome
+
+
+def _resolve_crawl_failures(outcome: ArchiveOutcome) -> None:
+    """아카이빙 성공 시 같은 URL 의 failed 크롤 페이지를 done 으로 해소.
+
+    크롤에서 실패한 주소를 단일 아카이빙(web/cli/api/schedule)으로 다시
+    성공시키면 크롤 진행 화면의 실패 상태도 함께 풀려야 한다 — 이번에
+    확인된 스냅샷을 연결하고, 크롤 마감 여부를 재평가한다. 부수 갱신
+    실패가 아카이빙 성공을 가리지 않게 예외는 로그만 남긴다.
+    """
+    try:
+        with db.connect() as conn:
+            crawl_ids = db.resolve_failed_crawl_pages(
+                conn, outcome.url, outcome.snapshot_id
+            )
+            for crawl_id in crawl_ids:
+                db.finish_crawl_if_done(conn, crawl_id)
+        if crawl_ids:
+            logger.info(
+                "크롤 실패 페이지 해소: %s — 크롤 %s",
+                outcome.url, ", ".join(map(str, crawl_ids)),
+            )
+    except Exception:
+        logger.exception("크롤 실패 페이지 해소 실패: %s", outcome.url)
 
 
 def _resolve_network_tag(norm: str, host: str, requested: str | None) -> str | None:

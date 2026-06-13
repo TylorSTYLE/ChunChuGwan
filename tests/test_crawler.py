@@ -336,6 +336,94 @@ def test_retry_failed_reopens_crawl(archive_env):
     assert page["status"] == "pending" and page["attempts"] == 0 and page["error"] is None
 
 
+def make_snapshot(url: str) -> int:
+    """테스트용 페이지 + 스냅샷 행 생성 (snapshot_id FK 충족용)."""
+    with db.connect() as conn:
+        page_id = db.get_or_create_page(conn, url, "example.com", "docs")
+        return db.insert_snapshot(
+            conn, page_id,
+            taken_at="2026-01-01T00:00:00+00:00", dir_name="2026-01-01T00-00-00",
+            content_hash="0" * 64, final_url=url, http_status=200, changed=1,
+        )
+
+
+def test_single_archive_success_resolves_failed_crawl_page(archive_env, monkeypatch):
+    """크롤에서 실패한 주소를 단일 아카이빙으로 성공시키면 failed 가 done 으로 풀린다."""
+    url = "https://example.com/docs/"
+    row, _ = crawler.start_crawl(url, delay_seconds=1)
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE crawl_pages SET status = 'failed', attempts = 3, error = 'x' "
+            "WHERE crawl_id = ?", (row["id"],),
+        )
+        conn.execute(
+            "UPDATE crawls SET status = 'done', finished_at = '2026-01-01T00:00:00+00:00' "
+            "WHERE id = ?", (row["id"],),
+        )
+
+    snap_id = make_snapshot(url)
+    monkeypatch.setattr(
+        pipeline, "_archive_url",
+        lambda *a, **k: fake_outcome(url, snapshot_id=snap_id),
+    )
+    outcome = pipeline.archive_url(url, source="web")
+    assert outcome.snapshot_id == snap_id
+
+    with db.connect() as conn:
+        page = db.list_crawl_pages(conn, row["id"])[0]
+    assert page["status"] == "done"
+    assert page["snapshot_id"] == snap_id and page["error"] is None
+
+
+def test_single_archive_resolution_closes_running_crawl(archive_env, monkeypatch):
+    """실패 페이지 해소로 처리할 것이 안 남으면 running 크롤도 마감된다."""
+    url = "https://example.com/docs/"
+    row, _ = crawler.start_crawl(url, delay_seconds=1)
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE crawl_pages SET status = 'failed', attempts = 3, error = 'x' "
+            "WHERE crawl_id = ?", (row["id"],),
+        )
+
+    snap_id = make_snapshot(url)
+    monkeypatch.setattr(
+        pipeline, "_archive_url",
+        lambda *a, **k: fake_outcome(url, status="unchanged", snapshot_id=snap_id),
+    )
+    pipeline.archive_url(url, source="web")
+
+    with db.connect() as conn:
+        crawl = db.get_crawl(conn, row["id"])
+        page = db.list_crawl_pages(conn, row["id"])[0]
+    assert page["status"] == "done" and page["snapshot_id"] == snap_id
+    assert crawl["status"] == "done" and crawl["finished_at"] is not None
+
+
+def test_single_archive_resolution_ignores_other_urls(archive_env, monkeypatch):
+    """다른 URL 의 failed 페이지는 건드리지 않고, 진행 중 페이지도 그대로다."""
+    row, _ = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    with db.connect() as conn:
+        db.insert_crawl_page(conn, row["id"], "https://example.com/docs/broken", 1)
+        conn.execute(
+            "UPDATE crawl_pages SET status = 'failed', attempts = 3, error = 'x' "
+            "WHERE crawl_id = ? AND url LIKE '%broken'", (row["id"],),
+        )
+
+    snap_id = make_snapshot("https://example.com/docs/")
+    monkeypatch.setattr(
+        pipeline, "_archive_url",
+        lambda *a, **k: fake_outcome("https://example.com/docs/", snapshot_id=snap_id),
+    )
+    pipeline.archive_url("https://example.com/docs/", source="web")
+
+    with db.connect() as conn:
+        pages = {p["url"]: p for p in db.list_crawl_pages(conn, row["id"])}
+        crawl = db.get_crawl(conn, row["id"])
+    assert pages["https://example.com/docs/broken"]["status"] == "failed"
+    assert pages["https://example.com/docs/"]["status"] == "pending"  # 큐는 그대로
+    assert crawl["status"] == "running"
+
+
 # ---- 취소 / 클레임 ----
 
 

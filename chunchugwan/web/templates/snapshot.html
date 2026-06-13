@@ -1,5 +1,13 @@
 {% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
 {% block title %}{{ _("스냅샷", ctx="one") }} — {{ snap['page_url'] }}{% endblock %}
+{% block head %}
+<style>
+/* dvh = 모바일 주소창을 제외한 실제 보이는 높이 (미지원 브라우저는 vh 폴백) */
+.viewer-frame { width: 100%; height: 80vh; height: 80dvh;
+                border: 1px solid var(--border); background: #fff; }
+</style>
+{% endblock %}
 {% block content %}
 <div class="toolbar">
   <h2 style="margin:0">{{ title or snap['page_url'] }}</h2>
@@ -12,6 +20,10 @@
   <tbody>
     <tr><th>URL</th><td class="mono">{{ snap['page_url'] }}</td></tr>
     <tr><th>{{ _("최종 URL") }}</th><td class="mono">{{ snap['final_url'] }}</td></tr>
+    {% if network_tag %}
+    <tr><th>{{ _("로컬 네트워크 태그") }}</th>
+      <td>{{ network_tag_badge(network_tag['name'], network_tag['description'], network_tag['id']) }}</td></tr>
+    {% endif %}
     <tr><th>{{ _("캡처 시각") }}</th><td class="mono">{{ snap['taken_at'] | ts }}</td></tr>
     <tr><th>{{ _("해시") }}</th><td class="mono">{{ snap['content_hash'] }}</td></tr>
     <tr><th>HTTP</th><td class="mono">{{ snap['http_status'] or '-' }}</td></tr>
@@ -57,7 +69,7 @@
 <div id="view-render">
   <!-- 배경 흰색 고정: 아카이빙 시점 그대로 보이도록 대시보드 다크 테마와 분리 -->
   <iframe sandbox="allow-top-navigation-by-user-activation" src="{{ page_html_url }}"
-          style="width:100%; height:80vh; border:1px solid var(--border); background:#fff;"></iframe>
+          class="viewer-frame"></iframe>
 </div>
 {% if has_screenshot %}
 <div id="view-shot" style="display:none">
@@ -66,8 +78,7 @@
 </div>
 {% endif %}
 <div id="view-text" style="display:none">
-  <iframe sandbox="" src="{{ content_url }}"
-          style="width:100%; height:80vh; border:1px solid var(--border); background:#fff;"></iframe>
+  <iframe sandbox="" src="{{ content_url }}" class="viewer-frame"></iframe>
 </div>
 
 <script>

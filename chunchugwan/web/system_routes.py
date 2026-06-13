@@ -23,8 +23,8 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
 from .. import __version__, auth, backup as backup_mod
-from .. import config, crawler, db, mailer, optimize, resources
-from . import permissions
+from .. import config, crawler, db, mailer, optimize, resources, storage
+from . import audit, permissions
 from .i18n import t
 from .templating import filesize, templates
 
@@ -40,13 +40,6 @@ def _require_admin(request: Request) -> None:
 router = APIRouter(prefix="/system", dependencies=[Depends(_require_admin)])
 
 
-def _dir_bytes(root: Path) -> int:
-    """디렉토리 전체 용량 (없으면 0)."""
-    if not root.is_dir():
-        return 0
-    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
-
-
 @router.get("", response_class=HTMLResponse)
 def system_view(request: Request, notice: str = "", error: str = ""):
     with db.connect() as conn:
@@ -59,6 +52,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         crawl_defaults = crawler.crawl_defaults(conn)
         crawl_backoff = crawler.retry_backoff(conn)
         network_tags = db.list_network_tags(conn)
+    usage = storage.archive_disk_usage()
     return templates.TemplateResponse(
         request, "system.html",
         {
@@ -79,10 +73,10 @@ def system_view(request: Request, notice: str = "", error: str = ""):
                 "max_delay": config.CRAWL_MAX_DELAY_SECONDS,
             },
             "archive_root": str(config.ARCHIVE_ROOT),
-            "db_bytes": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
-            "sites_bytes": _dir_bytes(config.SITES_DIR),
-            "resources_bytes": _dir_bytes(config.RESOURCES_DIR),
-            "documents_bytes": _dir_bytes(config.DOCUMENTS_DIR),
+            "db_bytes": usage["db"],
+            "sites_bytes": usage["sites"],
+            "resources_bytes": usage["resources"],
+            "documents_bytes": usage["documents"],
             "optimize_pending": sum(optimize.pending_counts()),
             "notice": notice, "error": error,
         },
@@ -165,8 +159,11 @@ def system_logs_view(
     )
 
 
-def _download(make: Callable[[Path], Path], prefix: str) -> FileResponse:
-    """코어 함수로 tar.gz 를 만들어 다운로드로 응답 (전송 후 임시 파일 정리)."""
+def tar_download(make: Callable[[Path], Path], prefix: str) -> FileResponse:
+    """코어 함수로 tar.gz 를 만들어 다운로드로 응답 (전송 후 임시 파일 정리).
+
+    사이트 단위 내보내기(app.site_export)도 같은 헬퍼를 쓴다.
+    """
     tmpdir = Path(tempfile.mkdtemp(prefix=f"wccg-{prefix}-"))
     try:
         out = make(tmpdir)
@@ -180,15 +177,17 @@ def _download(make: Callable[[Path], Path], prefix: str) -> FileResponse:
 
 
 @router.post("/backup")
-def system_backup() -> FileResponse:
+def system_backup(request: Request) -> FileResponse:
     """전체 백업 tar.gz 다운로드 (DB·인증 데이터·스냅샷 파일·rules.json)."""
-    return _download(backup_mod.create_backup, "backup")
+    audit.log(request, "전체 백업 다운로드")
+    return tar_download(backup_mod.create_backup, "backup")
 
 
 @router.post("/export")
-def system_export() -> FileResponse:
-    """아카이브 데이터만 내보내기 다운로드 (인증·로그 제외)."""
-    return _download(backup_mod.export_archive, "export")
+def system_export(request: Request) -> FileResponse:
+    """아카이브 데이터만 내보내기 다운로드 (인증 데이터 제외)."""
+    audit.log(request, "아카이브 내보내기 다운로드")
+    return tar_download(backup_mod.export_archive, "export")
 
 
 def _save_upload(file: UploadFile) -> Path:
@@ -220,6 +219,7 @@ def system_compact(request: Request):
         result = optimize.run()
     except OSError as e:
         return _system_redirect(error=t(request, "최적화 실패: {e}", e=e))
+    audit.log(request, "저장공간 최적화 실행")
     c = result.compact
     return _system_redirect(
         notice=t(
@@ -255,6 +255,10 @@ def system_settings(
             conn, db.SIGNUP_ENABLED_KEY, "on" if signup_enabled else "off"
         )
         db.set_setting(conn, db.SIGNUP_DEFAULT_ROLE_KEY, signup_default_role)
+    audit.log(
+        request, "가입 설정 변경: 가입 %s, 초기 권한 %s",
+        "허용" if signup_enabled else "차단", signup_default_role,
+    )
     return _system_redirect(notice=t(request, "가입 설정을 저장했습니다."))
 
 
@@ -283,6 +287,12 @@ def system_crawl_settings(
         db.set_setting(
             conn, db.CRAWL_RETRY_BACKOFF_KEY, ",".join(str(v) for v in backoff)
         )
+    audit.log(
+        request,
+        "사이트 아카이브 설정 변경: 최대 %d페이지, 깊이 %d, 간격 %d초, 재시도 대기 [%s]",
+        crawl_max_pages, crawl_max_depth, crawl_delay,
+        ", ".join(str(v) for v in backoff),
+    )
     return _system_redirect(notice=t(request, "사이트 아카이브 설정을 저장했습니다."))
 
 
@@ -320,6 +330,7 @@ def network_tags_create(
                 error=t(request, "이미 있는 태그 이름입니다: {name}", name=name)
             )
         db.create_network_tag(conn, name, description)
+    audit.log(request, "로컬 네트워크 태그 추가: '%s'", name)
     return _system_redirect(
         notice=t(request, "로컬 네트워크 태그 '{name}'을(를) 추가했습니다.", name=name)
     )
@@ -340,6 +351,7 @@ def network_tags_delete(request: Request, tag_id: str):
                         name=tag["name"], n=refs)
             )
         db.delete_network_tag(conn, tag_id)
+    audit.log(request, "로컬 네트워크 태그 삭제: '%s'", tag["name"])
     return _system_redirect(
         notice=t(request, "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.",
                  name=tag["name"])
@@ -360,6 +372,9 @@ def system_restore(request: Request, file: UploadFile = File(...)):
         return _system_redirect(error=t(request, "복원 실패: {e}", e=e))
     finally:
         tmp.unlink(missing_ok=True)
+    audit.log(
+        request, "백업 복원 실행 (백업: %s)", manifest.get("created_at", "?")
+    )
     c = manifest.get("counts", {})
     return _system_redirect(
         notice=t(
@@ -427,6 +442,10 @@ def users_set_role(request: Request, user_id: int, role: str = Form(...)):
         db.set_role(conn, user_id, role)
         if role == "blocked":
             db.delete_user_sessions(conn, user_id)
+    audit.log(
+        request, "사용자 권한 변경: %s → %s",
+        target["email"], db.ROLE_LABELS[role],
+    )
     return _users_redirect(
         notice=t(request, "{email} 권한을 '{label}'(으)로 변경했습니다.",
                  email=target["email"], label=t(request, db.ROLE_LABELS[role]))
@@ -458,6 +477,7 @@ def users_delete(request: Request, user_id: int, email: str = Form("")):
                 error=t(request, "확인 이메일이 일치하지 않습니다.")
             )
         db.delete_user(conn, target["id"])
+    audit.log(request, "사용자 계정 정보 삭제: %s", target["email"])
     return _users_redirect(
         notice=t(request,
                  "{email} 계정 정보를 삭제했습니다. 같은 이메일로 다시 가입하거나 "
@@ -478,6 +498,10 @@ def users_set_name(request: Request, user_id: int, display_name: str = Form(""))
         if target is None:
             raise HTTPException(404, t(request, "사용자 없음"))
         db.set_display_name(conn, user_id, name)
+    audit.log(
+        request, "사용자 이름 변경: %s → %s",
+        target["email"], f"'{name}'" if name else "(제거)",
+    )
     return _users_redirect(
         notice=(
             t(request, "{email} 이름을 '{name}'(으)로 변경했습니다.",
@@ -496,6 +520,7 @@ def users_force_logout(request: Request, user_id: int):
         if target is None:
             raise HTTPException(404, t(request, "사용자 없음"))
         db.delete_user_sessions(conn, user_id)
+    audit.log(request, "사용자 강제 로그아웃: %s", target["email"])
     return _users_redirect(
         notice=t(request, "{email} 의 모든 세션을 로그아웃했습니다.", email=target["email"])
     )
@@ -530,6 +555,9 @@ def users_invite(request: Request, email: str = Form(...), role: str = Form("vie
             invited_by=request.state.user["id"] if request.state.user else None,
             ttl_seconds=config.INVITE_TTL_DAYS * 86400,
         )
+    audit.log(
+        request, "사용자 초대 발급: %s (권한 %s)", email, db.ROLE_LABELS[role]
+    )
     link = _invite_link(request, token)
     if config.mail_enabled():
         inviter = (
@@ -558,8 +586,14 @@ def users_invite(request: Request, email: str = Form(...), role: str = Form("vie
 def users_invite_delete(request: Request, invite_id: int):
     """초대 취소 — 링크가 즉시 무효화된다."""
     with db.connect() as conn:
+        invite = next(
+            (i for i in db.list_invites(conn) if i["id"] == invite_id), None
+        )
         if not db.delete_invite(conn, invite_id):
             raise HTTPException(404, t(request, "초대 없음"))
+    audit.log(
+        request, "초대 취소: %s", invite["email"] if invite else f"#{invite_id}"
+    )
     return _users_redirect(notice=t(request, "초대를 취소했습니다."))
 
 
@@ -651,6 +685,11 @@ def api_keys_create(
             created_by=request.state.user["id"] if request.state.user else None,
             ttl_seconds=ttl_seconds,
         )
+    perms = ", ".join(
+        label for flag, label in ((can_view, "보기"), (can_archive, "아카이브"))
+        if flag
+    )
+    audit.log(request, "API 키 발급: '%s' (권한: %s)", name, perms)
     return _api_keys_redirect(
         notice=t(request,
                  "'{name}' 키를 발급했습니다 — 아래 키를 지금 복사하세요. 다시 표시되지 않습니다.",
@@ -663,8 +702,14 @@ def api_keys_create(
 def api_keys_delete(request: Request, key_id: int):
     """API 키 폐기 — 즉시 무효화된다."""
     with db.connect() as conn:
+        key = next(
+            (k for k in db.list_api_keys(conn) if k["id"] == key_id), None
+        )
         if not db.delete_api_key(conn, key_id):
             raise HTTPException(404, t(request, "API 키 없음"))
+    audit.log(
+        request, "API 키 폐기: %s", f"'{key['name']}'" if key else f"#{key_id}"
+    )
     return _api_keys_redirect(notice=t(request, "키를 폐기했습니다."))
 
 
@@ -682,12 +727,19 @@ def system_import(
         return _system_redirect(error=t(request, "가져오기 실패: {e}", e=e))
     finally:
         tmp.unlink(missing_ok=True)
+    audit.log(
+        request, "아카이브 가져오기 [%s]: 페이지 +%d, 스냅샷 +%d",
+        mode, result.pages_added, result.snapshots_added,
+    )
     return _system_redirect(
         notice=t(
             request,
             "가져오기 완료 [{mode}]: 페이지 +{pages}, 스냅샷 +{snapshots} "
-            "(스킵 {skipped}), 확인 기록 +{checks}",
+            "(스킵 {skipped}), 확인 기록 +{checks}, 크롤 +{crawls}, "
+            "인증서 +{certs}, 로그 +{logs}",
             mode=mode, pages=result.pages_added, snapshots=result.snapshots_added,
             skipped=result.snapshots_skipped, checks=result.checks_added,
+            crawls=result.crawls_added, certs=result.certificates_added,
+            logs=result.logs_added,
         )
     )

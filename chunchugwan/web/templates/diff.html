@@ -12,6 +12,17 @@ tr.d-skip td { text-align: center; color: var(--muted); background: var(--bg-sof
   font-size: 12px; }
 .shots img { max-width: 100%; border: 1px solid var(--border); display: none; }
 .shots img.show { display: block; }
+/* 좁은 화면 — side-by-side 를 위(이전)/아래(이후)로 쌓은 unified 형태로 전환.
+   동일·삽입·삭제 행은 비어 있거나 중복인 쪽 셀을 숨긴다 (배경색이 이전/이후 구분) */
+@media (max-width: 719px) {
+  table.diff thead { display: none; }
+  table.diff tr { display: block; }
+  table.diff td { display: block; }
+  table.diff td.l, table.diff td.r { width: 100%; }
+  table.diff tr.d-equal td.r,
+  table.diff tr.d-insert td.l,
+  table.diff tr.d-delete td.r { display: none; }
+}
 </style>
 {% endblock %}
 {% block content %}

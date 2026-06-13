@@ -113,6 +113,8 @@ _TYPE_EXTENSIONS = {
     "application/vnd.hancom.hwpx": ".hwpx",
     "application/rtf": ".rtf",
     "application/epub+zip": ".epub",
+    "application/zip": ".zip",
+    "application/x-zip-compressed": ".zip",
 }
 
 

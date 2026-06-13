@@ -130,6 +130,155 @@ def test_export_import_includes_documents(roots, tmp_path, monkeypatch):
     assert n == 1
 
 
+def test_export_site_only(roots, tmp_path, monkeypatch):
+    """site_id 한정 내보내기 — 소속 페이지·스냅샷·참조 CAS 만 담긴다."""
+    root_a, root_b = roots
+    used, unused = "a" * 64 + ".png", "b" * 64 + ".png"
+    for name in (used, unused):
+        f = config.RESOURCES_DIR / name[:2] / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(name.encode())
+    with db.connect() as conn:
+        site_id = db.get_site_by_key(conn, storage.site_key(URL_A))["id"]
+        db.insert_snapshot_resources(conn, 1, [{"name": used}])  # URL_A 스냅샷
+        db.insert_snapshot_resources(conn, 3, [{"name": unused}])  # URL_B 스냅샷
+
+    out = backup.export_archive(tmp_path, site_id=site_id)
+    assert out.name.startswith("chunchugwan-export-example.com-")
+    with tarfile.open(out) as tar:
+        names = tar.getnames()
+    assert any(n.startswith("sites/example.com/") for n in names)
+    assert not any("other.org" in n for n in names)
+    assert f"resources/{used[:2]}/{used}" in names
+    assert f"resources/{unused[:2]}/{unused}" not in names
+    assert f"documents/{DOC_SHA[:2]}/{DOC_SHA}.pdf" in names
+
+    # 가져오면 해당 사이트만 복원된다
+    _patch_root(monkeypatch, root_b)
+    backup.import_archive(out, mode="merge")
+    with db.connect() as conn:
+        assert db.get_page(conn, URL_A) is not None
+        assert db.get_page(conn, URL_B) is None
+    assert _counts() == {
+        "pages": 1, "snapshots": 2, "checks": 1, "users": 0, "archive_logs": 0,
+    }
+    assert documents.cas_path(DOC_SHA + ".pdf").read_bytes() == DOC_BODY
+    assert (config.RESOURCES_DIR / used[:2] / used).read_bytes() == used.encode()
+
+
+def test_export_unknown_site_raises(roots, tmp_path):
+    with pytest.raises(ValueError, match="사이트 없음"):
+        backup.export_archive(tmp_path / "x.tar.gz", site_id=9999)
+
+
+def _seed_crawl(conn, url: str, site_id: int) -> int:
+    """완료된 크롤 회차 1개 삽입 후 id 반환 (테스트 픽스처)."""
+    cur = conn.execute(
+        """
+        INSERT INTO crawls (start_url, scope_host, scope_path, status,
+            max_pages, max_depth, delay_seconds, source, site_id,
+            created_at, finished_at, next_page_at)
+        VALUES (?, ?, '/', 'done', 30, 2, 10, 'web', ?,
+                '2026-06-01T01:00:00+00:00', '2026-06-01T02:00:00+00:00',
+                '2026-06-01T02:00:00+00:00')
+        """,
+        (url, url.split("/")[2], site_id),
+    )
+    return cur.lastrowid
+
+
+def _seed_certificate(conn, site_id: int, host: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO site_certificates (site_id, host, fingerprint, subject,
+            issuer, serial, san, verified, pem, first_seen_at, last_seen_at)
+        VALUES (?, ?, ?, 'CN=' || ?, 'CN=ca', '01', '[]', 1, '-----PEM-----',
+                '2026-06-01T00:00:00+00:00', '2026-06-02T00:00:00+00:00')
+        """,
+        (site_id, host, "f" * 64, host),
+    )
+
+
+def test_export_import_carries_crawls_certs_logs(roots, tmp_path, monkeypatch):
+    """v4 — 크롤 회차·사이트 인증서·아카이브 로그가 함께 옮겨진다 (사이트 한정 포함)."""
+    root_a, root_b = roots
+    with db.connect() as conn:
+        site_a = db.get_site_by_key(conn, storage.site_key(URL_A))["id"]
+        site_b = db.get_site_by_key(conn, storage.site_key(URL_B))["id"]
+        crawl_a = _seed_crawl(conn, URL_A, site_a)
+        _seed_crawl(conn, URL_B, site_b)
+        # 크롤 페이지: 스냅샷 참조가 있는 done + 클레임 중이던 in_progress
+        conn.execute(
+            "INSERT INTO crawl_pages (crawl_id, url, status, snapshot_id) "
+            "VALUES (?, ?, 'done', 1)",
+            (crawl_a, URL_A),
+        )
+        conn.execute(
+            "INSERT INTO crawl_pages (crawl_id, url, depth, status, attempts) "
+            "VALUES (?, ?, 1, 'in_progress', 2)",
+            (crawl_a, URL_A + "/sub"),
+        )
+        _seed_certificate(conn, site_a, "example.com")
+        _seed_certificate(conn, site_b, "other.org")
+        db.insert_archive_log(
+            conn, url=URL_A, domain="example.com", page_id=1, snapshot_id=1,
+            source="cli", status="new", started_at="2026-06-01T00:00:00+00:00",
+        )
+        db.insert_archive_log(
+            conn, url=URL_B, domain="other.org", page_id=2, snapshot_id=3,
+            source="cli", status="new", started_at="2026-06-03T00:00:00+00:00",
+        )
+
+    out = backup.export_archive(tmp_path / "site.tar.gz", site_id=site_a)
+    _patch_root(monkeypatch, root_b)
+    result = backup.import_archive(out, mode="merge")
+    assert (result.crawls_added, result.certificates_added, result.logs_added) == (1, 1, 1)
+
+    with db.connect() as conn:
+        crawls = conn.execute("SELECT * FROM crawls").fetchall()
+        assert len(crawls) == 1 and crawls[0]["start_url"] == URL_A
+        assert crawls[0]["status"] == "done"
+        snap_id = conn.execute(
+            "SELECT id FROM snapshots WHERE dir_name = '2026-06-01T00-00-00'"
+        ).fetchone()["id"]
+        cps = conn.execute("SELECT * FROM crawl_pages ORDER BY id").fetchall()
+        assert len(cps) == 2
+        assert cps[0]["snapshot_id"] == snap_id  # 새 id 로 다시 연결
+        assert cps[1]["status"] == "pending"  # 클레임 상태는 옮기지 않는다
+        certs = conn.execute("SELECT * FROM site_certificates").fetchall()
+        assert len(certs) == 1 and certs[0]["host"] == "example.com"
+        logs = conn.execute("SELECT * FROM archive_logs").fetchall()
+        assert len(logs) == 1 and logs[0]["url"] == URL_A
+        assert logs[0]["page_id"] == db.get_page(conn, URL_A)["id"]
+        assert logs[0]["snapshot_id"] == snap_id
+
+    # 멱등 — 다시 가져와도 늘지 않는다
+    again = backup.import_archive(out, mode="merge")
+    assert (again.crawls_added, again.certificates_added, again.logs_added) == (0, 0, 0)
+    with db.connect() as conn:
+        for table, n in (("crawls", 1), ("crawl_pages", 2),
+                         ("site_certificates", 1), ("archive_logs", 1)):
+            assert conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"] == n
+
+
+def test_import_overwrite_relinks_kept_logs(roots, tmp_path):
+    """overwrite 가 FK 만 비워둔 기존 로그 행이 가져오기에서 다시 연결된다."""
+    with db.connect() as conn:
+        db.insert_archive_log(
+            conn, url=URL_A, domain="example.com", page_id=1, snapshot_id=1,
+            source="cli", status="new", started_at="2026-06-01T00:00:00+00:00",
+        )
+    out = backup.export_archive(tmp_path / "e.tar.gz")
+    result = backup.import_archive(out, mode="overwrite")  # 같은 루트에 덮어쓰기
+    assert result.logs_added == 0  # 행은 보존돼 있었다
+    with db.connect() as conn:
+        logs = conn.execute("SELECT * FROM archive_logs").fetchall()
+        page = db.get_page(conn, URL_A)
+        assert len(logs) == 1
+        assert logs[0]["page_id"] == page["id"]
+        assert logs[0]["snapshot_id"] is not None
+
+
 def test_import_rejects_bad_document_refs(roots, tmp_path, monkeypatch):
     """archive.json 의 문서 참조가 형식 위반이면 거부 (path traversal)."""
     root_a, root_b = roots

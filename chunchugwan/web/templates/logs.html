@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
 {% from "_snapshot_detail.html" import snapshot_detail with context %}
 {% block title %}{{ _("아카이빙 로그") }} — {{ _("춘추관") }}{% endblock %}
 {% block head %}
@@ -14,9 +15,6 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
                    border: 1px solid var(--border); border-radius: 4px;
                    background: var(--surface); color: var(--fg); }
 .date-range, .presets { display: inline-flex; gap: 4px; align-items: center; }
-.pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
-         font-size: 13px; }
-.pager .spacer { flex: 1; }
 </style>
 {% endblock %}
 {% block content %}
@@ -83,6 +81,7 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
 <p class="muted">{{ _("로그가 없습니다. 아카이빙을 실행하면 결과가 여기에 기록됩니다.") }}</p>
   {% endif %}
 {% else %}
+<div class="table-wrap wide">
 <table>
   <thead>
     <tr>
@@ -97,6 +96,7 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
       <td class="mono">{{ log['started_at'] | ts }}</td>
       <td><span class="badge {{ badge_class[log['status']] }}">{{ status_label[log['status']] }}</span></td>
       <td class="url-cell">
+        {% if log['network_tag_name'] %}{{ network_tag_badge(log['network_tag_name'], log['network_tag_description'], log['network_tag_id']) }}{% endif %}
         {% if log['page_id'] %}
         <a href="/page/{{ log['page_id'] }}" title="{{ log['url'] }}">{{ log['url'] }}</a>
         {% else %}
@@ -133,6 +133,7 @@ input[type=date] { font: inherit; font-size: 13px; padding: 2px 8px;
   {% endfor %}
   </tbody>
 </table>
+</div>
 <div class="pager">
   <span class="muted">{{ _("총 {n}건", n=total) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
   <span class="spacer"></span>

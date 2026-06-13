@@ -10,6 +10,7 @@
   {{ _("탈퇴=본인이 탈퇴한 계정(로그인 불가) — 권한을 되돌릴 수 없고, 계정 정보를 삭제하면 같은 이메일로 다시 가입하거나 초대할 수 있습니다.") }}
 </p>
 
+<div class="table-wrap wide">
 <table>
   <thead>
     <tr><th>{{ _("이메일") }}</th><th>{{ _("이름") }}</th><th>{{ _("권한") }}</th><th>2FA</th><th>SSO</th>
@@ -90,6 +91,7 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 
 <h3 style="margin-top:24px">{{ _("이메일 초대") }}</h3>
 <p class="muted" style="font-size:12px; max-width:720px">
@@ -109,7 +111,8 @@
 </form>
 
 {% if invites %}
-<table style="margin-top:12px">
+<div class="table-wrap" style="margin-top:12px">
+<table>
   <thead>
     <tr><th>{{ _("이메일") }}</th><th>{{ _("권한") }}</th><th>{{ _("초대한 사람") }}</th><th>{{ _("만료") }}</th><th></th></tr>
   </thead>
@@ -130,5 +133,6 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 {% endblock %}

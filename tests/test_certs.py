@@ -24,6 +24,14 @@ FIXTURES = Path(__file__).parent / "fixtures"
 _REAL_FETCH_CERT_INFO = certs.fetch_certificate_info
 
 
+@pytest.fixture(autouse=True)
+def _clear_cert_cache():
+    """(host, port) TTL 캐시를 테스트 간 비운다 — 교차 오염 방지."""
+    certs._cache.clear()
+    yield
+    certs._cache.clear()
+
+
 @pytest.fixture
 def archive_env(tmp_path, monkeypatch):
     """임시 아카이브 루트 (인증 off)."""
@@ -108,6 +116,59 @@ def test_fetch_certificate_info_from_real_server(tmp_path):
 
 def test_fetch_certificate_info_non_https():
     assert _REAL_FETCH_CERT_INFO("http://example.com/") is None
+
+
+# ---- (host, port) TTL 캐시 ----
+
+
+def test_fetch_certificate_info_caches_by_host_port(monkeypatch):
+    """같은 (host, port)는 TTL 안에서 핸드셰이크를 한 번만 한다 (크롤 대비)."""
+    calls: list[tuple[str, int]] = []
+    der = _fixture_der()
+
+    def fake_fetch_der(host: str, port: int) -> bytes:
+        calls.append((host, port))
+        return der
+
+    monkeypatch.setattr(certs, "_fetch_der", fake_fetch_der)
+    info1 = _REAL_FETCH_CERT_INFO("https://cache.example/a")
+    info2 = _REAL_FETCH_CERT_INFO("https://cache.example/b")
+    assert calls == [("cache.example", 443)]
+    assert info1 is not None and info2 is not None
+    assert info1["fingerprint"] == info2["fingerprint"]
+    # 다른 포트는 별도 항목 — 캐시를 공유하지 않는다
+    _REAL_FETCH_CERT_INFO("https://cache.example:8443/")
+    assert calls == [("cache.example", 443), ("cache.example", 8443)]
+
+
+def test_fetch_certificate_info_caches_failure(monkeypatch):
+    """수집 실패(None)도 캐시된다 — 응답 없는 호스트의 타임아웃 반복 방지."""
+    calls: list[str] = []
+
+    def boom(host: str, port: int) -> bytes:
+        calls.append(host)
+        raise OSError("connect fail")
+
+    monkeypatch.setattr(certs, "_fetch_der", boom)
+    assert _REAL_FETCH_CERT_INFO("https://dead.example/") is None
+    assert _REAL_FETCH_CERT_INFO("https://dead.example/") is None
+    assert calls == ["dead.example"]
+
+
+def test_fetch_certificate_info_cache_expires(monkeypatch):
+    """TTL 이 지나면 다시 수집한다."""
+    calls: list[str] = []
+    der = _fixture_der()
+
+    def fake_fetch_der(host: str, port: int) -> bytes:
+        calls.append(host)
+        return der
+
+    monkeypatch.setattr(certs, "_fetch_der", fake_fetch_der)
+    monkeypatch.setattr(config, "CERT_CACHE_TTL_SECONDS", 0)
+    _REAL_FETCH_CERT_INFO("https://expire.example/")
+    _REAL_FETCH_CERT_INFO("https://expire.example/")
+    assert calls == ["expire.example", "expire.example"]
 
 
 # ---- 버전 관리 (upsert) ----

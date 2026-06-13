@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
 {% block title %}{{ _("목록") }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <style>
@@ -31,19 +32,23 @@
 <p class="muted">{{ _("아카이브된 페이지가 없습니다.") }}
   {{ _("시작하려면") }} {% if can_archive %}<a href="/archive/new">{{ _("새 아카이빙") }}</a> {{ _("메뉴나") }} {% endif %}<span class="mono">wccg add &lt;url&gt;</span> {{ _("명령을 사용하세요.") }}</p>
 {% else %}
+<div class="table-wrap">
 <table id="items">
   <thead>
     <tr><th>{{ _("사이트") }}</th><th class="num">{{ _("페이지") }}</th><th class="num">{{ _("스냅샷") }}</th><th class="num">{{ _("용량") }}</th><th class="num">{{ _("크롤 회차") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
   </thead>
   <tbody>
   {% for it in items %}
-    <tr data-url="{{ (it['site_key'] ~ ' ' ~ (it['title'] or ''))|lower }}">
+    <tr data-url="{{ (it['site_key'] ~ ' ' ~ (it['title'] or '') ~ ' ' ~ (it['network_tags'] | map(attribute='name') | join(' ')))|lower }}">
       <td>
         {% if it['site_id'] %}
         <a href="/sites/{{ it['site_id'] }}" class="mono">{{ it['site_key'] }}</a>
         {% else %}
         <span class="mono">{{ it['site_key'] }}</span>
         {% endif %}
+        {% for tag in it['network_tags'] %}
+        {{ network_tag_badge(tag['name'], tag['description'], tag['id']) }}
+        {% endfor %}
         {% if it['title'] %}
         <div class="muted site-title" title="{{ it['title'] }}">{{ it['title'] }}</div>
         {% endif %}
@@ -71,6 +76,7 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 <script>

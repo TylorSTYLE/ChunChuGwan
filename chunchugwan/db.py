@@ -443,10 +443,10 @@ def get_page_by_id(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None
 
 
 def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> sqlite3.Row | None:
-    """스냅샷 row + 소속 페이지 정보(page_url, domain, slug) 조회."""
+    """스냅샷 row + 소속 페이지 정보(page_url, domain, slug, network_tag_id) 조회."""
     return conn.execute(
         """
-        SELECT s.*, p.url AS page_url, p.domain, p.slug
+        SELECT s.*, p.url AS page_url, p.domain, p.slug, p.network_tag_id
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         WHERE s.id = ?
         """,
@@ -889,6 +889,7 @@ def list_archive_logs(
 
     스냅샷이 생긴 로그에는 디렉토리 위치(snap_domain, snap_slug, snap_dir_name)를
     함께 반환한다 — 대시보드가 저장된 파일 목록/용량을 조회하는 데 쓴다.
+    사설 대역 페이지의 로그 구분용으로 로컬 네트워크 태그 이름·설명도 붙인다.
     """
     where_sql, params = _archive_log_where(
         domain=domain, page_id=page_id, snapshot_id=snapshot_id,
@@ -896,10 +897,15 @@ def list_archive_logs(
     )
     sql = """
         SELECT al.*, s.dir_name AS snap_dir_name,
-               sp.domain AS snap_domain, sp.slug AS snap_slug
+               sp.domain AS snap_domain, sp.slug AS snap_slug,
+               nt.name AS network_tag_name,
+               nt.description AS network_tag_description,
+               lp.network_tag_id
         FROM archive_logs al
         LEFT JOIN snapshots s ON s.id = al.snapshot_id
         LEFT JOIN pages sp ON sp.id = s.page_id
+        LEFT JOIN pages lp ON lp.id = al.page_id
+        LEFT JOIN network_tags nt ON nt.id = lp.network_tag_id
     """
     sql += where_sql
     sql += " ORDER BY al.started_at DESC, al.id DESC LIMIT ? OFFSET ?"
@@ -1088,17 +1094,24 @@ def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def list_recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
-    """최근 스냅샷 목록 (최신 순) + 페이지 정보 + 해당 페이지 첫 스냅샷 여부."""
+    """최근 스냅샷 목록 (최신 순) + 페이지 정보 + 해당 페이지 첫 스냅샷 여부.
+
+    사설 대역 페이지 구분용으로 로컬 네트워크 태그 이름·설명도 붙인다.
+    """
     return conn.execute(
         """
-        SELECT s.*, p.url AS page_url, p.domain, p.slug,
+        SELECT s.*, p.url AS page_url, p.domain, p.slug, p.network_tag_id,
+               nt.name AS network_tag_name,
+               nt.description AS network_tag_description,
                NOT EXISTS (
                    SELECT 1 FROM snapshots s2
                    WHERE s2.page_id = s.page_id
                      AND (s2.taken_at < s.taken_at
                           OR (s2.taken_at = s.taken_at AND s2.id < s.id))
                ) AS is_first
-        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        FROM snapshots s
+        JOIN pages p ON p.id = s.page_id
+        LEFT JOIN network_tags nt ON nt.id = p.network_tag_id
         ORDER BY s.taken_at DESC, s.id DESC LIMIT ?
         """,
         (limit,),
@@ -1377,10 +1390,18 @@ def get_schedule(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 
 def list_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """전체 스케줄 목록 (+ 페이지 url, 다음 실행이 가까운 순)."""
+    """전체 스케줄 목록 (+ 페이지 url, 다음 실행이 가까운 순).
+
+    사설 대역 페이지 구분용으로 로컬 네트워크 태그 이름·설명도 붙인다.
+    """
     return conn.execute(
         """
-        SELECT sc.*, p.url FROM schedules sc JOIN pages p ON p.id = sc.page_id
+        SELECT sc.*, p.url, p.network_tag_id,
+               nt.name AS network_tag_name,
+               nt.description AS network_tag_description
+        FROM schedules sc
+        JOIN pages p ON p.id = sc.page_id
+        LEFT JOIN network_tags nt ON nt.id = p.network_tag_id
         ORDER BY sc.next_run_at, sc.id
         """
     ).fetchall()
@@ -1516,16 +1537,24 @@ def crawl_page_counts(conn: sqlite3.Connection, crawl_id: int) -> dict[str, int]
     return counts
 
 
-def list_crawl_pages(conn: sqlite3.Connection, crawl_id: int) -> list[sqlite3.Row]:
-    """크롤의 페이지 목록 (발견 순) + 스냅샷의 page_id (타임라인 링크용)."""
-    return conn.execute(
-        """
+def list_crawl_pages(
+    conn: sqlite3.Connection, crawl_id: int, status: str | None = None
+) -> list[sqlite3.Row]:
+    """크롤의 페이지 목록 (발견 순) + 스냅샷의 page_id (타임라인 링크용).
+
+    status 를 주면 해당 상태(pending/in_progress/done/failed)만 추린다.
+    """
+    sql = """
         SELECT cp.*, s.page_id AS snapshot_page_id
         FROM crawl_pages cp LEFT JOIN snapshots s ON s.id = cp.snapshot_id
-        WHERE cp.crawl_id = ? ORDER BY cp.id
-        """,
-        (crawl_id,),
-    ).fetchall()
+        WHERE cp.crawl_id = ?
+    """
+    params: list[object] = [crawl_id]
+    if status is not None:
+        sql += " AND cp.status = ?"
+        params.append(status)
+    sql += " ORDER BY cp.id"
+    return conn.execute(sql, params).fetchall()
 
 
 def insert_crawl_page(
@@ -1710,6 +1739,38 @@ def retry_failed_crawl_pages(conn: sqlite3.Connection, crawl_id: int) -> int:
     return cur.rowcount
 
 
+def get_failed_crawl_page(
+    conn: sqlite3.Connection, crawl_id: int, crawl_page_id: int
+) -> sqlite3.Row | None:
+    """크롤 소속 실패 페이지 행 조회 — 단건 재시도 검증용.
+
+    소속이 아니거나 실패 상태가 아니면 None.
+    """
+    return conn.execute(
+        "SELECT * FROM crawl_pages WHERE id = ? AND crawl_id = ? AND status = 'failed'",
+        (crawl_page_id, crawl_id),
+    ).fetchone()
+
+
+def resolve_failed_crawl_pages(
+    conn: sqlite3.Connection, url: str, snapshot_id: int | None
+) -> list[int]:
+    """같은 URL 의 failed 크롤 페이지를 다른 경로의 아카이빙 성공으로 done 처리.
+
+    수동 단일 아카이빙·스케줄이 같은 주소를 성공적으로 아카이빙했다면
+    크롤의 실패 기록은 더 이상 유효하지 않다 — done 으로 돌리고 이번에
+    확인된 스냅샷을 연결한다. 반환은 갱신된 행들의 crawl_id 목록
+    (중복 제거 — 호출 쪽이 finish_crawl_if_done 으로 마감을 재평가).
+    """
+    rows = conn.execute(
+        "SELECT id, crawl_id FROM crawl_pages WHERE url = ? AND status = 'failed'",
+        (url,),
+    ).fetchall()
+    for row in rows:
+        finish_crawl_page(conn, row["id"], snapshot_id)
+    return sorted({row["crawl_id"] for row in rows})
+
+
 def find_crawl_snapshot(
     conn: sqlite3.Connection, crawl_id: int, url: str
 ) -> int | None:
@@ -1747,10 +1808,15 @@ def list_site_pages(
     """사이트 소속 페이지 목록 + 스냅샷 수·마지막 캡처 시각 (사이트 상세/삭제용).
 
     limit 을 주면 offset 부터 그만큼만 반환한다 (사이트 상세 페이징용).
+    사설 대역 페이지 구분용으로 로컬 네트워크 태그 이름·설명도 붙인다.
     """
     sql = """
-        SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
-        FROM pages p LEFT JOIN snapshots s ON s.page_id = p.id
+        SELECT p.*, nt.name AS network_tag_name,
+               nt.description AS network_tag_description,
+               COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
+        FROM pages p
+        LEFT JOIN snapshots s ON s.page_id = p.id
+        LEFT JOIN network_tags nt ON nt.id = p.network_tag_id
         WHERE p.site_id = ?
         GROUP BY p.id
         ORDER BY last_taken_at DESC NULLS LAST, p.url
@@ -1915,15 +1981,21 @@ def retry_failed_crawl_page(conn: sqlite3.Connection, crawl_page_id: int) -> Non
 
 
 def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
-    """사이트 소속 크롤 회차 목록 (최신 순) + 상태별 페이지 수 집계."""
+    """사이트 소속 크롤 회차 목록 (최신 순) + 상태별 페이지 수 집계.
+
+    사설 대역 크롤 구분용으로 로컬 네트워크 태그 이름·설명도 붙인다.
+    """
     return conn.execute(
         """
-        SELECT c.*,
+        SELECT c.*, nt.name AS network_tag_name,
+               nt.description AS network_tag_description,
                COUNT(cp.id) AS total_count,
                COALESCE(SUM(cp.status = 'done'), 0) AS done_count,
                COALESCE(SUM(cp.status = 'failed'), 0) AS failed_count,
                COALESCE(SUM(cp.status IN ('pending', 'in_progress')), 0) AS pending_count
-        FROM crawls c LEFT JOIN crawl_pages cp ON cp.crawl_id = c.id
+        FROM crawls c
+        LEFT JOIN crawl_pages cp ON cp.crawl_id = c.id
+        LEFT JOIN network_tags nt ON nt.id = c.network_tag_id
         WHERE c.site_id = ?
         GROUP BY c.id ORDER BY c.id DESC
         """,
@@ -1996,9 +2068,18 @@ def get_crawl_schedule_by_id(
 
 
 def list_crawl_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """전체 크롤 스케줄 목록 (다음 실행이 가까운 순)."""
+    """전체 크롤 스케줄 목록 (다음 실행이 가까운 순).
+
+    사설 대역 크롤 구분용으로 로컬 네트워크 태그 이름·설명도 붙인다.
+    """
     return conn.execute(
-        "SELECT * FROM crawl_schedules ORDER BY next_run_at, id"
+        """
+        SELECT cs.*, nt.name AS network_tag_name,
+               nt.description AS network_tag_description
+        FROM crawl_schedules cs
+        LEFT JOIN network_tags nt ON nt.id = cs.network_tag_id
+        ORDER BY cs.next_run_at, cs.id
+        """
     ).fetchall()
 
 
@@ -2369,6 +2450,34 @@ def list_network_tags(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         FROM network_tags nt ORDER BY nt.name
         """
     ).fetchall()
+
+
+def list_site_network_tags(
+    conn: sqlite3.Connection, site_id: int | None = None
+) -> list[sqlite3.Row]:
+    """사이트별로 소속 페이지·크롤이 참조하는 로컬 네트워크 태그 목록.
+
+    사이트 자체에는 태그 컬럼이 없다 — 같은 IP 대역의 다른 사설 네트워크를
+    아카이브 목록·사이트 상세에서 구분할 수 있도록, 참조 중인 태그를 모아
+    사이트 행에 뱃지로 보여주기 위한 집계다 (site_id, 태그 id·이름·설명).
+    site_id 를 주면 해당 사이트 것만 반환한다.
+    """
+    sql = """
+        SELECT refs.site_id, nt.id, nt.name, nt.description
+        FROM (
+            SELECT DISTINCT site_id, network_tag_id FROM pages
+             WHERE network_tag_id IS NOT NULL AND site_id IS NOT NULL
+            UNION
+            SELECT DISTINCT site_id, network_tag_id FROM crawls
+             WHERE network_tag_id IS NOT NULL AND site_id IS NOT NULL
+        ) refs JOIN network_tags nt ON nt.id = refs.network_tag_id
+        """
+    params: list[object] = []
+    if site_id is not None:
+        sql += " WHERE refs.site_id = ?"
+        params.append(site_id)
+    sql += " ORDER BY refs.site_id, nt.name"
+    return conn.execute(sql, params).fetchall()
 
 
 def get_network_tag(conn: sqlite3.Connection, tag_id: str) -> sqlite3.Row | None:

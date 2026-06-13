@@ -33,10 +33,10 @@ from fastapi.responses import (
 )
 
 from .. import (
-    auth, config, crawler, db, deletion, differ, documents, netcheck, pipeline,
-    resources, scheduler, storage, system_log,
+    auth, backup, config, crawler, db, deletion, differ, documents, netcheck,
+    pipeline, resources, scheduler, storage, system_log,
 )
-from . import api_routes, auth_routes, i18n, permissions, system_routes
+from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
 from .i18n import t
 from .templating import templates
 
@@ -321,6 +321,14 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
         sites = db.list_sites_overview(conn)
         running = [c for c in db.list_crawls(conn) if c["status"] == "running"]
         snap_dirs = db.list_snapshot_dirs(conn)
+        tag_rows = db.list_site_network_tags(conn)
+    # 사이트별 로컬 네트워크 태그 — 같은 IP 대역의 다른 사설 네트워크 구분용
+    site_tags: dict[int, list[dict]] = {}
+    for row in tag_rows:
+        site_tags.setdefault(row["site_id"], []).append(
+            {"id": row["id"], "name": row["name"],
+             "description": row["description"]}
+        )
     # 사이트별 저장 용량 — 스냅샷은 불변이므로 디렉토리 용량을 그대로 합산
     site_bytes: dict[int, int] = {}
     site_snaps: dict[int, list] = {}
@@ -338,6 +346,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
             "crawl_count": s["crawl_count"], "schedule_count": s["schedule_count"],
             "bytes": site_bytes.get(s["id"], 0),
             "title": titles.get(s["id"]),
+            "network_tags": site_tags.get(s["id"], []),
             "activity_at": s["last_activity_at"] or None,
             "crawling": s["running_crawl_count"] > 0,
             "active": s["site_key"] in active_keys or s["running_crawl_count"] > 0,
@@ -351,6 +360,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
             "site_id": None, "site_key": key,
             "page_count": 0, "snapshot_count": 0, "crawl_count": 0,
             "schedule_count": 0, "bytes": 0, "title": None,
+            "network_tags": [],
             "activity_at": t, "crawling": False,
             "active": True,
         }
@@ -414,6 +424,7 @@ def site_view(
         schedules = db.list_site_schedules(conn, site_id)
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
         certificates = db.list_site_certificates(conn, site_id)
+        site_network_tags = db.list_site_network_tags(conn, site_id)
         failed_logs = db.list_site_failed_logs(conn, site_id)
         # 크롤 실패는 페이지 행이 없는 신규 URL 까지 포함 — 실패한 작업
         # 목록(archive_logs 기반)에 이미 있는 URL 은 겹치지 않게 뺀다
@@ -472,6 +483,7 @@ def site_view(
         {
             "site": site, "pages": pages, "crawls": crawls,
             "site_title": _site_title(snap_dirs),
+            "network_tags": site_network_tags,
             "failed_logs": failed_logs,
             "failed_crawl_pages": failed_crawl_pages,
             "schedule_labels": schedule_labels,
@@ -506,6 +518,7 @@ def site_failed_retry(
     if log is None:
         raise HTTPException(404, t(request, "실패 기록 없음"))
     if _queue_archive(background, log["page_url"]):
+        audit.log(request, "실패 작업 재시도: %s", log["page_url"])
         params = {"notice": t(request, "아카이빙이 백그라운드에서 시작되었습니다")}
     else:
         params = {"error": t(request, _BUSY_MSG)}
@@ -524,6 +537,7 @@ def site_crawl_failed_retry(request: Request, site_id: int, crawl_page_id: int):
         if row is None:
             raise HTTPException(404, t(request, "실패 기록 없음"))
         db.retry_failed_crawl_page(conn, crawl_page_id)
+    audit.log(request, "크롤 페이지 재시도: %s", row["url"])
     params = {"notice": t(request, "재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.")}
     return RedirectResponse(f"/sites/{site_id}?{urlencode(params)}", status_code=303)
 
@@ -539,6 +553,24 @@ def site_certificate_pem(request: Request, site_id: int, cert_id: int):
     return PlainTextResponse(
         cert["pem"],
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/sites/{site_id}/export")
+def site_export(request: Request, site_id: int):
+    """사이트 아카이브 내보내기 — 소속 페이지·스냅샷과 참조 자원만 담은 tar.gz.
+
+    파일 형식은 전체 내보내기(/system/export)와 같아 가져오기(웹 화면·
+    wccg import)로 복원할 수 있다. admin/archiver 전용.
+    """
+    _require_archiver(request)
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+    if site is None:
+        raise HTTPException(404, t(request, "사이트 없음"))
+    audit.log(request, "사이트 아카이브 내보내기: %s", site["site_key"])
+    return system_routes.tar_download(
+        lambda dest: backup.export_archive(dest, site_id=site_id), "export"
     )
 
 
@@ -567,6 +599,11 @@ def site_delete(request: Request, site_id: int):
     result = deletion.delete_site(site_id)
     if result is None:
         raise HTTPException(404, t(request, "사이트 없음"))
+    audit.log(
+        request, "사이트 삭제: %s (페이지 %d개, 스냅샷 %d개, 크롤 %d개)",
+        result.site_key, result.pages_deleted, result.snapshots_deleted,
+        result.crawls_deleted,
+    )
     params = urlencode({
         "notice": t(
             request,
@@ -616,15 +653,16 @@ def dashboard(request: Request):
         recent_snaps = db.list_recent_snapshots(conn, limit=10)
         recent_logs = db.list_archive_logs(conn, limit=10)
 
-    # 스냅샷은 불변이므로 디렉토리 용량을 그대로 합산한다
+    # 총 용량은 스냅샷 파일 합이 아니라 실제 저장공간 (DB·자원/문서 CAS 포함)
+    total_bytes = sum(storage.archive_disk_usage().values())
+
+    # 스냅샷은 불변이므로 디렉토리 용량을 그대로 합산한다 (트렌드·최근 목록용)
     sizes: dict[int, int] = {}
     counts = {k: 0 for k in starts}
     period_bytes = {k: 0 for k in starts}
-    total_bytes = 0
     for row in snap_dirs:
         size = _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
         sizes[row["id"]] = size
-        total_bytes += size
         for key, start in starts.items():
             if row["taken_at"] >= start:
                 counts[key] += 1
@@ -768,6 +806,10 @@ def schedule_set(
         scheduler.set_schedule(page["url"], seconds, run_at=run_at or None)
     except ValueError as e:
         raise HTTPException(400, t(request, str(e)))
+    audit.log(
+        request, "스케줄 등록: %s (주기 %d초%s)", page["url"], seconds,
+        f", 실행 시각 {run_at}" if run_at else "",
+    )
     return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
 
 
@@ -804,6 +846,10 @@ def schedule_next_run(
         scheduler.set_next_run(page["url"], dt)
     except ValueError as e:
         raise HTTPException(400, t(request, str(e)))
+    audit.log(
+        request, "스케줄 다음 실행 변경: %s → %s",
+        page["url"], dt.isoformat(timespec="seconds"),
+    )
     return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
 
 
@@ -818,6 +864,7 @@ def schedule_delete(
     if page is None:
         raise HTTPException(404, t(request, "페이지 없음"))
     scheduler.remove_schedule(page["url"])
+    audit.log(request, "스케줄 해제: %s", page["url"])
     return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
 
 
@@ -857,6 +904,10 @@ def _snapshot_dir(snap) -> Path:
 @app.get("/snapshot/{snapshot_id}", response_class=HTMLResponse)
 def snapshot_view(request: Request, snapshot_id: int):
     snap = _load_snapshot(request, snapshot_id)
+    network_tag = None
+    if snap["network_tag_id"]:
+        with db.connect() as conn:
+            network_tag = db.get_network_tag(conn, snap["network_tag_id"])
     title = None
     documents: list[dict] = []
     try:
@@ -869,6 +920,7 @@ def snapshot_view(request: Request, snapshot_id: int):
         request, "snapshot.html",
         {
             "snap": snap,
+            "network_tag": network_tag,
             "title": title,
             "documents": documents,
             "page_html_url": f"/snapshot/{snapshot_id}/file/page.html",
@@ -1419,6 +1471,14 @@ def _archive_site(
             {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
         )
         return RedirectResponse(f"/archive/new?{params}", status_code=303)
+    audit.log(
+        request, "사이트 아카이브 등록: %s → 크롤 #%d%s", url, crawl["id"],
+        " (진행 중인 크롤로 병합)" if merged else "",
+    )
+    if interval_seconds:
+        audit.log(
+            request, "크롤 스케줄 등록: %s (주기 %d초)", url, interval_seconds
+        )
     suffix = "?merged=1" if merged else ""
     return RedirectResponse(f"/crawls/{crawl['id']}{suffix}", status_code=303)
 
@@ -1465,11 +1525,15 @@ def archive_new(
             run_at=(run_at or None) if seconds else None,
             network_tag_id=tag_id,
         )
-    _queue_archive(
+    if _queue_archive(
         background, norm,
         interval_seconds=seconds or None, run_at=(run_at or None) if seconds else None,
         network_tag_id=tag_id,
-    )
+    ):
+        audit.log(
+            request, "새 아카이빙 등록: %s%s", norm,
+            f" (주기 {seconds}초)" if seconds else "",
+        )
     return RedirectResponse(f"/archives?queued={quote(norm, safe='')}", status_code=303)
 
 
@@ -1485,7 +1549,11 @@ def rearchive(
         page = db.get_page_by_id(conn, page_id)
     if page is None:
         raise HTTPException(404, t(request, "페이지 없음"))
-    _queue_archive(background, page["url"], force=force)
+    if _queue_archive(background, page["url"], force=force):
+        audit.log(
+            request, "재아카이빙 등록: %s%s", page["url"],
+            " (강제)" if force else "",
+        )
     return RedirectResponse(url=f"/page/{page_id}?queued=1", status_code=303)
 
 
@@ -1510,6 +1578,8 @@ def log_retry(
     if log["status"] != "error":
         raise HTTPException(400, t(request, "실패한 로그만 재시도할 수 있습니다"))
     queued = _queue_archive(background, log["url"])
+    if queued:
+        audit.log(request, "실패 로그 재시도: %s", log["url"])
     # 필터를 유지한 채 로그 화면으로 복귀 — 내부 /logs 경로만 허용 (open redirect 방지)
     if not next_url.startswith("/logs"):
         next_url = "/logs"
@@ -1536,6 +1606,10 @@ def page_delete(request: Request, page_id: int):
             f"/archives?error={quote(t(request, _BUSY_MSG), safe='')}", status_code=303
         )
     result = deletion.delete_page(page_id)
+    audit.log(
+        request, "페이지 삭제: %s (스냅샷 %d개)",
+        result.url, result.snapshots_deleted,
+    )
     msg = t(request, "삭제됨: {url} (스냅샷 {n}개)",
             url=result.url, n=result.snapshots_deleted)
     return RedirectResponse(
@@ -1558,6 +1632,9 @@ def snapshot_delete(request: Request, snapshot_id: int):
             status_code=303,
         )
     deletion.delete_snapshot(snapshot_id)
+    audit.log(
+        request, "스냅샷 삭제: %s (%s)", snap["page_url"], snap["taken_at"]
+    )
     msg = t(request, "스냅샷 삭제됨: {t}", t=snap["taken_at"])
     return RedirectResponse(
         f"/page/{snap['page_id']}?notice={quote(msg, safe='')}", status_code=303
@@ -1581,23 +1658,37 @@ def crawls_view():
     return RedirectResponse("/archives", status_code=301)
 
 
+_CRAWL_PAGE_STATUSES = ("pending", "in_progress", "done", "failed")
+
+
 @app.get("/crawls/{crawl_id}", response_class=HTMLResponse)
-def crawl_view(request: Request, crawl_id: int, merged: int = 0):
+def crawl_view(
+    request: Request, crawl_id: int, merged: int = 0,
+    status: str = "", notice: str = "",
+):
     """크롤 진행 화면 — 상태별 집계와 페이지 목록, 취소·재시도.
 
     merged=1 이면 같은 사이트 아카이브가 이미 진행 중이라 이 크롤로
     병합되었다는 알림을 띄운다 (등록 직후 리다이렉트에서만 붙는다).
+    status 로 페이지 목록을 상태별 필터링한다 (잘못된 값은 전체).
     실패 재시도 대기(시스템 설정, 진행 중 크롤에도 적용)도 함께 보여준다.
     """
     crawl = _load_crawl(request, crawl_id)
+    status_filter = status if status in _CRAWL_PAGE_STATUSES else ""
     with db.connect() as conn:
         counts = db.crawl_page_counts(conn, crawl_id)
-        pages = db.list_crawl_pages(conn, crawl_id)
+        pages = db.list_crawl_pages(conn, crawl_id, status=status_filter or None)
         backoff = crawler.retry_backoff(conn)
+        network_tag = (
+            db.get_network_tag(conn, crawl["network_tag_id"])
+            if crawl["network_tag_id"] else None
+        )
     return templates.TemplateResponse(
         request, "crawl.html",
         {
             "crawl": crawl, "counts": counts, "pages": pages, "merged": merged,
+            "network_tag": network_tag,
+            "status_filter": status_filter, "notice": notice,
             "retry_backoff_labels": [
                 i18n.interval_label(request, s) for s in backoff
             ],
@@ -1619,9 +1710,10 @@ def crawl_status(request: Request, crawl_id: int) -> dict:
 def crawl_cancel(request: Request, crawl_id: int):
     """크롤 취소 — 처리 중인 페이지만 마치고 멈춘다. admin/archiver 전용."""
     _require_archiver(request)
-    _load_crawl(request, crawl_id)
+    crawl = _load_crawl(request, crawl_id)
     with db.connect() as conn:
         db.cancel_crawl(conn, crawl_id)
+    audit.log(request, "크롤 취소: #%d (%s)", crawl_id, crawl["start_url"])
     return RedirectResponse(f"/crawls/{crawl_id}", status_code=303)
 
 
@@ -1629,10 +1721,36 @@ def crawl_cancel(request: Request, crawl_id: int):
 def crawl_retry(request: Request, crawl_id: int):
     """실패한 페이지 일괄 재시도 (크롤이 닫혔으면 다시 연다). admin/archiver 전용."""
     _require_archiver(request)
-    _load_crawl(request, crawl_id)
+    crawl = _load_crawl(request, crawl_id)
     with db.connect() as conn:
         db.retry_failed_crawl_pages(conn, crawl_id)
+    audit.log(
+        request, "크롤 실패 페이지 일괄 재시도: #%d (%s)",
+        crawl_id, crawl["start_url"],
+    )
     return RedirectResponse(f"/crawls/{crawl_id}", status_code=303)
+
+
+@app.post("/crawls/{crawl_id}/pages/{crawl_page_id}/retry")
+def crawl_page_retry(
+    request: Request, crawl_id: int, crawl_page_id: int, status: str = ""
+):
+    """실패한 크롤 페이지 하나 재시도 (끝난 크롤이면 다시 연다). admin/archiver 전용.
+
+    status 는 진행 화면의 페이지 필터 — 재시도 후 같은 필터로 돌아간다.
+    """
+    _require_archiver(request)
+    _load_crawl(request, crawl_id)
+    with db.connect() as conn:
+        row = db.get_failed_crawl_page(conn, crawl_id, crawl_page_id)
+        if row is None:
+            raise HTTPException(404, t(request, "실패 기록 없음"))
+        db.retry_failed_crawl_page(conn, crawl_page_id)
+    audit.log(request, "크롤 페이지 재시도: %s", row["url"])
+    params = {"notice": t(request, "재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.")}
+    if status in _CRAWL_PAGE_STATUSES:
+        params["status"] = status
+    return RedirectResponse(f"/crawls/{crawl_id}?{urlencode(params)}", status_code=303)
 
 
 # ---- 사이트 아카이브 스케줄 (주기적 재크롤) ----
@@ -1667,6 +1785,10 @@ def crawl_schedule_set(
         )
     except ValueError as e:
         raise HTTPException(400, t(request, str(e)))
+    audit.log(
+        request, "크롤 스케줄 변경: %s (주기 %d초%s)", sched["start_url"], seconds,
+        f", 실행 시각 {run_at}" if run_at else "",
+    )
     return RedirectResponse("/schedules", status_code=303)
 
 
@@ -1678,7 +1800,7 @@ def crawl_schedule_next_run(
 ):
     """크롤 스케줄의 다음 실행 시각 변경 (시각 해석은 페이지 스케줄과 동일)."""
     _require_archiver(request)
-    _load_crawl_schedule(request, schedule_id)
+    sched = _load_crawl_schedule(request, schedule_id)
     try:
         dt = datetime.fromisoformat(next_run)
     except ValueError:
@@ -1695,6 +1817,10 @@ def crawl_schedule_next_run(
         crawler.set_crawl_schedule_next_run(schedule_id, dt)
     except ValueError as e:
         raise HTTPException(400, t(request, str(e)))
+    audit.log(
+        request, "크롤 스케줄 다음 실행 변경: %s → %s",
+        sched["start_url"], dt.isoformat(timespec="seconds"),
+    )
     return RedirectResponse("/schedules", status_code=303)
 
 
@@ -1704,6 +1830,7 @@ def crawl_schedule_delete(request: Request, schedule_id: int):
     _require_archiver(request)
     sched = _load_crawl_schedule(request, schedule_id)
     crawler.remove_crawl_schedule(sched["start_url"])
+    audit.log(request, "크롤 스케줄 해제: %s", sched["start_url"])
     return RedirectResponse("/schedules", status_code=303)
 
 

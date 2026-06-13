@@ -1,11 +1,9 @@
 {% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
 {% block title %}{{ site['site_key'] }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <style>
 #pages th:first-child { width: 45%; }
-.pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
-         font-size: 13px; }
-.pager .spacer { flex: 1; }
 .site-title { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
               white-space: nowrap; }
 td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
@@ -20,11 +18,17 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 
 <div class="toolbar">
   <h2 style="margin:0" class="mono">{{ site['site_key'] }}</h2>
+  {% for tag in network_tags %}{{ network_tag_badge(tag['name'], tag['description'], tag['id']) }}{% endfor %}
   {% if site_title %}<span class="site-title" title="{{ site_title }}">{{ site_title }}</span>{% endif %}
   <span class="muted" style="font-size:13px">
     {{ _("페이지 {p}개 · 스냅샷 {s}개 · 크롤 회차 {c}개 · 용량 {size}", p=page_count, s=snapshot_total, c=crawls|length, size=site_bytes|filesize) }}
   </span>
   <span class="spacer"></span>
+  {% if can_archive %}
+  <form class="inline" method="post" action="/sites/{{ site['id'] }}/export">
+    <button type="submit" title="{{ _('소속 페이지·스냅샷을 아카이브 내보내기 파일(tar.gz)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.') }}">{{ _("사이트 내보내기") }}</button>
+  </form>
+  {% endif %}
   {% if can_delete %}
   <form class="inline" method="post" action="/sites/{{ site['id'] }}/delete"
         onsubmit="return confirm({{ (site['site_key'] ~ '\n\n' ~ _('페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', p=page_count, c=crawls|length))|tojson }})">
@@ -38,6 +42,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 
 <h3>{{ _("페이지") }}</h3>
 {% if pages %}
+<div class="table-wrap">
 <table id="pages">
   <thead>
     <tr><th>URL</th><th class="num">{{ _("스냅샷") }}</th><th class="num">{{ _("용량") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
@@ -45,7 +50,8 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   <tbody>
   {% for p in pages %}
     <tr>
-      <td><a href="/page/{{ p['id'] }}">{{ p['url'] }}</a></td>
+      <td><a href="/page/{{ p['id'] }}">{{ p['url'] }}</a>
+        {%- if p['network_tag_name'] %} {{ network_tag_badge(p['network_tag_name'], p['network_tag_description'], p['network_tag_id']) }}{% endif %}</td>
       <td class="num">{{ p['snapshot_count'] }}</td>
       <td class="num mono">{% if page_bytes.get(p['id']) %}{{ page_bytes[p['id']] | filesize }}{% else %}-{% endif %}</td>
       <td class="mono">{% if p['last_taken_at'] %}{{ p['last_taken_at'] | ts }}{% else %}-{% endif %}</td>
@@ -77,6 +83,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 <div class="pager">
   <span class="muted">{{ _("총 {n}건", n=page_count) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
   <form class="inline" method="get" action="/sites/{{ site['id'] }}">
@@ -99,6 +106,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 <p class="muted" style="font-size:13px">
   {{ _("최근 실행이 실패로 끝난 페이지입니다. 크롤 중 실패한 페이지도 포함되며, 재시도가 성공하면 목록에서 사라집니다.") }}
 </p>
+<div class="table-wrap">
 <table id="failed">
   <thead>
     <tr><th>URL</th><th>{{ _("시각") }}</th><th>{{ _("출처") }}</th><th>{{ _("오류") }}</th><th></th></tr>
@@ -138,10 +146,12 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 <h3>{{ _("크롤 회차") }}</h3>
 {% if crawls %}
+<div class="table-wrap">
 <table id="crawls">
   <thead>
     <tr><th>{{ _("시작 URL") }}</th><th>{{ _("범위") }}</th><th class="num">{{ _("페이지") }}</th><th>{{ _("시작") }}</th><th>{{ _("상태") }}</th></tr>
@@ -149,7 +159,8 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   <tbody>
   {% for c in crawls %}
     <tr>
-      <td><a href="/crawls/{{ c['id'] }}">{{ c['start_url'] }}</a></td>
+      <td><a href="/crawls/{{ c['id'] }}">{{ c['start_url'] }}</a>
+        {%- if c['network_tag_name'] %} {{ network_tag_badge(c['network_tag_name'], c['network_tag_description'], c['network_tag_id']) }}{% endif %}</td>
       <td class="mono muted">{{ c['scope_host'] }}{{ c['scope_path'] }}</td>
       <td class="num">{{ c['done_count'] }}{% if c['total_count'] != c['done_count'] %} <span class="muted">/ {{ c['total_count'] }}</span>{% endif %}</td>
       <td class="mono">{{ c['created_at'] | ts }}</td>
@@ -168,6 +179,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="muted">{{ _("크롤 회차가 없습니다 — 새 아카이빙에서 '사이트 전체 아카이브'를 선택하면 만들어집니다.") }}</p>
 {% endif %}
@@ -177,6 +189,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 <p class="muted" style="font-size:13px">
   {{ _("https 아카이빙 때 받은 서버 인증서의 버전 이력입니다. 인증서가 갱신되면 새 버전으로 기록되고 이전 버전은 남습니다.") }}
 </p>
+<div class="table-wrap wide">
 <table id="certificates">
   <thead>
     <tr>
@@ -213,10 +226,12 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 {% if crawl_schedules %}
 <h3>{{ _("크롤 스케줄") }}</h3>
+<div class="table-wrap">
 <table>
   <thead>
     <tr><th>{{ _("시작 URL") }}</th><th>{{ _("주기") }}</th><th>{{ _("다음 실행") }}</th></tr>
@@ -231,6 +246,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   {% endfor %}
   </tbody>
 </table>
+</div>
 <p class="muted" style="font-size:13px">{{ _("스케줄 관리(해제·시각 변경)는") }} <a href="/schedules">{{ _("스케줄") }}</a> {{ _("화면에서 합니다.") }}</p>
 {% endif %}
 

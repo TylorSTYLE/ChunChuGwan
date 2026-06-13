@@ -410,6 +410,24 @@ def test_theme_toggle_present(client):
     assert "wccg-theme" in res.text  # localStorage 키 (사용자 선택 기억)
 
 
+def test_responsive_layout_present(client):
+    """반응형 레이아웃 — 헤더 메뉴 토글·뷰포트 메타·테이블 가로 스크롤 래퍼."""
+    res = client.get("/archives")
+    assert res.status_code == 200
+    assert 'name="viewport"' in res.text  # 모바일 뷰포트 메타
+    assert 'id="nav-toggle"' in res.text  # 좁은 화면용 메뉴 토글 버튼
+    assert 'id="site-nav"' in res.text  # 토글로 여닫는 메뉴 패널
+    assert '<div class="table-wrap">' in res.text  # 데이터 테이블 가로 스크롤 래퍼
+
+
+def test_responsive_diff_stacks_on_mobile(client):
+    """diff 화면 — 좁은 화면에서 side-by-side 를 상하로 쌓는 미디어 쿼리."""
+    res = client.get("/diff/1")
+    assert res.status_code == 200
+    assert "@media (max-width: 719px)" in res.text
+    assert "tr.d-equal td.r" in res.text  # 동일 행은 한 번만 표시
+
+
 def test_time_display_present(client):
     """모든 화면(base.html)에 타임존 기반 시간 변환 스크립트가 있다."""
     res = client.get("/")
@@ -835,14 +853,25 @@ def test_dashboard_period_counts(client):
     assert f'id="stat-recent">{expected_recent}</div>' in res.text
 
 
-def test_dashboard_total_bytes_sums_snapshot_files(client):
-    # fixture 스냅샷 2개의 파일(content.md, page.html, screenshot.png) 합계
-    expected = 0
-    for dir_name in ("2026-06-01T00-00-00", "2026-06-02T00-00-00"):
-        snap_dir = storage.page_dir(
-            "example.com", storage.url_to_slug("https://example.com/post")
-        ) / dir_name
-        expected += sum(f["bytes"] for f in storage.snapshot_files(snap_dir))
+def test_dashboard_total_bytes_is_actual_storage(client):
+    # 총 용량 = 실제 저장공간 — 스냅샷 파일 합이 아니라 DB·자원/문서 CAS 포함
+    expected = config.DB_PATH.stat().st_size + sum(
+        p.stat().st_size
+        for root in (config.SITES_DIR, config.RESOURCES_DIR, config.DOCUMENTS_DIR)
+        if root.is_dir()
+        for p in root.rglob("*")
+        if p.is_file()
+    )
+    # 스냅샷 파일 합산만으로는 도달할 수 없는 값인지 (회귀 가드)
+    snap_only = sum(
+        sum(f["bytes"] for f in storage.snapshot_files(
+            storage.page_dir(
+                "example.com", storage.url_to_slug("https://example.com/post")
+            ) / dir_name
+        ))
+        for dir_name in ("2026-06-01T00-00-00", "2026-06-02T00-00-00")
+    )
+    assert expected > snap_only
     res = client.get("/dashboard")
     assert f'id="stat-bytes">{web_app.templates.env.filters["filesize"](expected)}</div>' in res.text
 

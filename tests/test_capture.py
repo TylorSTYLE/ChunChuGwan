@@ -282,6 +282,106 @@ def test_capture_download_url_raises_download_error(tmp_path):
         thread.join(timeout=5)
 
 
+def test_capture_proceeds_when_subresource_hangs(tmp_path, monkeypatch):
+    """응답 없는 하위 자원이 load 를 막아도 현재 DOM 으로 캡처를 완료한다.
+
+    재현: 본문에 박힌 죽은 외부 이미지(연결이 영영 안 끝나는 호스트) —
+    networkidle·load 둘 다 미도달이지만 DOM 은 이미 파싱된 상태다.
+    """
+    import time
+    from http.server import BaseHTTPRequestHandler
+
+    class _HangingImageHandler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 (http.server 규약)
+            if self.path == "/hang.png":
+                time.sleep(30)  # 응답 없이 매달린다 (요청별 스레드라 격리됨)
+                return
+            body = (
+                '<html><head><meta charset="utf-8"><title>hang</title></head>'
+                '<body><p>매달린 자원 본문</p><img src="/hang.png"></body></html>'
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    monkeypatch.setattr(capture.config, "PAGE_LOAD_TIMEOUT_MS", 2_000)
+    monkeypatch.setattr(capture.config, "RESOURCE_FETCH_TIMEOUT_MS", 2_000)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _HangingImageHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        result = capture.capture(f"http://127.0.0.1:{server.server_address[1]}/", out)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert "매달린 자원 본문" in result.raw_html
+    assert result.http_status is None  # load 미도달 폴백 — 응답 객체 없음
+    assert (out / "screenshot.png").is_file()
+    # 매달린 이미지는 자원별 fetch 타임아웃으로 건너뛰고 원본 URL 이 남는다
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    assert "/hang.png" in page_html
+
+
+def test_capture_completes_despite_busy_network(tmp_path, monkeypatch):
+    """networkidle 에 영영 도달하지 않는 페이지(주기적 폴링)도 load 후 상한 대기로 완료한다.
+
+    재현: 200ms 간격 fetch 폴링 — 네트워크가 잠잠해지는 500ms 구간이 없어
+    networkidle 미도달. load 는 정상 도달이므로 응답 객체(http_status)는
+    유지된 채 짧은 추가 대기 후 진행돼야 한다 (재네비게이션 없음).
+    """
+    import time
+    from http.server import BaseHTTPRequestHandler
+
+    class _PollingHandler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 (http.server 규약)
+            if self.path == "/ping":
+                self.send_response(204)
+                self.end_headers()
+                return
+            body = (
+                '<html><head><meta charset="utf-8"><title>busy</title></head>'
+                "<body><p>폴링 본문</p>"
+                "<script>setInterval(() => fetch('/ping'), 200)</script>"
+                "</body></html>"
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    monkeypatch.setattr(capture.config, "NETWORK_IDLE_TIMEOUT_MS", 1_000)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _PollingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        t0 = time.monotonic()
+        result = capture.capture(f"http://127.0.0.1:{server.server_address[1]}/", out)
+        elapsed = time.monotonic() - t0
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert result.http_status == 200  # load 도달 — 응답 객체 유지
+    assert "폴링 본문" in result.raw_html
+    assert (out / "page.html").is_file()
+    # networkidle 30초 타임아웃 + 재네비게이션 경로였다면 60초 — 상한 대기 확인
+    assert elapsed < 20
+
+
 def test_capture_connect_error_on_closed_port(tmp_path):
     # 아무도 리슨하지 않는 포트 → ERR_CONNECTION_REFUSED → CaptureConnectError
     import socket
