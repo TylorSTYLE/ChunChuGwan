@@ -242,6 +242,22 @@ h3.danger-heading { color: var(--red); }
              placeholder="{{ _('설명 (선택)') }}">
       <button type="submit">{{ _("추가") }}</button>
     </form>
+    {% if network_tags and network_tags|length >= 2 %}
+    <p class="muted" style="font-size:11px; margin:8px 0 4px">
+      {{ _("같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.") }}
+    </p>
+    <form method="post" action="/system/network-tags/merge" class="actions"
+          onsubmit="return confirm({{ _('출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 같은 IP·포트를 가리킬 때만 병합됩니다.')|tojson }})">
+      <select name="source" aria-label="{{ _('출처 태그(삭제됨)') }}" style="font-size:11px">
+        {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
+      </select>
+      <span style="font-size:11px; color:var(--muted)">&rarr;</span>
+      <select name="target" aria-label="{{ _('대상 태그(유지)') }}" style="font-size:11px">
+        {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
+      </select>
+      <button type="submit" style="font-size:11px; padding:1px 8px">{{ _("병합") }}</button>
+    </form>
+    {% endif %}
   </div>
 
   <div class="sys-card">

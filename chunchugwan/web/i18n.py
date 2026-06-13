@@ -818,6 +818,30 @@ _EN: dict[str, str] = {
         "The tag '{name}' is in use and cannot be deleted ({n} reference(s)).",
     "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.":
         "Deleted local network tag '{name}'.",
+    # 로컬 네트워크 태그 병합 (같은 IP:포트의 중복 태그 정리)
+    "같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 "
+    "페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.":
+        "Merges two tags that point to the same private IP and port into one. "
+        "The source tag's pages and crawls move to the target tag, and the "
+        "source tag is deleted.",
+    "출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 "
+    "같은 IP·포트를 가리킬 때만 병합됩니다.":
+        "Merge the source tag into the target tag? The source tag is deleted, "
+        "and the merge only proceeds when both tags point to the same IP and port.",
+    "출처 태그(삭제됨)": "Source tag (deleted)",
+    "대상 태그(유지)": "Target tag (kept)",
+    "병합": "Merge",
+    "같은 태그끼리는 병합할 수 없습니다.": "A tag cannot be merged with itself.",
+    "참조가 없는 태그는 병합할 수 없습니다 — 삭제를 사용하세요.":
+        "A tag with no references cannot be merged — use delete instead.",
+    "두 태그가 같은 사설 네트워크(같은 IP·포트)를 가리킬 때만 "
+    "병합할 수 있습니다.":
+        "Tags can only be merged when they point to the same private network "
+        "(same IP and port).",
+    "'{src}' 태그를 '{tgt}'(으)로 병합했습니다 "
+    "(페이지 {p}개·크롤 {c}개·스케줄 {s}개 이전).":
+        "Merged tag '{src}' into '{tgt}' "
+        "({p} page(s), {c} crawl(s), {s} schedule(s) moved).",
     # 사이트(서브도메인) 단위 아카이브 — 목록·사이트 상세
     "사이트 {n}개": "{n} site(s)",
     "사이트 필터…": "Filter sites…",

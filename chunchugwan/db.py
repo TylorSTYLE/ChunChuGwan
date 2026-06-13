@@ -2575,6 +2575,49 @@ def delete_network_tag(conn: sqlite3.Connection, tag_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def network_tag_site_ids(conn: sqlite3.Connection, tag_id: str) -> set[int]:
+    """태그를 참조하는 pages·crawls·crawl_schedules 의 site_id 집합 (NULL 제외).
+
+    storage.site_key 가 호스트+포트라 같은 IP:포트 = 같은 site_id 다. 두 태그의
+    이 집합을 비교하면 '같은 사설 네트워크'를 가리키는지 판정할 수 있다 (병합 가드용).
+    """
+    rows = conn.execute(
+        """
+        SELECT site_id FROM pages
+         WHERE network_tag_id = ? AND site_id IS NOT NULL
+        UNION
+        SELECT site_id FROM crawls
+         WHERE network_tag_id = ? AND site_id IS NOT NULL
+        UNION
+        SELECT site_id FROM crawl_schedules
+         WHERE network_tag_id = ? AND site_id IS NOT NULL
+        """,
+        (tag_id, tag_id, tag_id),
+    ).fetchall()
+    return {row["site_id"] for row in rows}
+
+
+def merge_network_tags(
+    conn: sqlite3.Connection, source_id: str, target_id: str
+) -> dict[str, int]:
+    """source 태그의 모든 참조를 target 으로 옮긴 뒤 source 태그를 삭제한다.
+
+    pages·crawls·crawl_schedules 의 network_tag_id 를 일괄 갱신하고(테이블별
+    이전 행 수를 dict 로 반환) source 를 지운다. 검증(같은 사이트·미존재·동일
+    태그)은 호출부가 한다 — 여기선 단순 이전이다. UPDATE 가 모두 끝난 뒤
+    DELETE 하므로 FK(foreign_keys=ON) 위반이 없다.
+    """
+    moved: dict[str, int] = {}
+    for table in ("pages", "crawls", "crawl_schedules"):
+        cur = conn.execute(
+            f"UPDATE {table} SET network_tag_id = ? WHERE network_tag_id = ?",
+            (target_id, source_id),
+        )
+        moved[table] = cur.rowcount
+    conn.execute("DELETE FROM network_tags WHERE id = ?", (source_id,))
+    return moved
+
+
 # ---- 설정 (key-value) ----
 # 대시보드에서 변경 가능한 런타임 설정. 환경변수 설정(config.py)과 달리
 # DB 에 저장돼 재시작 없이 반영되고 백업/복원에 포함된다.

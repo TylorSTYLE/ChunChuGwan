@@ -276,6 +276,164 @@ def test_system_delete_unknown_tag_404(client):
     assert res.status_code == 404
 
 
+# ---- 태그 병합 (같은 IP:포트의 중복 태그 정리) ----
+# 같은 사설 IP·포트(= 같은 site_id)를 가리키는 두 태그를 하나로 합친다. 출처
+# 태그의 참조(페이지·크롤·크롤 스케줄)를 대상으로 옮기고 출처는 삭제하며, 두
+# 태그의 site_id 집합이 완전히 같을 때만 허용한다.
+
+
+def test_network_tag_site_ids_collects_across_tables(archive_env, monkeypatch):
+    """태그의 site_id 집합은 페이지·크롤·크롤 스케줄을 모두 모은다 (NULL 제외)."""
+    _fake_capture(monkeypatch)
+    tag_id = _make_tag()
+    pipeline.archive_url("http://192.168.0.10/wiki", network_tag_id=tag_id)
+    crawler.start_crawl("http://192.168.0.11/docs/", network_tag_id=tag_id)
+    crawler.set_crawl_schedule(
+        "http://192.168.0.12/x/", 86400, network_tag_id=tag_id
+    )
+    with db.connect() as conn:
+        # 세 개의 서로 다른 IP = 세 개의 서로 다른 site_id
+        assert len(db.network_tag_site_ids(conn, tag_id)) == 3
+        # 참조가 없는 태그는 빈 집합
+        empty = db.create_network_tag(conn, "빈 태그")
+        assert db.network_tag_site_ids(conn, empty["id"]) == set()
+
+
+def test_merge_moves_all_three_tables(archive_env, monkeypatch):
+    """병합은 페이지·크롤·크롤 스케줄 참조를 모두 대상으로 옮기고 행 수를 반환한다."""
+    _fake_capture(monkeypatch)
+    src = _make_tag("출처")
+    tgt = _make_tag("대상")
+    pipeline.archive_url("http://192.168.0.10/wiki", network_tag_id=src)
+    crawler.start_crawl("http://192.168.0.11/docs/", network_tag_id=src)
+    crawler.set_crawl_schedule("http://192.168.0.12/x/", 86400, network_tag_id=src)
+    with db.connect() as conn:
+        moved = db.merge_network_tags(conn, src, tgt)
+        assert moved == {"pages": 1, "crawls": 1, "crawl_schedules": 1}
+        assert db.count_network_tag_refs(conn, src) == 0
+        assert db.count_network_tag_refs(conn, tgt) == 3
+
+
+def test_merge_deletes_source_tag(archive_env, monkeypatch):
+    """병합 후 출처 태그는 사라지고 대상 태그는 남는다."""
+    _fake_capture(monkeypatch)
+    src = _make_tag("출처")
+    tgt = _make_tag("대상")
+    pipeline.archive_url("http://192.168.0.10/wiki", network_tag_id=src)
+    with db.connect() as conn:
+        db.merge_network_tags(conn, src, tgt)
+        assert db.get_network_tag(conn, src) is None
+        assert db.get_network_tag(conn, tgt) is not None
+
+
+def test_merge_same_site_success(client, monkeypatch):
+    """같은 IP:포트(같은 site_id)의 두 태그는 병합된다 — 출처가 대상으로 흡수."""
+    _fake_capture(monkeypatch)
+    src = _make_tag("출처")
+    tgt = _make_tag("대상")
+    pipeline.archive_url("http://192.168.0.10/a", network_tag_id=src)
+    pipeline.archive_url("http://192.168.0.10/b", network_tag_id=tgt)
+    res = client.post(
+        "/system/network-tags/merge",
+        data={"source": src, "target": tgt},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert "notice=" in res.headers["location"]
+    with db.connect() as conn:
+        assert db.get_network_tag(conn, src) is None
+        assert db.get_network_tag(conn, tgt) is not None
+        assert db.count_network_tag_refs(conn, tgt) == 2
+
+
+def test_merge_different_site_rejected(client, monkeypatch):
+    """다른 IP(다른 site_id)의 태그는 병합 거부 — 둘 다 남는다."""
+    _fake_capture(monkeypatch)
+    src = _make_tag("출처")
+    tgt = _make_tag("대상")
+    pipeline.archive_url("http://192.168.0.10/a", network_tag_id=src)
+    pipeline.archive_url("http://192.168.0.11/b", network_tag_id=tgt)
+    res = client.post(
+        "/system/network-tags/merge",
+        data={"source": src, "target": tgt},
+        follow_redirects=False,
+    )
+    assert "error=" in res.headers["location"]
+    with db.connect() as conn:
+        assert db.get_network_tag(conn, src) is not None
+        assert db.get_network_tag(conn, tgt) is not None
+
+
+def test_merge_partial_overlap_rejected(client, monkeypatch):
+    """부분 겹침(출처가 대상에 없는 IP를 더 가짐)은 거부된다 — 정책 회귀 방지."""
+    _fake_capture(monkeypatch)
+    src = _make_tag("출처")
+    tgt = _make_tag("대상")
+    # 출처 = {192.168.0.10, 192.168.0.11}, 대상 = {192.168.0.10}
+    pipeline.archive_url("http://192.168.0.10/a", network_tag_id=src)
+    pipeline.archive_url("http://192.168.0.11/c", network_tag_id=src)
+    pipeline.archive_url("http://192.168.0.10/b", network_tag_id=tgt)
+    res = client.post(
+        "/system/network-tags/merge",
+        data={"source": src, "target": tgt},
+        follow_redirects=False,
+    )
+    assert "error=" in res.headers["location"]
+    with db.connect() as conn:
+        assert db.get_network_tag(conn, src) is not None
+        assert db.get_network_tag(conn, tgt) is not None
+
+
+def test_merge_same_tag_rejected(client, monkeypatch):
+    """같은 태그끼리는 병합할 수 없다."""
+    _fake_capture(monkeypatch)
+    tag_id = _make_tag()
+    pipeline.archive_url("http://192.168.0.10/a", network_tag_id=tag_id)
+    res = client.post(
+        "/system/network-tags/merge",
+        data={"source": tag_id, "target": tag_id},
+        follow_redirects=False,
+    )
+    assert "error=" in res.headers["location"]
+    with db.connect() as conn:
+        assert db.get_network_tag(conn, tag_id) is not None
+
+
+def test_merge_unknown_tag_404(client):
+    """존재하지 않는 태그 병합은 404."""
+    tag_id = _make_tag()
+    res = client.post(
+        "/system/network-tags/merge",
+        data={"source": tag_id, "target": "no-such-guid"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 404
+
+
+def test_merge_tag_without_refs_rejected(client):
+    """참조가 없는 태그는 병합 불가 (삭제를 쓴다)."""
+    src = _make_tag("출처")
+    tgt = _make_tag("대상")
+    res = client.post(
+        "/system/network-tags/merge",
+        data={"source": src, "target": tgt},
+        follow_redirects=False,
+    )
+    assert "error=" in res.headers["location"]
+    with db.connect() as conn:
+        assert db.get_network_tag(conn, src) is not None
+        assert db.get_network_tag(conn, tgt) is not None
+
+
+def test_system_shows_merge_form_when_two_tags(client):
+    """병합 폼은 태그가 2개 이상일 때만 노출된다."""
+    _make_tag("하나")
+    assert 'name="source"' not in client.get("/system").text
+    _make_tag("둘")
+    page = client.get("/system").text
+    assert 'name="source"' in page and 'name="target"' in page
+
+
 # ---- 새 아카이빙 폼 ----
 
 
