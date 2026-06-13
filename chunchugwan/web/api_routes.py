@@ -19,6 +19,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from .. import auth, config, db, netcheck, storage
+from . import audit
 
 # 스냅샷 파일 응답에서 안내하는 논리 파일 이름 (서빙은 app.snapshot_file 공용)
 _SNAPSHOT_FILE_NAMES = ("page.html", "screenshot", "content.md")
@@ -191,4 +192,6 @@ def api_archive(request: Request, payload: ArchiveRequest, background: Backgroun
     from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
 
     queued = webapp._queue_archive(background, norm, force=payload.force, source="api")
+    if queued:
+        audit.log(request, "새 아카이빙 등록(API): %s", norm)
     return {"queued": queued, "url": norm}

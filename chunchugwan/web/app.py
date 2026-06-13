@@ -36,7 +36,7 @@ from .. import (
     auth, backup, config, crawler, db, deletion, differ, documents, netcheck,
     pipeline, resources, scheduler, storage, system_log,
 )
-from . import api_routes, auth_routes, i18n, permissions, system_routes
+from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
 from .i18n import t
 from .templating import templates
 
@@ -518,6 +518,7 @@ def site_failed_retry(
     if log is None:
         raise HTTPException(404, t(request, "실패 기록 없음"))
     if _queue_archive(background, log["page_url"]):
+        audit.log(request, "실패 작업 재시도: %s", log["page_url"])
         params = {"notice": t(request, "아카이빙이 백그라운드에서 시작되었습니다")}
     else:
         params = {"error": t(request, _BUSY_MSG)}
@@ -536,6 +537,7 @@ def site_crawl_failed_retry(request: Request, site_id: int, crawl_page_id: int):
         if row is None:
             raise HTTPException(404, t(request, "실패 기록 없음"))
         db.retry_failed_crawl_page(conn, crawl_page_id)
+    audit.log(request, "크롤 페이지 재시도: %s", row["url"])
     params = {"notice": t(request, "재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.")}
     return RedirectResponse(f"/sites/{site_id}?{urlencode(params)}", status_code=303)
 
@@ -563,8 +565,10 @@ def site_export(request: Request, site_id: int):
     """
     _require_archiver(request)
     with db.connect() as conn:
-        if db.get_site(conn, site_id) is None:
-            raise HTTPException(404, t(request, "사이트 없음"))
+        site = db.get_site(conn, site_id)
+    if site is None:
+        raise HTTPException(404, t(request, "사이트 없음"))
+    audit.log(request, "사이트 아카이브 내보내기: %s", site["site_key"])
     return system_routes.tar_download(
         lambda dest: backup.export_archive(dest, site_id=site_id), "export"
     )
@@ -595,6 +599,11 @@ def site_delete(request: Request, site_id: int):
     result = deletion.delete_site(site_id)
     if result is None:
         raise HTTPException(404, t(request, "사이트 없음"))
+    audit.log(
+        request, "사이트 삭제: %s (페이지 %d개, 스냅샷 %d개, 크롤 %d개)",
+        result.site_key, result.pages_deleted, result.snapshots_deleted,
+        result.crawls_deleted,
+    )
     params = urlencode({
         "notice": t(
             request,
@@ -797,6 +806,10 @@ def schedule_set(
         scheduler.set_schedule(page["url"], seconds, run_at=run_at or None)
     except ValueError as e:
         raise HTTPException(400, t(request, str(e)))
+    audit.log(
+        request, "스케줄 등록: %s (주기 %d초%s)", page["url"], seconds,
+        f", 실행 시각 {run_at}" if run_at else "",
+    )
     return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
 
 
@@ -833,6 +846,10 @@ def schedule_next_run(
         scheduler.set_next_run(page["url"], dt)
     except ValueError as e:
         raise HTTPException(400, t(request, str(e)))
+    audit.log(
+        request, "스케줄 다음 실행 변경: %s → %s",
+        page["url"], dt.isoformat(timespec="seconds"),
+    )
     return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
 
 
@@ -847,6 +864,7 @@ def schedule_delete(
     if page is None:
         raise HTTPException(404, t(request, "페이지 없음"))
     scheduler.remove_schedule(page["url"])
+    audit.log(request, "스케줄 해제: %s", page["url"])
     return RedirectResponse(_schedule_redirect(page_id, next_path), status_code=303)
 
 
@@ -1453,6 +1471,14 @@ def _archive_site(
             {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
         )
         return RedirectResponse(f"/archive/new?{params}", status_code=303)
+    audit.log(
+        request, "사이트 아카이브 등록: %s → 크롤 #%d%s", url, crawl["id"],
+        " (진행 중인 크롤로 병합)" if merged else "",
+    )
+    if interval_seconds:
+        audit.log(
+            request, "크롤 스케줄 등록: %s (주기 %d초)", url, interval_seconds
+        )
     suffix = "?merged=1" if merged else ""
     return RedirectResponse(f"/crawls/{crawl['id']}{suffix}", status_code=303)
 
@@ -1499,11 +1525,15 @@ def archive_new(
             run_at=(run_at or None) if seconds else None,
             network_tag_id=tag_id,
         )
-    _queue_archive(
+    if _queue_archive(
         background, norm,
         interval_seconds=seconds or None, run_at=(run_at or None) if seconds else None,
         network_tag_id=tag_id,
-    )
+    ):
+        audit.log(
+            request, "새 아카이빙 등록: %s%s", norm,
+            f" (주기 {seconds}초)" if seconds else "",
+        )
     return RedirectResponse(f"/archives?queued={quote(norm, safe='')}", status_code=303)
 
 
@@ -1519,7 +1549,11 @@ def rearchive(
         page = db.get_page_by_id(conn, page_id)
     if page is None:
         raise HTTPException(404, t(request, "페이지 없음"))
-    _queue_archive(background, page["url"], force=force)
+    if _queue_archive(background, page["url"], force=force):
+        audit.log(
+            request, "재아카이빙 등록: %s%s", page["url"],
+            " (강제)" if force else "",
+        )
     return RedirectResponse(url=f"/page/{page_id}?queued=1", status_code=303)
 
 
@@ -1544,6 +1578,8 @@ def log_retry(
     if log["status"] != "error":
         raise HTTPException(400, t(request, "실패한 로그만 재시도할 수 있습니다"))
     queued = _queue_archive(background, log["url"])
+    if queued:
+        audit.log(request, "실패 로그 재시도: %s", log["url"])
     # 필터를 유지한 채 로그 화면으로 복귀 — 내부 /logs 경로만 허용 (open redirect 방지)
     if not next_url.startswith("/logs"):
         next_url = "/logs"
@@ -1570,6 +1606,10 @@ def page_delete(request: Request, page_id: int):
             f"/archives?error={quote(t(request, _BUSY_MSG), safe='')}", status_code=303
         )
     result = deletion.delete_page(page_id)
+    audit.log(
+        request, "페이지 삭제: %s (스냅샷 %d개)",
+        result.url, result.snapshots_deleted,
+    )
     msg = t(request, "삭제됨: {url} (스냅샷 {n}개)",
             url=result.url, n=result.snapshots_deleted)
     return RedirectResponse(
@@ -1592,6 +1632,9 @@ def snapshot_delete(request: Request, snapshot_id: int):
             status_code=303,
         )
     deletion.delete_snapshot(snapshot_id)
+    audit.log(
+        request, "스냅샷 삭제: %s (%s)", snap["page_url"], snap["taken_at"]
+    )
     msg = t(request, "스냅샷 삭제됨: {t}", t=snap["taken_at"])
     return RedirectResponse(
         f"/page/{snap['page_id']}?notice={quote(msg, safe='')}", status_code=303
@@ -1667,9 +1710,10 @@ def crawl_status(request: Request, crawl_id: int) -> dict:
 def crawl_cancel(request: Request, crawl_id: int):
     """크롤 취소 — 처리 중인 페이지만 마치고 멈춘다. admin/archiver 전용."""
     _require_archiver(request)
-    _load_crawl(request, crawl_id)
+    crawl = _load_crawl(request, crawl_id)
     with db.connect() as conn:
         db.cancel_crawl(conn, crawl_id)
+    audit.log(request, "크롤 취소: #%d (%s)", crawl_id, crawl["start_url"])
     return RedirectResponse(f"/crawls/{crawl_id}", status_code=303)
 
 
@@ -1677,9 +1721,13 @@ def crawl_cancel(request: Request, crawl_id: int):
 def crawl_retry(request: Request, crawl_id: int):
     """실패한 페이지 일괄 재시도 (크롤이 닫혔으면 다시 연다). admin/archiver 전용."""
     _require_archiver(request)
-    _load_crawl(request, crawl_id)
+    crawl = _load_crawl(request, crawl_id)
     with db.connect() as conn:
         db.retry_failed_crawl_pages(conn, crawl_id)
+    audit.log(
+        request, "크롤 실패 페이지 일괄 재시도: #%d (%s)",
+        crawl_id, crawl["start_url"],
+    )
     return RedirectResponse(f"/crawls/{crawl_id}", status_code=303)
 
 
@@ -1698,6 +1746,7 @@ def crawl_page_retry(
         if row is None:
             raise HTTPException(404, t(request, "실패 기록 없음"))
         db.retry_failed_crawl_page(conn, crawl_page_id)
+    audit.log(request, "크롤 페이지 재시도: %s", row["url"])
     params = {"notice": t(request, "재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.")}
     if status in _CRAWL_PAGE_STATUSES:
         params["status"] = status
@@ -1736,6 +1785,10 @@ def crawl_schedule_set(
         )
     except ValueError as e:
         raise HTTPException(400, t(request, str(e)))
+    audit.log(
+        request, "크롤 스케줄 변경: %s (주기 %d초%s)", sched["start_url"], seconds,
+        f", 실행 시각 {run_at}" if run_at else "",
+    )
     return RedirectResponse("/schedules", status_code=303)
 
 
@@ -1747,7 +1800,7 @@ def crawl_schedule_next_run(
 ):
     """크롤 스케줄의 다음 실행 시각 변경 (시각 해석은 페이지 스케줄과 동일)."""
     _require_archiver(request)
-    _load_crawl_schedule(request, schedule_id)
+    sched = _load_crawl_schedule(request, schedule_id)
     try:
         dt = datetime.fromisoformat(next_run)
     except ValueError:
@@ -1764,6 +1817,10 @@ def crawl_schedule_next_run(
         crawler.set_crawl_schedule_next_run(schedule_id, dt)
     except ValueError as e:
         raise HTTPException(400, t(request, str(e)))
+    audit.log(
+        request, "크롤 스케줄 다음 실행 변경: %s → %s",
+        sched["start_url"], dt.isoformat(timespec="seconds"),
+    )
     return RedirectResponse("/schedules", status_code=303)
 
 
@@ -1773,6 +1830,7 @@ def crawl_schedule_delete(request: Request, schedule_id: int):
     _require_archiver(request)
     sched = _load_crawl_schedule(request, schedule_id)
     crawler.remove_crawl_schedule(sched["start_url"])
+    audit.log(request, "크롤 스케줄 해제: %s", sched["start_url"])
     return RedirectResponse("/schedules", status_code=303)
 
 
