@@ -388,9 +388,10 @@ _EN: dict[str, str] = {
     "복원": "Restore",
     "위험 구역": "Danger zone",
     "아카이브 내보내기": "Archive export",
-    "페이지·스냅샷·확인 기록과 스냅샷 파일만 담습니다 (인증 데이터·실행 로그 제외). 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.":
-        "Contains only pages, snapshots, checks, and snapshot files (no auth data "
-        "or run logs). Use this to move or merge archives between instances.",
+    "페이지·스냅샷·확인 기록·크롤 회차·인증서·아카이브 로그와 스냅샷 파일을 담습니다 (인증 데이터 제외). 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.":
+        "Contains pages, snapshots, checks, crawl runs, certificates, archive "
+        "logs, and snapshot files (no auth data). Use this to move or merge "
+        "archives between instances.",
     "내보내기 다운로드": "Download export",
     "아카이브 가져오기": "Archive import",
     "가져오기": "Import",
@@ -415,9 +416,10 @@ _EN: dict[str, str] = {
     "복원 완료 (백업: {created_at}, 페이지 {pages}개, 스냅샷 {snapshots}개)":
         "Restore complete (backup: {created_at}, {pages} pages, {snapshots} snapshots)",
     "가져오기 실패: {e}": "Import failed: {e}",
-    "가져오기 완료 [{mode}]: 페이지 +{pages}, 스냅샷 +{snapshots} (스킵 {skipped}), 확인 기록 +{checks}":
+    "가져오기 완료 [{mode}]: 페이지 +{pages}, 스냅샷 +{snapshots} (스킵 {skipped}), 확인 기록 +{checks}, 크롤 +{crawls}, 인증서 +{certs}, 로그 +{logs}":
         "Import complete [{mode}]: pages +{pages}, snapshots +{snapshots} "
-        "(skipped {skipped}), checks +{checks}",
+        "(skipped {skipped}), checks +{checks}, crawls +{crawls}, "
+        "certificates +{certs}, logs +{logs}",
     "알 수 없는 모드: {mode}": "Unknown mode: {mode}",
     # ---- 사이트 아카이브 설정 (system) ----
     "사이트 아카이브 설정": "Site archive settings",

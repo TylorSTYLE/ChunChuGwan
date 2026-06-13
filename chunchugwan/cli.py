@@ -649,7 +649,8 @@ def restore(src: Path, yes: bool) -> None:
 @main.command()
 @click.argument("dest", type=click.Path(path_type=Path), default=".", required=False)
 def export(dest: Path) -> None:
-    """아카이브 데이터만 내보내기 — 페이지·스냅샷·확인 기록 + 파일 (인증·로그 제외)."""
+    """아카이브 데이터만 내보내기 — 페이지·스냅샷·확인 기록·크롤 회차·인증서·
+    아카이브 로그 + 파일 (인증 데이터 제외)."""
     try:
         out = backup_mod.export_archive(dest)
     except OSError as e:
@@ -679,7 +680,8 @@ def import_cmd(src: Path, mode: str, yes: bool) -> None:
     click.echo(
         f"가져오기 완료 [{mode}]: 페이지 +{result.pages_added}, "
         f"스냅샷 +{result.snapshots_added} (스킵 {result.snapshots_skipped}), "
-        f"확인 기록 +{result.checks_added}"
+        f"확인 기록 +{result.checks_added}, 크롤 +{result.crawls_added}, "
+        f"인증서 +{result.certificates_added}, 로그 +{result.logs_added}"
     )
 
 

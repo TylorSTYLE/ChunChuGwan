@@ -42,10 +42,11 @@
   `POST /sites/{id}/crawl-failed/{cp_id}/retry` (admin/archiver 전용) — 행을
   pending 으로 되돌려 크롤러가 다시 집어가고, 끝난 크롤이면 다시 연다.
   사이트 내보내기(`POST /sites/{id}/export`, admin/archiver 전용)는 소속
-  페이지·스냅샷·확인 기록과 참조 중인 공유 자원·문서 CAS 파일만 담은
-  tar.gz 를 다운로드한다 — 형식은 전체 내보내기(`/system/export`)와 같아
-  가져오기(웹 화면·`wccg import`)로 복원할 수 있고, 파일명에 사이트 키가
-  붙는다. 사이트 삭제(`POST /sites/{id}/delete`,
+  페이지·스냅샷·확인 기록·크롤 회차·사이트 인증서·아카이브 로그와 참조
+  중인 공유 자원·문서 CAS 파일만 담은 tar.gz 를 다운로드한다 — 형식은
+  전체 내보내기(`/system/export`)와 같아 가져오기(웹 화면·`wccg import`)로
+  복원할 수 있고, 파일명에 사이트 키가 붙는다. 페이지 행이 생기기 전에
+  실패한 로그(page_id NULL)와 로컬 네트워크 태그는 옮겨지지 않는다. 사이트 삭제(`POST /sites/{id}/delete`,
   admin/archiver 전용)는 소속 페이지·크롤 회차·크롤 스케줄을 일괄 삭제 —
   소속 페이지가 아카이빙 중이거나 크롤이 진행 중이면 거부. 진행 중 작업
   폴링은 목록 화면과 동일. 인증서 섹션 — https 아카이빙 때 받은 서버
