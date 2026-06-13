@@ -411,13 +411,17 @@ def test_theme_toggle_present(client):
 
 
 def test_responsive_layout_present(client):
-    """반응형 레이아웃 — 헤더 메뉴 토글·뷰포트 메타·테이블 가로 스크롤 래퍼."""
+    """반응형 레이아웃 — 헤더 메뉴 토글·뷰포트 메타·테이블 래퍼(좁은 화면 카드 전환)."""
     res = client.get("/archives")
     assert res.status_code == 200
     assert 'name="viewport"' in res.text  # 모바일 뷰포트 메타
     assert 'id="nav-toggle"' in res.text  # 좁은 화면용 메뉴 토글 버튼
     assert 'id="site-nav"' in res.text  # 토글로 여닫는 메뉴 패널
-    assert '<div class="table-wrap">' in res.text  # 데이터 테이블 가로 스크롤 래퍼
+    # 데이터 표 래퍼 — 넓은 화면 가로 스크롤, 좁은 화면(≤599px) 행마다 카드 전환
+    assert '<div class="table-wrap cards">' in res.text
+    # 카드 메커니즘은 base.html 에 있어 모든 화면에 실린다 — CSS 와 헤더명 자동 라벨러 JS
+    assert ".table-wrap.cards > table > tbody > tr.cardrow" in res.text
+    assert 'setAttribute("data-label"' in res.text
 
 
 def test_responsive_diff_stacks_on_mobile(client):

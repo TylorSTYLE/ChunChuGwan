@@ -207,6 +207,7 @@ h3.danger-heading { color: var(--red); }
       {{ _("사설 IP 대역(로컬 네트워크)의 웹서버를 아카이빙할 때 어느 네트워크인지 구분하는 태그입니다. 사설 대역 주소는 태그를 지정해야 아카이빙할 수 있고, 루프백 주소는 항상 아카이빙할 수 없습니다. ID(GUID)는 자동 발급됩니다.") }}
     </p>
     {% if network_tags %}
+    <div class="table-wrap cards">
     <table style="font-size:12px; border-collapse:collapse; width:100%">
       <thead>
         <tr style="text-align:left; color:var(--muted)">
@@ -232,6 +233,7 @@ h3.danger-heading { color: var(--red); }
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
     <p class="muted" style="font-size:12px">{{ _("등록된 태그가 없습니다 — 사설 IP 대역 아카이빙이 모두 거부됩니다.") }}</p>
     {% endif %}

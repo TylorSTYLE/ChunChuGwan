@@ -138,6 +138,38 @@ header .spacer { flex: 1; }
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .table-wrap > table { min-width: 640px; }
 .table-wrap.wide > table { min-width: 920px; }
+/* 좁은 화면(≤599px) — .table-wrap.cards 의 다열 표는 가로 스크롤 대신 행마다
+   카드로 쌓는다. 헤더를 숨기고 하단 스크립트가 각 셀에 헤더명을 data-label 로
+   붙여 "라벨 — 값" 으로 세로 정렬한다. 외곽 표만 건드리도록 직계 자식 선택자(>)
+   로 한정 — 펼침(detail) 행에 중첩된 표(steps-table)·자체 thead 는 그대로 둔다.
+   셀 수가 헤더와 다른 행(펼침 행 등)은 스크립트가 .cardrow 를 안 붙여 제외된다 */
+@media (max-width: 599px) {
+  .table-wrap.cards { overflow-x: visible; }
+  .table-wrap.cards > table { min-width: 0; }
+  .table-wrap.cards > table > thead { display: none; }
+  .table-wrap.cards > table > tbody > tr.cardrow {
+    display: block; border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 11px; margin-bottom: 8px; }
+  .table-wrap.cards > table > tbody > tr.cardrow > td {
+    display: flex; gap: 12px; align-items: baseline; justify-content: space-between;
+    padding: 4px 0; border-bottom: none; }
+  .table-wrap.cards > table > tbody > tr.cardrow > td::before {
+    content: attr(data-label); flex: none; max-width: 45%; text-align: left;
+    color: var(--muted); font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .04em; }
+  /* 첫 열은 카드 제목 — 라벨을 위에 두고 링크·제목·배지를 블록으로 쌓는다
+     (한 줄에 몰리지 않게). 나머지 열은 "라벨 — 값" 한 줄 정렬 */
+  .table-wrap.cards > table > tbody > tr.cardrow > td:first-child {
+    display: block; padding: 2px 0 6px; }
+  .table-wrap.cards > table > tbody > tr.cardrow > td:first-child::before {
+    display: block; max-width: none; margin-bottom: 3px; }
+  /* 헤더가 빈 열(작업 버튼 등) — 라벨 없이 값만 오른쪽에 */
+  .table-wrap.cards > table > tbody > tr.cardrow > td:not([data-label]) {
+    justify-content: flex-end; }
+  .table-wrap.cards > table > tbody > tr.cardrow > td:not([data-label])::before {
+    content: none; }
+  .table-wrap.cards > table > tbody > tr.cardrow > td:empty { display: none; }
+}
 .pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
          font-size: 13px; flex-wrap: wrap; }
 .pager .spacer { flex: 1; }
@@ -276,6 +308,28 @@ button.danger:hover { background: var(--red-hover); }
     var opts = { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
                  hour: "2-digit", minute: "2-digit", hour12: false };
     el.value = d.toLocaleString("sv-SE", opts).replace(", ", "T").slice(0, 16);
+  });
+})();
+/* 반응형 카드 테이블 — .table-wrap.cards 안 외곽 표의 헤더 텍스트를 복사해
+   각 본문 셀에 data-label 로 붙이고 .cardrow 를 표시한다. 헤더를 그대로 쓰므로
+   번역·열 구성 변경에 자동으로 따라간다. 셀 수가 헤더 수와 다른 행(펼침 detail
+   행 등)은 건너뛰어 카드로 만들지 않는다. CSS 는 ≤599px 에서만 적용된다 */
+(function () {
+  document.querySelectorAll(".table-wrap.cards > table").forEach(function (table) {
+    var head = table.tHead;
+    if (!head || !head.rows.length) return;
+    var labels = Array.prototype.map.call(head.rows[0].cells, function (th) {
+      return th.textContent.trim();
+    });
+    Array.prototype.forEach.call(table.tBodies, function (body) {
+      Array.prototype.forEach.call(body.rows, function (tr) {
+        if (tr.cells.length !== labels.length) return;
+        tr.classList.add("cardrow");
+        Array.prototype.forEach.call(tr.cells, function (td, i) {
+          if (labels[i]) td.setAttribute("data-label", labels[i]);
+        });
+      });
+    });
   });
 })();
 </script>
