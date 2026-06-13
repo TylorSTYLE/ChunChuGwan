@@ -172,6 +172,10 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
 - `pages` — 정규화된 URL 단위 (1 URL = 1 row). 사설 대역 페이지는
   `network_tag_id` 로 로컬 네트워크 태그를 참조 (crawls·crawl_schedules 도
   같은 컬럼 보유 — 크롤 페이지·스케줄 재실행에 태그가 이어진다).
+  `credential_id` 는 아카이빙 시 쓸 로그인 자격증명(`site_credentials`)을
+  가리킨다 — 새 아카이빙 폼에서 도메인의 자격증명을 골라 연결하면 저장되고
+  재아카이빙·스케줄에도 이어진다 (network_tag_id 와 같은 경로로
+  `archive_url`→`get_or_create_page` 가 설정, 자격증명 삭제 시 NULL).
   명시적 http URL 은 신규 등록 시 https 지원(유효 인증서 + 응답 <400,
   HSTS 의 리다이렉트 포함)을 확인해 https 로 승격한다
   (`pipeline.upgrade_http_to_https` — 크롤·크롤 스케줄 등록도 동일,
@@ -258,8 +262,19 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   암호화한 암호문(`secret`)만 저장 (`crypto.py` — 원칙 6 예외, replay 위해
   복원 가능). 관리자 전용 `/sites/{id}/credentials`(+ 새 아카이빙 화면의
   선택 섹션)에서 관리하고 쓰기는 `credentials.py` 코어 모듈을 거친다.
-  사이트 prune·삭제 시 함께 정리(FK).
-  캡처 연동(아카이빙 시 실제 로그인 사용)은 이후 단계
+  사이트 prune·삭제 시 함께 정리(FK), 삭제 시 이 자격증명을 연결한
+  `pages.credential_id` 도 NULL 로 끊는다. 새 아카이빙 폼은 입력 URL 의
+  도메인 자격증명을 조회(`/archive/credentials`)해 골라 페이지에 연결할 수
+  있다. 아카이빙 시 캡처가 페이지의 자격증명을 reveal 해 Playwright
+  컨텍스트에 종류별로 주입한다 — http_basic→http_credentials,
+  session→storage_state, jwt→대상 origin 요청에만 Authorization 헤더
+  (context.route). 자격증명이 페이지의 서드파티 하위 자원(CDN 등)으로 새지
+  않게 모두 **대상 origin 으로 스코프**한다 (`capture._context_options`).
+  키 부재·복호화 실패·삭제된 자격증명이면 인증 없이 진행한다(graceful).
+  크롤(사이트 전체)은 `crawls.credential_id`/`crawl_schedules.credential_id` 로
+  전 페이지에 적용하고(network_tag_id 와 같은 경로), 문서 다운로드는 httpx 에
+  종류별 인증을 싣는다 (`credentials.httpx_auth` — Basic/Bearer 는 Authorization
+  헤더, 세션은 쿠키; 모두 대상 origin 으로 스코프해 서드파티 문서로 누수 방지)
 
 ## 코딩 컨벤션
 
