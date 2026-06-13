@@ -159,9 +159,12 @@
   아카이브 설정(`POST /system/crawl-settings` — 크롤 기본 옵션 3종 + 실패
   재시도 대기 쉼표 목록, 대기 횟수 + 1 = 페이지당 최대 시도. `settings`
   테이블, 재시도 대기는 진행 중 크롤에도 즉시 적용)·로컬 네트워크 태그
-  (`POST /system/network-tags`, `POST /system/network-tags/{id}/delete` —
-  사설 IP 대역 아카이빙을 허용하는 태그. id 는 GUID 자동 발급, 이름은
-  유일·60자, 설명 200자. 페이지·크롤·크롤 스케줄이 참조 중이면 삭제 거부).
+  (`POST /system/network-tags`, `POST /system/network-tags/{id}/delete`,
+  `POST /system/network-tags/merge` — 사설 IP 대역 아카이빙을 허용하는 태그.
+  id 는 GUID 자동 발급, 이름은 유일·60자, 설명 200자. 페이지·크롤·크롤
+  스케줄이 참조 중이면 삭제 거부. 병합은 출처(source)·대상(target) 두 태그가
+  같은 사설 IP·포트(= 같은 site_id) 집합을 가리킬 때만 허용 — 출처의 참조를
+  대상으로 옮기고 출처를 삭제한다. 폼은 태그가 2개 이상일 때만 보인다).
   백업에 인증 데이터가 포함되므로 인증이 켜진 환경에서는 관리자 전용.
 - **사용자** (users) — 관리자 전용 사용자 관리. 권한 조정(권한없음 가입자
   승인 = 권한 부여), 차단 시 세션 즉시 무효화, 최초 관리자는 변경 불가.
