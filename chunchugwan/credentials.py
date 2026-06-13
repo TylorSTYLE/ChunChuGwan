@@ -8,9 +8,11 @@
 종류(kind)는 확장형:
 - http_basic : HTTP 기본/다이제스트 인증 (username, password)
 - session    : 브라우저 세션 상태 storage_state (쿠키·localStorage JSON)
+- jwt        : Bearer 토큰(JWT 등) — 캡처 시 Authorization: Bearer 헤더로 주입
 
 다음 단계(캡처 연동)에서 reveal() 로 payload 를 꺼내 Playwright 컨텍스트에
-주입한다 — 이 모듈은 아직 캡처를 호출하지 않는다(관리만).
+주입한다 — http_basic→http_credentials, session→storage_state,
+jwt→extra_http_headers. 이 모듈은 아직 캡처를 호출하지 않는다(관리만).
 """
 from __future__ import annotations
 
@@ -22,18 +24,21 @@ from . import crypto, db
 # 지원하는 자격증명 종류
 KIND_HTTP_BASIC = "http_basic"
 KIND_SESSION = "session"
-KINDS = (KIND_HTTP_BASIC, KIND_SESSION)
+KIND_JWT = "jwt"
+KINDS = (KIND_HTTP_BASIC, KIND_SESSION, KIND_JWT)
 
 # 종류별 사람이 읽는 라벨 (i18n 키 — 한국어 원문이 곧 메시지 키)
 KIND_LABELS = {
     KIND_HTTP_BASIC: "HTTP 기본 인증",
     KIND_SESSION: "세션 쿠키",
+    KIND_JWT: "JWT (Bearer 토큰)",
 }
 
 MAX_LABEL_LENGTH = 50
 MAX_USERNAME_LENGTH = 200
 MAX_PASSWORD_LENGTH = 1000
 MAX_SESSION_BYTES = 256 * 1024   # storage_state JSON 상한 (256KB)
+MAX_JWT_LENGTH = 8192            # Bearer 토큰(JWT) 길이 상한
 
 
 class CredentialError(ValueError):
@@ -90,6 +95,17 @@ def build_payload(kind: str, form: dict) -> dict:
                 "세션 상태 JSON 형식이 아닙니다 (cookies 키가 필요합니다)."
             )
         return {"storage_state": data}
+
+    if kind == KIND_JWT:
+        token = (form.get("token") or "").strip()
+        if not token:
+            raise CredentialError("토큰을 입력하세요.")
+        if len(token) > MAX_JWT_LENGTH:
+            raise CredentialError(f"토큰은 {MAX_JWT_LENGTH}자 이하여야 합니다.")
+        # 공백·줄바꿈 금지 — Authorization 헤더 주입(캡처 연동) 위험 + 붙여넣기 실수
+        if any(ch.isspace() for ch in token):
+            raise CredentialError("토큰에 공백·줄바꿈을 넣을 수 없습니다.")
+        return {"token": token}
 
     raise CredentialError("잘못된 자격증명 종류입니다.")
 

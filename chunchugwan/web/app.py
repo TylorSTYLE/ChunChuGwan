@@ -668,6 +668,7 @@ def site_credentials_create(
     username: str = Form(""),
     password: str = Form(""),
     storage_state: str = Form(""),
+    token: str = Form(""),
 ):
     """로그인 자격증명 등록 — 입력 검증 → 암호화 저장 → 감사 로그. 관리자 전용.
 
@@ -695,6 +696,7 @@ def site_credentials_create(
                 "username": username,
                 "password": password,
                 "storage_state": storage_state,
+                "token": token,
             },
         )
     except credentials.CredentialError as e:
@@ -1526,6 +1528,11 @@ def archive_new_form(request: Request, error: str = "", url: str = ""):
         {
             "error": error, "url": url, "interval_options": _SCHEDULE_OPTIONS,
             "network_tags": network_tags,
+            "secret_key_configured": crypto.is_configured(),
+            "credential_kinds": [
+                {"value": k, "label": credentials.kind_label(k)}
+                for k in credentials.KINDS
+            ],
             "crawl_defaults": {
                 "max_pages": defaults["max_pages"],
                 "max_depth": defaults["max_depth"],
@@ -1608,6 +1615,71 @@ def _archive_site(
     return RedirectResponse(f"/crawls/{crawl['id']}{suffix}", status_code=303)
 
 
+def _default_credential_label(kind: str, username: str) -> str:
+    """새 아카이빙 폼에서 라벨을 비웠을 때의 기본 라벨 (DB 에 그대로 저장)."""
+    if kind == credentials.KIND_HTTP_BASIC and username.strip():
+        return username.strip()
+    if kind == credentials.KIND_SESSION:
+        return "세션"
+    if kind == credentials.KIND_JWT:
+        return "JWT"
+    return "로그인"
+
+
+def _store_archive_credential(
+    request: Request, norm: str, *,
+    enabled: bool, kind: str, label: str,
+    username: str, password: str, storage_state: str, token: str = "",
+) -> str | None:
+    """새 아카이빙 폼에서 받은 로그인 자격증명을 사이트에 등록 (관리자 전용, 선택).
+
+    체크 안 했거나 비관리자면 아무것도 안 하고 None. 입력 오류면 사용자에게
+    보일 한국어 메시지를, 성공이면 사이트를 확보(get_or_create_site)하고
+    자격증명을 저장한 뒤 None 을 반환한다. 자격증명은 관리 화면과 같은
+    credentials 코어 모듈을 거쳐 암호화 저장된다.
+    """
+    if not enabled or not permissions.system_allowed(request.state.user):
+        return None
+    if not crypto.is_configured():
+        return t(request, "WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.")
+    if kind not in credentials.KINDS:
+        return t(request, "잘못된 자격증명 종류입니다.")
+    try:
+        payload = credentials.build_payload(
+            kind,
+            {
+                "username": username, "password": password,
+                "storage_state": storage_state, "token": token,
+            },
+        )
+    except credentials.CredentialError as exc:
+        return t(request, str(exc))
+    label = label.strip() or _default_credential_label(kind, username)
+    label_error = credentials.validate_label(label)
+    if label_error is not None:
+        return t(request, label_error)
+    site_key = storage.site_key(norm)
+    with db.connect() as conn:
+        existing = db.get_site_by_key(conn, site_key)
+        if existing is not None and db.get_site_credential_by_label(
+            conn, existing["id"], label
+        ) is not None:
+            return t(
+                request,
+                "이 사이트에 이미 같은 이름의 자격증명이 있습니다: {name}", name=label,
+            )
+        site_id = db.get_or_create_site(conn, site_key)
+        credentials.add(
+            conn, site_id, label, kind, payload,
+            created_by=request.state.user["id"] if request.state.user else None,
+        )
+    audit.log(
+        request, "새 아카이빙에서 로그인 자격증명 등록: %s '%s' (%s)",
+        site_key, label, kind,
+    )
+    return None
+
+
 @app.post("/archive")
 def archive_new(
     request: Request,
@@ -1622,6 +1694,13 @@ def archive_new(
     custom_unit: str = Form("h"),
     run_at: str = Form(""),
     network_tag: str = Form(""),
+    add_credential: str = Form(""),
+    cred_kind: str = Form(""),
+    cred_label: str = Form(""),
+    cred_username: str = Form(""),
+    cred_password: str = Form(""),
+    cred_storage_state: str = Form(""),
+    cred_token: str = Form(""),
 ):
     """새 URL 아카이빙. 검증은 동기로, 캡처·주기 등록(interval>0)은 백그라운드로.
 
@@ -1642,6 +1721,15 @@ def archive_new(
         params = urlencode(
             {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
         )
+        return RedirectResponse(f"/archive/new?{params}", status_code=303)
+    cred_error = _store_archive_credential(
+        request, norm, enabled=bool(add_credential), kind=cred_kind.strip(),
+        label=cred_label, username=cred_username, password=cred_password,
+        storage_state=cred_storage_state, token=cred_token,
+    )
+    if cred_error is not None:
+        # 비밀번호가 쿼리스트링·로그에 실리지 않게 url 만 보존한다
+        params = urlencode({"error": cred_error, "url": url})
         return RedirectResponse(f"/archive/new?{params}", status_code=303)
     if site:
         return _archive_site(
