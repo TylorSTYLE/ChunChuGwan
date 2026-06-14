@@ -156,12 +156,23 @@ def test_build_payload_http_basic(tmp_db):
 
 
 def test_build_payload_session(tmp_db):
-    state = '{"cookies": [{"name": "s", "value": "1"}], "origins": []}'
+    state = '{"cookies": [{"name": "s", "value": "1", "domain": "ex.com", "path": "/"}], "origins": []}'
     p = credentials.build_payload("session", {"storage_state": state})
     assert p["storage_state"]["cookies"][0]["name"] == "s"
     for bad in ("", "not json", '{"no": "cookies"}', "[]"):
         with pytest.raises(credentials.CredentialError):
             credentials.build_payload("session", {"storage_state": bad})
+
+
+def test_build_payload_session_normalizes_cookies(tmp_db):
+    # path 가 빠진 쿠키는 "/" 로 채운다 (브라우저/확장 내보내기 흔한 누락)
+    state = '{"cookies": [{"name": "s", "value": "1", "domain": "ex.com"}]}'
+    p = credentials.build_payload("session", {"storage_state": state})
+    assert p["storage_state"]["cookies"][0]["path"] == "/"
+    # domain·url 둘 다 없는 쿠키는 명확한 오류로 거부 (Playwright 가 거부하는 형태)
+    bad = '{"cookies": [{"name": "s", "value": "1"}]}'
+    with pytest.raises(credentials.CredentialError):
+        credentials.build_payload("session", {"storage_state": bad})
 
 
 def test_build_payload_jwt(tmp_db):
@@ -261,7 +272,7 @@ def test_create_http_basic(client):
 def test_create_session(client):
     _login_admin(client)
     sid = _sid()
-    state = '{"cookies": [{"name": "sid", "value": "abc"}], "origins": []}'
+    state = '{"cookies": [{"name": "sid", "value": "abc", "domain": "ex.com", "path": "/"}], "origins": []}'
     r = client.post(
         f"/sites/{sid}/credentials",
         data={"label": "sess", "kind": "session", "storage_state": state},
@@ -451,7 +462,7 @@ def test_archive_stores_credential_for_existing_site(client, monkeypatch):
 def test_archive_stores_session_credential(client, monkeypatch):
     _stub_archive(monkeypatch)
     _login_admin(client)
-    state = '{"cookies": [{"name": "s", "value": "1"}], "origins": []}'
+    state = '{"cookies": [{"name": "s", "value": "1", "domain": "sess.example.org", "path": "/"}], "origins": []}'
     r = client.post(
         "/archive",
         data={

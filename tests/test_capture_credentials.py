@@ -127,6 +127,24 @@ def test_reveal_for_capture(tmp_db):
         assert credentials.reveal_for_capture(conn, 99999) is None
 
 
+def test_reveal_for_capture_heals_session_cookies(tmp_db):
+    # 입력 검증을 우회해 저장된 불완전 storage_state (path 누락 + 못 살리는 쿠키)도
+    # 캡처가 받을 수 있게 정규화된다 — Playwright new_context 가 깨지지 않게.
+    state = {"cookies": [
+        {"name": "sid", "value": "1", "domain": "example.com"},  # path 누락 → "/"
+        {"name": "bad", "value": "2"},                            # domain·url 없음 → 버림
+    ], "origins": []}
+    with db.connect() as conn:
+        sid = db.get_or_create_site(conn, "example.com")
+        cid = credentials.add(
+            conn, sid, "s", "session", {"storage_state": state}, created_by=None
+        )
+        kind, payload = credentials.reveal_for_capture(conn, cid)
+    assert kind == "session"
+    cookies = payload["storage_state"]["cookies"]
+    assert cookies == [{"name": "sid", "value": "1", "domain": "example.com", "path": "/"}]
+
+
 # ---- pipeline: 페이지 자격증명 복호화·capture 전달 ----
 
 URL = "https://example.com/secret"
