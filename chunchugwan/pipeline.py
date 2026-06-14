@@ -322,6 +322,9 @@ def _archive_url(
     is_download = False  # 탐색이 파일 다운로드로 전환 — 문서 아카이빙으로 분기
     tmp_dir = Path(tempfile.mkdtemp(prefix="wccg-"))
     try:
+        # 캡처가 실제로 어떤 모드로 도는지 로그에 남긴다 — 스텔스 설정
+        # (WCCG_CAPTURE_*)이 적용됐는지 /logs 에서 바로 확인할 수 있게 한다.
+        run.step("engine", capture.capture_mode_str())
         try:
             result = capture.capture(norm, tmp_dir, **capture_kwargs)
         except capture.CaptureDownloadError:

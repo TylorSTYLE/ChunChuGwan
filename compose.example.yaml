@@ -29,8 +29,10 @@ services:
       # WCCG_SMTP_FROM: ""                           # 발신자 주소 (기본: WCCG_SMTP_USER)
       # WCCG_SMTP_TLS: "starttls"                    # starttls | ssl | off
       # WCCG_INVITE_TTL_DAYS: "7"                    # 초대 링크 수명 (일)
-      # 재아카이빙 버튼도 캡처를 하므로, 스텔스 캡처를 쓰면 worker 의
-      # WCCG_CAPTURE_* 와 동일하게 dashboard 에도 같은 값을 설정한다.
+      # --- 스텔스 캡처 (재아카이빙 버튼도 캡처하므로 worker 와 동일하게 설정) ---
+      # WCCG_CAPTURE_ENGINE: "patchright"   # Runtime.enable 봇탐지 우회 드롭인 엔진
+      # WCCG_CAPTURE_HEADFUL: "on"          # Xvfb 가상 디스플레이로 헤드풀 실행 (탐지 회피)
+      # WCCG_CAPTURE_CHANNEL: "chrome"      # real Chrome (amd64). arm64 는 자동 폴백 — 그냥 둬도 안전
     ports:
       - "127.0.0.1:8765:8765"       # localhost 전용 원칙 유지. 외부 노출은 리버스 프록시를 앞단에 둘 것.
     volumes:
