@@ -63,6 +63,54 @@
     {{ interval_field(allow_off=True) }}
     <span class="hint">{{ _("주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다. 직접 입력은 1시간~1개월 범위, 1일 단위 주기는 실행 시각(서버 시간)도 지정할 수 있습니다. 타임라인 화면에서 언제든 변경/해제할 수 있습니다.") }}</span>
   </label>
+  {% if system_allowed %}
+  <label>{{ _("로그인 자격증명") }}
+    <select name="cred_existing_id" id="cred-select">
+      <option value="">{{ _("연결 안 함") }}</option>
+      <option value="__new__">{{ _("새 자격증명 추가…") }}</option>
+    </select>
+    <span class="hint">{{ _("이 도메인에 등록된 자격증명이 있으면 골라서 연결하고, 없으면 새로 추가할 수 있습니다. 아카이빙 시 로그인에 사용됩니다 (사이트 상세에서도 관리).") }}</span>
+  </label>
+  <div id="cred-section" style="display:none">
+    {% if not secret_key_configured %}
+    <div class="error">{{ _("WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.") }}</div>
+    {% endif %}
+    <div class="crawl-options" style="flex-direction:column">
+      <label>{{ _("종류") }}
+        <select name="cred_kind" id="cred-kind">
+          {% for k in credential_kinds %}
+          <option value="{{ k['value'] }}">{{ _(k['label']) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>{{ _("이름") }}
+        <input type="text" name="cred_label" maxlength="50" autocomplete="off"
+               placeholder="{{ _('비우면 자동 지정') }}">
+      </label>
+      <div class="cred-fields" data-kind="http_basic">
+        <label>{{ _("사용자명") }}
+          <input type="text" name="cred_username" autocomplete="off">
+        </label>
+        <label>{{ _("비밀번호") }}
+          <input type="password" name="cred_password" autocomplete="new-password">
+        </label>
+      </div>
+      <div class="cred-fields" data-kind="session" hidden>
+        <label>{{ _("세션 상태 (storage_state JSON)") }}
+          <textarea name="cred_storage_state" rows="6" spellcheck="false"
+                    placeholder='{"cookies": [...], "origins": [...]}'></textarea>
+        </label>
+      </div>
+      <div class="cred-fields" data-kind="jwt" hidden>
+        <label>{{ _("Bearer 토큰") }}
+          <textarea name="cred_token" rows="4" spellcheck="false" autocomplete="off"
+                    placeholder="eyJhbGciOi…"></textarea>
+        </label>
+        <span class="hint">{{ _("캡처 시 Authorization: Bearer 헤더로 주입됩니다. 'Bearer ' 접두사 없이 토큰 값만 넣으세요.") }}</span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
   <button type="submit">{{ _("아카이빙 시작") }}</button>
 </form>
 {{ interval_field_js() }}
@@ -76,6 +124,59 @@
   }
   check.addEventListener("change", apply);
   apply();
+})();
+/* 로그인 자격증명(관리자): URL 도메인의 기존 자격증명을 불러와 드롭다운을
+   채우고, '새 자격증명 추가…' 를 고르면 입력 폼을 편다 */
+(function () {
+  var sel = document.getElementById("cred-select");
+  if (!sel) return;
+  var urlInput = document.querySelector(".archive-form input[name=url]");
+  var sec = document.getElementById("cred-section");
+  var NEW = "__new__";
+
+  function applySection() { sec.style.display = sel.value === NEW ? "" : "none"; }
+  sel.addEventListener("change", applySection);
+  applySection();
+
+  var kindSel = document.getElementById("cred-kind");
+  function applyKind() {
+    document.querySelectorAll("#cred-section .cred-fields").forEach(function (el) {
+      el.hidden = el.getAttribute("data-kind") !== kindSel.value;
+    });
+  }
+  if (kindSel) { kindSel.addEventListener("change", applyKind); applyKind(); }
+
+  /* URL 도메인의 기존 자격증명을 불러와 숫자 value 옵션으로 채운다 */
+  var lastQuery = null;
+  function loadCredentials() {
+    var url = (urlInput.value || "").trim();
+    if (url === lastQuery) return;
+    lastQuery = url;
+    var keep = sel.value;
+    Array.prototype.slice.call(sel.options).forEach(function (o) {
+      if (/^[0-9]+$/.test(o.value)) sel.removeChild(o);   /* 이전 동적 옵션 제거 */
+    });
+    if (!url) { applySection(); return; }
+    fetch("/archive/credentials?url=" + encodeURIComponent(url))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data || !data.credentials || lastQuery !== url) return;
+        var newOpt = sel.querySelector('option[value="' + NEW + '"]');
+        data.credentials.forEach(function (c) {
+          var o = document.createElement("option");
+          o.value = String(c.id);
+          o.textContent = c.label + " (" + c.kind_label + ")";
+          sel.insertBefore(o, newOpt);
+        });
+        if (Array.prototype.some.call(sel.options, function (o) { return o.value === keep; })) {
+          sel.value = keep;   /* 이전 선택 복원 */
+        }
+        applySection();
+      })
+      .catch(function () {});
+  }
+  urlInput.addEventListener("change", loadCredentials);
+  loadCredentials();   /* 폼에 url 이 미리 채워진 경우 (재시도 등) */
 })();
 </script>
 {% endblock %}

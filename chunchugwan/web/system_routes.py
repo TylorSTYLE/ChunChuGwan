@@ -358,6 +358,53 @@ def network_tags_delete(request: Request, tag_id: str):
     )
 
 
+@router.post("/network-tags/merge")
+def network_tags_merge(
+    request: Request, source: str = Form(...), target: str = Form(...)
+):
+    """두 로컬 네트워크 태그 병합 — source 의 참조를 target 으로 옮기고 source 삭제.
+
+    같은 사설 IP:포트(같은 사이트)를 가리킬 때만 허용한다 — 두 태그의 site_id
+    집합이 완전히 같을 때다 (network_tag_site_ids). 참조가 없는 태그는 삭제를 쓴다.
+    검증·병합을 한 트랜잭션 안에서 처리해 경합(TOCTOU)을 피한다.
+    """
+    with db.connect() as conn:
+        src = db.get_network_tag(conn, source)
+        tgt = db.get_network_tag(conn, target)
+        if src is None or tgt is None:
+            raise HTTPException(404, t(request, "로컬 네트워크 태그 없음"))
+        if source == target:
+            return _system_redirect(
+                error=t(request, "같은 태그끼리는 병합할 수 없습니다.")
+            )
+        src_sites = db.network_tag_site_ids(conn, source)
+        tgt_sites = db.network_tag_site_ids(conn, target)
+        if not src_sites or not tgt_sites:
+            return _system_redirect(
+                error=t(request,
+                        "참조가 없는 태그는 병합할 수 없습니다 — 삭제를 사용하세요.")
+            )
+        if src_sites != tgt_sites:
+            return _system_redirect(
+                error=t(request,
+                        "두 태그가 같은 사설 네트워크(같은 IP·포트)를 가리킬 때만 "
+                        "병합할 수 있습니다.")
+            )
+        moved = db.merge_network_tags(conn, source, target)
+    audit.log(
+        request, "로컬 네트워크 태그 병합: '%s' → '%s' (페이지 %d·크롤 %d·스케줄 %d)",
+        src["name"], tgt["name"],
+        moved["pages"], moved["crawls"], moved["crawl_schedules"],
+    )
+    return _system_redirect(
+        notice=t(request,
+                 "'{src}' 태그를 '{tgt}'(으)로 병합했습니다 "
+                 "(페이지 {p}개·크롤 {c}개·스케줄 {s}개 이전).",
+                 src=src["name"], tgt=tgt["name"],
+                 p=moved["pages"], c=moved["crawls"], s=moved["crawl_schedules"])
+    )
+
+
 @router.post("/restore")
 def system_restore(request: Request, file: UploadFile = File(...)):
     """전체 백업 업로드로 복원 — 현재 데이터(인증 포함)를 백업 시점으로 교체.

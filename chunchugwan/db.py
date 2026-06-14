@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS pages (
     slug        TEXT NOT NULL,          -- 디렉토리명 {slug}-{hash8}
     site_id     INTEGER REFERENCES sites(id),  -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id),  -- 사설 대역 페이지의 로컬 네트워크 태그
+    credential_id INTEGER REFERENCES site_credentials(id),  -- 아카이빙 시 쓸 로그인 자격증명(선택)
     created_at  TEXT NOT NULL           -- ISO 8601 UTC
 );
 -- 주의: 마이그레이션으로 추가되는 컬럼(site_id 등)의 인덱스는 SCHEMA 가
@@ -147,6 +148,7 @@ CREATE TABLE IF NOT EXISTS crawls (
     source         TEXT NOT NULL DEFAULT 'web',      -- 'web' | 'cli'
     site_id        INTEGER REFERENCES sites(id),     -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id), -- 사설 대역 크롤의 로컬 네트워크 태그
+    credential_id  INTEGER REFERENCES site_credentials(id), -- 크롤 페이지에 적용할 로그인 자격증명(선택)
     created_at     TEXT NOT NULL,
     finished_at    TEXT,
     next_page_at   TEXT NOT NULL       -- 다음 페이지 처리 가능 시각 (ISO 8601 UTC)
@@ -180,6 +182,7 @@ CREATE TABLE IF NOT EXISTS crawl_schedules (
     run_at_time      TEXT,                  -- 'HH:MM' 서버 로컬 시간 (1일 단위 주기 전용)
     site_id          INTEGER REFERENCES sites(id),       -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id   TEXT REFERENCES network_tags(id),  -- 사설 대역 사이트의 로컬 네트워크 태그
+    credential_id    INTEGER REFERENCES site_credentials(id),  -- 주기 크롤에 적용할 로그인 자격증명(선택)
     created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_crawl_schedules_next ON crawl_schedules(next_run_at);
@@ -280,6 +283,20 @@ CREATE TABLE IF NOT EXISTS api_keys (
     last_used_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS site_credentials (
+    id          INTEGER PRIMARY KEY,
+    site_id     INTEGER NOT NULL REFERENCES sites(id),
+    label       TEXT NOT NULL,           -- 사람이 식별하는 이름 (예: '관리자 계정')
+    kind        TEXT NOT NULL,           -- 종류: http_basic | session (확장형)
+    secret      TEXT NOT NULL,           -- 암호화된 payload (crypto.encrypt — 평문 금지)
+    created_by  INTEGER REFERENCES users(id),  -- 등록한 관리자 (기록용)
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    UNIQUE (site_id, label)
+);
+CREATE INDEX IF NOT EXISTS idx_site_credentials_site
+    ON site_credentials(site_id);
+
 CREATE TABLE IF NOT EXISTS settings (
     key         TEXT PRIMARY KEY,
     value       TEXT NOT NULL,
@@ -335,6 +352,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         if cols and "network_tag_id" not in cols:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN network_tag_id TEXT REFERENCES network_tags(id)"
+            )
+    # 로그인 자격증명 참조 — site_credentials 는 SCHEMA 가 먼저 만든다
+    for table in ("pages", "crawls", "crawl_schedules"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if cols and "credential_id" not in cols:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN credential_id INTEGER REFERENCES site_credentials(id)"
             )
     # 자원 참조 인덱스 여부 — 0 인 스냅샷은 저장공간 최적화가 백필한다
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
@@ -513,10 +537,12 @@ def prune_site_if_empty(conn: sqlite3.Connection, site_id: int | None) -> bool:
 
     페이지·크롤 스케줄 삭제 경로가 호출한다 — 크롤 회차는 개별 삭제가
     없으므로(사이트 단위 삭제뿐) 회차가 남아 있는 한 사이트도 남는다.
-    인증서 이력은 사이트의 부가 기록이라 함께 지운다.
+    인증서 이력·로그인 자격증명은 사이트의 부가 기록이라 함께 지운다
+    (자격증명은 FK 로 사이트를 참조하므로 사이트 행 삭제 전에 비워야 한다).
     """
     if site_id is None or not _site_is_empty(conn, site_id):
         return False
+    conn.execute("DELETE FROM site_credentials WHERE site_id = ?", (site_id,))
     conn.execute("DELETE FROM site_certificates WHERE site_id = ?", (site_id,))
     cur = conn.execute("DELETE FROM sites WHERE id = ?", (site_id,))
     return cur.rowcount == 1
@@ -529,6 +555,10 @@ def prune_empty_sites(conn: sqlite3.Connection) -> int:
           AND NOT EXISTS (SELECT 1 FROM crawls WHERE site_id = sites.id)
           AND NOT EXISTS (SELECT 1 FROM crawl_schedules WHERE site_id = sites.id)
     """
+    conn.execute(
+        "DELETE FROM site_credentials WHERE site_id IN "
+        f"(SELECT id FROM sites WHERE {empty_filter})"
+    )
     conn.execute(
         "DELETE FROM site_certificates WHERE site_id IN "
         f"(SELECT id FROM sites WHERE {empty_filter})"
@@ -646,6 +676,7 @@ def get_or_create_page(
     domain: str,
     slug: str,
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> int:
     """정규화 URL로 page row를 찾거나 생성하고 id 반환.
 
@@ -654,9 +685,12 @@ def get_or_create_page(
     network_tag_id 를 주면 기존 페이지의 태그도 갱신한다 — 태그 없이
     만들어진 사설 대역 페이지를 새 아카이빙 폼에서 태그를 골라 다시
     제출하는 것이 태그 지정/변경 경로다.
+    credential_id 를 주면 아카이빙에 쓸 로그인 자격증명을 페이지에 연결한다
+    (기존 페이지도 갱신) — 새 아카이빙 폼에서 도메인의 자격증명을 골라
+    연결하는 경로다. 캡처 연동 단계에서 이 자격증명을 실제 로그인에 쓴다.
     """
     row = conn.execute(
-        "SELECT id, network_tag_id FROM pages WHERE url = ?", (url,)
+        "SELECT id, network_tag_id, credential_id FROM pages WHERE url = ?", (url,)
     ).fetchone()
     if row is not None:
         if network_tag_id is not None and row["network_tag_id"] != network_tag_id:
@@ -664,14 +698,20 @@ def get_or_create_page(
                 "UPDATE pages SET network_tag_id = ? WHERE id = ?",
                 (network_tag_id, row["id"]),
             )
+        if credential_id is not None and row["credential_id"] != credential_id:
+            conn.execute(
+                "UPDATE pages SET credential_id = ? WHERE id = ?",
+                (credential_id, row["id"]),
+            )
         return row["id"]
     site_id = get_or_create_site(conn, storage.site_key(url))
     cur = conn.execute(
         """
-        INSERT INTO pages (url, domain, slug, site_id, network_tag_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO pages
+            (url, domain, slug, site_id, network_tag_id, credential_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (url, domain, slug, site_id, network_tag_id, _utcnow()),
+        (url, domain, slug, site_id, network_tag_id, credential_id, _utcnow()),
     )
     return cur.lastrowid
 
@@ -1484,6 +1524,7 @@ def insert_crawl(
     delay_seconds: int,
     source: str,
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> int:
     """크롤 row 생성 후 id 반환. next_page_at 은 지금 — 즉시 시작 가능.
 
@@ -1495,11 +1536,12 @@ def insert_crawl(
         """
         INSERT INTO crawls
             (start_url, scope_host, scope_path, max_pages, max_depth,
-             delay_seconds, source, site_id, network_tag_id, created_at, next_page_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             delay_seconds, source, site_id, network_tag_id, credential_id,
+             created_at, next_page_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (start_url, scope_host, scope_path, max_pages, max_depth,
-         delay_seconds, source, site_id, network_tag_id, now, now),
+         delay_seconds, source, site_id, network_tag_id, credential_id, now, now),
     )
     return cur.lastrowid
 
@@ -1593,7 +1635,7 @@ def claim_due_crawl_page(
     """
     sql = """
         SELECT cp.*, c.scope_host, c.scope_path, c.max_pages, c.max_depth,
-               c.delay_seconds, c.network_tag_id
+               c.delay_seconds, c.network_tag_id, c.credential_id
         FROM crawl_pages cp JOIN crawls c ON c.id = cp.crawl_id
         WHERE c.status = 'running' AND c.next_page_at <= ?
           AND cp.status = 'pending'
@@ -2104,6 +2146,7 @@ def upsert_crawl_schedule(
     next_run_at: str,
     run_at_time: str | None = None,
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> None:
     """시작 URL 의 크롤 스케줄 등록 (이미 있으면 옵션·주기·다음 실행 시각 교체).
 
@@ -2114,8 +2157,9 @@ def upsert_crawl_schedule(
         """
         INSERT INTO crawl_schedules
             (start_url, max_pages, max_depth, delay_seconds, interval_seconds,
-             next_run_at, run_at_time, site_id, network_tag_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             next_run_at, run_at_time, site_id, network_tag_id, credential_id,
+             created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(start_url) DO UPDATE SET
             max_pages = excluded.max_pages,
             max_depth = excluded.max_depth,
@@ -2124,10 +2168,11 @@ def upsert_crawl_schedule(
             next_run_at = excluded.next_run_at,
             run_at_time = excluded.run_at_time,
             site_id = excluded.site_id,
-            network_tag_id = excluded.network_tag_id
+            network_tag_id = excluded.network_tag_id,
+            credential_id = excluded.credential_id
         """,
         (start_url, max_pages, max_depth, delay_seconds, interval_seconds,
-         next_run_at, run_at_time, site_id, network_tag_id, _utcnow()),
+         next_run_at, run_at_time, site_id, network_tag_id, credential_id, _utcnow()),
     )
 
 
@@ -2530,6 +2575,49 @@ def delete_network_tag(conn: sqlite3.Connection, tag_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def network_tag_site_ids(conn: sqlite3.Connection, tag_id: str) -> set[int]:
+    """태그를 참조하는 pages·crawls·crawl_schedules 의 site_id 집합 (NULL 제외).
+
+    storage.site_key 가 호스트+포트라 같은 IP:포트 = 같은 site_id 다. 두 태그의
+    이 집합을 비교하면 '같은 사설 네트워크'를 가리키는지 판정할 수 있다 (병합 가드용).
+    """
+    rows = conn.execute(
+        """
+        SELECT site_id FROM pages
+         WHERE network_tag_id = ? AND site_id IS NOT NULL
+        UNION
+        SELECT site_id FROM crawls
+         WHERE network_tag_id = ? AND site_id IS NOT NULL
+        UNION
+        SELECT site_id FROM crawl_schedules
+         WHERE network_tag_id = ? AND site_id IS NOT NULL
+        """,
+        (tag_id, tag_id, tag_id),
+    ).fetchall()
+    return {row["site_id"] for row in rows}
+
+
+def merge_network_tags(
+    conn: sqlite3.Connection, source_id: str, target_id: str
+) -> dict[str, int]:
+    """source 태그의 모든 참조를 target 으로 옮긴 뒤 source 태그를 삭제한다.
+
+    pages·crawls·crawl_schedules 의 network_tag_id 를 일괄 갱신하고(테이블별
+    이전 행 수를 dict 로 반환) source 를 지운다. 검증(같은 사이트·미존재·동일
+    태그)은 호출부가 한다 — 여기선 단순 이전이다. UPDATE 가 모두 끝난 뒤
+    DELETE 하므로 FK(foreign_keys=ON) 위반이 없다.
+    """
+    moved: dict[str, int] = {}
+    for table in ("pages", "crawls", "crawl_schedules"):
+        cur = conn.execute(
+            f"UPDATE {table} SET network_tag_id = ? WHERE network_tag_id = ?",
+            (target_id, source_id),
+        )
+        moved[table] = cur.rowcount
+    conn.execute("DELETE FROM network_tags WHERE id = ?", (source_id,))
+    return moved
+
+
 # ---- 설정 (key-value) ----
 # 대시보드에서 변경 가능한 런타임 설정. 환경변수 설정(config.py)과 달리
 # DB 에 저장돼 재시작 없이 반영되고 백업/복원에 포함된다.
@@ -2643,6 +2731,93 @@ def touch_api_key(conn: sqlite3.Connection, key_id: int) -> None:
 def delete_api_key(conn: sqlite3.Connection, key_id: int) -> bool:
     """API 키 폐기 — 즉시 무효화된다. 없으면 False."""
     cur = conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
+    return cur.rowcount == 1
+
+
+# ---- 사이트 로그인 자격증명 ----
+# 아카이빙 대상 사이트에 춘추관이 로그인하기 위한 외부 자격증명. secret 은
+# 암호문만 저장한다 (crypto 로 대칭 암호화 — CLAUDE.md 원칙 6 예외). 쓰기는
+# credentials.py 코어 모듈을 거친다.
+
+
+def create_site_credential(
+    conn: sqlite3.Connection,
+    site_id: int,
+    label: str,
+    kind: str,
+    secret: str,
+    *,
+    created_by: int | None,
+) -> int:
+    """사이트 자격증명 row 생성 후 id 반환. secret 은 암호문(평문 금지).
+
+    같은 사이트 안에서 label 은 UNIQUE — 호출부가 중복을 먼저 검사한다.
+    """
+    now = _utcnow()
+    cur = conn.execute(
+        """
+        INSERT INTO site_credentials
+            (site_id, label, kind, secret, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (site_id, label, kind, secret, created_by, now, now),
+    )
+    return cur.lastrowid
+
+
+def get_site_credential(
+    conn: sqlite3.Connection, cred_id: int
+) -> sqlite3.Row | None:
+    """자격증명 id 로 조회 (암호문 secret 포함, 없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM site_credentials WHERE id = ?", (cred_id,)
+    ).fetchone()
+
+
+def list_site_credentials(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트의 자격증명 목록 (라벨순, 암호문 secret 제외 — 관리 화면용)."""
+    return conn.execute(
+        """
+        SELECT c.id, c.site_id, c.label, c.kind, c.created_by,
+               c.created_at, c.updated_at, u.email AS creator_email
+        FROM site_credentials c LEFT JOIN users u ON u.id = c.created_by
+        WHERE c.site_id = ? ORDER BY c.label, c.id
+        """,
+        (site_id,),
+    ).fetchall()
+
+
+def get_site_credential_by_label(
+    conn: sqlite3.Connection, site_id: int, label: str
+) -> sqlite3.Row | None:
+    """사이트의 라벨로 자격증명 조회 (중복 검사용, 없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM site_credentials WHERE site_id = ? AND label = ?",
+        (site_id, label),
+    ).fetchone()
+
+
+def count_site_credentials(conn: sqlite3.Connection, site_id: int) -> int:
+    """사이트의 자격증명 수 (사이트 상세 표시용)."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM site_credentials WHERE site_id = ?", (site_id,)
+    ).fetchone()["c"]
+
+
+def delete_site_credential(conn: sqlite3.Connection, cred_id: int) -> bool:
+    """자격증명 삭제. 없으면 False.
+
+    이 자격증명을 연결한 페이지·크롤·크롤 스케줄(credential_id)은 NULL 로
+    끊는다 — FK 가 RESTRICT 라 끊지 않으면 삭제가 막힌다.
+    """
+    for table in ("pages", "crawls", "crawl_schedules"):
+        conn.execute(
+            f"UPDATE {table} SET credential_id = NULL WHERE credential_id = ?",
+            (cred_id,),
+        )
+    cur = conn.execute("DELETE FROM site_credentials WHERE id = ?", (cred_id,))
     return cur.rowcount == 1
 
 

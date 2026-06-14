@@ -118,7 +118,7 @@ def test_insecure_capture_downloads_documents_without_verify(
 
     seen_verify: list[bool] = []
 
-    def fake_download(links, dest_dir, referer=None, verify=True):
+    def fake_download(links, dest_dir, referer=None, verify=True, **kwargs):
         seen_verify.append(verify)
         return [], []
 

@@ -33,8 +33,8 @@ from fastapi.responses import (
 )
 
 from .. import (
-    auth, backup, config, crawler, db, deletion, differ, documents, netcheck,
-    pipeline, resources, scheduler, storage, system_log,
+    auth, backup, config, crawler, credentials, crypto, db, deletion, differ,
+    documents, netcheck, pipeline, resources, scheduler, storage, system_log,
 )
 from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -613,6 +613,127 @@ def site_delete(request: Request, site_id: int):
         )
     })
     return RedirectResponse(f"/archives?{params}", status_code=303)
+
+
+def _credentials_redirect(
+    site_id: int, *, notice: str = "", error: str = ""
+) -> RedirectResponse:
+    """자격증명 페이지로 PRG 리다이렉트."""
+    params = {"error": error} if error else ({"notice": notice} if notice else {})
+    suffix = f"?{urlencode(params)}" if params else ""
+    return RedirectResponse(
+        f"/sites/{site_id}/credentials{suffix}", status_code=303
+    )
+
+
+@app.get("/sites/{site_id}/credentials", response_class=HTMLResponse)
+def site_credentials_view(
+    request: Request, site_id: int, notice: str = "", error: str = ""
+):
+    """사이트 로그인 자격증명 관리 — 목록 + 등록 폼. 관리자 전용.
+
+    비밀은 표시하지 않는다 (라벨·종류·등록 정보만). 캡처 연동은 다음 단계.
+    """
+    _require_admin(request)
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, t(request, "사이트 없음"))
+        rows = db.list_site_credentials(conn, site_id)
+    cred_rows = [
+        {**dict(c), "kind_label": credentials.kind_label(c["kind"])} for c in rows
+    ]
+    kinds = [
+        {"value": k, "label": credentials.kind_label(k)} for k in credentials.KINDS
+    ]
+    return templates.TemplateResponse(
+        request, "site_credentials.html",
+        {
+            "site": site,
+            "credentials": cred_rows,
+            "kinds": kinds,
+            "secret_key_configured": crypto.is_configured(),
+            "notice": notice,
+            "error": error,
+        },
+    )
+
+
+@app.post("/sites/{site_id}/credentials")
+def site_credentials_create(
+    request: Request,
+    site_id: int,
+    label: str = Form(""),
+    kind: str = Form(""),
+    username: str = Form(""),
+    password: str = Form(""),
+    storage_state: str = Form(""),
+    token: str = Form(""),
+):
+    """로그인 자격증명 등록 — 입력 검증 → 암호화 저장 → 감사 로그. 관리자 전용.
+
+    빈 폼 값은 인코딩에서 누락되므로 모든 필드에 기본값을 둬, 누락도 422 가
+    아니라 검증 메시지(리다이렉트)로 처리한다.
+    """
+    _require_admin(request)
+    if not crypto.is_configured():
+        return _credentials_redirect(
+            site_id,
+            error=t(request, "WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다."),
+        )
+    label = label.strip()
+    label_error = credentials.validate_label(label)
+    if label_error is not None:
+        return _credentials_redirect(site_id, error=t(request, label_error))
+    if kind not in credentials.KINDS:
+        return _credentials_redirect(
+            site_id, error=t(request, "잘못된 자격증명 종류입니다.")
+        )
+    try:
+        payload = credentials.build_payload(
+            kind,
+            {
+                "username": username,
+                "password": password,
+                "storage_state": storage_state,
+                "token": token,
+            },
+        )
+    except credentials.CredentialError as e:
+        return _credentials_redirect(site_id, error=t(request, str(e)))
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, t(request, "사이트 없음"))
+        if db.get_site_credential_by_label(conn, site_id, label) is not None:
+            return _credentials_redirect(
+                site_id, error=t(request, "이미 있는 이름입니다: {name}", name=label)
+            )
+        credentials.add(
+            conn, site_id, label, kind, payload,
+            created_by=request.state.user["id"] if request.state.user else None,
+        )
+    audit.log(
+        request, "사이트 자격증명 등록: %s '%s' (%s)", site["site_key"], label, kind
+    )
+    return _credentials_redirect(site_id, notice=t(request, "자격증명을 등록했습니다."))
+
+
+@app.post("/sites/{site_id}/credentials/{cred_id}/delete")
+def site_credentials_delete(request: Request, site_id: int, cred_id: int):
+    """로그인 자격증명 삭제. 관리자 전용."""
+    _require_admin(request)
+    with db.connect() as conn:
+        cred = db.get_site_credential(conn, cred_id)
+        if cred is None or cred["site_id"] != site_id:
+            raise HTTPException(404, t(request, "자격증명 없음"))
+        site = db.get_site(conn, site_id)
+        db.delete_site_credential(conn, cred_id)
+    audit.log(
+        request, "사이트 자격증명 삭제: %s '%s'",
+        site["site_key"] if site else f"#{site_id}", cred["label"],
+    )
+    return _credentials_redirect(site_id, notice=t(request, "자격증명을 삭제했습니다."))
 
 
 @app.get("/archive/active")
@@ -1329,6 +1450,7 @@ def _run_archive(
     run_at: str | None = None,
     source: str = "web",
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> None:
     """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다 (source 포함).
 
@@ -1336,8 +1458,12 @@ def _run_archive(
     신규 URL 은 아카이빙이 끝나야 pages 행이 생기므로 등록을 여기서 한다.
     """
     try:
-        # network_tag_id 는 줄 때만 넘긴다 (사설 대역 — 폼에서 선택)
-        extra = {"network_tag_id": network_tag_id} if network_tag_id else {}
+        # network_tag_id·credential_id 는 줄 때만 넘긴다 (폼에서 선택)
+        extra: dict = {}
+        if network_tag_id:
+            extra["network_tag_id"] = network_tag_id
+        if credential_id:
+            extra["credential_id"] = credential_id
         outcome = pipeline.archive_url(url, force=force, source=source, **extra)
         logger.info("아카이빙 완료: %s [%s]", url, outcome.status)
     except Exception:
@@ -1360,6 +1486,7 @@ def _queue_archive(
     run_at: str | None = None,
     source: str = "web",
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> bool:
     """진행 목록 등록 후 백그라운드 작업 추가. 이미 진행 중이면 무시(False).
 
@@ -1368,7 +1495,8 @@ def _queue_archive(
     if not _register_job(url):
         return False
     background.add_task(
-        _run_archive, url, force, interval_seconds, run_at, source, network_tag_id
+        _run_archive, url, force, interval_seconds, run_at, source,
+        network_tag_id, credential_id,
     )
     return True
 
@@ -1383,6 +1511,12 @@ def _require_deleter(request: Request) -> None:
     """삭제 권한 가드 (admin/archiver). 보기 전용·차단 계정은 403."""
     if not permissions.can_delete(request.state.user):
         raise HTTPException(403, t(request, "삭제 권한이 없습니다"))
+
+
+def _require_admin(request: Request) -> None:
+    """관리자 가드 — 시스템 관리 동작(로그인 자격증명 등). 그 외 계정은 403."""
+    if not permissions.system_allowed(request.state.user):
+        raise HTTPException(403, t(request, "관리자만 접근할 수 있습니다"))
 
 
 @app.get("/archive/new", response_class=HTMLResponse)
@@ -1401,6 +1535,11 @@ def archive_new_form(request: Request, error: str = "", url: str = ""):
         {
             "error": error, "url": url, "interval_options": _SCHEDULE_OPTIONS,
             "network_tags": network_tags,
+            "secret_key_configured": crypto.is_configured(),
+            "credential_kinds": [
+                {"value": k, "label": credentials.kind_label(k)}
+                for k in credentials.KINDS
+            ],
             "crawl_defaults": {
                 "max_pages": defaults["max_pages"],
                 "max_depth": defaults["max_depth"],
@@ -1442,7 +1581,7 @@ def _network_gate(request: Request, norm: str, tag_id: str | None) -> str | None
 def _archive_site(
     request: Request, url: str, max_pages: str, max_depth: str, delay: str,
     interval_seconds: int | None = None, run_at: str | None = None,
-    network_tag_id: str | None = None,
+    network_tag_id: str | None = None, credential_id: int | None = None,
 ) -> RedirectResponse:
     """사이트 전체 아카이브 등록 — 크롤을 만들고 진행 화면으로 보낸다.
 
@@ -1459,12 +1598,13 @@ def _archive_site(
             "delay_seconds": int(delay) if delay else None,
         }
         crawl, merged = crawler.start_crawl(
-            url, **options, source="web", network_tag_id=network_tag_id
+            url, **options, source="web",
+            network_tag_id=network_tag_id, credential_id=credential_id,
         )
         if interval_seconds:
             crawler.set_crawl_schedule(
                 url, interval_seconds, run_at=run_at, **options,
-                network_tag_id=network_tag_id,
+                network_tag_id=network_tag_id, credential_id=credential_id,
             )
     except ValueError as exc:
         params = urlencode(
@@ -1483,6 +1623,131 @@ def _archive_site(
     return RedirectResponse(f"/crawls/{crawl['id']}{suffix}", status_code=303)
 
 
+def _default_credential_label(kind: str, username: str) -> str:
+    """새 아카이빙 폼에서 라벨을 비웠을 때의 기본 라벨 (DB 에 그대로 저장)."""
+    if kind == credentials.KIND_HTTP_BASIC and username.strip():
+        return username.strip()
+    if kind == credentials.KIND_SESSION:
+        return "세션"
+    if kind == credentials.KIND_JWT:
+        return "JWT"
+    return "로그인"
+
+
+def _create_archive_credential(
+    request: Request, site_key: str, *,
+    kind: str, label: str, username: str, password: str,
+    storage_state: str, token: str,
+) -> tuple[int | None, str | None]:
+    """새 자격증명을 만들어 (credential_id, None) 또는 (None, 오류메시지) 반환.
+
+    관리자라고 가정한다(호출부가 보장). 관리 화면과 같은 credentials 코어로
+    암호화 저장하고, 사이트가 없으면 확보(get_or_create_site)한다.
+    """
+    if not crypto.is_configured():
+        return None, t(request, "WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.")
+    if kind not in credentials.KINDS:
+        return None, t(request, "잘못된 자격증명 종류입니다.")
+    try:
+        payload = credentials.build_payload(
+            kind,
+            {
+                "username": username, "password": password,
+                "storage_state": storage_state, "token": token,
+            },
+        )
+    except credentials.CredentialError as exc:
+        return None, t(request, str(exc))
+    label = label.strip() or _default_credential_label(kind, username)
+    label_error = credentials.validate_label(label)
+    if label_error is not None:
+        return None, t(request, label_error)
+    with db.connect() as conn:
+        existing = db.get_site_by_key(conn, site_key)
+        if existing is not None and db.get_site_credential_by_label(
+            conn, existing["id"], label
+        ) is not None:
+            return None, t(
+                request,
+                "이 사이트에 이미 같은 이름의 자격증명이 있습니다: {name}", name=label,
+            )
+        site_id = db.get_or_create_site(conn, site_key)
+        cred_id = credentials.add(
+            conn, site_id, label, kind, payload,
+            created_by=request.state.user["id"] if request.state.user else None,
+        )
+    audit.log(
+        request, "새 아카이빙에서 로그인 자격증명 등록: %s '%s' (%s)",
+        site_key, label, kind,
+    )
+    return cred_id, None
+
+
+def _resolve_archive_credential(
+    request: Request, norm: str, *,
+    existing_id: str, kind: str, label: str,
+    username: str, password: str, storage_state: str, token: str,
+) -> tuple[int | None, str | None]:
+    """새 아카이빙 폼의 자격증명 선택을 해석 — (연결할 credential_id, 오류) 반환.
+
+    관리자 전용(비관리자면 무시). existing_id 가:
+    - ""        : 연결 안 함 → (None, None)
+    - "__new__" : 새 자격증명을 만들어 그 id 를 연결
+    - 숫자       : 그 기존 자격증명을 연결 (URL 도메인 소속인지 검증)
+    """
+    if not permissions.system_allowed(request.state.user):
+        return None, None
+    existing_id = existing_id.strip()
+    if not existing_id:
+        return None, None
+    site_key = storage.site_key(norm)
+    if existing_id == "__new__":
+        return _create_archive_credential(
+            request, site_key, kind=kind, label=label, username=username,
+            password=password, storage_state=storage_state, token=token,
+        )
+    if not existing_id.isdigit():
+        return None, t(request, "잘못된 자격증명 선택입니다.")
+    cred_id = int(existing_id)
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, site_key)
+        cred = db.get_site_credential(conn, cred_id)
+        if site is None or cred is None or cred["site_id"] != site["id"]:
+            return None, t(request, "이 도메인에 등록된 자격증명이 아닙니다.")
+    audit.log(
+        request, "새 아카이빙에 기존 자격증명 연결: %s (cred #%d)", site_key, cred_id
+    )
+    return cred_id, None
+
+
+@app.get("/archive/credentials")
+def archive_credentials(request: Request, url: str = "") -> dict:
+    """입력된 URL 의 도메인(사이트)에 등록된 로그인 자격증명 목록 (관리자 전용).
+
+    새 아카이빙 폼이 URL 입력 시 호출해 '연결' 드롭다운을 채운다. 비밀은
+    내려보내지 않는다 — id·라벨·종류만. URL 이 비었거나 잘못됐거나 사이트가
+    없으면 빈 목록.
+    """
+    _require_admin(request)
+    try:
+        site_key = storage.site_key(storage.normalize_url(url)) if url.strip() else ""
+    except ValueError:
+        site_key = ""
+    creds: list[dict] = []
+    if site_key:
+        with db.connect() as conn:
+            site = db.get_site_by_key(conn, site_key)
+            if site is not None:
+                creds = [
+                    {
+                        "id": c["id"], "label": c["label"], "kind": c["kind"],
+                        "kind_label": i18n.t(request, credentials.kind_label(c["kind"])),
+                    }
+                    for c in db.list_site_credentials(conn, site["id"])
+                ]
+    return {"site_key": site_key, "credentials": creds}
+
+
 @app.post("/archive")
 def archive_new(
     request: Request,
@@ -1497,6 +1762,13 @@ def archive_new(
     custom_unit: str = Form("h"),
     run_at: str = Form(""),
     network_tag: str = Form(""),
+    cred_existing_id: str = Form(""),
+    cred_kind: str = Form(""),
+    cred_label: str = Form(""),
+    cred_username: str = Form(""),
+    cred_password: str = Form(""),
+    cred_storage_state: str = Form(""),
+    cred_token: str = Form(""),
 ):
     """새 URL 아카이빙. 검증은 동기로, 캡처·주기 등록(interval>0)은 백그라운드로.
 
@@ -1518,17 +1790,29 @@ def archive_new(
             {"error": t(request, "아카이빙 실패: {e}", e=exc), "url": url}
         )
         return RedirectResponse(f"/archive/new?{params}", status_code=303)
+    link_credential_id, cred_error = _resolve_archive_credential(
+        request, norm, existing_id=cred_existing_id, kind=cred_kind.strip(),
+        label=cred_label, username=cred_username, password=cred_password,
+        storage_state=cred_storage_state, token=cred_token,
+    )
+    if cred_error is not None:
+        # 비밀번호·토큰이 쿼리스트링·로그에 실리지 않게 url 만 보존한다
+        params = urlencode({"error": cred_error, "url": url})
+        return RedirectResponse(f"/archive/new?{params}", status_code=303)
     if site:
+        # 크롤(사이트 전체)은 자격증명을 crawls.credential_id 에 실어 크롤러가
+        # 모든 페이지에 적용한다 (network_tag_id 와 같은 경로). 주기 크롤은
+        # crawl_schedules.credential_id 로 이어진다.
         return _archive_site(
             request, url, crawl_max_pages, crawl_max_depth, crawl_delay,
             interval_seconds=seconds or None,
             run_at=(run_at or None) if seconds else None,
-            network_tag_id=tag_id,
+            network_tag_id=tag_id, credential_id=link_credential_id,
         )
     if _queue_archive(
         background, norm,
         interval_seconds=seconds or None, run_at=(run_at or None) if seconds else None,
-        network_tag_id=tag_id,
+        network_tag_id=tag_id, credential_id=link_credential_id,
     ):
         audit.log(
             request, "새 아카이빙 등록: %s%s", norm,

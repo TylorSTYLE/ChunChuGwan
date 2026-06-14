@@ -5,10 +5,14 @@
 
 ## 참고 문서 (해당 작업 시 읽을 것)
 
-- `docs/DASHBOARD.md` — 대시보드 화면 15개의 라우트·권한·세부 동작 레퍼런스.
+- `docs/DASHBOARD.md` — 대시보드 화면 16개의 라우트·권한·세부 동작 레퍼런스.
   웹 UI 화면을 추가/수정하기 전에 읽는다.
 - `docs/ROADMAP.md` — 완료된 구현 로드맵 히스토리(M1~M8, A1~A11 상세).
   기능의 도입 배경·구현 범위가 궁금할 때 읽는다.
+
+사용자용 기능 문서는 `docs/` 에 주제별로 나눠져 있다 (CRAWLING·STORAGE·
+DOCKER·API·AUTHENTICATION·DEVELOPMENT — README 는 빠른 시작 + 링크만 둔다).
+해당 기능의 동작·옵션·CLI 를 바꾸면 README 요약과 함께 그 docs 파일도 갱신한다.
 
 ## 기술 스택
 
@@ -97,7 +101,17 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
    SHA-256 만 저장 (세션은 서버사이드). 2FA(TOTP·패스키)는 패스워드 로그인에만 적용하고 SSO(OIDC)는
    IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origin 은
    `WCCG_PUBLIC_URL` 에서 파생(미설정 시 localhost). 환경변수 목록은
-   README "인증" 절 참조.
+   `docs/AUTHENTICATION.md` 참조. 단, 위 단방향 저장 규칙은 춘추관이 **사용자를**
+   인증하는 데이터(로그인 비밀번호·세션·API 키·패스키)에 한한다.
+   아카이빙 대상 사이트에 춘추관이 **로그인하기 위한 외부 자격증명**(세션
+   쿠키·Basic 인증·Bearer 토큰)은 재생(replay)이 필요해 복원 가능해야
+   하므로, 예외적으로 **대칭 암호화**로 저장한다 (평문·해시 금지). 암호화
+   키는 환경변수(`WCCG_SECRET_KEY`)에서만 오고 DB·저장소에 들어가지
+   않으며, 키 부재 시 이 기능만 비활성화되고 기존 아카이빙은 영향받지
+   않는다. 변조 감지가 되는 인증 암호화(AES-GCM 등)를 쓰고, 자격증명은
+   사이트 단위로 스코프한다. `backup` 에는 다른 인증 데이터처럼 포함하되
+   `export` 에는 제외한다. 이것이 양방향(복원 가능) 저장을 허용하는
+   **유일한** 예외이며, 사용자 인증 데이터에는 절대 적용하지 않는다.
 7. **사설 IP·루프백 게이트.** 아카이빙 대상 호스트의 네트워크 대역은
    `netcheck.py` 가 판정한다(IP 리터럴·localhost 는 즉시, 호스트명은 서버
    리졸버 해석 + TTL 캐시, 해석 실패는 공인 취급). 루프백은 항상 거부 —
@@ -162,6 +176,10 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
 - `pages` — 정규화된 URL 단위 (1 URL = 1 row). 사설 대역 페이지는
   `network_tag_id` 로 로컬 네트워크 태그를 참조 (crawls·crawl_schedules 도
   같은 컬럼 보유 — 크롤 페이지·스케줄 재실행에 태그가 이어진다).
+  `credential_id` 는 아카이빙 시 쓸 로그인 자격증명(`site_credentials`)을
+  가리킨다 — 새 아카이빙 폼에서 도메인의 자격증명을 골라 연결하면 저장되고
+  재아카이빙·스케줄에도 이어진다 (network_tag_id 와 같은 경로로
+  `archive_url`→`get_or_create_page` 가 설정, 자격증명 삭제 시 NULL).
   명시적 http URL 은 신규 등록 시 https 지원(유효 인증서 + 응답 <400,
   HSTS 의 리다이렉트 포함)을 확인해 https 로 승격한다
   (`pipeline.upgrade_http_to_https` — 크롤·크롤 스케줄 등록도 동일,
@@ -171,7 +189,9 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   연결 실패에 한해)
 - `network_tags` — 로컬 네트워크 태그 (id 는 GUID 자동 발급, 이름 유일,
   설명). 사설 IP 대역 아카이빙은 태그 지정이 필수, 루프백은 항상 금지
-  (아키텍처 원칙 7 · netcheck.py). 참조 중인 태그는 삭제 거부
+  (아키텍처 원칙 7 · netcheck.py). 참조 중인 태그는 삭제 거부. 같은 사설
+  IP·포트(= 같은 site_id) 집합을 가리키는 두 태그는 시스템 화면에서 병합 가능
+  (출처→대상으로 참조 이전 후 출처 삭제 — `db.merge_network_tags`)
 - `site_certificates` — https 아카이빙 때 받은 서버 리프 인증서의 버전
   이력 (`certs.py` — 캡처와 별도 핸드셰이크로 수집·파싱, 실패해도
   아카이빙은 진행). 버전 식별은 (site_id, host, DER sha256 지문) — 같은
@@ -243,6 +263,24 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
 - `api_keys` — 외부 소프트웨어용 API 키 (`/api/v1` REST API 인증).
   관리자만 발급, 모든 관리자가 공동 관리. 키마다 보기/아카이브 권한과
   만료 시각(NULL=영구), 토큰은 SHA-256 해시만 저장 (원문은 발급 시 1회 표시)
+- `site_credentials` — 아카이빙 대상 사이트 로그인용 외부 자격증명 (사이트별,
+  `kind` = http_basic/session/jwt, 라벨 UNIQUE). 비밀은 `WCCG_SECRET_KEY` 로 대칭
+  암호화한 암호문(`secret`)만 저장 (`crypto.py` — 원칙 6 예외, replay 위해
+  복원 가능). 관리자 전용 `/sites/{id}/credentials`(+ 새 아카이빙 화면의
+  선택 섹션)에서 관리하고 쓰기는 `credentials.py` 코어 모듈을 거친다.
+  사이트 prune·삭제 시 함께 정리(FK), 삭제 시 이 자격증명을 연결한
+  `pages.credential_id` 도 NULL 로 끊는다. 새 아카이빙 폼은 입력 URL 의
+  도메인 자격증명을 조회(`/archive/credentials`)해 골라 페이지에 연결할 수
+  있다. 아카이빙 시 캡처가 페이지의 자격증명을 reveal 해 Playwright
+  컨텍스트에 종류별로 주입한다 — http_basic→http_credentials,
+  session→storage_state, jwt→대상 origin 요청에만 Authorization 헤더
+  (context.route). 자격증명이 페이지의 서드파티 하위 자원(CDN 등)으로 새지
+  않게 모두 **대상 origin 으로 스코프**한다 (`capture._context_options`).
+  키 부재·복호화 실패·삭제된 자격증명이면 인증 없이 진행한다(graceful).
+  크롤(사이트 전체)은 `crawls.credential_id`/`crawl_schedules.credential_id` 로
+  전 페이지에 적용하고(network_tag_id 와 같은 경로), 문서 다운로드는 httpx 에
+  종류별 인증을 싣는다 (`credentials.httpx_auth` — Basic/Bearer 는 Authorization
+  헤더, 세션은 쿠키; 모두 대상 origin 으로 스코프해 서드파티 문서로 누수 방지)
 
 ## 코딩 컨벤션
 
@@ -268,8 +306,9 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
 
 ## 대시보드 디자인 방향
 
-- 화면 15개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
+- 화면 16개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
   사이트 상세(`/sites/{id}` — 소속 페이지·크롤 회차·스케줄·사이트 삭제),
+  사이트 로그인 자격증명(`/sites/{id}/credentials` — 관리자 전용),
   문서(`/documents` — 문서 파일 통합 목록), 새 아카이빙(`/archive/new`),
   사이트 아카이브 진행(`/crawls/{id}` — 크롤 회차 상세), 스케줄(`/schedules`),
   타임라인, 스냅샷 뷰어, diff 뷰어, 아카이빙 로그(`/logs` — viewer 이상),

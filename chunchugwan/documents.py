@@ -149,9 +149,32 @@ def direct_filename(
     return None
 
 
+def _auth_to_httpx(auth: dict | None):
+    """credentials.httpx_auth 스펙을 httpx 호출 인자로 변환.
+
+    반환: (추가 헤더 dict, 도메인 스코프 Cookies jar 또는 None).
+    """
+    if not auth:
+        return {}, None
+    extra_headers = dict(auth.get("headers") or {})
+    cookies = None
+    cookie_dicts = auth.get("cookies") or []
+    if cookie_dicts:
+        cookies = httpx.Cookies()
+        for c in cookie_dicts:
+            name = c.get("name")
+            if not name:
+                continue
+            domain = (c.get("domain") or "").lstrip(".")
+            cookies.set(
+                name, c.get("value", ""), domain=domain, path=c.get("path") or "/"
+            )
+    return extra_headers, cookies
+
+
 def download_documents(
     links: list[str], dest_dir: Path, referer: str | None = None,
-    verify: bool = True,
+    verify: bool = True, auth: dict | None = None, auth_origin: str | None = None,
 ) -> tuple[list[dict[str, object]], list[str]]:
     """문서 링크들을 dest_dir 에 내려받아 (성공 manifest, 실패 URL) 반환.
 
@@ -159,7 +182,9 @@ def download_documents(
     개수(config.DOCUMENT_MAX_COUNT)·크기(config.DOCUMENT_MAX_BYTES) 한도를
     넘거나 응답이 HTML 인 항목은 건너뛴다. 실패가 아카이빙을 막지 않는다.
     verify=False 는 TLS 인증서 검증을 끈다 — 자체 서명 사이트를 검증 무시로
-    캡처한 경우(pipeline insecure_tls)에만 쓴다.
+    캡처한 경우(pipeline insecure_tls)에만 쓴다. auth(credentials.httpx_auth)는
+    auth_origin 과 같은 origin 의 문서에만 실어 보낸다 — 서드파티 CDN 문서로
+    자격증명이 새지 않게 한다.
     """
     links = list(dict.fromkeys(links))
     if len(links) > config.DOCUMENT_MAX_COUNT:
@@ -169,15 +194,21 @@ def download_documents(
         )
         links = links[: config.DOCUMENT_MAX_COUNT]
 
-    headers = {"User-Agent": config.USER_AGENT}
+    base_headers = {"User-Agent": config.USER_AGENT}
     if referer:
-        headers["Referer"] = referer
+        base_headers["Referer"] = referer
 
     manifest: list[dict[str, object]] = []
     failed: list[str] = []
     for url in links:
+        # 자격증명은 같은 origin 의 문서에만 (서드파티로 누수 방지)
+        if auth and auth_origin and storage.url_origin(url) == auth_origin:
+            extra_headers, cookies = _auth_to_httpx(auth)
+            headers = {**base_headers, **extra_headers}
+        else:
+            headers, cookies = base_headers, None
         try:
-            manifest.append(_download_one(url, dest_dir, headers, verify))
+            manifest.append(_download_one(url, dest_dir, headers, verify, cookies))
         except Exception as e:
             logger.warning("문서 다운로드 실패(건너뜀): %s — %s", url, e)
             failed.append(url)
@@ -219,14 +250,15 @@ def _save_stream(resp, path: Path) -> tuple[int, str]:
 
 
 def _download_one(
-    url: str, dest_dir: Path, headers: dict[str, str], verify: bool = True
+    url: str, dest_dir: Path, headers: dict[str, str], verify: bool = True,
+    cookies=None,
 ) -> dict[str, object]:
     """문서 1개를 스트리밍 다운로드 (크기 한도 검사 + sha256 계산)."""
     name = document_filename(url)
     dest_dir.mkdir(parents=True, exist_ok=True)
     path = dest_dir / name
     with httpx.stream(
-        "GET", url, headers=headers, follow_redirects=True,
+        "GET", url, headers=headers, cookies=cookies, follow_redirects=True,
         timeout=config.DOCUMENT_FETCH_TIMEOUT_SECONDS, verify=verify,
     ) as resp:
         resp.raise_for_status()
@@ -250,19 +282,23 @@ class DirectDownload:
     http_status: int
 
 
-def download_direct(url: str, dest_dir: Path, verify: bool = True) -> DirectDownload:
+def download_direct(
+    url: str, dest_dir: Path, verify: bool = True, auth: dict | None = None,
+) -> DirectDownload:
     """탐색이 다운로드로 전환된 URL(파일 직접 링크)을 문서로 내려받는다.
 
     페이지가 링크한 문서(download_documents)와 달리 URL 경로 확장자를
     신뢰할 수 없으므로(download.php 등) 파일명은 direct_filename 으로
     결정하고, 문서 화이트리스트 확장자를 못 정하면 ValueError. HTML 응답
     거부·크기 한도는 링크 문서 다운로드와 동일하다. 네트워크 실패는
-    httpx.HTTPError 로 전파된다.
+    httpx.HTTPError 로 전파된다. auth(credentials.httpx_auth)는 대상 자체가
+    로그인 보호된 다운로드 URL 일 때 인증을 싣는다 (대상 origin 과 동일).
     """
+    extra_headers, cookies = _auth_to_httpx(auth)
     dest_dir.mkdir(parents=True, exist_ok=True)
     with httpx.stream(
-        "GET", url, headers={"User-Agent": config.USER_AGENT},
-        follow_redirects=True,
+        "GET", url, headers={"User-Agent": config.USER_AGENT, **extra_headers},
+        cookies=cookies, follow_redirects=True,
         timeout=config.DOCUMENT_FETCH_TIMEOUT_SECONDS, verify=verify,
     ) as resp:
         resp.raise_for_status()
