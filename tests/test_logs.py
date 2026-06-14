@@ -4,8 +4,14 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import capture, config, db, pipeline, storage
+from chunchugwan import archive_worker, capture, config, db, pipeline, storage
 from chunchugwan.web import app as web_app
+
+
+def _drain_archive_jobs():
+    """큐에 쌓인 단발 아카이빙 작업을 동기로 모두 처리 (테스트 전용)."""
+    while archive_worker.process_next() is not None:
+        pass
 
 
 @pytest.fixture
@@ -383,10 +389,11 @@ def test_retry_queues_archive(client, monkeypatch):
         follow_redirects=False,
     )
     assert res.status_code == 303
-    # 필터를 유지한 채 복귀 + 알림 플래그 (TestClient 는 백그라운드 작업을 응답 후 즉시 실행)
+    # 필터를 유지한 채 복귀 + 알림 플래그. 캡처는 worker 가 큐를 소비해 실행한다.
     assert res.headers["location"] == "/logs?status=error&retry=queued"
+    _drain_archive_jobs()
     assert calls == ["https://b.com/y"]
-    assert not web_app._active_jobs  # 완료 후 진행 목록에서 해제
+    assert web_app._active_snapshot() == {}  # 완료 후 큐가 비워진다
 
 
 def test_retry_rejects_non_error_or_missing_log(client):
@@ -412,12 +419,11 @@ def test_retry_ignores_external_next(client, monkeypatch):
 
 
 def test_retry_active_when_already_running(client):
-    assert web_app._register_job("https://b.com/y")
-    try:
-        res = client.post(f"/logs/{_error_log_id()}/retry", follow_redirects=False)
-        assert res.headers["location"] == "/logs?retry=active"
-    finally:
-        web_app._unregister_job("https://b.com/y")
+    # 같은 URL 이 이미 큐에 있으면 재시도는 중복 등록하지 않고 retry=active 로 안내
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, "https://b.com/y", source="web")
+    res = client.post(f"/logs/{_error_log_id()}/retry", follow_redirects=False)
+    assert res.headers["location"] == "/logs?retry=active"
 
 
 def test_logs_retry_notice(client):

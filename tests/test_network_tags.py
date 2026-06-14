@@ -461,22 +461,21 @@ def test_post_archive_private_without_tag_rejected(client):
     assert res.headers["location"].startswith("/archive/new?")
 
 
-def test_post_archive_private_with_tag_queued(client, monkeypatch):
+def test_post_archive_private_with_tag_queued(client):
     tag_id = _make_tag()
-    seen = {}
-
-    def fake_run(url, force=False, interval_seconds=None, run_at=None,
-                 source="web", network_tag_id=None, credential_id=None):
-        seen.update(url=url, network_tag_id=network_tag_id)
-
-    monkeypatch.setattr(web_app, "_run_archive", fake_run)
     res = client.post(
         "/archive",
         data={"url": "http://192.168.0.10/wiki", "network_tag": tag_id},
         follow_redirects=False,
     )
     assert res.headers["location"].startswith("/archives?queued=")
-    assert seen == {"url": "http://192.168.0.10/wiki", "network_tag_id": tag_id}
+    # 네트워크 태그가 큐 작업에 실린다 (worker 가 캡처 시 적용)
+    with db.connect() as conn:
+        job = conn.execute(
+            "SELECT url, network_tag_id FROM archive_jobs"
+        ).fetchone()
+    assert job["url"] == "http://192.168.0.10/wiki"
+    assert job["network_tag_id"] == tag_id
 
 
 def test_post_archive_site_private_with_tag(client):
@@ -492,8 +491,7 @@ def test_post_archive_site_private_with_tag(client):
     assert crawl["network_tag_id"] == tag_id
 
 
-def test_post_archive_public_unaffected(client, monkeypatch):
-    monkeypatch.setattr(web_app, "_run_archive", lambda *a, **k: None)
+def test_post_archive_public_unaffected(client):
     res = client.post(
         "/archive", data={"url": "example.com/post"}, follow_redirects=False
     )
@@ -622,7 +620,5 @@ def test_api_archive_private_requires_tagged_page(client, monkeypatch):
     tag_id = _make_tag()
     _fake_capture(monkeypatch)
     pipeline.archive_url("http://192.168.0.10/wiki", network_tag_id=tag_id)
-    web_app._active_jobs.clear()
-    monkeypatch.setattr(web_app, "_run_archive", lambda *a, **k: None)
     res = client.post("/api/v1/archive", json={"url": "http://192.168.0.10/wiki"})
     assert res.status_code == 202

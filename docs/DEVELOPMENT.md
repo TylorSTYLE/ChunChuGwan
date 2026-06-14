@@ -43,7 +43,8 @@ uv run pytest                            # 테스트 (네트워크 불필요, ~1
 | `chunchugwan/capture.py` | Playwright 렌더링, 자원 인라인, 셀렉터 제거 |
 | `chunchugwan/extract.py` | 본문 추출(DOM 가시 텍스트 덤프) + 정규화 |
 | `chunchugwan/differ.py` | 텍스트 diff + 스크린샷 픽셀 diff |
-| `chunchugwan/pipeline.py` | 아카이빙 흐름 (CLI/대시보드 공용 쓰기 진입점) |
+| `chunchugwan/pipeline.py` | 아카이빙 흐름 (모든 캡처 경로의 공용 코어) |
+| `chunchugwan/archive_worker.py` | 단발 아카이빙 작업 큐(archive_jobs) 소비자 — worker·serve 가 폴링 |
 | `chunchugwan/auth.py` | 인증 코어 — argon2 해싱, 세션 토큰, TOTP |
 | `chunchugwan/oidc.py` | Authentik OIDC 클라이언트 (httpx + PyJWT) |
 | `chunchugwan/cli.py` | click CLI |

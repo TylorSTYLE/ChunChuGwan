@@ -191,12 +191,7 @@ def test_api_view_denied_without_can_view(client):
 # ---- 아카이빙 트리거 (아카이브 권한) ----
 
 
-def test_api_archive_triggers_pipeline(client, monkeypatch):
-    calls: list[tuple[str, bool, str]] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append((url, force, source)),
-    )
+def test_api_archive_triggers_pipeline(client):
     token = _issue()
     r = client.post(
         "/api/v1/archive", json={"url": "https://example.com/new?utm_source=x"},
@@ -204,7 +199,12 @@ def test_api_archive_triggers_pipeline(client, monkeypatch):
     )
     assert r.status_code == 202
     assert r.json() == {"queued": True, "url": "https://example.com/new"}
-    assert calls == [("https://example.com/new", False, "api")]
+    # 정규화된 URL 로 source='api' 작업이 큐에 등록된다 (worker 가 캡처)
+    with db.connect() as conn:
+        jobs = conn.execute("SELECT url, force, source FROM archive_jobs").fetchall()
+    assert [(j["url"], j["force"], j["source"]) for j in jobs] == [
+        ("https://example.com/new", 0, "api")
+    ]
 
 
 def test_api_archive_rejects_invalid_url(client):
@@ -224,13 +224,10 @@ def test_api_archive_denied_without_can_archive(client):
     assert r.status_code == 403
 
 
-def test_api_archive_skips_duplicate_in_progress(client, monkeypatch):
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": None,
-    )
+def test_api_archive_skips_duplicate_in_progress(client):
     token = _issue()
-    web_app._register_job("https://example.com/busy")
+    with db.connect() as conn:  # 같은 URL 이 이미 큐에 있는 상태
+        db.enqueue_archive_job(conn, "https://example.com/busy", source="api")
     r = client.post(
         "/api/v1/archive", json={"url": "https://example.com/busy"},
         headers=_headers(token),

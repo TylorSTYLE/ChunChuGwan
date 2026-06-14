@@ -25,7 +25,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import (
-    BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
+    FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
 )
 from fastapi.responses import (
     FileResponse,
@@ -35,9 +35,9 @@ from fastapi.responses import (
 )
 
 from .. import (
-    auth, backup, config, crawler, credentials, crypto, db, deletion, differ,
-    documents, netcheck, pipeline, resources, scheduler, searchindex, storage,
-    system_log,
+    archive_worker, auth, backup, config, crawler, credentials, crypto, db,
+    deletion, differ, documents, netcheck, resources, scheduler,
+    searchindex, storage, system_log,
 )
 from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -48,11 +48,12 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """서버 구동 동안 스케줄러·크롤러 폴링 스레드 운영 (WCCG_SCHEDULER=off 면 비활성).
+    """서버 구동 동안 스케줄러·크롤러·단발 아카이빙 폴링 스레드 운영
+    (WCCG_SCHEDULER=off 면 비활성 — 그 경우 `wccg worker` 가 큐를 소비한다).
 
-    진행 중 작업 레지스트리(claim/release)를 같이 써서 수동 재아카이빙과
-    같은 URL 이 동시에 돌지 않게 한다. 크롤러는 사이트 전체 아카이브 큐
-    (crawl_pages)를 소비한다 — 페이지 간 간격이 짧아 별도 폴링 주기를 쓴다.
+    진행 중 작업 레지스트리(claim/release)를 같이 써서 같은 URL 이 동시에
+    돌지 않게 한다. 크롤러는 사이트 전체 아카이브 큐(crawl_pages)를, 아카이빙
+    워커는 단발 아카이빙 큐(archive_jobs — 새/재아카이빙·API·CLI)를 소비한다.
     """
     # 시스템 로그 DB 적재 — `wccg serve` 가 이미 설치했으면 중복 설치 무시.
     # uvicorn 으로 직접 띄우는 경우를 위해 여기서도 보장한다.
@@ -77,6 +78,13 @@ async def _lifespan(app: FastAPI):
                 args=(stop,),
                 kwargs={"claim": _register_job, "release": _unregister_job},
                 name="wccg-crawler",
+                daemon=True,
+            ),
+            threading.Thread(
+                target=archive_worker.run_loop,
+                args=(stop,),
+                kwargs={"claim": _register_job, "release": _unregister_job},
+                name="wccg-archive",
                 daemon=True,
             ),
         ]
@@ -236,9 +244,10 @@ _ALLOWED_FILES["screenshot.png"] = _ALLOWED_FILES["screenshot"]
 
 _BADGES = {1: "changed", 0: "same"}
 
-# 진행 중 아카이빙 레지스트리 — 정규화 URL → 시작 시각(ISO 8601 UTC).
-# 이 프로세스의 BackgroundTasks 로 실행되는 작업만 추적한다
-# (CLI 등 별도 프로세스 실행은 보이지 않음. serve 는 단일 워커 전제).
+# 진행 중인 크롤·스케줄 작업 레지스트리 — 정규화 URL → 시작 시각(ISO 8601 UTC).
+# 같은 프로세스의 크롤러·스케줄러 스레드가 같은 URL 을 동시에 아카이빙하지
+# 않게 막는 claim 콜백용(단발 아카이빙 큐 소비자도 같은 레지스트리를 받는다).
+# 단발 아카이빙의 진행 상태 자체는 이제 archive_jobs 큐(DB)가 보존한다.
 _active_jobs: dict[str, str] = {}
 _active_lock = threading.Lock()
 
@@ -259,9 +268,13 @@ def _unregister_job(url: str) -> None:
 
 
 def _active_snapshot() -> dict[str, str]:
-    """진행 중 작업의 사본 (렌더링/폴링용)."""
+    """진행 중 작업의 사본 (렌더링/폴링용) — 단발 아카이빙 큐(pending+in_progress)와
+    인메모리 크롤·스케줄 진행을 합친 url→시각 매핑."""
+    with db.connect() as conn:
+        snap = {row["url"]: row["activity_at"] for row in db.list_active_archive_jobs(conn)}
     with _active_lock:
-        return dict(_active_jobs)
+        snap.update(_active_jobs)
+    return snap
 
 
 @app.get("/healthz")
@@ -509,7 +522,7 @@ def site_view(
 
 @app.post("/sites/{site_id}/failed/{log_id}/retry")
 def site_failed_retry(
-    request: Request, site_id: int, log_id: int, background: BackgroundTasks
+    request: Request, site_id: int, log_id: int
 ):
     """실패한 작업 재시도 — 해당 페이지를 백그라운드로 재아카이빙. admin/archiver 전용.
 
@@ -520,7 +533,7 @@ def site_failed_retry(
         log = db.get_site_failed_log(conn, site_id, log_id)
     if log is None:
         raise HTTPException(404, t(request, "실패 기록 없음"))
-    if _queue_archive(background, log["page_url"]):
+    if _queue_archive(log["page_url"]):
         audit.log(request, "실패 작업 재시도: %s", log["page_url"])
         params = {"notice": t(request, "아카이빙이 백그라운드에서 시작되었습니다")}
     else:
@@ -1529,43 +1542,7 @@ def logs_view(
     )
 
 
-def _run_archive(
-    url: str,
-    force: bool = False,
-    interval_seconds: int | None = None,
-    run_at: str | None = None,
-    source: str = "web",
-    network_tag_id: str | None = None,
-    credential_id: int | None = None,
-) -> None:
-    """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다 (source 포함).
-
-    interval_seconds 가 있으면 실행 후 자동 재아카이빙 주기를 등록한다 —
-    신규 URL 은 아카이빙이 끝나야 pages 행이 생기므로 등록을 여기서 한다.
-    """
-    try:
-        # network_tag_id·credential_id 는 줄 때만 넘긴다 (폼에서 선택)
-        extra: dict = {}
-        if network_tag_id:
-            extra["network_tag_id"] = network_tag_id
-        if credential_id:
-            extra["credential_id"] = credential_id
-        outcome = pipeline.archive_url(url, force=force, source=source, **extra)
-        logger.info("아카이빙 완료: %s [%s]", url, outcome.status)
-    except Exception:
-        logger.exception("아카이빙 실패: %s", url)
-    finally:
-        if interval_seconds:
-            try:
-                scheduler.set_schedule(url, interval_seconds, run_at=run_at)
-            except ValueError as e:
-                # 아카이빙 실패로 pages 행이 안 생겼으면 주기 등록도 불가
-                logger.warning("자동 재아카이빙 등록 실패: %s — %s", url, e)
-        _unregister_job(url)
-
-
 def _queue_archive(
-    background: BackgroundTasks,
     url: str,
     force: bool = False,
     interval_seconds: int | None = None,
@@ -1574,17 +1551,21 @@ def _queue_archive(
     network_tag_id: str | None = None,
     credential_id: int | None = None,
 ) -> bool:
-    """진행 목록 등록 후 백그라운드 작업 추가. 이미 진행 중이면 무시(False).
+    """단발 아카이빙 작업을 archive_jobs 큐에 추가. 같은 URL 이 이미 큐에 있으면
+    무시(False — 호출부가 기존처럼 '이미 진행 중' 안내를 띄운다).
 
-    등록은 응답 전(동기)에 해서 리다이렉트된 목록 화면이 바로 진행 상태를 본다.
+    실제 캡처는 worker(또는 serve 단일 프로세스)의 archive_worker 가 큐를
+    소비해 실행한다 — 대시보드 프로세스에서 직접 캡처하지 않는다. interval 이
+    있으면 소비자가 아카이빙 후 자동 재아카이빙 주기를 등록한다. URL 정규화·
+    netcheck 게이트·자격증명 검증은 라우트 본문이 enqueue 전에 동기로 끝내므로
+    잘못된 입력은 여전히 폼에서 즉시 에러로 보인다.
     """
-    if not _register_job(url):
-        return False
-    background.add_task(
-        _run_archive, url, force, interval_seconds, run_at, source,
-        network_tag_id, credential_id,
-    )
-    return True
+    with db.connect() as conn:
+        return db.enqueue_archive_job(
+            conn, url, force=force, source=source,
+            network_tag_id=network_tag_id, credential_id=credential_id,
+            interval_seconds=interval_seconds, run_at=run_at,
+        )
 
 
 def _require_archiver(request: Request) -> None:
@@ -1844,7 +1825,6 @@ def archive_credentials(request: Request, url: str = "") -> dict:
 @app.post("/archive")
 def archive_new(
     request: Request,
-    background: BackgroundTasks,
     url: str = Form(...),
     site: str = Form(""),
     crawl_max_pages: str = Form(""),
@@ -1905,7 +1885,7 @@ def archive_new(
             network_tag_id=tag_id, credential_id=link_credential_id,
         )
     if _queue_archive(
-        background, norm,
+        norm,
         interval_seconds=seconds or None, run_at=(run_at or None) if seconds else None,
         network_tag_id=tag_id, credential_id=link_credential_id,
     ):
@@ -1920,7 +1900,6 @@ def archive_new(
 def rearchive(
     request: Request,
     page_id: int,
-    background: BackgroundTasks,
     force: bool = Form(False),
 ):
     _require_archiver(request)
@@ -1928,7 +1907,7 @@ def rearchive(
         page = db.get_page_by_id(conn, page_id)
     if page is None:
         raise HTTPException(404, t(request, "페이지 없음"))
-    if _queue_archive(background, page["url"], force=force):
+    if _queue_archive(page["url"], force=force):
         audit.log(
             request, "재아카이빙 등록: %s%s", page["url"],
             " (강제)" if force else "",
@@ -1940,7 +1919,6 @@ def rearchive(
 def log_retry(
     request: Request,
     log_id: int,
-    background: BackgroundTasks,
     next_url: str = Form("/logs", alias="next"),
 ):
     """실패 로그의 URL 재시도 — 같은 URL 을 백그라운드로 다시 아카이빙.
@@ -1956,7 +1934,7 @@ def log_retry(
         raise HTTPException(404, t(request, "로그 없음"))
     if log["status"] != "error":
         raise HTTPException(400, t(request, "실패한 로그만 재시도할 수 있습니다"))
-    queued = _queue_archive(background, log["url"])
+    queued = _queue_archive(log["url"])
     if queued:
         audit.log(request, "실패 로그 재시도: %s", log["url"])
     # 필터를 유지한 채 로그 화면으로 복귀 — 내부 /logs 경로만 허용 (open redirect 방지)

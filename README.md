@@ -79,8 +79,9 @@ uv run playwright install chromium       # 최초 1회
 ## 사용법
 
 ```bash
-uv run wccg add <url>                # 스냅샷 생성
+uv run wccg add <url>                # 아카이빙 작업을 큐에 등록 (worker 가 캡처)
 uv run wccg add <url> --force        # 콘텐츠 동일해도 강제 저장
+uv run wccg archive run              # 큐에 쌓인 단발 아카이빙 작업 처리 (cron 용)
 uv run wccg list                     # 전체 아카이브 현황
 uv run wccg history <url>            # 해당 URL 스냅샷 목록 (번호는 diff에 사용)
 uv run wccg diff <url>               # 최신 2개 스냅샷 비교 (+ 스크린샷 픽셀 diff)
@@ -91,9 +92,14 @@ uv run wccg delete <url>             # 아카이브 전체 삭제 (모든 스냅
 uv run wccg delete <url> --snapshot 2  # history 번호의 스냅샷 하나만 삭제
 uv run wccg serve                    # 대시보드 (http://127.0.0.1:8765)
 uv run wccg serve --host 0.0.0.0     # 외부 노출 (인증 켜진 상태에서만 허용)
-uv run wccg worker                   # 아카이빙 워커 — 스케줄·크롤을 별도 프로세스에서 실행
-uv run wccg -v add <url>             # 단계별 상세 로그를 stderr 로 출력
+uv run wccg worker                   # 아카이빙 워커 — 단발·스케줄·크롤 큐를 별도 프로세스에서 소비
+uv run wccg -v archive run           # 캡처 단계별 상세 로그를 stderr 로 출력
 ```
+
+`wccg add` 는 작업을 큐에 넣을 뿐 캡처는 `wccg worker`(또는 대시보드/`wccg archive
+run`)가 소비해 실행한다 — `crawl add`/`crawl run` 과 같은 모델이다. 모든 아카이빙을
+한 프로세스로 모아, 봇 차단 우회용 스텔스 캡처 설정(`WCCG_CAPTURE_*`)을 그
+프로세스에만 두면 되게 한다.
 
 삭제는 대시보드의 목록(아카이브 전체)·타임라인(스냅샷 하나) 화면에서도 할 수
 있다 — 인증이 켜진 환경에서는 아카이빙 권한이 있는 사용자(admin/archiver)만

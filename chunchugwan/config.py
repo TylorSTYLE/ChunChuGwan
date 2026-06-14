@@ -95,6 +95,7 @@ CRAWL_RETRY_BACKOFF_MAX_SECONDS = 86400
 CRAWL_RETRY_BACKOFF_MAX_STEPS = 5          # 대기 항목 수 한도 — 최대 시도 6회
 CRAWL_STALE_CLAIM_SECONDS = 600      # 이보다 오래된 in_progress 는 중단으로 보고 복구
 CRAWLER_POLL_SECONDS = 2             # serve·워커 크롤러 폴링 간격
+ARCHIVE_POLL_SECONDS = 2             # serve·워커 단발 아카이빙 큐 폴링 간격 (archive_worker.py)
 
 # ---- 아카이빙 워커 (`wccg worker`, worker.py) ----
 # 크롤 스레드 수 = 동시에 진행되는 크롤(사이트) 수. 같은 크롤은 스레드가

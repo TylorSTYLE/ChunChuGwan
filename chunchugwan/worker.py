@@ -1,8 +1,9 @@
 """백그라운드 아카이빙 워커 — 대시보드 프로세스 밖에서 큐를 소비한다.
 
-`wccg worker` 가 실행한다. 페이지 스케줄(schedules)·크롤 큐(crawl_pages)·
-크롤 스케줄(crawl_schedules)을 이 프로세스에서 처리해, 아카이빙의 CPU
-부하(렌더링·추출·압축)가 대시보드(serve) 응답을 막지 않게 한다.
+`wccg worker` 가 실행한다. 단발 아카이빙 큐(archive_jobs — 새/재아카이빙·
+API·CLI add)·페이지 스케줄(schedules)·크롤 큐(crawl_pages)·크롤 스케줄
+(crawl_schedules)을 이 프로세스에서 처리해, 아카이빙의 CPU 부하(렌더링·
+추출·압축)가 대시보드(serve) 응답을 막지 않게 한다.
 serve 와 함께 쓸 때는 serve 쪽 내장 폴링을 WCCG_SCHEDULER=off 로 끈다
 (compose.example.yaml 의 dashboard + worker 구성 참조).
 
@@ -17,7 +18,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from . import config, crawler, scheduler
+from . import archive_worker, config, crawler, scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,14 @@ def run(stop: threading.Event, *, crawl_workers: int = 1) -> None:
             },
             name="wccg-worker-scheduler",
             daemon=True,
-        )
+        ),
+        threading.Thread(
+            target=archive_worker.run_loop,
+            args=(stop,),
+            kwargs={"claim": registry.claim, "release": registry.release},
+            name="wccg-worker-archive",
+            daemon=True,
+        ),
     ]
     for i in range(crawl_workers):
         threads.append(

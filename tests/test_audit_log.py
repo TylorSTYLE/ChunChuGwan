@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import auth, config, db, system_log
+from chunchugwan import archive_worker, auth, config, db, system_log
 from chunchugwan.web import app as web_app
 
 _AUDIT_LOGGER = "chunchugwan.web.audit"
@@ -51,9 +51,9 @@ def audit_logs(caplog):
 
 
 def _fake_archive(monkeypatch):
-    """백그라운드 캡처를 무력화 — 감사 로그는 등록 시점에 남는다."""
+    """캡처(worker 큐 소비)를 무력화 — 감사 로그는 enqueue 시점에 남는다."""
     monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
+        archive_worker.pipeline, "archive_url",
         lambda url, force=False, source="cli", **kw: SimpleNamespace(status="archived"),
     )
 
