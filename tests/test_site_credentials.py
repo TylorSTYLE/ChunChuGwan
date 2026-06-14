@@ -5,7 +5,9 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import auth, config, credentials, crypto, db, deletion, storage
+from chunchugwan import (
+    archive_worker, auth, config, credentials, crypto, db, deletion, storage,
+)
 from chunchugwan.web import app as web_app
 
 URL = "https://example.com/post"
@@ -380,15 +382,25 @@ class _Outcome:
 
 
 def _stub_archive(monkeypatch):
-    """/archive 의 실제 캡처를 가로채고 호출 인자(url·credential_id 등)를 기록."""
+    """캡처(pipeline.archive_url)를 가로채 호출 인자(url·credential_id 등)를 기록.
+
+    아카이빙은 이제 archive_worker 가 큐를 소비해 실행하므로, POST 후 _drain()
+    으로 큐를 비워야 fake 가 호출된다.
+    """
     calls = []
 
     def fake(url, **kwargs):
         calls.append({"url": url, **kwargs})
         return _Outcome()
 
-    monkeypatch.setattr(web_app.pipeline, "archive_url", fake)
+    monkeypatch.setattr(archive_worker.pipeline, "archive_url", fake)
     return calls
+
+
+def _drain():
+    """큐에 쌓인 단발 아카이빙 작업을 동기로 모두 처리 (테스트 전용)."""
+    while archive_worker.process_next() is not None:
+        pass
 
 
 def _archive_data(**over):
@@ -443,6 +455,7 @@ def test_archive_stores_credential_for_new_site(client, monkeypatch):
             "username": "siteuser", "password": "sitepass"
         }
         new_id = creds[0]["id"]
+    _drain()
     assert len(calls) == 1                        # 아카이빙도 트리거됨
     assert calls[0]["credential_id"] == new_id    # 새 자격증명이 페이지에 연결됨
 
@@ -505,6 +518,7 @@ def test_archive_credential_ignored_for_non_admin(client, monkeypatch):
     _login(client, "arch@test.co", "password1234")
     r = client.post("/archive", data=_archive_data(), follow_redirects=False)
     assert r.status_code == 303
+    _drain()
     assert len(calls) == 1                        # 아카이빙은 진행
     assert _site_id_for("login.example.org") is None   # 자격증명 경로는 무시됨
 
@@ -519,6 +533,7 @@ def test_archive_without_credential_selection_skips(client, monkeypatch):
         follow_redirects=False,
     )
     assert r.status_code == 303
+    _drain()
     assert len(calls) == 1
     assert calls[0].get("credential_id") is None         # 연결 안 함
     assert _site_id_for("nocred.example.org") is None  # 자격증명 미저장
@@ -611,6 +626,7 @@ def test_archive_connect_existing_credential(client, monkeypatch):
         follow_redirects=False,
     )
     assert r.status_code == 303
+    _drain()
     assert len(calls) == 1
     assert calls[0]["credential_id"] == cid    # 연결된 자격증명이 아카이브로 전달됨
     # 새 자격증명을 만들지 않는다
@@ -664,6 +680,7 @@ def test_archive_connect_ignored_for_non_admin(client, monkeypatch):
         follow_redirects=False,
     )
     assert r.status_code == 303
+    _drain()
     assert len(calls) == 1 and calls[0].get("credential_id") is None
 
 

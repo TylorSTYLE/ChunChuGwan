@@ -6,11 +6,40 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from chunchugwan import config, db, documents, storage
+from chunchugwan import archive_worker, config, crawler, db, documents, storage
 from chunchugwan.web import app as web_app
 
 GUIDE_BODY = b"%PDF-1.4 cas fixture"
 GUIDE_SHA = hashlib.sha256(GUIDE_BODY).hexdigest()
+
+
+class _Outcome:
+    """process_next 가 읽는 최소 ArchiveOutcome 대체 (status 만 필요)."""
+
+    status = "new"
+    snapshot_id = 1
+    page_links: list = []
+
+
+def _stub_capture(monkeypatch, fake):
+    """단발 아카이빙은 이제 archive_worker 가 큐를 소비해 실행한다 — 그 캡처
+    함수(pipeline.archive_url)를 fake 로 교체한다. POST 후 _drain_archive_jobs()
+    로 큐를 비워야 fake 가 호출된다."""
+    monkeypatch.setattr(archive_worker.pipeline, "archive_url", fake)
+
+
+def _drain_archive_jobs():
+    """큐에 쌓인 단발 아카이빙 작업을 동기로 모두 처리 (테스트 전용)."""
+    while archive_worker.process_next() is not None:
+        pass
+
+
+def _archive_jobs():
+    """현재 큐에 있는 단발 아카이빙 작업 행 목록 (검증용)."""
+    with db.connect() as conn:
+        return conn.execute(
+            "SELECT url, force, source, interval_seconds FROM archive_jobs ORDER BY id"
+        ).fetchall()
 
 
 @pytest.fixture
@@ -189,12 +218,7 @@ def test_site_failed_jobs_cleared_after_success(client):
     assert "boom" not in res.text
 
 
-def test_site_failed_retry_queues_archive(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
+def test_site_failed_retry_queues_archive(client):
     log_id = _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
     with db.connect() as conn:
         site = db.get_site_by_key(conn, "example.com")
@@ -203,7 +227,8 @@ def test_site_failed_retry_queues_archive(client, monkeypatch):
     )
     assert res.status_code == 303
     assert res.headers["location"].startswith(f"/sites/{site['id']}?notice=")
-    assert calls == ["https://example.com/post"]
+    # 재시도는 단발 아카이빙 큐에 작업을 넣는다 (worker 가 소비)
+    assert [j["url"] for j in _archive_jobs()] == ["https://example.com/post"]
 
 
 def _insert_failed_crawl_page(
@@ -574,41 +599,29 @@ def test_diff_bad_range(client):
     assert client.get("/diff/1?from=2&to=1").status_code == 400
 
 
-def test_rearchive_triggers_pipeline(client, monkeypatch):
-    calls: list[tuple[str, bool]] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append((url, force)),
-    )
+def test_rearchive_triggers_pipeline(client):
     res = client.post("/page/1/rearchive", follow_redirects=False)
     assert res.status_code == 303
     assert res.headers["location"] == "/page/1?queued=1"
-    assert calls == [("https://example.com/post", False)]
+    # 재아카이빙은 큐에 작업을 넣는다 (worker 가 캡처)
+    jobs = _archive_jobs()
+    assert [(j["url"], j["force"]) for j in jobs] == [("https://example.com/post", 0)]
 
 
-def test_rearchive_force(client, monkeypatch):
-    calls: list[tuple[str, bool]] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append((url, force)),
-    )
+def test_rearchive_force(client):
     res = client.post(
         "/page/1/rearchive", data={"force": "1"}, follow_redirects=False
     )
     assert res.status_code == 303
-    assert calls == [("https://example.com/post", True)]
+    jobs = _archive_jobs()
+    assert [(j["url"], j["force"]) for j in jobs] == [("https://example.com/post", 1)]
 
 
 def test_rearchive_unknown_page(client):
     assert client.post("/page/999/rearchive").status_code == 404
 
 
-def test_archive_new_url_triggers_pipeline(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
+def test_archive_new_url_triggers_pipeline(client):
     res = client.post(
         "/archive",
         data={"url": "https://example.com/new?utm_source=x"},
@@ -616,22 +629,17 @@ def test_archive_new_url_triggers_pipeline(client, monkeypatch):
     )
     assert res.status_code == 303
     assert res.headers["location"].startswith("/archives?queued=")
-    # 정규화된 URL(트래킹 파라미터 제거)로 파이프라인 호출
-    assert calls == ["https://example.com/new"]
+    # 정규화된 URL(트래킹 파라미터 제거)로 큐에 등록된다
+    assert [j["url"] for j in _archive_jobs()] == ["https://example.com/new"]
 
 
-def test_archive_invalid_url_rejected(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
+def test_archive_invalid_url_rejected(client):
     res = client.post("/archive", data={"url": "ftp://example.com/x"}, follow_redirects=False)
     assert res.status_code == 303
-    # 에러는 새 아카이빙 폼으로 돌아가 입력값을 유지한 채 보여준다
+    # 에러는 새 아카이빙 폼으로 돌아가 입력값을 유지한 채 보여준다 (큐 등록 전 동기 검증)
     assert res.headers["location"].startswith("/archive/new?error=")
     assert "url=ftp" in res.headers["location"]
-    assert calls == []
+    assert _archive_jobs() == []
 
 
 def test_archive_new_form_page(client):
@@ -646,11 +654,8 @@ def test_archive_new_form_page(client):
 
 
 def test_archive_with_interval_sets_schedule(client, monkeypatch):
-    """주기를 함께 등록하면 아카이빙 완료 후 스케줄이 생성된다."""
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": None,
-    )
+    """주기를 함께 등록하면 아카이빙 완료 후(큐 소비 시) 스케줄이 생성된다."""
+    _stub_capture(monkeypatch, lambda url, **kw: _Outcome())
     res = client.post(
         "/archive",
         data={"url": "https://example.com/post", "interval": "3600"},
@@ -658,6 +663,7 @@ def test_archive_with_interval_sets_schedule(client, monkeypatch):
     )
     assert res.status_code == 303
     assert res.headers["location"].startswith("/archives?queued=")
+    _drain_archive_jobs()  # worker 가 캡처 후 주기를 등록
     with db.connect() as conn:
         sched = db.get_schedule(conn, 1)
     assert sched is not None and sched["interval_seconds"] == 3600
@@ -665,10 +671,7 @@ def test_archive_with_interval_sets_schedule(client, monkeypatch):
 
 def test_archive_with_custom_interval_and_run_at(client, monkeypatch):
     """직접 입력 주기(2일) + 실행 시각이 스케줄에 반영된다."""
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": None,
-    )
+    _stub_capture(monkeypatch, lambda url, **kw: _Outcome())
     res = client.post(
         "/archive",
         data={
@@ -678,18 +681,14 @@ def test_archive_with_custom_interval_and_run_at(client, monkeypatch):
         follow_redirects=False,
     )
     assert res.status_code == 303
+    _drain_archive_jobs()  # worker 가 캡처 후 주기를 등록
     with db.connect() as conn:
         sched = db.get_schedule(conn, 1)
     assert sched["interval_seconds"] == 2 * 86400
     assert sched["run_at_time"] == "09:00"
 
 
-def test_archive_rejects_run_at_for_hourly_interval(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
+def test_archive_rejects_run_at_for_hourly_interval(client):
     res = client.post(
         "/archive",
         data={"url": "https://example.com/post", "interval": "3600", "run_at": "09:00"},
@@ -697,27 +696,20 @@ def test_archive_rejects_run_at_for_hourly_interval(client, monkeypatch):
     )
     assert res.status_code == 303
     assert res.headers["location"].startswith("/archive/new?error=")
-    assert calls == []
+    assert _archive_jobs() == []  # 검증 실패 시 큐에 등록하지 않는다
 
 
 def test_archive_without_interval_no_schedule(client, monkeypatch):
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": None,
-    )
+    _stub_capture(monkeypatch, lambda url, **kw: _Outcome())
     client.post(
         "/archive", data={"url": "https://example.com/post"}, follow_redirects=False
     )
+    _drain_archive_jobs()
     with db.connect() as conn:
         assert db.get_schedule(conn, 1) is None
 
 
-def test_archive_rejects_out_of_range_interval(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
+def test_archive_rejects_out_of_range_interval(client):
     res = client.post(
         "/archive",
         data={"url": "https://example.com/post", "interval": "60"},
@@ -725,23 +717,26 @@ def test_archive_rejects_out_of_range_interval(client, monkeypatch):
     )
     assert res.status_code == 303
     assert res.headers["location"].startswith("/archive/new?error=")
-    assert calls == []
+    assert _archive_jobs() == []  # 검증 실패 시 큐에 등록하지 않는다
     with db.connect() as conn:
         assert db.get_schedule(conn, 1) is None
 
 
 def test_archive_interval_skipped_when_page_missing(client, monkeypatch):
     """신규 URL 아카이빙이 실패하면 pages 행이 없어 주기 등록도 건너뛴다."""
-    def boom(url, force=False, source="cli"):
+    def boom(url, **kw):
         raise RuntimeError("캡처 실패")
 
-    monkeypatch.setattr(web_app.pipeline, "archive_url", boom)
+    _stub_capture(monkeypatch, boom)
+    # 재시도 없이 1회 실패로 종결 → 작업이 큐에서 제거되게 백오프를 비운다
+    monkeypatch.setattr(crawler, "retry_backoff", lambda conn: ())
     res = client.post(
         "/archive",
         data={"url": "https://example.com/brand-new", "interval": "3600"},
         follow_redirects=False,
     )
-    assert res.status_code == 303  # 백그라운드 실패가 응답을 깨지 않는다
+    assert res.status_code == 303
+    _drain_archive_jobs()  # 캡처 실패 → 주기 등록 안 됨
     assert client.get("/archive/active").json() == {"active": []}
     with db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM schedules").fetchone()[0] == 0
@@ -755,27 +750,30 @@ def test_index_shows_queued_banner(client):
 
 def test_archive_registers_active_job_and_clears_on_finish(client, monkeypatch):
     seen: list[list[str]] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": seen.append(
-            sorted(web_app._active_snapshot())
-        ),
+    _stub_capture(
+        monkeypatch,
+        lambda url, **kw: seen.append(sorted(web_app._active_snapshot())) or _Outcome(),
     )
     res = client.post(
         "/archive", data={"url": "https://example.com/new"}, follow_redirects=False
     )
     assert res.status_code == 303
-    # 파이프라인 실행 중에는 진행 목록에 있고, 끝나면 비워진다
+    # enqueue 직후엔 대기(pending) 작업이 진행 목록에 보인다
+    assert client.get("/archive/active").json() == {"active": ["https://example.com/new"]}
+    _drain_archive_jobs()
+    # 캡처 실행 중에도 진행 목록에 있었고(in_progress), 끝나면 비워진다
     assert seen == [["https://example.com/new"]]
     assert client.get("/archive/active").json() == {"active": []}
 
 
 def test_active_job_cleared_even_on_failure(client, monkeypatch):
-    def boom(url, force=False, source="cli"):
+    def boom(url, **kw):
         raise RuntimeError("캡처 실패")
 
-    monkeypatch.setattr(web_app.pipeline, "archive_url", boom)
+    _stub_capture(monkeypatch, boom)
+    monkeypatch.setattr(crawler, "retry_backoff", lambda conn: ())  # 재시도 없이 종결
     client.post("/archive", data={"url": "https://example.com/new"}, follow_redirects=False)
+    _drain_archive_jobs()
     assert client.get("/archive/active").json() == {"active": []}
 
 
@@ -801,18 +799,15 @@ def test_archive_active_endpoint_sorted(client):
     }
 
 
-def test_archive_duplicate_url_not_requeued(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
-    web_app._register_job("https://example.com/new")  # 이미 진행 중인 상태
+def test_archive_duplicate_url_not_requeued(client):
+    # 이미 큐에 있는 작업을 시드 — 같은 URL 은 중복 등록되지 않는다 (부분 UNIQUE)
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, "https://example.com/new", source="web")
     res = client.post(
         "/archive", data={"url": "https://example.com/new"}, follow_redirects=False
     )
     assert res.status_code == 303
-    assert calls == []
+    assert len(_archive_jobs()) == 1  # 큐에 여전히 1건
 
 
 def test_period_starts_boundaries():
@@ -880,16 +875,13 @@ def test_dashboard_total_bytes_is_actual_storage(client):
     assert f'id="stat-bytes">{web_app.templates.env.filters["filesize"](expected)}</div>' in res.text
 
 
-def test_rearchive_duplicate_not_requeued(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
-    web_app._register_job("https://example.com/post")
+def test_rearchive_duplicate_not_requeued(client):
+    # 같은 URL 이 이미 큐에 있으면 재아카이빙은 중복 등록하지 않는다
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, "https://example.com/post", source="web")
     res = client.post("/page/1/rearchive", follow_redirects=False)
     assert res.status_code == 303
-    assert calls == []
+    assert len(_archive_jobs()) == 1
 
 
 def test_schedule_set_and_shown(client):

@@ -33,8 +33,10 @@ SEARCH·DOCKER·API·AUTHENTICATION·DEVELOPMENT — README 는 빠른 시작 + 
 ```bash
 uv sync                                  # 의존성 설치
 uv run playwright install chromium       # 최초 1회
-uv run wccg add <url>                    # 스냅샷 생성
+uv run wccg add <url>                    # 아카이빙 작업을 큐에 등록 (worker 가 캡처)
 uv run wccg add <url> --force            # 콘텐츠 동일해도 강제 저장
+uv run wccg archive run                  # 기한이 된 단발 아카이빙 작업 1회 처리 (cron 용,
+                                         #   serve/worker 가 돌고 있으면 자동 처리되어 불필요)
 uv run wccg list                         # 전체 아카이브 현황
 uv run wccg history <url>                # 해당 URL 스냅샷 목록
 uv run wccg diff <url>                   # 최신 2개 스냅샷 비교
@@ -57,8 +59,9 @@ uv run wccg crawl schedule add <url> --every 1w  # 주기적 사이트 재아카
 uv run wccg crawl schedule list          # 크롤 스케줄 목록 / remove <url> 로 해제
 uv run wccg serve                        # 대시보드 (127.0.0.1:8765)
 uv run wccg serve --host 0.0.0.0         # 외부 노출 (인증 켜진 상태에서만 허용)
-uv run wccg worker [--workers N]         # 아카이빙 워커 — 스케줄·크롤 큐 소비 (worker.py,
-                                         #   serve 와 분리 실행 시 WCCG_SCHEDULER=off, N=동시 크롤 수)
+uv run wccg worker [--workers N]         # 아카이빙 워커 — 단발 아카이빙·스케줄·크롤 큐
+                                         #   소비 (worker.py, serve 와 분리 시 WCCG_SCHEDULER=off,
+                                         #   N=동시 크롤 수)
 uv run wccg backup [dest]                # 전체 백업 tar.gz (DB·인증 포함)
 uv run wccg restore <file> [--yes]       # 전체 복원 (현재 데이터를 백업 시점으로 교체)
 uv run wccg export [dest]                # 아카이브 데이터만 내보내기 (인증 데이터 제외)
@@ -240,6 +243,17 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   serve/worker/cli·트레이스백). 비차단 큐 + 쓰기 스레드, 보관 한도
   (`WCCG_SYSTEM_LOG_MAX_ROWS`) 초과분 자동 정리. 대시보드 `/system/logs`
   (관리자 전용)의 데이터 소스
+- `archive_jobs` — 단발(즉시) 아카이빙 작업 큐. 대시보드 새/재아카이빙·실패
+  재시도·REST API·CLI `add` 가 캡처를 직접 실행하지 않고 이 큐에 넣으면,
+  worker(또는 serve 단일 프로세스)의 `archive_worker` 가 소비해 `pipeline.archive_url`
+  을 호출한다 — 캡처 실행 지점을 한 프로세스로 통일해 스텔스 캡처 설정
+  (`WCCG_CAPTURE_*`)이 그 프로세스에만 있으면 되게 한다. `crawl_pages` 와 같은
+  'DB 큐 + 원자적 클레임 + 폴링' 패턴(pending/in_progress, attempts·next_attempt_at·
+  claimed_at·error). 같은 URL 의 활성 작업은 부분 UNIQUE 로 하나만(중복 enqueue
+  무시). 회차·범위·링크추적·페이싱이 없어 단순하며, 완료/최종실패 행은 삭제하고
+  결과·오류는 `archive_logs` 가 보존한다. interval 이 실리면 소비자가 캡처 후
+  주기를 `schedules` 에 등록한다. `wccg worker`/serve(`WCCG_SCHEDULER`)/`wccg archive
+  run` 이 소비한다. 진행 상태(`/archive/active` 폴링)의 데이터 소스
 - `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1개월, 다음 실행 시각,
   1일 단위 주기는 `run_at_time` HH:MM 으로 실행 시각 지정 — 서버 로컬 시간)
 - `crawls` / `crawl_pages` — 사이트 전체 아카이브의 실행 회차. 크롤(범위

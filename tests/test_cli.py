@@ -140,6 +140,52 @@ def test_worker_command_runs_with_resolved_count(monkeypatch):
         signal.signal(signal.SIGTERM, old_term)
 
 
+# ---- add (큐 등록) + archive run (큐 소비) ----
+
+
+def test_add_enqueues_job(archive_env):
+    res = CliRunner().invoke(cli.main, ["add", "https://example.com/new?utm_source=x"])
+    assert res.exit_code == 0
+    assert "큐에 추가" in res.output
+    with db.connect() as conn:  # 정규화된 URL 로 source='cli' 작업이 등록된다
+        jobs = conn.execute("SELECT url, source FROM archive_jobs").fetchall()
+    assert [(j["url"], j["source"]) for j in jobs] == [("https://example.com/new", "cli")]
+
+
+def test_add_skips_duplicate(archive_env):
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, "https://example.com/new", source="cli")
+    res = CliRunner().invoke(cli.main, ["add", "https://example.com/new"])
+    assert res.exit_code == 0 and "이미 큐에 있어" in res.output
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM archive_jobs").fetchone()["c"] == 1
+
+
+def test_archive_run_drains_queue(archive_env, monkeypatch):
+    from chunchugwan import archive_worker
+    from chunchugwan.pipeline import ArchiveOutcome
+
+    monkeypatch.setattr(
+        archive_worker.pipeline, "archive_url",
+        lambda url, **kw: ArchiveOutcome(
+            status="new", url=url, content_hash="0" * 64, snapshot_dir=None,
+            taken_at=None, last_taken_at=None, http_status=200, title="t", snapshot_id=1,
+        ),
+    )
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, "https://example.com/new", source="cli")
+    res = CliRunner().invoke(cli.main, ["archive", "run"])
+    assert res.exit_code == 0
+    assert "https://example.com/new" in res.output and "신규" in res.output
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM archive_jobs").fetchone()["c"] == 0
+
+
+def test_archive_run_empty(archive_env):
+    res = CliRunner().invoke(cli.main, ["archive", "run"])
+    assert res.exit_code == 0 and "처리할 아카이빙 작업이 없습니다" in res.output
+
+
 # ---- compact (저장공간 최적화) ----
 
 

@@ -175,6 +175,27 @@ CREATE TABLE IF NOT EXISTS crawl_pages (
 );
 CREATE INDEX IF NOT EXISTS idx_crawl_pages_status ON crawl_pages(crawl_id, status);
 
+CREATE TABLE IF NOT EXISTS archive_jobs (
+    id               INTEGER PRIMARY KEY,
+    url              TEXT NOT NULL,                 -- 정규화 URL
+    force            INTEGER NOT NULL DEFAULT 0,
+    source           TEXT NOT NULL DEFAULT 'web',   -- cli|web|api
+    network_tag_id   TEXT REFERENCES network_tags(id),         -- 사설 대역의 로컬 네트워크 태그
+    credential_id    INTEGER REFERENCES site_credentials(id),  -- 적용할 로그인 자격증명(선택)
+    interval_seconds INTEGER,             -- 아카이빙 후 자동 재아카이빙 주기 등록용(선택)
+    run_at           TEXT,                -- 'HH:MM' 서버 로컬 (1일 단위 주기 실행 시각)
+    status           TEXT NOT NULL DEFAULT 'pending', -- pending|in_progress (done/failed 는 삭제)
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at  TEXT,                -- 재시도 대기 시각 (NULL = 즉시 가능)
+    claimed_at       TEXT,                -- in_progress 시작 시각 (중단 복구 판정용)
+    error            TEXT,                -- 마지막 실패 사유 (재시도 대기 중 표시용)
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_archive_jobs_status ON archive_jobs(status, next_attempt_at);
+-- 같은 URL 의 활성(대기·진행) 작업은 하나만 — 중복 enqueue 를 DB 레벨에서 차단
+CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_jobs_active
+    ON archive_jobs(url) WHERE status IN ('pending', 'in_progress');
+
 CREATE TABLE IF NOT EXISTS crawl_schedules (
     id               INTEGER PRIMARY KEY,
     start_url        TEXT NOT NULL UNIQUE,  -- 정규화된 시작 URL
@@ -1965,6 +1986,131 @@ def fail_crawl_page(
         """,
         (status, attempts, error, next_attempt_at, crawl_page_id),
     )
+
+
+# ---- 단발 아카이빙 작업 큐 (archive_jobs — archive_worker.py 가 소비) ----
+
+def enqueue_archive_job(
+    conn: sqlite3.Connection,
+    url: str,
+    *,
+    force: bool = False,
+    source: str = "web",
+    network_tag_id: str | None = None,
+    credential_id: int | None = None,
+    interval_seconds: int | None = None,
+    run_at: str | None = None,
+) -> bool:
+    """단발 아카이빙 작업을 큐에 추가. 같은 URL 의 활성 작업이 이미 있으면 무시(False).
+
+    중복 차단은 부분 UNIQUE 인덱스(idx_archive_jobs_active)가 한다 — INSERT OR
+    IGNORE 가 활성 중복이면 0행을 넣고 False 를 반환한다 (현재 _register_job 의
+    중복-방지 역할 대체).
+    """
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO archive_jobs
+            (url, force, source, network_tag_id, credential_id,
+             interval_seconds, run_at, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        """,
+        (url, 1 if force else 0, source, network_tag_id, credential_id,
+         interval_seconds, run_at, _utcnow()),
+    )
+    return cur.rowcount == 1
+
+
+def claim_due_archive_job(
+    conn: sqlite3.Connection, now_iso: str
+) -> sqlite3.Row | None:
+    """기한이 된 대기 작업 하나를 원자적으로 클레임 (in_progress). 없으면 None.
+
+    조건부 UPDATE 의 status='pending' 가 멀티 프로세스(serve 폴링 + worker +
+    CLI) 경합을 막는다 — 경합 시 rowcount!=1 → None.
+    """
+    row = conn.execute(
+        """
+        SELECT * FROM archive_jobs
+        WHERE status = 'pending'
+          AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+        ORDER BY id LIMIT 1
+        """,
+        (now_iso,),
+    ).fetchone()
+    if row is None:
+        return None
+    cur = conn.execute(
+        """
+        UPDATE archive_jobs SET status = 'in_progress', claimed_at = ?
+        WHERE id = ? AND status = 'pending'
+        """,
+        (now_iso, row["id"]),
+    )
+    if cur.rowcount != 1:
+        return None
+    return row
+
+
+def release_archive_job(conn: sqlite3.Connection, job_id: int) -> None:
+    """클레임 반납 (in_progress → pending, 시도 수 미증가) — 다음 폴링에서 재시도."""
+    conn.execute(
+        """
+        UPDATE archive_jobs SET status = 'pending', claimed_at = NULL
+        WHERE id = ? AND status = 'in_progress'
+        """,
+        (job_id,),
+    )
+
+
+def recover_stale_archive_jobs(conn: sqlite3.Connection, cutoff_iso: str) -> int:
+    """클레임 후 오래 방치된 in_progress 를 pending 으로 복구 (프로세스 중단 대비)."""
+    cur = conn.execute(
+        """
+        UPDATE archive_jobs SET status = 'pending', claimed_at = NULL
+        WHERE status = 'in_progress' AND claimed_at <= ?
+        """,
+        (cutoff_iso,),
+    )
+    return cur.rowcount
+
+
+def finish_archive_job(conn: sqlite3.Connection, job_id: int) -> None:
+    """작업 성공 — 큐에서 삭제한다. 결과는 archive_logs 가 보존한다."""
+    conn.execute("DELETE FROM archive_jobs WHERE id = ?", (job_id,))
+
+
+def fail_archive_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    attempts: int,
+    error: str,
+    next_attempt_at: str | None,
+) -> None:
+    """작업 실패 — 재시도 시각이 있으면 pending 으로 되돌리고, 없으면(최종 실패)
+    큐에서 삭제한다. 최종 실패 사유는 pipeline 이 archive_logs(error)에 남겼다."""
+    if next_attempt_at:
+        conn.execute(
+            """
+            UPDATE archive_jobs
+            SET status = 'pending', attempts = ?, error = ?,
+                next_attempt_at = ?, claimed_at = NULL
+            WHERE id = ?
+            """,
+            (attempts, error, next_attempt_at, job_id),
+        )
+    else:
+        conn.execute("DELETE FROM archive_jobs WHERE id = ?", (job_id,))
+
+
+def list_active_archive_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """활성(pending|in_progress) 작업의 url·시각 — 진행 표시(_active_snapshot)용."""
+    return conn.execute(
+        """
+        SELECT url, COALESCE(claimed_at, created_at) AS activity_at
+        FROM archive_jobs WHERE status IN ('pending', 'in_progress')
+        """
+    ).fetchall()
 
 
 def finish_crawl_if_done(conn: sqlite3.Connection, crawl_id: int) -> bool:

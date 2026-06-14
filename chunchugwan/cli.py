@@ -10,11 +10,11 @@ from pathlib import Path
 import click
 
 from . import __version__
+from . import archive_worker
 from . import backup as backup_mod
-from . import capture as capture_mod
 from . import worker as worker_mod
 from . import (
-    config, crawler, db, deletion, differ, optimize, pipeline, resources,
+    config, crawler, db, deletion, differ, optimize, resources,
     scheduler, searchindex, storage, system_log,
 )
 
@@ -48,22 +48,55 @@ def main(ctx: click.Context, verbose: bool) -> None:
 @click.argument("url")
 @click.option("--force", is_flag=True, help="콘텐츠가 동일해도 스냅샷 강제 저장")
 def add(url: str, force: bool) -> None:
-    """URL을 아카이빙한다."""
-    try:
-        outcome = pipeline.archive_url(url, force=force)
-    except (ValueError, capture_mod.CaptureError) as e:
-        raise click.ClickException(str(e))
+    """URL 아카이빙 작업을 큐에 추가한다.
 
-    if outcome.status == "unchanged":
-        click.echo(f"변경 없음 (마지막 스냅샷 {outcome.last_taken_at})")
-        return
-    click.echo(f"저장됨 [{_STATUS_LABELS[outcome.status]}]: {outcome.snapshot_dir}")
-    click.echo(
-        f"  hash {outcome.content_hash[:12]}  http {outcome.http_status}  "
-        f"title {outcome.title or '-'}"
-    )
-    if outcome.documents:
-        click.echo(f"  첨부 문서 {outcome.documents}개 저장 (files/)")
+    실제 캡처는 `wccg worker`(또는 serve 단일 프로세스)나 `wccg archive run`
+    이 큐를 소비해 실행한다 — 모든 아카이빙을 한 프로세스로 통일해 스텔스
+    캡처 설정(WCCG_CAPTURE_*)이 그 프로세스에만 있으면 되게 한다.
+    """
+    try:
+        norm = storage.normalize_url(url)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    with db.connect() as conn:
+        queued = db.enqueue_archive_job(conn, norm, force=force, source="cli")
+    if queued:
+        click.echo(f"아카이빙 작업을 큐에 추가했습니다: {norm}")
+        click.echo("  `wccg worker` 또는 `wccg archive run` 이 처리합니다.")
+    else:
+        click.echo(f"이미 큐에 있어 건너뜁니다: {norm}")
+
+
+_ARCHIVE_STATUS_LABELS = {
+    "new": "신규", "changed": "변경", "unchanged": "변경 없음",
+    "forced_same": "동일(강제 저장)", "retry": "재시도 예약",
+    "failed": "실패", "skipped": "건너뜀",
+}
+
+
+@main.group()
+def archive() -> None:
+    """단발 아카이빙 작업 큐 (add·대시보드·API 가 넣은 작업)."""
+
+
+@archive.command("run")
+def archive_run() -> None:
+    """기한이 된 단발 아카이빙 작업을 모두 처리하고 종료 (cron 용).
+
+    `wccg crawl run`/`schedule run` 과 대칭. worker 를 상주시키지 않는 배포에서
+    cron 으로 돌려 큐를 소비한다 (serve/worker 가 돌고 있으면 자동 처리되므로 불필요).
+    """
+    ran = 0
+    while True:
+        step = archive_worker.process_next()
+        if step is None:
+            break
+        ran += 1
+        label = _ARCHIVE_STATUS_LABELS.get(step.status, step.status)
+        click.echo(f"{step.url} — {label}"
+                   + (f" ({step.error})" if step.error else ""))
+    if ran == 0:
+        click.echo("처리할 아카이빙 작업이 없습니다.")
 
 
 @main.command("list")

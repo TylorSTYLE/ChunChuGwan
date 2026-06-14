@@ -15,7 +15,7 @@ from __future__ import annotations
 import sqlite3
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from .. import auth, config, db, netcheck, storage
@@ -165,10 +165,10 @@ class ArchiveRequest(BaseModel):
 
 
 @router.post("/archive", status_code=202)
-def api_archive(request: Request, payload: ArchiveRequest, background: BackgroundTasks):
-    """아카이빙 트리거 — 검증은 동기, 캡처는 백그라운드 (웹 UI 와 동일 경로).
+def api_archive(request: Request, payload: ArchiveRequest):
+    """아카이빙 트리거 — 검증은 동기, 캡처는 worker 가 큐를 소비해 실행 (웹 UI 와 동일 경로).
 
-    같은 URL 이 이미 진행 중이면 중복 실행하지 않고 queued=false 로 응답한다.
+    같은 URL 이 이미 큐에 있으면 중복 등록하지 않고 queued=false 로 응답한다.
     """
     _require_archive(request)
     try:
@@ -191,7 +191,7 @@ def api_archive(request: Request, payload: ArchiveRequest, background: Backgroun
             )
     from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
 
-    queued = webapp._queue_archive(background, norm, force=payload.force, source="api")
+    queued = webapp._queue_archive(norm, force=payload.force, source="api")
     if queued:
         audit.log(request, "새 아카이빙 등록(API): %s", norm)
     return {"queued": queued, "url": norm}
