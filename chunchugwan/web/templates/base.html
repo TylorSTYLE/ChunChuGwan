@@ -224,6 +224,9 @@ button.danger:hover { background: var(--red-hover); }
     <a href="/dashboard">{{ _("현황") }}</a>
     <a href="/archives">{{ _("목록") }}</a>
     <a href="/documents">{{ _("문서") }}</a>
+    {% if can_search %}
+    <a href="/search">{{ _("검색") }}</a>
+    {% endif %}
     {% if can_archive %}
     <a href="/archive/new">{{ _("새 아카이빙") }}</a>
     {% endif %}

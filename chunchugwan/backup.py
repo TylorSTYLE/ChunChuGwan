@@ -493,6 +493,7 @@ def _wipe_archive_data(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM schedules")
     conn.execute("DELETE FROM snapshot_documents")
     conn.execute("DELETE FROM snapshot_resources")
+    db.clear_search_index(conn)
     conn.execute("DELETE FROM checks")
     conn.execute("DELETE FROM snapshots")
     conn.execute("DELETE FROM pages")

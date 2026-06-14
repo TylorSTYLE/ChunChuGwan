@@ -34,7 +34,8 @@ from fastapi.responses import (
 
 from .. import (
     auth, backup, config, crawler, credentials, crypto, db, deletion, differ,
-    documents, netcheck, pipeline, resources, scheduler, storage, system_log,
+    documents, netcheck, pipeline, resources, scheduler, searchindex, storage,
+    system_log,
 )
 from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -1155,6 +1156,55 @@ def documents_view(request: Request, page: int = Query(1, ge=1)):
             "page": page,
             "has_next": has_next,
             "legacy_pending": legacy_pending,
+        },
+    )
+
+
+_SEARCH_PER_PAGE = 20
+
+
+@app.get("/search", response_class=HTMLResponse)
+def search_view(
+    request: Request,
+    q: str = "",
+    domain: str = "",
+    latest: int = 0,
+    page: int = Query(1, ge=1),
+):
+    """아카이브 전문 검색 — content.md(정규화 텍스트) + 첨부 문서 본문.
+
+    viewer 이상만 접근(검색은 모든 아카이브 본문을 훑는 강한 열람 권한).
+    한국어는 trigram 부분문자열로 찾고, 1~2글자 쿼리는 부분일치로 폴백한다.
+    """
+    if not permissions.can_search(request.state.user):
+        raise HTTPException(403, t(request, "검색 권한이 없습니다"))
+    query = (q or "").strip()
+    domain_filter = (domain or "").strip() or None
+    latest_only = bool(latest)
+    available = searchindex.available()
+    results = None
+    total_pages = 1
+    if available and query:
+        results = searchindex.search(
+            query, domain=domain_filter, latest_only=latest_only,
+            limit=_SEARCH_PER_PAGE, offset=(page - 1) * _SEARCH_PER_PAGE,
+        )
+        total_pages = max(1, -(-results.total // _SEARCH_PER_PAGE))  # ceil
+        if page > total_pages and results.total:
+            # 페이지가 범위를 넘었으면 마지막 페이지로 보정해 다시 조회
+            page = total_pages
+            results = searchindex.search(
+                query, domain=domain_filter, latest_only=latest_only,
+                limit=_SEARCH_PER_PAGE, offset=(page - 1) * _SEARCH_PER_PAGE,
+            )
+    return templates.TemplateResponse(
+        request, "search.html",
+        {
+            "q": query, "domain": domain_filter or "", "latest": latest_only,
+            "available": available, "results": results,
+            "page": page, "total_pages": total_pages,
+            "has_prev": page > 1, "has_next": page < total_pages,
+            "per_page": _SEARCH_PER_PAGE,
         },
     )
 
