@@ -13,12 +13,15 @@ import shutil
 import sqlite3
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import capture, certs, config, db, documents, extract, netcheck, resources, storage
+from . import (
+    capture, certs, config, credentials, crypto, db, documents, extract,
+    netcheck, resources, searchindex, storage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +111,7 @@ def archive_url(
     link_rewriter: capture.LinkRewriter | None = None,
     browser_session: capture.BrowserSession | None = None,
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> ArchiveOutcome:
     """URL 아카이빙 전체 흐름.
 
@@ -125,7 +129,7 @@ def archive_url(
     run = _RunLog(url, source)
     try:
         outcome = _archive_url(url, force, run, link_rewriter, browser_session,
-                               network_tag_id)
+                               network_tag_id, credential_id)
     except Exception as e:
         _log_failure(run, e)
         raise
@@ -251,6 +255,7 @@ def _archive_url(
     link_rewriter: capture.LinkRewriter | None = None,
     browser_session: capture.BrowserSession | None = None,
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> ArchiveOutcome:
     norm = storage.normalize_url(url)
     domain = urlsplit(norm).hostname or ""
@@ -279,6 +284,31 @@ def _archive_url(
     run.step("normalize", f"{norm} → {domain}/{slug}"
              + (" (도메인 룰 적용)" if rules else ""))
 
+    # 이 URL 에 적용할 로그인 자격증명을 정한다 — 폼이 넘긴 credential_id 가
+    # 우선, 없으면 페이지에 저장된 연결(pages.credential_id)을 쓴다 (스케줄·
+    # CLI 재아카이빙이 저장된 자격증명을 이어 쓰는 경로). 복호화는 키 부재·
+    # 실패·삭제된 자격증명이면 인증 없이 진행한다(graceful).
+    credential = None
+    try:
+        with db.connect() as conn:
+            effective_cred_id = credential_id
+            if effective_cred_id is None:
+                existing = db.get_page(conn, norm)
+                if existing is not None:
+                    effective_cred_id = existing["credential_id"]
+            revealed = (
+                credentials.reveal_for_capture(conn, effective_cred_id)
+                if effective_cred_id is not None else None
+            )
+        if revealed is not None:
+            kind, payload = revealed
+            credential = capture.CaptureCredential(
+                kind=kind, payload=payload, origin=storage.url_origin(norm)
+            )
+            run.step("credential", f"로그인 자격증명 적용 ({kind})")
+    except (crypto.SecretKeyMissing, crypto.SecretDecryptError) as e:
+        logger.warning("자격증명 복호화 실패 — 인증 없이 진행: %s (%s)", norm, e)
+
     # 해시가 같으면 스냅샷 디렉토리를 만들지 않도록 임시 디렉토리에 먼저 캡처
     capture_kwargs = dict(
         remove_selectors=tuple(rules.get("remove_selectors") or ()),
@@ -286,14 +316,24 @@ def _archive_url(
         session=browser_session,
         resource_fallback=_resource_fallback,
     )
+    if credential is not None:
+        capture_kwargs["credential"] = credential
     insecure_tls = False
     is_download = False  # 탐색이 파일 다운로드로 전환 — 문서 아카이빙으로 분기
     tmp_dir = Path(tempfile.mkdtemp(prefix="wccg-"))
     try:
+        # 캡처가 실제로 어떤 모드로 도는지 로그에 남긴다 — 스텔스 설정
+        # (WCCG_CAPTURE_*)이 적용됐는지 /logs 에서 바로 확인할 수 있게 한다.
+        run.step("engine", capture.capture_mode_str())
         try:
             result = capture.capture(norm, tmp_dir, **capture_kwargs)
         except capture.CaptureDownloadError:
             is_download = True
+        except capture.CaptureChallengeError as e:
+            # 봇 차단/사람 확인 챌린지 — http 폴백으로도 못 풀고, 차단 페이지를
+            # 저장/해시하면 아카이브가 오염된다 (원칙 3). 저장 없이 실패로만 남긴다.
+            run.step("capture", str(e).splitlines()[0])
+            raise
         except capture.CaptureError as e:
             result = None
             if norm.startswith("https://") and capture.is_cert_error(e):
@@ -331,6 +371,11 @@ def _archive_url(
                 norm = "http://" + norm.removeprefix("https://")
                 slug = storage.url_to_slug(norm)
                 run.url = norm
+                # 자격증명 origin 도 http 로 맞춘다 — 안 그러면 origin 불일치로
+                # 인증이 조용히 빠진 채 http 사이트가 비인증으로 아카이빙된다
+                if credential is not None:
+                    credential = replace(credential, origin=storage.url_origin(norm))
+                    capture_kwargs["credential"] = credential
                 try:
                     result = capture.capture(norm, tmp_dir, **capture_kwargs)
                 except capture.CaptureDownloadError:
@@ -339,7 +384,8 @@ def _archive_url(
             run.step("capture", "탐색이 파일 다운로드로 전환 — 문서 파일로 아카이빙")
             return _archive_document_url(
                 norm, domain, slug, force, run, tmp_dir,
-                network_tag_id=network_tag_id, verify=not insecure_tls,
+                network_tag_id=network_tag_id, credential_id=credential_id,
+                credential=credential, verify=not insecure_tls,
             )
         run.step(
             "capture",
@@ -376,7 +422,8 @@ def _archive_url(
 
         with db.connect() as conn:
             page_id = db.get_or_create_page(
-                conn, norm, domain, slug, network_tag_id=network_tag_id
+                conn, norm, domain, slug, network_tag_id=network_tag_id,
+                credential_id=credential_id,
             )
             if cert_info:
                 # 콘텐츠가 동일(unchanged)해도 인증서 갱신은 기록돼야 하므로
@@ -419,6 +466,9 @@ def _archive_url(
                     result.document_links, tmp_dir / "files",
                     referer=result.final_url,
                     verify=not insecure_tls,  # 자체 서명 사이트의 문서도 받는다
+                    auth=(credentials.httpx_auth(credential.kind, credential.payload)
+                          if credential else None),
+                    auth_origin=credential.origin if credential else None,
                 )
                 documents.ingest_into_cas(tmp_dir / "files", doc_manifest)
                 run.step(
@@ -471,6 +521,7 @@ def _archive_url(
                         for n in stats.resource_names
                     ],
                 )
+            _index_snapshot_safe(conn, snapshot_id, run)
             status = "new" if prev is None else ("changed" if changed else "forced_same")
             run.step("store", f"스냅샷 저장 [{status}]: {snap_dir.name}")
             run.write(
@@ -487,6 +538,22 @@ def _archive_url(
             )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _index_snapshot_safe(
+    conn: sqlite3.Connection, snapshot_id: int, run: "_RunLog"
+) -> None:
+    """검색 인덱스 반영 — best-effort. 실패해도 아카이빙을 깨지 않는다.
+
+    실패 시 search_indexed=0 이 남아 'wccg search reindex' 백필이 메운다.
+    문서 본문 추출(doctext)이 큰 PDF 등에서 시간이 걸릴 수 있으나, 같은
+    트랜잭션 안에서 content.md·문서 본문을 모아 색인한다.
+    """
+    try:
+        if searchindex.index_snapshot(conn, snapshot_id):
+            run.step("index", "검색 인덱스 반영")
+    except Exception as e:  # noqa: BLE001 — 색인 실패가 저장을 롤백하지 않게
+        logger.warning("스냅샷 %d 검색 색인 실패 (백필 대상으로 남김): %s", snapshot_id, e)
 
 
 def _document_content_text(url: str, entry: dict) -> str:
@@ -541,6 +608,8 @@ def _archive_document_url(
     tmp_dir: Path,
     *,
     network_tag_id: str | None,
+    credential_id: int | None = None,
+    credential: "capture.CaptureCredential | None" = None,
     verify: bool,
 ) -> ArchiveOutcome:
     """URL 자체가 파일 다운로드인 경우의 아카이빙 — 문서 스냅샷.
@@ -555,7 +624,11 @@ def _archive_document_url(
     import httpx
 
     try:
-        dl = documents.download_direct(norm, tmp_dir / "files", verify=verify)
+        dl = documents.download_direct(
+            norm, tmp_dir / "files", verify=verify,
+            auth=(credentials.httpx_auth(credential.kind, credential.payload)
+                  if credential else None),
+        )
     except (ValueError, httpx.HTTPError) as e:
         raise capture.CaptureError(f"{norm} 문서 다운로드 실패: {e}") from e
     entry = dl.entry
@@ -588,7 +661,8 @@ def _archive_document_url(
 
     with db.connect() as conn:
         page_id = db.get_or_create_page(
-            conn, norm, domain, slug, network_tag_id=network_tag_id
+            conn, norm, domain, slug, network_tag_id=network_tag_id,
+            credential_id=credential_id,
         )
         if cert_info:
             site_id = db.get_or_create_site(conn, storage.site_key(norm))
@@ -651,6 +725,7 @@ def _archive_document_url(
             css_externalized=1,   # 인라인 <style> 없음
         )
         db.insert_snapshot_documents(conn, snapshot_id, manifest)
+        _index_snapshot_safe(conn, snapshot_id, run)
         status = "new" if prev is None else ("changed" if changed else "forced_same")
         run.step("store", f"문서 스냅샷 저장 [{status}]: {snap_dir.name}")
         run.write(

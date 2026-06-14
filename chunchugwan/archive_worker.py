@@ -1,0 +1,158 @@
+"""단발 아카이빙 작업 큐(archive_jobs) 소비자.
+
+대시보드의 새/재아카이빙·REST API·CLI `add` 는 캡처를 직접 실행하지 않고
+archive_jobs 큐에 작업을 넣는다. 이 모듈의 소비 루프가 worker(또는 serve 단일
+프로세스)에서 큐를 꺼내 pipeline.archive_url 을 호출한다 — 캡처 실행 지점을
+한 곳으로 통일해, 봇 차단 우회용 스텔스 설정(WCCG_CAPTURE_*)이 소비 프로세스에만
+있으면 되게 한다.
+
+크롤(crawler.py)과 같은 'DB 큐 + 원자적 클레임 + 폴링' 패턴이며, 클레임이
+db 원자적 UPDATE 라 serve·worker·CLI 동시 실행에 안전하다. 회차·범위·링크
+추적·페이싱이 없는 단발이라 crawl_pages 보다 단순하다.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Callable
+
+from . import capture, config, crawler, db, pipeline, scheduler
+
+logger = logging.getLogger(__name__)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso(dt: datetime) -> str:
+    return dt.isoformat(timespec="seconds")
+
+
+@dataclass
+class ArchiveStep:
+    """process_next 한 번의 처리 결과 (CLI 진행 표시용)."""
+
+    url: str
+    status: str          # ArchiveOutcome.status | 'retry' | 'failed' | 'skipped'
+    error: str | None = None
+
+
+def _handle_failure(item, exc: Exception) -> ArchiveStep:
+    """실패 기록 — 시도 횟수가 남았으면 백오프 후 재시도(pending), 아니면 큐에서 삭제.
+
+    백오프는 크롤과 같은 시스템 설정(crawler.retry_backoff) 기준. 오류 상세는
+    pipeline 이 archive_logs 에 이미 남겼다 (source 보존).
+    """
+    attempts = item["attempts"] + 1
+    error = f"{type(exc).__name__}: {exc}".splitlines()[0][:500]
+    with db.connect() as conn:
+        backoff = crawler.retry_backoff(conn)
+        next_attempt_at = (
+            _iso(_utcnow() + timedelta(seconds=backoff[attempts - 1]))
+            if attempts <= len(backoff) else None
+        )
+        db.fail_archive_job(
+            conn, item["id"],
+            attempts=attempts, error=error, next_attempt_at=next_attempt_at,
+        )
+    return ArchiveStep(
+        url=item["url"],
+        status="retry" if next_attempt_at else "failed",
+        error=error,
+    )
+
+
+def process_next(
+    *,
+    claim: Callable[[str], bool] | None = None,
+    release: Callable[[str], None] | None = None,
+    archive_fn: Callable[..., pipeline.ArchiveOutcome] | None = None,
+    browser_session: "capture.BrowserSession | None" = None,
+) -> ArchiveStep | None:
+    """기한이 된 아카이빙 작업 하나를 처리. 처리할 것이 없으면 None.
+
+    claim/release 는 크롤·스케줄과 공유하는 진행 중 작업 레지스트리 연동 —
+    같은 URL 이 스케줄·크롤로도 동시에 돌지 않게 한다(같은 프로세스 한정).
+    archive_fn 은 테스트 주입 지점, browser_session 은 작업 간 브라우저 재사용.
+    """
+    now = _utcnow()
+    with db.connect() as conn:
+        recovered = db.recover_stale_archive_jobs(
+            conn, _iso(now - timedelta(seconds=config.CRAWL_STALE_CLAIM_SECONDS))
+        )
+        if recovered:
+            logger.warning("중단된 아카이빙 작업 %d개 복구 (pending 으로)", recovered)
+        item = db.claim_due_archive_job(conn, _iso(now))
+    if item is None:
+        return None
+
+    url = item["url"]
+    if claim is not None and not claim(url):
+        with db.connect() as conn:
+            db.release_archive_job(conn, item["id"])
+        return ArchiveStep(url=url, status="skipped")
+
+    try:
+        try:
+            # browser_session·network_tag_id·credential_id 는 있을 때만 넘긴다 —
+            # archive_fn 주입(테스트)이 이 인자를 몰라도 동작하게.
+            extra = {"browser_session": browser_session} if browser_session else {}
+            if item["network_tag_id"]:
+                extra["network_tag_id"] = item["network_tag_id"]
+            if item["credential_id"]:
+                extra["credential_id"] = item["credential_id"]
+            # 기본 캡처 함수는 호출 시점에 참조한다 (테스트의 monkeypatch 반영)
+            fn = archive_fn if archive_fn is not None else pipeline.archive_url
+            outcome = fn(
+                url, force=bool(item["force"]), source=item["source"], **extra,
+            )
+        finally:
+            if release is not None:
+                release(url)
+    except Exception as e:
+        logger.warning("아카이빙 작업 실패: %s — %s", url, e)
+        return _handle_failure(item, e)
+
+    with db.connect() as conn:
+        db.finish_archive_job(conn, item["id"])
+    # interval 이 있으면 아카이빙 후 자동 재아카이빙 주기를 등록한다 — 신규 URL 은
+    # 아카이빙이 끝나야 pages 행이 생기므로 등록을 여기서 한다.
+    if item["interval_seconds"]:
+        try:
+            scheduler.set_schedule(url, item["interval_seconds"], run_at=item["run_at"])
+        except ValueError as e:
+            logger.warning("자동 재아카이빙 등록 실패: %s — %s", url, e)
+    return ArchiveStep(url=url, status=outcome.status)
+
+
+def run_loop(
+    stop: threading.Event,
+    *,
+    poll_seconds: int = config.ARCHIVE_POLL_SECONDS,
+    claim: Callable[[str], bool] | None = None,
+    release: Callable[[str], None] | None = None,
+) -> None:
+    """stop 이 설정될 때까지 단발 아카이빙 큐를 소비 (serve·worker 백그라운드 스레드용).
+
+    처리할 작업이 있으면 즉시 다음으로 넘어가고, 없을 때만 poll_seconds 만큼
+    쉰다. 브라우저는 작업 간 재사용하고, 큐가 비면 내려서 메모리 점유를 피한다.
+    """
+    logger.info("아카이빙 워커 시작 (폴링 %ds)", poll_seconds)
+    with capture.BrowserSession() as session:
+        while not stop.is_set():
+            step = None
+            try:
+                step = process_next(
+                    claim=claim, release=release, browser_session=session
+                )
+            except Exception:
+                logger.exception("아카이빙 워커 폴링 실패")
+            if step is None:
+                session.close()  # 다음 작업에서 재기동 — 유휴 중 점유 방지
+                if stop.wait(poll_seconds):
+                    break
+    logger.info("아카이빙 워커 종료")

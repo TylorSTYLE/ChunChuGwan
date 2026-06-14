@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 from urllib.parse import urldefrag, urljoin
 
-from . import config, documents, trackers
+from . import browser_engine, config, documents, storage, trackers
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +289,78 @@ LinkRewriter = Callable[[Sequence[str]], dict[str, str]]
 ResourceFallback = Callable[[str], "tuple[str, bytes] | None"]
 
 
+# 채널(real Chrome 등) 기동이 한 번 실패하면(예: arm64 에 google-chrome
+# 미설치) 이후로는 번들 chromium 으로 폴백을 유지한다 — 매 캡처마다 실패-재시도
+# 비용을 한 번만 치르게 한다.
+_channel_fallback = False
+_mode_logged = False
+
+
+def capture_mode_str() -> str:
+    """현재 캡처가 도는 모드 — 엔진/headful/channel 한 줄. 진단용.
+
+    스텔스 설정(WCCG_CAPTURE_*)이 실제로 적용됐는지 로그·archive_logs 로
+    확인할 수 있게 한다. 예: 'playwright · headless · channel=-' 이 찍히면
+    스텔스가 안 켜진 것(이미지 미빌드 또는 환경변수 미설정).
+    """
+    engine = browser_engine.get_engine()[0]
+    head = "headful" if config.CAPTURE_HEADFUL else "headless"
+    channel = config.CAPTURE_CHANNEL or "-"
+    if _channel_fallback:
+        channel += " (폴백: 번들 chromium)"
+    return f"{engine} · {head} · channel={channel}"
+
+
+def _launch(p, browser_args: tuple[str, ...] = ()):
+    """설정에 따라 chromium 을 기동 — headless/channel 을 한 곳에서 결정.
+
+    기본은 headless=True (기존 동작). `WCCG_CAPTURE_HEADFUL=on` 이면 헤드풀로
+    띄우고(서버에선 Xvfb 가상 디스플레이 전제), `WCCG_CAPTURE_CHANNEL` 이 있으면
+    그 채널(예: 'chrome' — 번들 chromium 대신 시스템 real Chrome)을 쓴다.
+    두 launch 지점(BrowserSession.browser, _capture_once)이 이 헬퍼만 호출해
+    옵션이 어긋나지 않게 한다.
+
+    채널을 지정했는데 그 브라우저가 없으면(amd64 전용 google-chrome 을 arm64 에서
+    요청하는 등) 번들 chromium 으로 폴백한다 — 같은 설정을 양쪽 아키텍처에서
+    안전하게 쓸 수 있게 한다 (arm64 는 real Chrome 이 없으므로 stealth 가 다소
+    약하지만 동작은 한다).
+    """
+    global _channel_fallback, _mode_logged
+    if not _mode_logged:
+        # 프로세스당 한 번 — 캡처가 실제로 어떤 모드로 도는지 남긴다(진단)
+        logger.info("캡처 모드: %s", capture_mode_str())
+        _mode_logged = True
+    kwargs: dict = {
+        "headless": not config.CAPTURE_HEADFUL,
+        "args": list(browser_args),
+    }
+    channel = config.CAPTURE_CHANNEL
+    if channel and not _channel_fallback:
+        try:
+            return p.chromium.launch(channel=channel, **kwargs)
+        except Exception as e:
+            logger.warning(
+                "캡처 채널 %r 기동 실패 — 번들 chromium 으로 폴백합니다 "
+                "(예: arm64 에 real Chrome 미설치). 이후 폴백을 유지합니다: %s",
+                channel, str(e).splitlines()[0],
+            )
+            _channel_fallback = True
+    return p.chromium.launch(**kwargs)
+
+
+def _context_user_agent() -> str | None:
+    """new_context 에 넘길 User-Agent — 헤드풀 스텔스에선 real Chrome 기본 UA.
+
+    고정 UA(config.USER_AGENT, Chrome 136 Windows)를 real Chrome 위에 강제하면
+    UA/Client Hints/JA4 가 불일치해 오히려 봇 신호가 된다. 따라서 헤드풀일 때는
+    기본적으로 오버라이드를 해제(None → 브라우저 실제 UA 사용)하고,
+    `WCCG_CAPTURE_FORCE_UA=on` 이면 강제한다. 헤드리스 기본 경로는 영향 없음.
+    """
+    if config.CAPTURE_HEADFUL and not config.CAPTURE_FORCE_USER_AGENT:
+        return None
+    return config.USER_AGENT
+
+
 class BrowserSession:
     """여러 캡처가 재사용하는 Chromium 세션 (크롤러 스레드용).
 
@@ -308,10 +380,10 @@ class BrowserSession:
         if self._browser is not None and self._browser.is_connected():
             return self._browser
         self.close()
-        from playwright.sync_api import sync_playwright
+        _, sync_playwright, _, _ = browser_engine.get_engine()
 
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=True)
+        self._browser = _launch(self._playwright)
         return self._browser
 
     def close(self) -> None:
@@ -336,6 +408,82 @@ class BrowserSession:
         self.close()
 
 
+@dataclass
+class CaptureCredential:
+    """캡처 시 주입할 로그인 자격증명 — pipeline 이 복호화해 만든다.
+
+    origin 은 대상 사이트의 origin(`scheme://host[:port]`) — 자격증명을 이
+    origin 의 요청에만 적용해 페이지의 서드파티 하위 자원(CDN 등)으로
+    Basic 인증·Bearer 토큰이 새는 것을 막는다.
+    """
+    kind: str
+    payload: dict
+    origin: str
+
+
+def _context_options(
+    credential: CaptureCredential | None, insecure_tls: bool
+) -> tuple[dict, str | None]:
+    """new_context() 옵션과, jwt 면 origin-스코프로 붙일 Authorization 값을 만든다.
+
+    - http_basic : http_credentials 를 대상 origin 으로 스코프 (context.request 에도 상속)
+    - session    : storage_state (쿠키는 도메인 스코프라 자체 안전)
+    - jwt        : 컨텍스트 옵션으로는 못 붙인다(extra_http_headers 는 모든 origin
+      으로 새므로). Authorization 헤더 문자열만 돌려주고, 호출부가 context.route 로
+      대상 origin 요청에만 추가한다.
+    반환: (new_context kwargs, jwt Authorization 헤더 또는 None)
+    """
+    kwargs: dict = {
+        "user_agent": _context_user_agent(),
+        "ignore_https_errors": insecure_tls,
+    }
+    if credential is None:
+        return kwargs, None
+    if credential.kind == "http_basic":
+        kwargs["http_credentials"] = {
+            "username": credential.payload.get("username", ""),
+            "password": credential.payload.get("password", ""),
+            "origin": credential.origin,   # 이 origin 에만 Basic 전송 (누수 차단)
+            "send": "always",
+        }
+        return kwargs, None
+    if credential.kind == "session":
+        state = credential.payload.get("storage_state")
+        if state:
+            kwargs["storage_state"] = state
+        return kwargs, None
+    if credential.kind == "jwt":
+        token = credential.payload.get("token", "")
+        return kwargs, (f"Bearer {token}" if token else None)
+    return kwargs, None
+
+
+def _install_origin_scoped_header(context, origin: str, authorization: str) -> None:
+    """대상 origin 요청에만 Authorization 헤더를 붙이는 라우트를 단다 (jwt 용).
+
+    context.route 는 페이지 네비게이션·하위 자원·페이지 내 fetch 를 가로채므로
+    같은 origin 의 요청에만 토큰을 실어 보낸다 — 서드파티(CDN 등)로는 새지
+    않는다. context.request(자원 인라인 폴백)에는 route 가 안 걸린다 — 같은
+    origin 자원은 보통 페이지 fetch 단계에서 이 헤더로 인라인되지만, 그 fetch
+    가 실패해 폴백으로 떨어지면 그 자원은 인증 없이 시도된다 (인라인 실패 가능,
+    토큰 누수는 없음). http_basic 은 http_credentials 가 context.request 에도
+    상속돼 이 한계가 없다.
+    """
+    def handler(route) -> None:
+        request = route.request
+        if storage.url_origin(request.url) == origin:
+            headers = {
+                k: v for k, v in request.headers.items()
+                if k.lower() != "authorization"
+            }
+            headers["Authorization"] = authorization
+            route.continue_(headers=headers)
+        else:
+            route.continue_()
+
+    context.route("**/*", handler)
+
+
 def capture(
     url: str,
     out_dir: Path,
@@ -344,6 +492,7 @@ def capture(
     session: BrowserSession | None = None,
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
+    credential: CaptureCredential | None = None,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
 
@@ -361,7 +510,7 @@ def capture(
     try:
         return _capture_once(url, out_dir, remove_selectors, link_rewriter,
                              session=session, resource_fallback=resource_fallback,
-                             insecure_tls=insecure_tls)
+                             insecure_tls=insecure_tls, credential=credential)
     except CaptureError as e:
         if "ERR_HTTP2" not in str(e):
             raise
@@ -370,7 +519,7 @@ def capture(
             url, out_dir, remove_selectors, link_rewriter,
             browser_args=("--disable-http2",),
             resource_fallback=resource_fallback,
-            insecure_tls=insecure_tls,
+            insecure_tls=insecure_tls, credential=credential,
         )
 
 
@@ -383,23 +532,23 @@ def _capture_once(
     session: BrowserSession | None = None,
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
+    credential: CaptureCredential | None = None,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
-    from playwright.sync_api import Error as PlaywrightError
-    from playwright.sync_api import sync_playwright
+    _, sync_playwright, PlaywrightError, _ = browser_engine.get_engine()
 
     try:
         if session is not None and not browser_args:
             return _capture_in_browser(
                 session.browser(), url, out_dir, remove_selectors, link_rewriter,
-                resource_fallback, insecure_tls,
+                resource_fallback, insecure_tls, credential,
             )
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=list(browser_args))
+            browser = _launch(p, browser_args)
             try:
                 return _capture_in_browser(
                     browser, url, out_dir, remove_selectors, link_rewriter,
-                    resource_fallback, insecure_tls,
+                    resource_fallback, insecure_tls, credential,
                 )
             finally:
                 browser.close()
@@ -419,6 +568,7 @@ def _capture_in_browser(
     link_rewriter: LinkRewriter | None,
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
+    credential: CaptureCredential | None = None,
 ) -> CaptureResult:
     """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다.
 
@@ -426,12 +576,15 @@ def _capture_in_browser(
     서빙하는 사이트(사설 NAS 등)의 재시도 경로(pipeline)에서만 켠다.
     컨텍스트 옵션이라 페이지의 하위 자원 요청·context.request 폴백에도
     적용된다.
+    credential 이 있으면 종류별로 컨텍스트에 주입한다 (http_credentials/
+    storage_state) — jwt 는 대상 origin 요청에만 Authorization 헤더를 붙인다.
     """
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    _, _, _, PlaywrightTimeoutError = browser_engine.get_engine()
 
-    context = browser.new_context(
-        user_agent=config.USER_AGENT, ignore_https_errors=insecure_tls
-    )
+    context_kwargs, jwt_authorization = _context_options(credential, insecure_tls)
+    context = browser.new_context(**context_kwargs)
+    if jwt_authorization and credential is not None:
+        _install_origin_scoped_header(context, credential.origin, jwt_authorization)
     try:
         page = context.new_page()
         page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
@@ -465,6 +618,15 @@ def _capture_in_browser(
             response = None
 
         raw_html = page.content()
+        # 봇 차단/사람 확인 챌린지 페이지면 정상 콘텐츠가 아니므로 저장하지
+        # 않는다 — 그대로 해시하면 차단 페이지가 스냅샷으로 둔갑하거나 직전과
+        # 같은 해시로 묻혀 아카이브를 오염시킨다 (아키텍처 원칙 3). raw.html 을
+        # 쓰기 전에 판정해 out_dir 을 깨끗이 둔다.
+        reason = challenge_reason(
+            raw_html, response.status if response else None, page.url, page.title()
+        )
+        if reason:
+            raise CaptureChallengeError(f"{url}: {reason}")
         (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
         document_links = _collect_document_links(page)
         page_links = _collect_page_links(page)
@@ -731,6 +893,47 @@ _CONNECT_ERROR_MARKERS = (
 )
 
 
+# 봇 차단/사람 확인 챌린지 페이지의 마커 (raw_html·title·final_url 에서 소문자
+# 비교로 탐지). 잡히면 정상 콘텐츠가 아니므로 스냅샷으로 저장하지 않는다 —
+# 차단 페이지를 해시하면 아카이브가 오염된다 (아키텍처 원칙 3). 대부분
+# Cloudflare 관리형 챌린지/Turnstile 의 고정 문자열이라 오탐이 드물지만,
+# 잦으면 이 튜플을 줄인다.
+_CHALLENGE_MARKERS = (
+    "/cdn-cgi/challenge-platform/",        # Cloudflare 챌린지 스크립트 경로
+    "challenges.cloudflare.com",           # Turnstile iframe src
+    "cf-turnstile",                        # Turnstile 위젯 컨테이너
+    "__cf_chl_",                           # 챌린지 토큰/오케스트레이트
+    "cf_chl_opt",
+    "just a moment...",                    # Cloudflare 인터스티셜 제목
+    "attention required! | cloudflare",    # Cloudflare 차단 제목
+    "verify you are human",                # 사람 확인 문구 (영문)
+    "사람인지 확인",                         # 사람 확인 문구 (한글)
+    "enable javascript and cookies to continue",
+    "there was a problem providing the content you requested",  # Elsevier/ScienceDirect
+)
+
+
+def challenge_reason(
+    raw_html: str,
+    http_status: int | None,
+    final_url: str,
+    title: str | None,
+) -> str | None:
+    """봇 차단/사람 확인 챌린지 페이지면 사유 문자열, 아니면 None.
+
+    순수 함수 — Playwright 없이 단위 테스트할 수 있다. raw_html·title·final_url
+    을 소문자로 합쳐 _CHALLENGE_MARKERS 를 찾는다. http_status 는 현재 판정에
+    쓰지 않고 사유에만 덧붙인다 (정상 콘텐츠가 403/503 을 줄 수도 있어 상태만으로는
+    차단으로 보지 않는다).
+    """
+    haystack = "\n".join(s for s in (raw_html, title or "", final_url) if s).lower()
+    for marker in _CHALLENGE_MARKERS:
+        if marker in haystack:
+            status = f"http {http_status} · " if http_status else ""
+            return f"봇 차단/사람 확인 챌린지 감지 ({status}마커: {marker!r})"
+    return None
+
+
 def _remove_trackers(page) -> tuple[int, int]:
     """page.html 저장 전 live DOM 에서 추적기 스크립트·픽셀 제거.
 
@@ -760,4 +963,12 @@ class CaptureDownloadError(CaptureError):
     """탐색이 파일 다운로드로 전환된 실패 — URL 이 페이지가 아니라 파일.
 
     pipeline 이 문서 아카이빙(documents.download_direct)으로 전환하는 신호다.
+    """
+
+
+class CaptureChallengeError(CaptureError):
+    """봇 차단/사람 확인 챌린지 페이지가 감지된 실패 — 정상 콘텐츠가 아님.
+
+    pipeline 이 http 폴백으로 새지 않고(폴백해도 못 푼다) 저장·해시를 생략한 채
+    실패로만 기록하게 하는 신호다 (아키텍처 원칙 3 — 해시 오염 방지).
     """
