@@ -37,3 +37,60 @@ def test_context_user_agent_headful_forced(monkeypatch):
     monkeypatch.setattr(config, "CAPTURE_HEADFUL", True)
     monkeypatch.setattr(config, "CAPTURE_FORCE_USER_AGENT", True)
     assert capture._context_user_agent() == config.USER_AGENT
+
+
+# ---- _launch 채널 폴백 (브라우저 없이 가짜 playwright 로 검증) ----
+
+class _FakeChromium:
+    def __init__(self, fail_on_channel=False):
+        self.calls = []
+        self.fail_on_channel = fail_on_channel
+
+    def launch(self, **kwargs):
+        self.calls.append(kwargs)
+        if "channel" in kwargs and self.fail_on_channel:
+            raise RuntimeError("Chromium distribution 'chrome' is not found")
+        return ("browser", kwargs)
+
+
+class _FakeP:
+    def __init__(self, chromium):
+        self.chromium = chromium
+
+
+def test_launch_no_channel_is_headless_default(monkeypatch):
+    monkeypatch.setattr(config, "CAPTURE_CHANNEL", "")
+    monkeypatch.setattr(config, "CAPTURE_HEADFUL", False)
+    monkeypatch.setattr(capture, "_channel_fallback", False)
+    chromium = _FakeChromium()
+    capture._launch(_FakeP(chromium))
+    assert chromium.calls == [{"headless": True, "args": []}]
+
+
+def test_launch_with_channel_passes_channel(monkeypatch):
+    monkeypatch.setattr(config, "CAPTURE_CHANNEL", "chrome")
+    monkeypatch.setattr(config, "CAPTURE_HEADFUL", True)
+    monkeypatch.setattr(capture, "_channel_fallback", False)
+    chromium = _FakeChromium(fail_on_channel=False)
+    capture._launch(_FakeP(chromium))
+    assert chromium.calls[0].get("channel") == "chrome"
+    assert chromium.calls[0]["headless"] is False
+
+
+def test_launch_channel_missing_falls_back_and_sticks(monkeypatch):
+    # arm64 처럼 real Chrome 이 없으면: 첫 채널 시도 실패 → 번들 chromium 폴백,
+    # 이후로는 채널 시도조차 안 한다 (실패-재시도 비용 1회만).
+    monkeypatch.setattr(config, "CAPTURE_CHANNEL", "chrome")
+    monkeypatch.setattr(config, "CAPTURE_HEADFUL", False)
+    monkeypatch.setattr(capture, "_channel_fallback", False)
+    chromium = _FakeChromium(fail_on_channel=True)
+    p = _FakeP(chromium)
+
+    capture._launch(p)
+    assert chromium.calls[0].get("channel") == "chrome"   # 채널 시도
+    assert "channel" not in chromium.calls[1]              # 번들로 폴백
+    assert capture._channel_fallback is True
+
+    chromium.calls.clear()
+    capture._launch(p)
+    assert chromium.calls == [{"headless": True, "args": []}]  # 더는 채널 시도 안 함

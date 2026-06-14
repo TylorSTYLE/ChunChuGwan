@@ -20,8 +20,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # (WCCG_CAPTURE_HEADFUL=on)용 가상 디스플레이 — 서버엔 물리 디스플레이가 없다.
 # google-chrome-stable: patchright 스텔스 경로의 WCCG_CAPTURE_CHANNEL=chrome 용
 # (번들 chromium 보다 TLS/HTTP2 지문이 진짜라 네트워크 레벨 탐지에 강하다).
-# Google 은 amd64 .deb 만 제공하므로 amd64 에서만 설치하고, arm64 는 번들
-# chromium 을 쓴다 (그 경우 WCCG_CAPTURE_CHANNEL 은 비워 둘 것).
+# Google 은 amd64 .deb 만 제공하므로 amd64 에서만 설치한다. arm64(또는 채널을
+# 비운 경우)는 patchright 번들 chromium 을 쓰며, 채널이 없으면 _launch 가
+# 자동 폴백하므로 양쪽 아키텍처에서 같은 설정이 안전하게 동작한다.
+# patchright install: 스텔스 엔진(no-channel 경로)이 쓸 번들 chromium 을
+# /ms-playwright 에 확보 — playwright 와 리비전이 같으면 사실상 no-op.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends gosu xvfb; \
@@ -32,6 +35,7 @@ RUN set -eux; \
         rm /tmp/chrome.deb; \
     fi; \
     /app/.venv/bin/playwright install --with-deps chromium; \
+    /app/.venv/bin/patchright install chromium; \
     rm -rf /var/lib/apt/lists/*; \
     chmod -R a+rX /ms-playwright
 

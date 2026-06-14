@@ -51,7 +51,7 @@ services:
       # 단 데이터센터 IP 평판으로 막힐 수 있고(엔진으론 못 고침), ToS 회색지대다.
       # WCCG_CAPTURE_ENGINE: "patchright"   # Runtime.enable 봇탐지 우회 드롭인 엔진
       # WCCG_CAPTURE_HEADFUL: "on"          # Xvfb 가상 디스플레이로 헤드풀 실행 (탐지 회피)
-      # WCCG_CAPTURE_CHANNEL: "chrome"      # 번들 chromium 대신 real Chrome (amd64 전용)
+      # WCCG_CAPTURE_CHANNEL: "chrome"      # real Chrome (amd64). arm64 는 자동으로 번들 chromium 폴백 — 그냥 둬도 안전
     volumes:
       - ./archive:/data/archive
     shm_size: 1gb                   # 페이지 캡처가 chromium 을 띄운다
