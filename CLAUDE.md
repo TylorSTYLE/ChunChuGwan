@@ -10,6 +10,10 @@
 - `docs/ROADMAP.md` — 완료된 구현 로드맵 히스토리(M1~M8, A1~A11 상세).
   기능의 도입 배경·구현 범위가 궁금할 때 읽는다.
 
+사용자용 기능 문서는 `docs/` 에 주제별로 나눠져 있다 (CRAWLING·STORAGE·
+DOCKER·API·AUTHENTICATION·DEVELOPMENT — README 는 빠른 시작 + 링크만 둔다).
+해당 기능의 동작·옵션·CLI 를 바꾸면 README 요약과 함께 그 docs 파일도 갱신한다.
+
 ## 기술 스택
 
 - Python 3.12+ / 패키지 관리: `uv` (없으면 pip + venv)
@@ -97,7 +101,7 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
    SHA-256 만 저장 (세션은 서버사이드). 2FA(TOTP·패스키)는 패스워드 로그인에만 적용하고 SSO(OIDC)는
    IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origin 은
    `WCCG_PUBLIC_URL` 에서 파생(미설정 시 localhost). 환경변수 목록은
-   README "인증" 절 참조. 단, 위 단방향 저장 규칙은 춘추관이 **사용자를**
+   `docs/AUTHENTICATION.md` 참조. 단, 위 단방향 저장 규칙은 춘추관이 **사용자를**
    인증하는 데이터(로그인 비밀번호·세션·API 키·패스키)에 한한다.
    아카이빙 대상 사이트에 춘추관이 **로그인하기 위한 외부 자격증명**(세션
    쿠키·Basic 인증·Bearer 토큰)은 재생(replay)이 필요해 복원 가능해야
