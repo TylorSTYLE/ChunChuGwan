@@ -29,6 +29,8 @@ services:
       # WCCG_SMTP_FROM: ""                           # 발신자 주소 (기본: WCCG_SMTP_USER)
       # WCCG_SMTP_TLS: "starttls"                    # starttls | ssl | off
       # WCCG_INVITE_TTL_DAYS: "7"                    # 초대 링크 수명 (일)
+      # 재아카이빙 버튼도 캡처를 하므로, 스텔스 캡처를 쓰면 worker 의
+      # WCCG_CAPTURE_* 와 동일하게 dashboard 에도 같은 값을 설정한다.
     ports:
       - "127.0.0.1:8765:8765"       # localhost 전용 원칙 유지. 외부 노출은 리버스 프록시를 앞단에 둘 것.
     volumes:
@@ -44,6 +46,12 @@ services:
     environment:
       TZ: "Asia/Seoul"
       # WCCG_CRAWL_WORKERS: "2"     # 동시 진행 크롤(사이트) 수 (1~8, 기본 2)
+      # --- 스텔스 캡처 (Cloudflare Turnstile 등 봇차단 페이지 통과 시도) ---
+      # 이미지에 patchright·Xvfb·real Chrome(amd64) 가 포함돼 있어 아래만 켜면 된다.
+      # 단 데이터센터 IP 평판으로 막힐 수 있고(엔진으론 못 고침), ToS 회색지대다.
+      # WCCG_CAPTURE_ENGINE: "patchright"   # Runtime.enable 봇탐지 우회 드롭인 엔진
+      # WCCG_CAPTURE_HEADFUL: "on"          # Xvfb 가상 디스플레이로 헤드풀 실행 (탐지 회피)
+      # WCCG_CAPTURE_CHANNEL: "chrome"      # 번들 chromium 대신 real Chrome (amd64 전용)
     volumes:
       - ./archive:/data/archive
     shm_size: 1gb                   # 페이지 캡처가 chromium 을 띄운다

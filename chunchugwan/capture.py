@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 from urllib.parse import urldefrag, urljoin
 
-from . import config, documents, trackers
+from . import browser_engine, config, documents, trackers
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +289,37 @@ LinkRewriter = Callable[[Sequence[str]], dict[str, str]]
 ResourceFallback = Callable[[str], "tuple[str, bytes] | None"]
 
 
+def _launch(p, browser_args: tuple[str, ...] = ()):
+    """설정에 따라 chromium 을 기동 — headless/channel 을 한 곳에서 결정.
+
+    기본은 headless=True (기존 동작). `WCCG_CAPTURE_HEADFUL=on` 이면 헤드풀로
+    띄우고(서버에선 Xvfb 가상 디스플레이 전제), `WCCG_CAPTURE_CHANNEL` 이 있으면
+    그 채널(예: 'chrome' — 번들 chromium 대신 시스템 real Chrome)을 쓴다.
+    두 launch 지점(BrowserSession.browser, _capture_once)이 이 헬퍼만 호출해
+    옵션이 어긋나지 않게 한다.
+    """
+    kwargs: dict = {
+        "headless": not config.CAPTURE_HEADFUL,
+        "args": list(browser_args),
+    }
+    if config.CAPTURE_CHANNEL:
+        kwargs["channel"] = config.CAPTURE_CHANNEL
+    return p.chromium.launch(**kwargs)
+
+
+def _context_user_agent() -> str | None:
+    """new_context 에 넘길 User-Agent — 헤드풀 스텔스에선 real Chrome 기본 UA.
+
+    고정 UA(config.USER_AGENT, Chrome 136 Windows)를 real Chrome 위에 강제하면
+    UA/Client Hints/JA4 가 불일치해 오히려 봇 신호가 된다. 따라서 헤드풀일 때는
+    기본적으로 오버라이드를 해제(None → 브라우저 실제 UA 사용)하고,
+    `WCCG_CAPTURE_FORCE_UA=on` 이면 강제한다. 헤드리스 기본 경로는 영향 없음.
+    """
+    if config.CAPTURE_HEADFUL and not config.CAPTURE_FORCE_USER_AGENT:
+        return None
+    return config.USER_AGENT
+
+
 class BrowserSession:
     """여러 캡처가 재사용하는 Chromium 세션 (크롤러 스레드용).
 
@@ -308,10 +339,10 @@ class BrowserSession:
         if self._browser is not None and self._browser.is_connected():
             return self._browser
         self.close()
-        from playwright.sync_api import sync_playwright
+        _, sync_playwright, _, _ = browser_engine.get_engine()
 
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=True)
+        self._browser = _launch(self._playwright)
         return self._browser
 
     def close(self) -> None:
@@ -385,8 +416,7 @@ def _capture_once(
     insecure_tls: bool = False,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
-    from playwright.sync_api import Error as PlaywrightError
-    from playwright.sync_api import sync_playwright
+    _, sync_playwright, PlaywrightError, _ = browser_engine.get_engine()
 
     try:
         if session is not None and not browser_args:
@@ -395,7 +425,7 @@ def _capture_once(
                 resource_fallback, insecure_tls,
             )
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=list(browser_args))
+            browser = _launch(p, browser_args)
             try:
                 return _capture_in_browser(
                     browser, url, out_dir, remove_selectors, link_rewriter,
@@ -427,10 +457,10 @@ def _capture_in_browser(
     컨텍스트 옵션이라 페이지의 하위 자원 요청·context.request 폴백에도
     적용된다.
     """
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    _, _, _, PlaywrightTimeoutError = browser_engine.get_engine()
 
     context = browser.new_context(
-        user_agent=config.USER_AGENT, ignore_https_errors=insecure_tls
+        user_agent=_context_user_agent(), ignore_https_errors=insecure_tls
     )
     try:
         page = context.new_page()
@@ -465,6 +495,15 @@ def _capture_in_browser(
             response = None
 
         raw_html = page.content()
+        # 봇 차단/사람 확인 챌린지 페이지면 정상 콘텐츠가 아니므로 저장하지
+        # 않는다 — 그대로 해시하면 차단 페이지가 스냅샷으로 둔갑하거나 직전과
+        # 같은 해시로 묻혀 아카이브를 오염시킨다 (아키텍처 원칙 3). raw.html 을
+        # 쓰기 전에 판정해 out_dir 을 깨끗이 둔다.
+        reason = challenge_reason(
+            raw_html, response.status if response else None, page.url, page.title()
+        )
+        if reason:
+            raise CaptureChallengeError(f"{url}: {reason}")
         (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
         document_links = _collect_document_links(page)
         page_links = _collect_page_links(page)
@@ -731,6 +770,47 @@ _CONNECT_ERROR_MARKERS = (
 )
 
 
+# 봇 차단/사람 확인 챌린지 페이지의 마커 (raw_html·title·final_url 에서 소문자
+# 비교로 탐지). 잡히면 정상 콘텐츠가 아니므로 스냅샷으로 저장하지 않는다 —
+# 차단 페이지를 해시하면 아카이브가 오염된다 (아키텍처 원칙 3). 대부분
+# Cloudflare 관리형 챌린지/Turnstile 의 고정 문자열이라 오탐이 드물지만,
+# 잦으면 이 튜플을 줄인다.
+_CHALLENGE_MARKERS = (
+    "/cdn-cgi/challenge-platform/",        # Cloudflare 챌린지 스크립트 경로
+    "challenges.cloudflare.com",           # Turnstile iframe src
+    "cf-turnstile",                        # Turnstile 위젯 컨테이너
+    "__cf_chl_",                           # 챌린지 토큰/오케스트레이트
+    "cf_chl_opt",
+    "just a moment...",                    # Cloudflare 인터스티셜 제목
+    "attention required! | cloudflare",    # Cloudflare 차단 제목
+    "verify you are human",                # 사람 확인 문구 (영문)
+    "사람인지 확인",                         # 사람 확인 문구 (한글)
+    "enable javascript and cookies to continue",
+    "there was a problem providing the content you requested",  # Elsevier/ScienceDirect
+)
+
+
+def challenge_reason(
+    raw_html: str,
+    http_status: int | None,
+    final_url: str,
+    title: str | None,
+) -> str | None:
+    """봇 차단/사람 확인 챌린지 페이지면 사유 문자열, 아니면 None.
+
+    순수 함수 — Playwright 없이 단위 테스트할 수 있다. raw_html·title·final_url
+    을 소문자로 합쳐 _CHALLENGE_MARKERS 를 찾는다. http_status 는 현재 판정에
+    쓰지 않고 사유에만 덧붙인다 (정상 콘텐츠가 403/503 을 줄 수도 있어 상태만으로는
+    차단으로 보지 않는다).
+    """
+    haystack = "\n".join(s for s in (raw_html, title or "", final_url) if s).lower()
+    for marker in _CHALLENGE_MARKERS:
+        if marker in haystack:
+            status = f"http {http_status} · " if http_status else ""
+            return f"봇 차단/사람 확인 챌린지 감지 ({status}마커: {marker!r})"
+    return None
+
+
 def _remove_trackers(page) -> tuple[int, int]:
     """page.html 저장 전 live DOM 에서 추적기 스크립트·픽셀 제거.
 
@@ -760,4 +840,12 @@ class CaptureDownloadError(CaptureError):
     """탐색이 파일 다운로드로 전환된 실패 — URL 이 페이지가 아니라 파일.
 
     pipeline 이 문서 아카이빙(documents.download_direct)으로 전환하는 신호다.
+    """
+
+
+class CaptureChallengeError(CaptureError):
+    """봇 차단/사람 확인 챌린지 페이지가 감지된 실패 — 정상 콘텐츠가 아님.
+
+    pipeline 이 http 폴백으로 새지 않고(폴백해도 못 푼다) 저장·해시를 생략한 채
+    실패로만 기록하게 하는 신호다 (아키텍처 원칙 3 — 해시 오염 방지).
     """

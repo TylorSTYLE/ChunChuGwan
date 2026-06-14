@@ -21,6 +21,12 @@ dependencies = [
     "cryptography>=42",
 ]
 
+[project.optional-dependencies]
+# 스텔스 캡처 엔진 — Cloudflare 등의 Runtime.enable 봇 탐지를 우회하는 Playwright
+# 드롭인 패치. `uv sync --extra stealth` 로 설치하고 WCCG_CAPTURE_ENGINE=patchright
+# 로 켠다 (미설치 시 표준 playwright 로 자동 폴백). browser_engine.py 참조.
+stealth = ["patchright>=1.60"]
+
 [project.scripts]
 wccg = "chunchugwan.cli:main"
 
