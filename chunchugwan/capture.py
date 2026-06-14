@@ -289,6 +289,12 @@ LinkRewriter = Callable[[Sequence[str]], dict[str, str]]
 ResourceFallback = Callable[[str], "tuple[str, bytes] | None"]
 
 
+# 채널(real Chrome 등) 기동이 한 번 실패하면(예: arm64 에 google-chrome
+# 미설치) 이후로는 번들 chromium 으로 폴백을 유지한다 — 매 캡처마다 실패-재시도
+# 비용을 한 번만 치르게 한다.
+_channel_fallback = False
+
+
 def _launch(p, browser_args: tuple[str, ...] = ()):
     """설정에 따라 chromium 을 기동 — headless/channel 을 한 곳에서 결정.
 
@@ -297,13 +303,28 @@ def _launch(p, browser_args: tuple[str, ...] = ()):
     그 채널(예: 'chrome' — 번들 chromium 대신 시스템 real Chrome)을 쓴다.
     두 launch 지점(BrowserSession.browser, _capture_once)이 이 헬퍼만 호출해
     옵션이 어긋나지 않게 한다.
+
+    채널을 지정했는데 그 브라우저가 없으면(amd64 전용 google-chrome 을 arm64 에서
+    요청하는 등) 번들 chromium 으로 폴백한다 — 같은 설정을 양쪽 아키텍처에서
+    안전하게 쓸 수 있게 한다 (arm64 는 real Chrome 이 없으므로 stealth 가 다소
+    약하지만 동작은 한다).
     """
+    global _channel_fallback
     kwargs: dict = {
         "headless": not config.CAPTURE_HEADFUL,
         "args": list(browser_args),
     }
-    if config.CAPTURE_CHANNEL:
-        kwargs["channel"] = config.CAPTURE_CHANNEL
+    channel = config.CAPTURE_CHANNEL
+    if channel and not _channel_fallback:
+        try:
+            return p.chromium.launch(channel=channel, **kwargs)
+        except Exception as e:
+            logger.warning(
+                "캡처 채널 %r 기동 실패 — 번들 chromium 으로 폴백합니다 "
+                "(예: arm64 에 real Chrome 미설치). 이후 폴백을 유지합니다: %s",
+                channel, str(e).splitlines()[0],
+            )
+            _channel_fallback = True
     return p.chromium.launch(**kwargs)
 
 

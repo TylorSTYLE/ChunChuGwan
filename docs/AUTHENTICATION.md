@@ -93,7 +93,7 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 2단계를 건너뛴다.
 | `WCCG_SYSTEM_LOG_MAX_ROWS` | `20000` | 시스템 로그(`/system/logs`) 보관 한도 행 수 — 초과분은 오래된 것부터 자동 정리 |
 | `WCCG_CAPTURE_ENGINE` | `playwright` | `patchright` 면 스텔스 캡처 엔진 사용 (Cloudflare 등의 `Runtime.enable` 봇 탐지 우회). 도커 이미지에 포함, 비도커는 `uv sync --extra stealth`. 미설치 시 playwright 로 자동 폴백 |
 | `WCCG_CAPTURE_HEADFUL` | `off` | `on` 이면 헤드리스 대신 헤드풀로 캡처 — 서버(디스플레이 없음)에서는 Xvfb 가 필요하다 (도커 엔트리포인트가 `xvfb-run` 으로 자동 래핑). Turnstile 류는 헤드풀이 사실상 필수 |
-| `WCCG_CAPTURE_CHANNEL` | (없음) | `chrome` 이면 번들 chromium 대신 시스템 real Chrome 사용 (TLS/HTTP2 지문이 진짜라 네트워크 레벨 탐지에 강함). 도커는 amd64 에만 Chrome 이 설치됨 — arm64 는 비워 둘 것 |
+| `WCCG_CAPTURE_CHANNEL` | (없음) | `chrome` 이면 번들 chromium 대신 시스템 real Chrome 사용 (TLS/HTTP2 지문이 진짜라 네트워크 레벨 탐지에 강함). 도커는 amd64 에만 Chrome 이 설치됨 — arm64 는 Chrome 이 없어 자동으로 번들 chromium 으로 폴백한다(동작은 하되 stealth 가 다소 약함). amd64·arm64 혼용이면 그냥 `chrome` 으로 둬도 안전 |
 | `WCCG_CAPTURE_FORCE_UA` | `off` | 헤드풀일 때 기본은 고정 UA(`config.USER_AGENT`)를 해제해 real Chrome UA/Client Hints 와 맞춘다. `on` 이면 헤드풀에서도 고정 UA 를 강제 |
 
 OIDC 변수 3개가 모두 설정되면 로그인 페이지에 "Authentik으로 로그인" 버튼이
