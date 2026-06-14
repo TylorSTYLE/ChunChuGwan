@@ -3,7 +3,7 @@
 #   cp compose.example.yaml compose.yaml
 #
 # 포트·환경변수 등 개인 설정은 복사한 compose.yaml 에서만 수정할 것.
-# 환경변수 전체 목록은 README "인증 > 환경변수" 절 참조.
+# 환경변수 전체 목록은 docs/AUTHENTICATION.md "환경변수" 절 참조.
 services:
   dashboard:
     image: ghcr.io/tylorstyle/chunchugwan:latest   # GitHub Actions 가 main 푸시마다 게시 (amd64/arm64)
