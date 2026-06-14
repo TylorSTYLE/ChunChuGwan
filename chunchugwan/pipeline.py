@@ -326,6 +326,11 @@ def _archive_url(
             result = capture.capture(norm, tmp_dir, **capture_kwargs)
         except capture.CaptureDownloadError:
             is_download = True
+        except capture.CaptureChallengeError as e:
+            # 봇 차단/사람 확인 챌린지 — http 폴백으로도 못 풀고, 차단 페이지를
+            # 저장/해시하면 아카이브가 오염된다 (원칙 3). 저장 없이 실패로만 남긴다.
+            run.step("capture", str(e).splitlines()[0])
+            raise
         except capture.CaptureError as e:
             result = None
             if norm.startswith("https://") and capture.is_cert_error(e):
