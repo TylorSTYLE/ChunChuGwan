@@ -267,7 +267,13 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   `kind` = http_basic/session/jwt, 라벨 UNIQUE). 비밀은 `WCCG_SECRET_KEY` 로 대칭
   암호화한 암호문(`secret`)만 저장 (`crypto.py` — 원칙 6 예외, replay 위해
   복원 가능). 관리자 전용 `/sites/{id}/credentials`(+ 새 아카이빙 화면의
-  선택 섹션)에서 관리하고 쓰기는 `credentials.py` 코어 모듈을 거친다.
+  선택 섹션)에서 관리하고 쓰기는 `credentials.py` 코어 모듈을 거친다. session
+  종류는 storage_state JSON 을 직접 넣는 대신 로그인 상태로 기록한 HAR 파일을
+  올려 쿠키를 추출할 수 있다 (`credentials.storage_state_from_har` — HAR 의
+  cookies 배열·요청 Cookie 헤더에서 최종 쿠키 상태를 모아 storage_state 로
+  변환. 무관한 서드파티 쿠키가 섞이지 않게 **대상 사이트의 등록 도메인**
+  쿠키만 남긴다(origin 스코프 원칙과 일관 — 외부 IdP 등 다른 등록 도메인
+  SSO 는 JSON 직접 입력), localStorage 는 미포함).
   사이트 prune·삭제 시 함께 정리(FK), 삭제 시 이 자격증명을 연결한
   `pages.credential_id` 도 NULL 로 끊는다. 새 아카이빙 폼은 입력 URL 의
   도메인 자격증명을 조회(`/archive/credentials`)해 골라 페이지에 연결할 수

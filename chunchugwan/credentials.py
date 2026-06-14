@@ -19,8 +19,11 @@ session→storage_state, jwt→대상 origin 요청에만 Authorization 헤더
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import sqlite3
+from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from . import crypto, db
 
@@ -42,6 +45,7 @@ MAX_USERNAME_LENGTH = 200
 MAX_PASSWORD_LENGTH = 1000
 MAX_SESSION_BYTES = 256 * 1024   # storage_state JSON 상한 (256KB)
 MAX_JWT_LENGTH = 8192            # Bearer 토큰(JWT) 길이 상한
+MAX_HAR_BYTES = 64 * 1024 * 1024  # 업로드 HAR 파일 상한 (64MB — 쿠키만 추출)
 
 
 class CredentialError(ValueError):
@@ -117,6 +121,211 @@ def normalize_storage_state(data: dict, *, strict: bool) -> dict:
     result = dict(data)
     result["cookies"] = normalized
     return result
+
+
+# ---- HAR(브라우저 네트워크 기록) → storage_state 변환 ----
+#
+# 브라우저 개발자도구·확장이 내보내는 HAR(HTTP Archive, JSON)에서 쿠키를 뽑아
+# Playwright storage_state 로 만든다. 세션 상태를 손으로 추출(JSON 붙여넣기)하는
+# 대신, 로그인한 상태로 기록한 HAR 을 올리면 같은 결과를 얻는다. HAR 에는
+# localStorage 가 없으므로 origins 는 비우고 쿠키만 추출한다.
+
+# HAR sameSite 표기 → Playwright sameSite 표기. 모르는 값은 버린다(선택 속성).
+_SAMESITE_MAP = {
+    "strict": "Strict",
+    "lax": "Lax",
+    "none": "None",
+    "no_restriction": "None",
+    "unspecified": None,
+}
+
+
+def _parse_har_expires(value: object) -> float | None:
+    """HAR 쿠키 expires(ISO 8601 문자열)를 unix 초로 변환. 세션·해석불가면 None.
+
+    타임존이 없는 값은 UTC 로 본다 — HAR 스펙은 오프셋을 요구하지만, 누락한
+    비표준 내보내기에서 서버 로컬 타임존에 따라 만료가 흔들리지 않게 고정한다.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):              # 'Z'(UTC)를 fromisoformat 가 받는 형태로
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _har_cookie_to_pw(cookie: object, fallback_domain: str) -> dict | None:
+    """HAR 쿠키 한 개를 Playwright 쿠키 dict 로 변환. 못 살리면 None.
+
+    domain 이 없으면 요청 URL 의 호스트(fallback_domain)로 채운다. name·domain 이
+    모두 없으면 못 살린다. value 가 빈 쿠키(삭제된 쿠키)는 호출부가 거른다.
+    """
+    if not isinstance(cookie, dict):
+        return None
+    name = cookie.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    domain = cookie.get("domain") or fallback_domain
+    if not domain:
+        return None
+    pw: dict = {
+        "name": name,
+        "value": cookie.get("value") if isinstance(cookie.get("value"), str) else "",
+        "domain": domain,
+        "path": cookie.get("path") or "/",
+    }
+    expires = _parse_har_expires(cookie.get("expires"))
+    if expires is not None:
+        pw["expires"] = expires
+    if isinstance(cookie.get("httpOnly"), bool):
+        pw["httpOnly"] = cookie["httpOnly"]
+    if isinstance(cookie.get("secure"), bool):
+        pw["secure"] = cookie["secure"]
+    same_site = cookie.get("sameSite")
+    if isinstance(same_site, str):
+        mapped = _SAMESITE_MAP.get(same_site.lower(), None)
+        if mapped is not None:
+            pw["sameSite"] = mapped
+    return pw
+
+
+def _cookies_from_header(value: object, fallback_domain: str) -> list[dict]:
+    """요청 Cookie 헤더("a=1; b=2")를 Playwright 쿠키 목록으로 파싱(폴백용).
+
+    HAR 의 cookies 배열을 채우지 않는 내보내기 도구를 위해, 배열이 비었을 때만
+    쓴다. 헤더에는 속성이 없으므로 name·value·domain·path 만 채운다.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return []
+    out: list[dict] = []
+    for part in value.split(";"):
+        if "=" not in part:
+            continue
+        name, _, val = part.strip().partition("=")
+        name = name.strip()
+        if name and fallback_domain:
+            out.append({"name": name, "value": val.strip(),
+                        "domain": fallback_domain, "path": "/"})
+    return out
+
+
+def _header_value(headers: object, target: str) -> str | None:
+    """HAR headers 목록에서 이름(대소문자 무시)에 맞는 첫 값 반환."""
+    if not isinstance(headers, list):
+        return None
+    for h in headers:
+        if isinstance(h, dict) and str(h.get("name", "")).lower() == target:
+            value = h.get("value")
+            return value if isinstance(value, str) else None
+    return None
+
+
+def _base_domain(host: str) -> str:
+    """호스트의 등록 가능 도메인 근사 — 마지막 두 레이블 (IP·단일 레이블은 그대로).
+
+    공개 접미사 목록(PSL)이 없어 정확하진 않지만(co.uk 등 과대 매칭 가능),
+    같은 조직의 서브도메인·CDN·SSO 쿠키를 함께 남기는 스코프로는 충분하다.
+    """
+    host = host.strip(".").lower()
+    if not host:
+        return ""
+    try:                                  # IP 리터럴은 그대로
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    labels = host.split(".")
+    if len(labels) <= 2:
+        return host
+    return ".".join(labels[-2:])
+
+
+def _cookie_in_site_scope(cookie_domain: str, base: str) -> bool:
+    """쿠키 도메인이 대상 사이트의 등록 도메인(base) 범위에 드는지."""
+    d = (cookie_domain or "").strip(".").lower()
+    return bool(base) and (d == base or d.endswith("." + base))
+
+
+def storage_state_from_har(raw: str | bytes, *, site_host: str | None = None) -> dict:
+    """HAR(JSON)에서 쿠키를 추출해 Playwright storage_state dict 로 변환.
+
+    반환: {"cookies": [...], "origins": []}. 항목을 시간순(HAR 기록 순서)으로
+    훑어 같은 (name, domain, path) 쿠키는 마지막 값으로 갱신하고(세션 종료
+    시점의 상태), 최종 값이 빈 쿠키(로그아웃 등으로 삭제된 쿠키)는 버린다.
+    각 항목의 cookies 배열을 우선 쓰고, 배열이 비었으면 요청 Cookie 헤더로
+    폴백한다. 쿠키를 하나도 못 찾으면 CredentialError 를 던진다.
+
+    site_host 를 주면 그 사이트의 등록 도메인(`_base_domain`) 범위 쿠키만
+    남긴다 — HAR 에 섞인 무관한 서드파티 쿠키(애널리틱스·다른 탭 세션 등)가
+    자격증명에 빨려 들어가 캡처 때 그 서드파티로 흘러가는 것을 막는다
+    (프로젝트의 origin 스코프 원칙과 일관). 그 도메인 쿠키가 하나도 없으면
+    명확한 오류를 던진다 — 외부 IdP(다른 등록 도메인) SSO 처럼 범위를 벗어난
+    경우엔 storage_state JSON 을 직접 붙여넣으면 된다.
+    """
+    if isinstance(raw, (bytes, bytearray)):
+        if len(raw) > MAX_HAR_BYTES:
+            raise CredentialError("HAR 파일이 너무 큽니다.")
+        try:
+            text = bytes(raw).decode("utf-8")
+        except UnicodeDecodeError:
+            raise CredentialError("HAR 파일을 UTF-8 로 읽을 수 없습니다.") from None
+    else:
+        if len(raw.encode("utf-8")) > MAX_HAR_BYTES:
+            raise CredentialError("HAR 파일이 너무 큽니다.")
+        text = raw
+    try:
+        har = json.loads(text)
+    except json.JSONDecodeError:
+        raise CredentialError("HAR 파일이 올바른 JSON 이 아닙니다.") from None
+    log = har.get("log") if isinstance(har, dict) else None
+    entries = log.get("entries") if isinstance(log, dict) else None
+    if not isinstance(entries, list):
+        raise CredentialError("올바른 HAR 파일이 아닙니다 (log.entries 가 없습니다).")
+
+    # (name, domain, path) → 최종 쿠키. 시간순으로 마지막 값이 남는다.
+    jar: dict[tuple[str, str, str], dict] = {}
+
+    def _apply(cookies: object, fallback_domain: str) -> None:
+        if not isinstance(cookies, list):
+            return
+        for c in cookies:
+            pw = _har_cookie_to_pw(c, fallback_domain)
+            if pw is not None:
+                jar[(pw["name"], pw["domain"], pw["path"])] = pw
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
+        response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+        host = urlsplit(request.get("url", "") if isinstance(request.get("url"), str) else "").hostname or ""
+        # 요청 쿠키(브라우저가 보낸 현재 상태) → 응답 쿠키(서버가 갱신/설정) 순으로
+        # 적용해 응답이 우선한다. 배열이 비었으면 Cookie 헤더로 폴백.
+        req_cookies = request.get("cookies")
+        if not (isinstance(req_cookies, list) and req_cookies):
+            req_cookies = _cookies_from_header(_header_value(request.get("headers"), "cookie"), host)
+        _apply(req_cookies, host)
+        _apply(response.get("cookies"), host)
+
+    cookies = [c for c in jar.values() if c["value"] != ""]
+    if not cookies:
+        raise CredentialError("HAR 파일에서 쿠키를 찾지 못했습니다.")
+    if site_host:
+        base = _base_domain(site_host)
+        scoped = [c for c in cookies if _cookie_in_site_scope(c["domain"], base)]
+        if not scoped:
+            raise CredentialError(
+                "HAR 파일에 이 사이트 도메인의 쿠키가 없습니다 "
+                "(다른 도메인 쿠키만 있어 가져오지 않았습니다)."
+            )
+        cookies = scoped
+    return {"cookies": cookies, "origins": []}
 
 
 def build_payload(kind: str, form: dict) -> dict:
