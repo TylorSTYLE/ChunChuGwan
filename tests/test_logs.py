@@ -126,7 +126,7 @@ def test_pipeline_writes_success_log(archive_env, monkeypatch):
     assert log["snapshot_id"] is not None
     steps = json.loads(log["steps"])
     assert [s["step"] for s in steps] == [
-        "normalize", "capture", "extract", "hash", "compress", "index", "store"
+        "normalize", "engine", "capture", "extract", "hash", "compress", "index", "store"
     ]
 
     # 같은 내용 재실행 → unchanged 로그 (스냅샷 없음)
@@ -168,9 +168,9 @@ def test_pipeline_falls_back_to_http_when_scheme_inferred(archive_env, monkeypat
     assert log["url"] == "http://example.com/post"
     steps = json.loads(log["steps"])
     assert [s["step"] for s in steps] == [
-        "normalize", "capture", "capture", "extract", "hash", "compress", "index", "store"
+        "normalize", "engine", "capture", "capture", "extract", "hash", "compress", "index", "store"
     ]
-    assert "http 로 재시도" in steps[1]["detail"]
+    assert "http 로 재시도" in steps[2]["detail"]  # 0=normalize 1=engine 2=capture
 
 
 def test_pipeline_http_fallback_for_explicit_https_on_connect_error(
@@ -197,7 +197,7 @@ def test_pipeline_http_fallback_for_explicit_https_on_connect_error(
         log = db.list_archive_logs(conn)[0]
     assert log["status"] == "new"
     assert log["url"] == "http://example.com/post"
-    assert "http 로 재시도" in json.loads(log["steps"])[1]["detail"]
+    assert "http 로 재시도" in json.loads(log["steps"])[2]["detail"]  # 0=normalize 1=engine 2=capture
 
 
 def test_pipeline_no_http_fallback_for_explicit_https(archive_env, monkeypatch):

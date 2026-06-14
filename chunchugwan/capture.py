@@ -293,6 +293,22 @@ ResourceFallback = Callable[[str], "tuple[str, bytes] | None"]
 # 미설치) 이후로는 번들 chromium 으로 폴백을 유지한다 — 매 캡처마다 실패-재시도
 # 비용을 한 번만 치르게 한다.
 _channel_fallback = False
+_mode_logged = False
+
+
+def capture_mode_str() -> str:
+    """현재 캡처가 도는 모드 — 엔진/headful/channel 한 줄. 진단용.
+
+    스텔스 설정(WCCG_CAPTURE_*)이 실제로 적용됐는지 로그·archive_logs 로
+    확인할 수 있게 한다. 예: 'playwright · headless · channel=-' 이 찍히면
+    스텔스가 안 켜진 것(이미지 미빌드 또는 환경변수 미설정).
+    """
+    engine = browser_engine.get_engine()[0]
+    head = "headful" if config.CAPTURE_HEADFUL else "headless"
+    channel = config.CAPTURE_CHANNEL or "-"
+    if _channel_fallback:
+        channel += " (폴백: 번들 chromium)"
+    return f"{engine} · {head} · channel={channel}"
 
 
 def _launch(p, browser_args: tuple[str, ...] = ()):
@@ -309,7 +325,11 @@ def _launch(p, browser_args: tuple[str, ...] = ()):
     안전하게 쓸 수 있게 한다 (arm64 는 real Chrome 이 없으므로 stealth 가 다소
     약하지만 동작은 한다).
     """
-    global _channel_fallback
+    global _channel_fallback, _mode_logged
+    if not _mode_logged:
+        # 프로세스당 한 번 — 캡처가 실제로 어떤 모드로 도는지 남긴다(진단)
+        logger.info("캡처 모드: %s", capture_mode_str())
+        _mode_logged = True
     kwargs: dict = {
         "headless": not config.CAPTURE_HEADFUL,
         "args": list(browser_args),

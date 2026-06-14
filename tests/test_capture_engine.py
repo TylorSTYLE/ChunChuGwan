@@ -94,3 +94,28 @@ def test_launch_channel_missing_falls_back_and_sticks(monkeypatch):
     chromium.calls.clear()
     capture._launch(p)
     assert chromium.calls == [{"headless": True, "args": []}]  # 더는 채널 시도 안 함
+
+
+# ---- capture_mode_str (진단 로그) ----
+
+def test_capture_mode_str_headless_default(monkeypatch):
+    monkeypatch.setattr(config, "CAPTURE_ENGINE", "playwright")
+    monkeypatch.setattr(config, "CAPTURE_HEADFUL", False)
+    monkeypatch.setattr(config, "CAPTURE_CHANNEL", "")
+    monkeypatch.setattr(capture, "_channel_fallback", False)
+    s = capture.capture_mode_str()
+    assert "playwright" in s and "headless" in s and "channel=-" in s
+
+
+def test_capture_mode_str_stealth(monkeypatch):
+    monkeypatch.setattr(config, "CAPTURE_HEADFUL", True)
+    monkeypatch.setattr(config, "CAPTURE_CHANNEL", "chrome")
+    monkeypatch.setattr(capture, "_channel_fallback", False)
+    s = capture.capture_mode_str()
+    assert "headful" in s and "channel=chrome" in s
+
+
+def test_capture_mode_str_shows_fallback(monkeypatch):
+    monkeypatch.setattr(config, "CAPTURE_CHANNEL", "chrome")
+    monkeypatch.setattr(capture, "_channel_fallback", True)
+    assert "폴백" in capture.capture_mode_str()
