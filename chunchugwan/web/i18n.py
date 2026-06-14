@@ -41,6 +41,7 @@ _EN: dict[str, str] = {
     "시스템 로그": "System logs",
     "사용자": "Users",
     "시스템": "System",
+    "검색": "Search",
     "계정": "Account",
     "로그아웃": "Log out",
     "메뉴": "Menu",
@@ -919,6 +920,21 @@ _EN: dict[str, str] = {
         "it finishes",
     "사이트 삭제됨: {key} (페이지 {p}개, 스냅샷 {s}개, 크롤 {c}개)":
         "Site deleted: {key} ({p} page(s), {s} snapshot(s), {c} crawl(s))",
+    # ---- 검색 (/search) ----
+    "아카이브 본문·문서에서 검색…": "Search archived text and documents…",
+    "도메인 (선택)": "Domain (optional)",
+    "URL당 최신만": "Latest per URL",
+    "한국어는 3글자 이상이 정확합니다 — 1~2글자 검색어는 부분일치로 처리되어 결과가 많거나 느릴 수 있습니다. 검색 대상은 페이지 본문과 첨부 문서(PDF·워드·한글 등) 본문입니다.":
+        "Korean queries of 3+ characters are most accurate — 1–2 character queries "
+        "fall back to substring matching, which can be slow or return many results. "
+        "Search covers page text and attached document bodies (PDF, Word, HWP, etc.).",
+    "이 환경의 SQLite 빌드에 FTS5 가 없어 검색을 쓸 수 없습니다. 기존 아카이빙은 영향받지 않습니다.":
+        "Search is unavailable because this SQLite build lacks FTS5. Existing "
+        "archiving is unaffected.",
+    "검색어를 입력하세요.": "Enter a search query.",
+    "일치하는 결과가 없습니다.": "No matching results.",
+    "짧은 검색어라 부분일치로 찾았습니다.": "Short query — matched by substring.",
+    "검색 권한이 없습니다": "You do not have permission to search",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

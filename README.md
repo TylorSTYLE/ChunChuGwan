@@ -18,7 +18,9 @@
   대시보드 "문서" 통합 목록(`/documents`)에서 다운로드. 참조하는 스냅샷이
   모두 삭제되면 문서 파일도 자동 정리
 - 사이트(섹션) 전체를 링크 따라 수집하는 크롤, 페이지/사이트 주기적 재아카이빙
-- 읽기 전용 대시보드 (목록/타임라인/스냅샷 뷰어/diff 뷰어/로그 + 재아카이빙·삭제 버튼)
+- 전문(full-text) 검색 — 페이지 본문 + 첨부 문서(PDF·워드·한글 등) 본문을
+  SQLite FTS5(trigram, 한국어 부분문자열)로 검색 (CLI `wccg search`, 대시보드 `/search`)
+- 읽기 전용 대시보드 (목록/타임라인/스냅샷 뷰어/diff 뷰어/검색/로그 + 재아카이빙·삭제 버튼)
 - 아카이브 실행 로그 — 모든 실행(성공/실패)을 단계별 소요시간과 함께 DB에 기록
 - 사용자 인증 — 이메일/패스워드(+선택 TOTP 2FA), Authentik OIDC SSO 지원
 - 역할 기반 권한 — 관리자/아카이브/보기 전용/권한없음(가입 승인 대기)/차단,
@@ -33,6 +35,7 @@
 |---|---|
 | [docs/CRAWLING.md](docs/CRAWLING.md) | 사이트 전체 아카이브(크롤) · 주기적 자동 재아카이빙 |
 | [docs/STORAGE.md](docs/STORAGE.md) | 저장 구조 · 도메인별 정규화 룰 · 백업/복원·내보내기 |
+| [docs/SEARCH.md](docs/SEARCH.md) | 전문 검색(FTS5 trigram) · 한국어 검색 특성 · 문서 본문 색인 |
 | [docs/DOCKER.md](docs/DOCKER.md) | 도커 / 도커 컴포즈 실행 (상세) |
 | [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) | 인증 · 권한 · 초대 · 2FA · OIDC · 환경변수 |
 | [docs/API.md](docs/API.md) | 외부 API (API 키) 레퍼런스 |
@@ -57,6 +60,8 @@ uv run wccg list                     # 전체 아카이브 현황
 uv run wccg history <url>            # 해당 URL 스냅샷 목록 (번호는 diff에 사용)
 uv run wccg diff <url>               # 최신 2개 스냅샷 비교 (+ 스크린샷 픽셀 diff)
 uv run wccg diff <url> --from 1 --to 3
+uv run wccg search <검색어>          # 본문·첨부 문서 전문 검색 (docs/SEARCH.md)
+uv run wccg search reindex          # 기존/가져온 스냅샷을 검색 인덱스에 색인
 uv run wccg delete <url>             # 아카이브 전체 삭제 (모든 스냅샷, 확인 후 진행)
 uv run wccg delete <url> --snapshot 2  # history 번호의 스냅샷 하나만 삭제
 uv run wccg serve                    # 대시보드 (http://127.0.0.1:8765)

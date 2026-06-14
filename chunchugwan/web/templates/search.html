@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}{{ _("검색") }} — {{ _("춘추관") }}{% endblock %}
+{% block content %}
+<style>
+.search-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.search-form input[type=text] { flex: 1; min-width: 200px; }
+.search-form input[name=domain] { flex: none; width: 180px; }
+.search-hits { list-style: none; padding: 0; margin: 16px 0; }
+.search-hits li { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.search-hits .url { font-size: 13px; }
+.search-hits .snippet { font-size: 13px; margin: 4px 0 0; line-height: 1.5; }
+.search-hits .snippet mark { background: var(--accent, #fde68a); color: inherit; padding: 0 1px; }
+.search-hits .meta { font-size: 12px; }
+.search-hits .title { font-size: 12px; max-width: 560px; overflow: hidden;
+                      text-overflow: ellipsis; white-space: nowrap; }
+</style>
+
+<div class="toolbar">
+  <h2 style="margin:0">{{ _("검색") }}</h2>
+  <span class="spacer"></span>
+</div>
+
+<form class="search-form" method="get" action="/search">
+  <input type="text" name="q" value="{{ q }}" autofocus autocomplete="off"
+         placeholder="{{ _('아카이브 본문·문서에서 검색…') }}">
+  <input type="text" name="domain" value="{{ domain }}" autocomplete="off"
+         placeholder="{{ _('도메인 (선택)') }}">
+  <label class="mono" style="font-size:12px">
+    <input type="checkbox" name="latest" value="1" {% if latest %}checked{% endif %}>
+    {{ _("URL당 최신만") }}
+  </label>
+  <button type="submit">{{ _("검색") }}</button>
+</form>
+
+<p class="muted" style="font-size:12px">
+  {{ _("한국어는 3글자 이상이 정확합니다 — 1~2글자 검색어는 부분일치로 처리되어 결과가 많거나 느릴 수 있습니다. 검색 대상은 페이지 본문과 첨부 문서(PDF·워드·한글 등) 본문입니다.") }}
+</p>
+
+{% if not available %}
+<div class="error">{{ _("이 환경의 SQLite 빌드에 FTS5 가 없어 검색을 쓸 수 없습니다. 기존 아카이빙은 영향받지 않습니다.") }}</div>
+{% elif not q %}
+<p class="muted">{{ _("검색어를 입력하세요.") }}</p>
+{% elif results and not results.hits %}
+<p class="muted">{{ _("일치하는 결과가 없습니다.") }}</p>
+{% elif results %}
+
+{% if results.mode == 'like' %}
+<div class="notice">{{ _("짧은 검색어라 부분일치로 찾았습니다.") }}</div>
+{% endif %}
+
+<ul class="search-hits">
+  {% for hit in results.hits %}
+  <li>
+    <div class="url">
+      <a href="/snapshot/{{ hit.snapshot_id }}">{{ hit.page_url }}</a>
+      {% if hit.changed %}
+      <span class="badge changed">{{ _("변경") }}</span>
+      {% else %}
+      <span class="badge same">{{ _("동일") }}</span>
+      {% endif %}
+    </div>
+    {% if hit.title %}
+    <div class="muted title" title="{{ hit.title }}">{{ hit.title }}</div>
+    {% endif %}
+    {% if hit.snippet %}
+    <p class="snippet">{{ hit.snippet | highlight(hit.terms) }}</p>
+    {% endif %}
+    <div class="meta muted mono">
+      {{ hit.taken_at | ts }} ·
+      <a href="/page/{{ hit.page_id }}">{{ _("타임라인") }}</a> ·
+      snapshot #{{ hit.snapshot_id }}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+
+{% set qs = '/search?q=' ~ (q | urlencode) ~ ('&domain=' ~ (domain | urlencode) if domain else '') ~ ('&latest=1' if latest else '') %}
+<div class="pager">
+  <span class="muted">{{ _("총 {n}건", n=results.total) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page, t=total_pages) }}{% endif %}</span>
+  <span class="spacer"></span>
+  {% if has_prev %}<a href="{{ qs }}&page={{ page - 1 }}">&larr; {{ _("이전") }}</a>{% endif %}
+  {% if has_next %}<a href="{{ qs }}&page={{ page + 1 }}">{{ _("다음") }} &rarr;</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

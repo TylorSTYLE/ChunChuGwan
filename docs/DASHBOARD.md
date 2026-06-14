@@ -1,6 +1,6 @@
 # 대시보드 화면 구성 (참조)
 
-화면 16개의 라우트·권한·세부 동작 레퍼런스. UI 스타일·i18n 규칙 등
+화면 17개의 라우트·권한·세부 동작 레퍼런스. UI 스타일·i18n 규칙 등
 작업 시 지켜야 하는 원칙은 CLAUDE.md "대시보드 디자인 방향" 절 참조.
 
 - **현황** (dashboard) — 첫 화면 `/`(= `/dashboard`). 사이트·페이지·스냅샷 수,
@@ -78,6 +78,14 @@
   `GET /document/{sha256}/{file}` — snapshot_documents 에 기록된 조합만
   문서 CAS 에서 항상 첨부파일로 서빙. compact 전 스냅샷(files/)의 문서가
   남아 있으면 압축 실행 안내를 띄운다 (압축하면 목록에 포함 + 중복 제거).
+- **검색** (search) — `/search`, 헤더 메뉴 "검색", viewer 이상
+  (`permissions.can_search` — 전문 검색은 모든 아카이브 본문 열람이라 로그와
+  같은 하한). 검색어(`q`)·도메인 필터(`domain`)·"URL당 최신만"(`latest`)
+  GET 파라미터. 색인 본문은 스냅샷 content.md + 첨부 문서 본문(searchindex.py),
+  결과마다 매치 강조 스니펫(`highlight` 필터)·스냅샷 뷰어·타임라인 링크,
+  20개 단위 페이징. 한국어는 trigram 부분문자열(3글자+), 1~2글자는 LIKE
+  폴백(안내 배지). FTS5 없는 SQLite 빌드면 비활성 안내만 표시(아카이빙 영향
+  없음). 색인 동기화·CLI(`wccg search`)는 docs/SEARCH.md 참조.
 - **새 아카이빙** (archive_new) — `/archive/new`, admin/archiver 전용.
   URL 등록 + 자동 재아카이빙 주기 선택. 신규 URL 은 pages 행이 아카이빙
   후에 생기므로 주기 등록은 백그라운드 작업 말미에 수행.

@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 
 from . import (
     capture, certs, config, credentials, crypto, db, documents, extract,
-    netcheck, resources, storage,
+    netcheck, resources, searchindex, storage,
 )
 
 logger = logging.getLogger(__name__)
@@ -518,6 +518,7 @@ def _archive_url(
                         for n in stats.resource_names
                     ],
                 )
+            _index_snapshot_safe(conn, snapshot_id, run)
             status = "new" if prev is None else ("changed" if changed else "forced_same")
             run.step("store", f"스냅샷 저장 [{status}]: {snap_dir.name}")
             run.write(
@@ -534,6 +535,22 @@ def _archive_url(
             )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _index_snapshot_safe(
+    conn: sqlite3.Connection, snapshot_id: int, run: "_RunLog"
+) -> None:
+    """검색 인덱스 반영 — best-effort. 실패해도 아카이빙을 깨지 않는다.
+
+    실패 시 search_indexed=0 이 남아 'wccg search reindex' 백필이 메운다.
+    문서 본문 추출(doctext)이 큰 PDF 등에서 시간이 걸릴 수 있으나, 같은
+    트랜잭션 안에서 content.md·문서 본문을 모아 색인한다.
+    """
+    try:
+        if searchindex.index_snapshot(conn, snapshot_id):
+            run.step("index", "검색 인덱스 반영")
+    except Exception as e:  # noqa: BLE001 — 색인 실패가 저장을 롤백하지 않게
+        logger.warning("스냅샷 %d 검색 색인 실패 (백필 대상으로 남김): %s", snapshot_id, e)
 
 
 def _document_content_text(url: str, entry: dict) -> str:
@@ -705,6 +722,7 @@ def _archive_document_url(
             css_externalized=1,   # 인라인 <style> 없음
         )
         db.insert_snapshot_documents(conn, snapshot_id, manifest)
+        _index_snapshot_safe(conn, snapshot_id, run)
         status = "new" if prev is None else ("changed" if changed else "forced_same")
         run.step("store", f"문서 스냅샷 저장 [{status}]: {snap_dir.name}")
         run.write(
