@@ -68,6 +68,14 @@ DOCUMENT_MAX_COUNT = 20                     # 스냅샷당 문서 수 한도
 DOCUMENT_MAX_BYTES = 50 * 1024 * 1024       # 문서 1개 크기 한도 (50MB)
 DOCUMENT_FETCH_TIMEOUT_SECONDS = 30
 
+# ---- 텍스트 검색 인덱스 (searchindex.py — SQLite FTS5 trigram) ----
+# 색인 원문은 스냅샷의 content.md(정규화 텍스트) + 첨부 문서 본문이다.
+# 문서 본문 추출(doctext.py)은 이 크기 이하 파일만 시도한다 — 거대한 PDF
+# 파싱이 아카이빙/백필을 과도하게 지연시키는 것을 막는다 (초과분은 파일
+# 메타데이터만 색인). 한 문서에서 가져오는 본문 길이도 상한을 둔다.
+SEARCH_DOC_TEXT_MAX_BYTES = 30 * 1024 * 1024   # 본문 추출 시도 파일 크기 상한 (30MB)
+SEARCH_DOC_TEXT_MAX_CHARS = 2 * 1024 * 1024    # 문서 1개에서 색인할 본문 글자 수 상한
+
 # URL 정규화 시 제거할 트래킹 파라미터 prefix
 TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 import uuid
@@ -10,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
 from . import config, storage
+
+logger = logging.getLogger(__name__)
 
 # 쓰기 락 대기 한도(초) — WAL 에서도 쓰기는 한 번에 하나라, 동시 쓰기가
 # 겹치면 이 시간만큼 기다린 뒤 OperationalError.
@@ -89,8 +92,10 @@ CREATE TABLE IF NOT EXISTS snapshots (
     note          TEXT,
     resources_indexed INTEGER NOT NULL DEFAULT 0, -- 자원 참조(snapshot_resources) 기록 여부.
                                                   --   0 이면 저장공간 최적화의 백필 대상
-    css_externalized INTEGER NOT NULL DEFAULT 0   -- 인라인 <style> 의 CAS 추출 여부.
+    css_externalized INTEGER NOT NULL DEFAULT 0,  -- 인라인 <style> 의 CAS 추출 여부.
                                                   --   0 이면 저장공간 최적화의 추출 대상
+    search_indexed INTEGER NOT NULL DEFAULT 0     -- 텍스트 검색 인덱스(snapshot_fts) 반영 여부.
+                                                  --   0 이면 'wccg search reindex' 백필 대상
 );
 
 CREATE TABLE IF NOT EXISTS checks (
@@ -371,6 +376,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN css_externalized INTEGER NOT NULL DEFAULT 0"
         )
+    # 텍스트 검색 인덱스 반영 여부 — 0 인 스냅샷은 'wccg search reindex' 백필 대상.
+    # (마이그레이션은 컬럼만 추가하고 실제 색인은 명시 명령으로 채운다 — connect
+    #  마다 content.md 수천 개를 읽어 첫 연결이 느려지는 것을 막는다.)
+    if cols and "search_indexed" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN search_indexed INTEGER NOT NULL DEFAULT 0"
+        )
+    _ensure_search_index(conn)
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -382,6 +395,39 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id)")
     _backfill_sites(conn)
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    """이름의 테이블/가상테이블/뷰가 존재하는지 (FTS5 가용성 분기 등)."""
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+        (name,),
+    ).fetchone() is not None
+
+
+def _ensure_search_index(conn: sqlite3.Connection) -> None:
+    """텍스트 검색용 FTS5 가상테이블 생성 (trigram 토크나이저).
+
+    rowid = snapshots.id 라 결과를 snapshots/pages 와 JOIN 한다. 색인 컬럼은
+    content(본문 = content.md + 첨부 문서 본문)·title·url. trigram 은 한국어
+    부분문자열(길이 3+) 검색을 CJK 단어분절 없이 지원한다 (searchindex.py).
+
+    SQLite 가 FTS5 없이 빌드된 환경에서는 생성이 실패하지만, 검색 기능만
+    비활성화될 뿐 기존 아카이빙은 영향받지 않는다 (graceful degradation —
+    인증 암호화가 키 부재 시 그 기능만 끄는 원칙 6 과 같은 방식).
+    가상테이블은 ALTER 로 못 바꾸므로 executescript(SCHEMA)가 아니라 여기서
+    try/except 로 만든다.
+    """
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS snapshot_fts "
+            "USING fts5(content, title, url, tokenize='trigram')"
+        )
+    except sqlite3.OperationalError as e:
+        logger.warning(
+            "SQLite FTS5 미지원 — 텍스트 검색 기능이 비활성화됩니다 (%s). "
+            "기존 아카이빙에는 영향이 없습니다.", e
+        )
 
 
 def _backfill_sites(conn: sqlite3.Connection) -> None:
@@ -726,7 +772,7 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed", "css_externalized"}
+     "note", "resources_indexed", "css_externalized", "search_indexed"}
 )
 
 
@@ -789,6 +835,8 @@ def delete_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> bool:
     conn.execute(
         "DELETE FROM snapshot_resources WHERE snapshot_id = ?", (snapshot_id,)
     )
+    if _table_exists(conn, "snapshot_fts"):
+        conn.execute("DELETE FROM snapshot_fts WHERE rowid = ?", (snapshot_id,))
     conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
     if nxt is not None:
         changed = 1 if prev is None else int(prev["content_hash"] != nxt["content_hash"])
@@ -838,6 +886,12 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
         """,
         (page_id,),
     )
+    if _table_exists(conn, "snapshot_fts"):
+        conn.execute(
+            "DELETE FROM snapshot_fts WHERE rowid IN "
+            "(SELECT id FROM snapshots WHERE page_id = ?)",
+            (page_id,),
+        )
     conn.execute("DELETE FROM checks WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM schedules WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM snapshots WHERE page_id = ?", (page_id,))
@@ -1290,6 +1344,192 @@ def list_all_resource_names(conn: sqlite3.Connection) -> set[str]:
         r["name"]
         for r in conn.execute("SELECT DISTINCT name FROM snapshot_resources")
     }
+
+
+# ---- 텍스트 검색 인덱스 (snapshot_fts — FTS5 trigram, searchindex.py) ----
+# 색인 본문은 스냅샷의 content.md(정규화 텍스트) + 첨부 문서 본문. rowid =
+# snapshots.id 라 결과를 snapshots/pages 와 JOIN 한다. 색인 쓰기/조회는 모두
+# 여기를 거친다 (원칙 1 — 쓰기는 코어). 텍스트 조립·문서 추출·스니펫 생성은
+# searchindex.py 가 맡는다.
+
+
+def search_index_available(conn: sqlite3.Connection) -> bool:
+    """FTS5 검색 인덱스 테이블이 존재하는지 (FTS5 미지원 환경이면 False)."""
+    return _table_exists(conn, "snapshot_fts")
+
+
+def clear_search_index(conn: sqlite3.Connection) -> None:
+    """검색 인덱스 전체 비우기 (가져오기 overwrite 등) — 테이블 없으면 무시."""
+    if _table_exists(conn, "snapshot_fts"):
+        conn.execute("DELETE FROM snapshot_fts")
+
+
+def upsert_snapshot_fts(
+    conn: sqlite3.Connection,
+    snapshot_id: int,
+    content: str,
+    title: str | None,
+    url: str | None,
+) -> None:
+    """스냅샷의 검색 인덱스 행 갱신 (rowid=snapshot_id). 재색인에 멱등."""
+    conn.execute(
+        "INSERT OR REPLACE INTO snapshot_fts (rowid, content, title, url) "
+        "VALUES (?, ?, ?, ?)",
+        (snapshot_id, content, title or "", url or ""),
+    )
+
+
+def count_unindexed_search_snapshots(conn: sqlite3.Connection) -> int:
+    """검색 인덱스에 아직 반영되지 않은 스냅샷 수 — reindex 백필 대상."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots WHERE search_indexed = 0"
+    ).fetchone()["c"]
+
+
+def list_unindexed_search_snapshots(
+    conn: sqlite3.Connection, limit: int | None = None
+) -> list[sqlite3.Row]:
+    """검색 인덱스 백필 대상 스냅샷 (+ 위치·URL) — content.md 읽기용."""
+    sql = """
+        SELECT s.id, s.dir_name, p.url AS page_url, p.domain, p.slug
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.search_indexed = 0 ORDER BY s.id
+    """
+    if limit is not None:
+        return conn.execute(sql + " LIMIT ?", (limit,)).fetchall()
+    return conn.execute(sql).fetchall()
+
+
+def mark_snapshot_search_indexed(conn: sqlite3.Connection, snapshot_id: int) -> None:
+    """스냅샷의 검색 인덱스 반영 완료 표시 — 이후 백필 대상에서 제외."""
+    conn.execute(
+        "UPDATE snapshots SET search_indexed = 1 WHERE id = ?", (snapshot_id,)
+    )
+
+
+def reset_search_indexed(conn: sqlite3.Connection) -> None:
+    """모든 스냅샷을 미색인으로 표시 (전체 재색인 — reindex --all)."""
+    conn.execute("UPDATE snapshots SET search_indexed = 0")
+
+
+# 검색 결과 행의 공통 투영 — FTS/LIKE 양쪽이 같은 형태를 돌려준다.
+# (url 은 pages.url 과 snapshot_fts.url 이 겹치므로 반드시 테이블로 한정한다.)
+_SEARCH_SELECT = """
+    SELECT snapshot_fts.rowid AS snapshot_id, s.page_id, s.taken_at, s.changed,
+           p.url AS page_url, p.domain,
+           snapshot_fts.content AS content, snapshot_fts.title AS title
+    FROM snapshot_fts
+    JOIN snapshots s ON s.id = snapshot_fts.rowid
+    JOIN pages p ON p.id = s.page_id
+"""
+# 같은 URL 의 여러 스냅샷 중 최신 1건만 (현재 본문 검색 토글)
+_SEARCH_LATEST_CLAUSE = (
+    " AND s.id = (SELECT id FROM snapshots s2 WHERE s2.page_id = s.page_id"
+    " ORDER BY s2.taken_at DESC, s2.id DESC LIMIT 1)"
+)
+
+
+def search_snapshots_fts(
+    conn: sqlite3.Connection,
+    match: str,
+    *,
+    domain: str | None = None,
+    latest_only: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """FTS MATCH 검색 (bm25 랭킹 순). match 는 searchindex 가 조립한 안전한 질의."""
+    sql = _SEARCH_SELECT + " WHERE snapshot_fts MATCH ?"
+    params: list[object] = [match]
+    if domain:
+        sql += " AND p.domain = ?"
+        params.append(domain)
+    if latest_only:
+        sql += _SEARCH_LATEST_CLAUSE
+    sql += " ORDER BY bm25(snapshot_fts), s.taken_at DESC, s.id DESC LIMIT ? OFFSET ?"
+    params += [limit, offset]
+    return conn.execute(sql, params).fetchall()
+
+
+def count_search_snapshots_fts(
+    conn: sqlite3.Connection,
+    match: str,
+    *,
+    domain: str | None = None,
+    latest_only: bool = False,
+) -> int:
+    """FTS MATCH 결과 총 건수 (페이징용)."""
+    sql = (
+        "SELECT COUNT(*) AS c FROM snapshot_fts "
+        "JOIN snapshots s ON s.id = snapshot_fts.rowid "
+        "JOIN pages p ON p.id = s.page_id WHERE snapshot_fts MATCH ?"
+    )
+    params: list[object] = [match]
+    if domain:
+        sql += " AND p.domain = ?"
+        params.append(domain)
+    if latest_only:
+        sql += _SEARCH_LATEST_CLAUSE
+    return conn.execute(sql, params).fetchone()["c"]
+
+
+def _like_where(patterns: list[str]) -> tuple[str, list[object]]:
+    """짧은 쿼리(LIKE 폴백)의 WHERE 절 — 각 패턴이 content/title/url 중 하나에
+    부분일치(AND). 패턴은 searchindex 가 % _ \\ 이스케이프해 만든다."""
+    clause = " AND ".join(
+        "(snapshot_fts.content LIKE ? ESCAPE '\\' "
+        "OR snapshot_fts.title LIKE ? ESCAPE '\\' "
+        "OR snapshot_fts.url LIKE ? ESCAPE '\\')"
+        for _ in patterns
+    )
+    params: list[object] = []
+    for p in patterns:
+        params += [p, p, p]
+    return clause, params
+
+
+def search_snapshots_like(
+    conn: sqlite3.Connection,
+    patterns: list[str],
+    *,
+    domain: str | None = None,
+    latest_only: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """LIKE 부분일치 검색 (최신순) — trigram 이 못 잡는 1~2글자 쿼리 폴백."""
+    clause, params = _like_where(patterns)
+    sql = _SEARCH_SELECT + " WHERE " + clause
+    if domain:
+        sql += " AND p.domain = ?"
+        params.append(domain)
+    if latest_only:
+        sql += _SEARCH_LATEST_CLAUSE
+    sql += " ORDER BY s.taken_at DESC, s.id DESC LIMIT ? OFFSET ?"
+    params += [limit, offset]
+    return conn.execute(sql, params).fetchall()
+
+
+def count_search_snapshots_like(
+    conn: sqlite3.Connection,
+    patterns: list[str],
+    *,
+    domain: str | None = None,
+    latest_only: bool = False,
+) -> int:
+    """LIKE 폴백 결과 총 건수 (페이징용)."""
+    clause, params = _like_where(patterns)
+    sql = (
+        "SELECT COUNT(*) AS c FROM snapshot_fts "
+        "JOIN snapshots s ON s.id = snapshot_fts.rowid "
+        "JOIN pages p ON p.id = s.page_id WHERE " + clause
+    )
+    if domain:
+        sql += " AND p.domain = ?"
+        params.append(domain)
+    if latest_only:
+        sql += _SEARCH_LATEST_CLAUSE
+    return conn.execute(sql, params).fetchone()["c"]
 
 
 # ---- 함께 저장된 문서 파일 (문서 CAS 참조) ----

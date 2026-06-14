@@ -41,6 +41,7 @@ _EN: dict[str, str] = {
     "시스템 로그": "System logs",
     "사용자": "Users",
     "시스템": "System",
+    "검색": "Search",
     "계정": "Account",
     "로그아웃": "Log out",
     "메뉴": "Menu",
@@ -579,6 +580,23 @@ _EN: dict[str, str] = {
     "브라우저에서 로그인한 뒤 Playwright 의 storage_state() 등으로 추출한 JSON 을 붙여넣으세요. 쿠키·localStorage 가 포함됩니다.":
         "Log in in your browser, then paste the JSON exported via Playwright's "
         "storage_state() or similar. It includes cookies and localStorage.",
+    "또는 HAR 파일 업로드": "Or upload a HAR file",
+    "로그인한 상태로 기록한 HAR 파일(브라우저 개발자도구 네트워크 탭 → 내보내기)을 올리면 쿠키를 자동 추출해 세션 상태로 저장합니다. 이 사이트 도메인의 쿠키만 가져오며, HAR 을 올리면 위 JSON 입력은 무시되고 localStorage 는 포함되지 않습니다.":
+        "Upload a HAR file recorded while logged in (browser DevTools Network tab "
+        "→ export) to automatically extract its cookies into the session state. "
+        "Only cookies for this site's domain are imported; when a HAR is uploaded "
+        "the JSON field above is ignored and localStorage is not included.",
+    "로그인한 상태로 기록한 HAR 파일을 올리면 쿠키를 자동 추출해 세션 상태로 저장합니다. HAR 을 올리면 위 JSON 입력은 무시됩니다.":
+        "Upload a HAR file recorded while logged in to automatically extract its "
+        "cookies into the session state. When a HAR is uploaded the JSON field "
+        "above is ignored.",
+    # HAR 파싱 오류 (credentials.storage_state_from_har)
+    "HAR 파일이 너무 큽니다.": "The HAR file is too large.",
+    "HAR 파일을 UTF-8 로 읽을 수 없습니다.": "The HAR file could not be read as UTF-8.",
+    "HAR 파일이 올바른 JSON 이 아닙니다.": "The HAR file is not valid JSON.",
+    "올바른 HAR 파일이 아닙니다 (log.entries 가 없습니다).":
+        "Not a valid HAR file (missing log.entries).",
+    "HAR 파일에서 쿠키를 찾지 못했습니다.": "No cookies were found in the HAR file.",
     # 종류 라벨 (credentials.KIND_LABELS)
     "HTTP 기본 인증": "HTTP basic auth",
     "세션 쿠키": "Session cookie",
@@ -902,6 +920,21 @@ _EN: dict[str, str] = {
         "it finishes",
     "사이트 삭제됨: {key} (페이지 {p}개, 스냅샷 {s}개, 크롤 {c}개)":
         "Site deleted: {key} ({p} page(s), {s} snapshot(s), {c} crawl(s))",
+    # ---- 검색 (/search) ----
+    "아카이브 본문·문서에서 검색…": "Search archived text and documents…",
+    "도메인 (선택)": "Domain (optional)",
+    "URL당 최신만": "Latest per URL",
+    "한국어는 3글자 이상이 정확합니다 — 1~2글자 검색어는 부분일치로 처리되어 결과가 많거나 느릴 수 있습니다. 검색 대상은 페이지 본문과 첨부 문서(PDF·워드·한글 등) 본문입니다.":
+        "Korean queries of 3+ characters are most accurate — 1–2 character queries "
+        "fall back to substring matching, which can be slow or return many results. "
+        "Search covers page text and attached document bodies (PDF, Word, HWP, etc.).",
+    "이 환경의 SQLite 빌드에 FTS5 가 없어 검색을 쓸 수 없습니다. 기존 아카이빙은 영향받지 않습니다.":
+        "Search is unavailable because this SQLite build lacks FTS5. Existing "
+        "archiving is unaffected.",
+    "검색어를 입력하세요.": "Enter a search query.",
+    "일치하는 결과가 없습니다.": "No matching results.",
+    "짧은 검색어라 부분일치로 찾았습니다.": "Short query — matched by substring.",
+    "검색 권한이 없습니다": "You do not have permission to search",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

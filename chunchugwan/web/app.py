@@ -24,7 +24,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
 
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Query, Request
+from fastapi import (
+    BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
+)
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -34,7 +36,8 @@ from fastapi.responses import (
 
 from .. import (
     auth, backup, config, crawler, credentials, crypto, db, deletion, differ,
-    documents, netcheck, pipeline, resources, scheduler, storage, system_log,
+    documents, netcheck, pipeline, resources, scheduler, searchindex, storage,
+    system_log,
 )
 from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -615,6 +618,33 @@ def site_delete(request: Request, site_id: int):
     return RedirectResponse(f"/archives?{params}", status_code=303)
 
 
+def _read_har_upload(har_file: UploadFile | None) -> bytes:
+    """업로드된 HAR 파일을 바이트로 읽는다 (상한 초과 시 CredentialError). 없으면 b""."""
+    if har_file is None or not (har_file.filename or "").strip():
+        return b""
+    raw = har_file.file.read(credentials.MAX_HAR_BYTES + 1)
+    if len(raw) > credentials.MAX_HAR_BYTES:
+        raise credentials.CredentialError("HAR 파일이 너무 큽니다.")
+    return raw
+
+
+def _session_storage_state(storage_state: str, har: bytes, *, site_key: str = "") -> str:
+    """세션 자격증명용 storage_state 문자열을 정한다.
+
+    HAR 업로드가 있으면 그것을 파싱해 쿠키를 추출한 storage_state 가 우선하고,
+    없으면 입력한 JSON 을 그대로 쓴다. HAR 은 대상 사이트(site_key) 도메인의
+    쿠키만 남겨 무관한 서드파티 쿠키가 섞이지 않게 한다. 파싱 실패는
+    CredentialError(호출부가 처리).
+    """
+    if har:
+        host = (urlsplit(f"//{site_key}").hostname or "") if site_key else ""
+        return json.dumps(
+            credentials.storage_state_from_har(har, site_host=host or None),
+            ensure_ascii=False,
+        )
+    return storage_state
+
+
 def _credentials_redirect(
     site_id: int, *, notice: str = "", error: str = ""
 ) -> RedirectResponse:
@@ -669,11 +699,13 @@ def site_credentials_create(
     password: str = Form(""),
     storage_state: str = Form(""),
     token: str = Form(""),
+    har_file: UploadFile | None = File(None),
 ):
     """로그인 자격증명 등록 — 입력 검증 → 암호화 저장 → 감사 로그. 관리자 전용.
 
     빈 폼 값은 인코딩에서 누락되므로 모든 필드에 기본값을 둬, 누락도 422 가
-    아니라 검증 메시지(리다이렉트)로 처리한다.
+    아니라 검증 메시지(리다이렉트)로 처리한다. 세션 종류는 storage_state JSON
+    대신 로그인 흐름을 기록한 HAR 파일을 올려 쿠키를 자동 추출할 수도 있다.
     """
     _require_admin(request)
     if not crypto.is_configured():
@@ -689,7 +721,15 @@ def site_credentials_create(
         return _credentials_redirect(
             site_id, error=t(request, "잘못된 자격증명 종류입니다.")
         )
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+    if site is None:
+        raise HTTPException(404, t(request, "사이트 없음"))
     try:
+        if kind == credentials.KIND_SESSION:
+            storage_state = _session_storage_state(
+                storage_state, _read_har_upload(har_file), site_key=site["site_key"]
+            )
         payload = credentials.build_payload(
             kind,
             {
@@ -702,9 +742,6 @@ def site_credentials_create(
     except credentials.CredentialError as e:
         return _credentials_redirect(site_id, error=t(request, str(e)))
     with db.connect() as conn:
-        site = db.get_site(conn, site_id)
-        if site is None:
-            raise HTTPException(404, t(request, "사이트 없음"))
         if db.get_site_credential_by_label(conn, site_id, label) is not None:
             return _credentials_redirect(
                 site_id, error=t(request, "이미 있는 이름입니다: {name}", name=label)
@@ -1155,6 +1192,55 @@ def documents_view(request: Request, page: int = Query(1, ge=1)):
             "page": page,
             "has_next": has_next,
             "legacy_pending": legacy_pending,
+        },
+    )
+
+
+_SEARCH_PER_PAGE = 20
+
+
+@app.get("/search", response_class=HTMLResponse)
+def search_view(
+    request: Request,
+    q: str = "",
+    domain: str = "",
+    latest: int = 0,
+    page: int = Query(1, ge=1),
+):
+    """아카이브 전문 검색 — content.md(정규화 텍스트) + 첨부 문서 본문.
+
+    viewer 이상만 접근(검색은 모든 아카이브 본문을 훑는 강한 열람 권한).
+    한국어는 trigram 부분문자열로 찾고, 1~2글자 쿼리는 부분일치로 폴백한다.
+    """
+    if not permissions.can_search(request.state.user):
+        raise HTTPException(403, t(request, "검색 권한이 없습니다"))
+    query = (q or "").strip()
+    domain_filter = (domain or "").strip() or None
+    latest_only = bool(latest)
+    available = searchindex.available()
+    results = None
+    total_pages = 1
+    if available and query:
+        results = searchindex.search(
+            query, domain=domain_filter, latest_only=latest_only,
+            limit=_SEARCH_PER_PAGE, offset=(page - 1) * _SEARCH_PER_PAGE,
+        )
+        total_pages = max(1, -(-results.total // _SEARCH_PER_PAGE))  # ceil
+        if page > total_pages and results.total:
+            # 페이지가 범위를 넘었으면 마지막 페이지로 보정해 다시 조회
+            page = total_pages
+            results = searchindex.search(
+                query, domain=domain_filter, latest_only=latest_only,
+                limit=_SEARCH_PER_PAGE, offset=(page - 1) * _SEARCH_PER_PAGE,
+            )
+    return templates.TemplateResponse(
+        request, "search.html",
+        {
+            "q": query, "domain": domain_filter or "", "latest": latest_only,
+            "available": available, "results": results,
+            "page": page, "total_pages": total_pages,
+            "has_prev": page > 1, "has_next": page < total_pages,
+            "per_page": _SEARCH_PER_PAGE,
         },
     )
 
@@ -1637,18 +1723,23 @@ def _default_credential_label(kind: str, username: str) -> str:
 def _create_archive_credential(
     request: Request, site_key: str, *,
     kind: str, label: str, username: str, password: str,
-    storage_state: str, token: str,
+    storage_state: str, token: str, har_file: UploadFile | None = None,
 ) -> tuple[int | None, str | None]:
     """새 자격증명을 만들어 (credential_id, None) 또는 (None, 오류메시지) 반환.
 
     관리자라고 가정한다(호출부가 보장). 관리 화면과 같은 credentials 코어로
-    암호화 저장하고, 사이트가 없으면 확보(get_or_create_site)한다.
+    암호화 저장하고, 사이트가 없으면 확보(get_or_create_site)한다. 세션 종류는
+    storage_state JSON 대신 HAR 파일(har_file)을 올려 쿠키를 자동 추출할 수 있다.
     """
     if not crypto.is_configured():
         return None, t(request, "WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.")
     if kind not in credentials.KINDS:
         return None, t(request, "잘못된 자격증명 종류입니다.")
     try:
+        if kind == credentials.KIND_SESSION:
+            storage_state = _session_storage_state(
+                storage_state, _read_har_upload(har_file), site_key=site_key
+            )
         payload = credentials.build_payload(
             kind,
             {
@@ -1687,6 +1778,7 @@ def _resolve_archive_credential(
     request: Request, norm: str, *,
     existing_id: str, kind: str, label: str,
     username: str, password: str, storage_state: str, token: str,
+    har_file: UploadFile | None = None,
 ) -> tuple[int | None, str | None]:
     """새 아카이빙 폼의 자격증명 선택을 해석 — (연결할 credential_id, 오류) 반환.
 
@@ -1705,6 +1797,7 @@ def _resolve_archive_credential(
         return _create_archive_credential(
             request, site_key, kind=kind, label=label, username=username,
             password=password, storage_state=storage_state, token=token,
+            har_file=har_file,
         )
     if not existing_id.isdigit():
         return None, t(request, "잘못된 자격증명 선택입니다.")
@@ -1769,6 +1862,7 @@ def archive_new(
     cred_password: str = Form(""),
     cred_storage_state: str = Form(""),
     cred_token: str = Form(""),
+    cred_har_file: UploadFile | None = File(None),
 ):
     """새 URL 아카이빙. 검증은 동기로, 캡처·주기 등록(interval>0)은 백그라운드로.
 
@@ -1794,6 +1888,7 @@ def archive_new(
         request, norm, existing_id=cred_existing_id, kind=cred_kind.strip(),
         label=cred_label, username=cred_username, password=cred_password,
         storage_state=cred_storage_state, token=cred_token,
+        har_file=cred_har_file,
     )
     if cred_error is not None:
         # 비밀번호·토큰이 쿼리스트링·로그에 실리지 않게 url 만 보존한다

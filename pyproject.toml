@@ -19,6 +19,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "webauthn>=2.7.1",
     "cryptography>=42",
+    "pypdf>=4.0",
 ]
 
 [project.optional-dependencies]

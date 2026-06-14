@@ -126,7 +126,7 @@ def test_pipeline_writes_success_log(archive_env, monkeypatch):
     assert log["snapshot_id"] is not None
     steps = json.loads(log["steps"])
     assert [s["step"] for s in steps] == [
-        "normalize", "engine", "capture", "extract", "hash", "compress", "store"
+        "normalize", "engine", "capture", "extract", "hash", "compress", "index", "store"
     ]
 
     # 같은 내용 재실행 → unchanged 로그 (스냅샷 없음)
@@ -168,7 +168,7 @@ def test_pipeline_falls_back_to_http_when_scheme_inferred(archive_env, monkeypat
     assert log["url"] == "http://example.com/post"
     steps = json.loads(log["steps"])
     assert [s["step"] for s in steps] == [
-        "normalize", "engine", "capture", "capture", "extract", "hash", "compress", "store"
+        "normalize", "engine", "capture", "capture", "extract", "hash", "compress", "index", "store"
     ]
     assert "http 로 재시도" in steps[2]["detail"]  # 0=normalize 1=engine 2=capture
 

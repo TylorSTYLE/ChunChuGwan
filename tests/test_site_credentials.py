@@ -1,4 +1,5 @@
 """사이트 로그인 자격증명 — crypto·db·코어(credentials)·관리 화면 테스트."""
+import json
 import sqlite3
 
 import pytest
@@ -683,3 +684,244 @@ def test_archive_crawl_threads_credential(client):
     with db.connect() as conn:
         crawl = db.find_running_crawl(conn, "https://example.com/sec/")
         assert crawl is not None and crawl["credential_id"] == cid
+
+
+# ---- HAR → storage_state 변환 (코어) ----
+
+
+def _har_entry(url, *, req_cookies=None, resp_cookies=None, req_headers=None):
+    """HAR entry 한 개를 만든다 (request/response cookies·headers)."""
+    return {
+        "request": {"url": url, "cookies": req_cookies or [], "headers": req_headers or []},
+        "response": {"cookies": resp_cookies or [], "headers": []},
+    }
+
+
+def _har(entries):
+    """HAR(JSON 문자열)을 만든다."""
+    return json.dumps({"log": {"version": "1.2", "entries": entries}})
+
+
+def test_har_extracts_cookies_with_attrs():
+    har = _har([_har_entry(
+        "https://app.example.com/login",
+        resp_cookies=[{"name": "sid", "value": "abc", "domain": "app.example.com",
+                       "path": "/", "httpOnly": True, "secure": True}],
+    )])
+    state = credentials.storage_state_from_har(har)
+    assert state["origins"] == []
+    c = state["cookies"][0]
+    assert c["name"] == "sid" and c["value"] == "abc"
+    assert c["domain"] == "app.example.com" and c["path"] == "/"
+    assert c["httpOnly"] is True and c["secure"] is True
+
+
+def test_har_uses_request_host_when_cookie_has_no_domain():
+    har = _har([_har_entry(
+        "https://app.example.com/x", req_cookies=[{"name": "sid", "value": "v"}]
+    )])
+    c = credentials.storage_state_from_har(har)["cookies"][0]
+    assert c["domain"] == "app.example.com" and c["path"] == "/"
+
+
+def test_har_cookie_header_fallback_when_array_empty():
+    har = _har([_har_entry(
+        "https://h.example.com/a",
+        req_headers=[{"name": "Cookie", "value": "a=1; b=2"}],
+    )])
+    names = {c["name"]: c["value"] for c in credentials.storage_state_from_har(har)["cookies"]}
+    assert names == {"a": "1", "b": "2"}
+
+
+def test_har_latest_value_wins_and_cleared_dropped():
+    har = _har([
+        _har_entry("https://e.com/1", resp_cookies=[
+            {"name": "s", "value": "old", "domain": "e.com", "path": "/"}]),
+        _har_entry("https://e.com/2", resp_cookies=[
+            {"name": "s", "value": "new", "domain": "e.com", "path": "/"}]),
+        _har_entry("https://e.com/3", resp_cookies=[
+            {"name": "gone", "value": "x", "domain": "e.com", "path": "/"}]),
+        _har_entry("https://e.com/4", resp_cookies=[
+            {"name": "gone", "value": "", "domain": "e.com", "path": "/"}]),
+    ])
+    cookies = {c["name"]: c["value"] for c in credentials.storage_state_from_har(har)["cookies"]}
+    assert cookies == {"s": "new"}        # 마지막 값 채택 + 빈 값(삭제) 제외
+
+
+def test_har_parses_expires_and_samesite():
+    har = _har([_har_entry("https://e.com/", resp_cookies=[
+        {"name": "s", "value": "1", "domain": "e.com", "path": "/",
+         "expires": "2030-01-01T00:00:00.000Z", "sameSite": "lax"}])])
+    c = credentials.storage_state_from_har(har)["cookies"][0]
+    assert c["expires"] > 0 and c["sameSite"] == "Lax"
+
+
+def test_har_result_passes_build_payload():
+    """HAR 결과 storage_state 가 build_payload(session) 검증을 그대로 통과한다."""
+    har = _har([_har_entry("https://e.com/", resp_cookies=[
+        {"name": "s", "value": "1", "domain": "e.com", "path": "/"}])])
+    state = credentials.storage_state_from_har(har)
+    payload = credentials.build_payload("session", {"storage_state": json.dumps(state)})
+    assert payload["storage_state"]["cookies"][0]["value"] == "1"
+
+
+def test_har_rejects_bad_input():
+    for bad in ("not json", "{}", '{"log": {}}', '{"log": {"entries": []}}',
+                _har([_har_entry("https://e.com/")])):   # 쿠키 없음
+        with pytest.raises(credentials.CredentialError):
+            credentials.storage_state_from_har(bad)
+
+
+def test_har_rejects_oversize(monkeypatch):
+    monkeypatch.setattr(credentials, "MAX_HAR_BYTES", 10)
+    with pytest.raises(credentials.CredentialError):
+        credentials.storage_state_from_har(b"x" * 11)
+
+
+def test_har_scopes_cookies_to_site_base_domain():
+    """site_host 를 주면 그 등록 도메인(서브도메인 포함) 쿠키만 남기고
+    무관한 서드파티 쿠키는 버린다."""
+    har = _har([
+        _har_entry("https://app.example.com/login", resp_cookies=[
+            {"name": "sid", "value": "1", "domain": "app.example.com", "path": "/"}]),
+        _har_entry("https://cdn.example.com/a", resp_cookies=[
+            {"name": "cdn", "value": "1", "domain": "cdn.example.com", "path": "/"}]),
+        _har_entry("https://analytics.tracker.io/p", resp_cookies=[
+            {"name": "ga", "value": "1", "domain": "analytics.tracker.io", "path": "/"}]),
+    ])
+    state = credentials.storage_state_from_har(har, site_host="app.example.com")
+    assert {c["name"] for c in state["cookies"]} == {"sid", "cdn"}   # tracker.io 제외
+
+
+def test_har_scope_without_matching_cookie_errors():
+    har = _har([_har_entry("https://other.io/x", resp_cookies=[
+        {"name": "x", "value": "1", "domain": "other.io", "path": "/"}])])
+    with pytest.raises(credentials.CredentialError):
+        credentials.storage_state_from_har(har, site_host="example.com")
+
+
+def test_har_expires_naive_treated_as_utc():
+    """타임존 없는 expires 는 서버 로컬이 아니라 UTC 로 해석한다 (결정적)."""
+    from datetime import datetime, timezone
+    har = _har([_har_entry("https://e.com/", resp_cookies=[
+        {"name": "s", "value": "1", "domain": "e.com", "path": "/",
+         "expires": "2030-01-01T00:00:00"}])])
+    c = credentials.storage_state_from_har(har)["cookies"][0]
+    assert c["expires"] == datetime(2030, 1, 1, tzinfo=timezone.utc).timestamp()
+
+
+# ---- HAR 업로드로 세션 자격증명 등록 (웹) ----
+
+
+def test_create_session_credential_from_har(client):
+    _login_admin(client)
+    sid = _sid()
+    har = _har([_har_entry("https://example.com/login", resp_cookies=[
+        {"name": "sid", "value": "fromhar", "domain": "example.com", "path": "/"}])])
+    r = client.post(
+        f"/sites/{sid}/credentials",
+        data={"label": "har-sess", "kind": "session"},
+        files={"har_file": ("login.har", har, "application/json")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with db.connect() as conn:
+        cred = db.list_site_credentials(conn, sid)[0]
+        assert cred["kind"] == "session"
+        revealed = credentials.reveal(conn, cred["id"])
+        assert revealed["storage_state"]["cookies"][0]["value"] == "fromhar"
+
+
+def test_create_session_har_overrides_pasted_json(client):
+    """HAR 을 올리면 같이 보낸 storage_state JSON 은 무시된다 (HAR 우선)."""
+    _login_admin(client)
+    sid = _sid()
+    har = _har([_har_entry("https://example.com/", resp_cookies=[
+        {"name": "win", "value": "har", "domain": "example.com", "path": "/"}])])
+    pasted = '{"cookies": [{"name": "lose", "value": "json", "domain": "example.com", "path": "/"}]}'
+    r = client.post(
+        f"/sites/{sid}/credentials",
+        data={"label": "s", "kind": "session", "storage_state": pasted},
+        files={"har_file": ("login.har", har, "application/json")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with db.connect() as conn:
+        cred = db.list_site_credentials(conn, sid)[0]
+        cookies = credentials.reveal(conn, cred["id"])["storage_state"]["cookies"]
+        assert {c["name"] for c in cookies} == {"win"}
+
+
+def test_create_session_har_without_cookies_rejected(client):
+    _login_admin(client)
+    sid = _sid()
+    har = _har([_har_entry("https://example.com/login")])   # 쿠키 없는 HAR
+    r = client.post(
+        f"/sites/{sid}/credentials",
+        data={"label": "x", "kind": "session"},
+        files={"har_file": ("empty.har", har, "application/json")},
+        follow_redirects=False,
+    )
+    assert "error=" in r.headers["location"]
+    with db.connect() as conn:
+        assert db.count_site_credentials(conn, sid) == 0
+
+
+def test_create_session_har_drops_third_party_cookies(client):
+    """업로드 경로도 대상 사이트(example.com) 도메인 쿠키만 저장한다."""
+    _login_admin(client)
+    sid = _sid()
+    har = _har([
+        _har_entry("https://example.com/login", resp_cookies=[
+            {"name": "sid", "value": "mine", "domain": "example.com", "path": "/"}]),
+        _har_entry("https://tracker.io/p", resp_cookies=[
+            {"name": "ga", "value": "theirs", "domain": "tracker.io", "path": "/"}]),
+    ])
+    r = client.post(
+        f"/sites/{sid}/credentials",
+        data={"label": "scoped", "kind": "session"},
+        files={"har_file": ("login.har", har, "application/json")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with db.connect() as conn:
+        cred = db.list_site_credentials(conn, sid)[0]
+        cookies = credentials.reveal(conn, cred["id"])["storage_state"]["cookies"]
+        assert {c["name"] for c in cookies} == {"sid"}      # tracker.io 제외
+
+
+def test_create_session_har_oversize_rejected(client, monkeypatch):
+    """업로드 단계의 크기 상한(_read_har_upload)도 거부 → 저장 안 함."""
+    monkeypatch.setattr(credentials, "MAX_HAR_BYTES", 10)
+    _login_admin(client)
+    sid = _sid()
+    r = client.post(
+        f"/sites/{sid}/credentials",
+        data={"label": "big", "kind": "session"},
+        files={"har_file": ("big.har", b"x" * 50, "application/json")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303 and "error=" in r.headers["location"]
+    with db.connect() as conn:
+        assert db.count_site_credentials(conn, sid) == 0
+
+
+def test_archive_stores_session_credential_from_har(client, monkeypatch):
+    _stub_archive(monkeypatch)
+    _login_admin(client)
+    har = _har([_har_entry("https://harsess.example.org/login", resp_cookies=[
+        {"name": "s", "value": "1", "domain": "harsess.example.org", "path": "/"}])])
+    r = client.post(
+        "/archive",
+        data={"url": "https://harsess.example.org/", "cred_existing_id": "__new__",
+              "cred_kind": "session"},
+        files={"cred_har_file": ("login.har", har, "application/json")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    sid = _site_id_for("harsess.example.org")
+    with db.connect() as conn:
+        cred = db.list_site_credentials(conn, sid)[0]
+        assert cred["kind"] == "session" and cred["label"] == "세션"
+        revealed = credentials.reveal(conn, cred["id"])
+        assert revealed["storage_state"]["cookies"][0]["value"] == "1"
