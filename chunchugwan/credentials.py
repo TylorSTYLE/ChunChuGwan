@@ -64,6 +64,61 @@ def validate_label(label: str) -> str | None:
     return None
 
 
+def _normalize_cookie(cookie: object) -> dict | None:
+    """storage_state 쿠키 한 개를 Playwright 가 받는 형태로 정규화. 못 살리면 None.
+
+    Playwright new_context(storage_state=) 는 쿠키마다 url 또는 (domain, path)
+    쌍을 요구한다(둘을 섞으면 거부). 브라우저/확장 내보내기가 흔히 빠뜨리는
+    path 를 "/" 로 채우고 domain 이 있으면 domain/path 형식으로 통일한다.
+    name 이 없거나 url·domain 둘 다 없으면 못 살린다.
+    """
+    if not isinstance(cookie, dict):
+        return None
+    name = cookie.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    fixed = dict(cookie)
+    if fixed.get("domain"):
+        fixed.pop("url", None)            # domain/path 와 url 혼용 금지
+        if not fixed.get("path"):
+            fixed["path"] = "/"
+        return fixed
+    if fixed.get("url"):
+        return fixed
+    return None
+
+
+def normalize_storage_state(data: dict, *, strict: bool) -> dict:
+    """storage_state 의 cookies 를 Playwright 가 받는 형태로 정규화해 반환.
+
+    각 쿠키는 url 또는 (domain, path) 쌍이 있어야 new_context 가 받는다
+    (`_normalize_cookie`). strict=True(입력 검증)면 못 살리는 쿠키에서
+    CredentialError 를 던지고, strict=False(저장된 자격증명 소비)면 그 쿠키만
+    버리고 진행한다 — 한 쿠키 때문에 아카이빙 전체가 깨지지 않게.
+    """
+    cookies = data.get("cookies")
+    if not isinstance(cookies, list):
+        if strict:
+            raise CredentialError("세션 상태의 cookies 는 목록이어야 합니다.")
+        return data
+    normalized: list[dict] = []
+    for cookie in cookies:
+        fixed = _normalize_cookie(cookie)
+        if fixed is None:
+            if strict:
+                name = cookie.get("name") if isinstance(cookie, dict) else None
+                where = f" ('{name}')" if isinstance(name, str) and name else ""
+                raise CredentialError(
+                    f"세션 쿠키{where}에 domain 또는 url 이 없습니다 "
+                    "(쿠키마다 domain 이 있어야 합니다)."
+                )
+            continue
+        normalized.append(fixed)
+    result = dict(data)
+    result["cookies"] = normalized
+    return result
+
+
 def build_payload(kind: str, form: dict) -> dict:
     """폼 입력에서 종류별 payload dict 를 만든다(검증 포함).
 
@@ -97,6 +152,11 @@ def build_payload(kind: str, form: dict) -> dict:
             raise CredentialError(
                 "세션 상태 JSON 형식이 아닙니다 (cookies 키가 필요합니다)."
             )
+        # 쿠키마다 domain/path(또는 url)를 갖추도록 정규화·검증 — 빠진 path 는
+        # 채우고, domain·url 모두 없는 쿠키는 명확한 오류로 거른다 (Playwright
+        # new_context 가 "Cookie should have a url or a domain/path pair" 로
+        # 캡처 전체를 깨뜨리는 것을 입력 단계에서 차단).
+        data = normalize_storage_state(data, strict=True)
         return {"storage_state": data}
 
     if kind == KIND_JWT:
@@ -156,7 +216,15 @@ def reveal_for_capture(
     row = db.get_site_credential(conn, cred_id)
     if row is None:
         return None
-    return row["kind"], json.loads(crypto.decrypt(row["secret"]))
+    kind = row["kind"]
+    payload = json.loads(crypto.decrypt(row["secret"]))
+    # 입력 검증 전에 저장됐거나 외부에서 들어온 storage_state 도 캡처가 받도록
+    # 쿠키를 정규화한다 — 못 살리는 쿠키는 버리고 나머지로 진행 (strict=False).
+    if kind == KIND_SESSION and isinstance(payload.get("storage_state"), dict):
+        payload["storage_state"] = normalize_storage_state(
+            payload["storage_state"], strict=False
+        )
+    return kind, payload
 
 
 def httpx_auth(kind: str, payload: dict) -> dict:
