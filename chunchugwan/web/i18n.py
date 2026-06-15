@@ -637,11 +637,11 @@ _EN: dict[str, str] = {
     "확장 자격증명 설정을 저장했습니다.": "Extension credential settings saved.",
     # ---- 캡처 설정 (system) ----
     "캡처 설정": "Capture settings",
-    "아카이빙할 때 데스크탑 스크린샷 외에 모바일 해상도(화면비율) 스크린샷도 함께 저장합니다. 같은 페이지를 모바일 뷰포트 너비로 재배치해 한 장 더 찍으며, 이후 새로 만들어지는 스냅샷에만 적용됩니다(기존 스냅샷은 그대로).":
+    "아카이빙할 때 데스크탑 스크린샷 외에 모바일 해상도(화면비율) 스크린샷도 함께 저장합니다. 같은 URL 을 안드로이드 크롬 모바일 브라우저로 한 번 더 열어 찍으며, 이후 새로 만들어지는 스냅샷에만 적용됩니다(기존 스냅샷은 그대로).":
         "When archiving, also save a mobile-resolution (aspect-ratio) screenshot "
-        "in addition to the desktop one. The same page is re-laid-out at the mobile "
-        "viewport width for one extra shot; this applies only to snapshots created "
-        "afterward (existing snapshots are unchanged).",
+        "in addition to the desktop one. The same URL is reopened once more as an "
+        "Android Chrome mobile browser for the extra shot; this applies only to "
+        "snapshots created afterward (existing snapshots are unchanged).",
     "모바일 해상도 스크린샷도 함께 저장": "Also save a mobile-resolution screenshot",
     "캡처 설정을 저장했습니다.": "Capture settings saved.",
     # ---- 문서 아카이브 설정 (system) ----

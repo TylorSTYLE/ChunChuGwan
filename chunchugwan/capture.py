@@ -6,8 +6,9 @@
 - screenshot.png  전체 페이지(데스크탑 뷰포트) 스크린샷 (full_page=True)
 - content.md      extract.py 가 생성 (이 모듈 밖)
 
-mobile_screenshot 가 켜져 있으면 같은 페이지를 모바일 뷰포트 너비
-(config.MOBILE_SCREENSHOT_*)로 재배치해 screenshot-mobile.png 한 장을 더 찍는다.
+mobile_screenshot 가 켜져 있으면 같은 URL 을 안드로이드 크롬으로 위장한
+모바일 컨텍스트(config.MOBILE_SCREENSHOT_*)로 한 번 더 열어
+screenshot-mobile.png 한 장을 더 찍는다.
 """
 
 from __future__ import annotations
@@ -20,9 +21,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
-from urllib.parse import urldefrag, urljoin
+from urllib.parse import urldefrag, urljoin, urlsplit
 
-from . import browser_engine, config, documents, storage, trackers
+from . import browser_engine, config, documents, netcheck, storage, trackers
 
 logger = logging.getLogger(__name__)
 
@@ -507,7 +508,8 @@ def capture(
     link_rewriter 가 있으면(사이트 전체 아카이브) page.html 의 앵커를
     반환된 매핑대로 재작성한다 — raw.html/content_html 은 원본 유지.
     session 이 있으면 그 브라우저를 재사용한다 (없으면 1회용 기동).
-    mobile_screenshot 가 켜져 있으면 screenshot-mobile.png 도 함께 저장한다.
+    mobile_screenshot 가 켜져 있으면 안드로이드 크롬 모바일 컨텍스트로 같은
+    URL 을 한 번 더 열어 screenshot-mobile.png 도 함께 저장한다.
 
     일부 서버(구형 IIS 등)는 HTTP/2 구현이 깨져 chromium 만
     net::ERR_HTTP2_* 로 실패한다 (curl 등은 정상) — 이 경우 HTTP/2 를
@@ -674,10 +676,11 @@ def _capture_in_browser(
 
         page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
         if mobile_screenshot:
-            # 데스크탑 스크린샷 직후, 자원 인라인 전에 찍는다 — 같은 렌더링
-            # 상태에서 뷰포트만 모바일 너비로 바꿔 반응형 레이아웃을 캡처하고,
-            # 끝나면 원래 뷰포트로 되돌려 이후 인라인에 영향을 주지 않는다.
-            _capture_mobile_screenshot(page, out_dir)
+            # 데스크탑 캡처가 끝난 뒤, 같은 브라우저에 안드로이드 크롬 모바일
+            # 컨텍스트를 새로 띄워 같은 URL 을 한 번 더 열고 스크린샷을 찍는다
+            # (UA 가 컨텍스트 옵션이라 기존 page 의 뷰포트만 바꿔서는 불가).
+            # 데스크탑 컨텍스트/page 는 건드리지 않는다.
+            _capture_mobile_screenshot(browser, url, out_dir, credential, insecure_tls)
         page_html, resource_urls = _inline_resources(
             page, raw_html, resource_fallback
         )
@@ -697,25 +700,77 @@ def _capture_in_browser(
         context.close()
 
 
-def _capture_mobile_screenshot(page, out_dir: Path) -> None:
-    """모바일 뷰포트 너비로 재배치한 전체 페이지 스크린샷을 screenshot-mobile.png 로 저장.
+def _capture_mobile_screenshot(
+    browser,
+    url: str,
+    out_dir: Path,
+    credential: CaptureCredential | None,
+    insecure_tls: bool,
+) -> None:
+    """안드로이드 크롬으로 위장한 모바일 컨텍스트로 같은 URL 을 다시 열어
+    전체 페이지 스크린샷을 screenshot-mobile.png 로 저장.
 
-    데이터센터 IP 평판·재네비게이션 비용(봇 챌린지 재발 위험 포함)을 늘리지
-    않으려고 새 컨텍스트를 만들지 않고, 이미 로드된 page 의 뷰포트만
-    config.MOBILE_SCREENSHOT_* 로 바꿔 한 장 더 찍는다. 반응형 CSS(@media)는
-    뷰포트 너비에 반응하므로 모바일 레이아웃으로 흐른다. 찍은 뒤에는 원래
-    뷰포트로 되돌려 이후 단계(자원 인라인)가 영향을 받지 않게 한다.
+    User-Agent 는 컨텍스트 생성 옵션이라 데스크탑 page 의 뷰포트만 바꿔서는
+    바꿀 수 없다 — 모바일 UA(config.MOBILE_SCREENSHOT_USER_AGENT)·뷰포트
+    (390×844)·isMobile/hasTouch 를 가진 컨텍스트를 같은 브라우저에 새로 띄워
+    url 을 한 번 더 캡처한다. 자격증명·인증서 무시 설정은 데스크탑 캡처와
+    동일하게 적용한다 (origin 스코프 유지).
 
-    부가 산출물이므로 실패해도 캡처 전체를 막지 않는다(best-effort) — 모바일
-    스크린샷만 빠지고 나머지 산출물은 그대로 저장된다.
+    부가 산출물이라 실패해도 캡처 전체를 막지 않는다(best-effort) — 모바일
+    스크린샷만 빠지고 나머지 산출물은 그대로 저장된다. 모바일 UA 로만 다른
+    호스트의 루프백으로 리다이렉트되면(모바일 전용 우회) 저장하지 않는다 —
+    대시보드 자신이 모바일 스크린샷으로 새는 것을 막는다(아키텍처 원칙 7·
+    netcheck). 네트워크 게이트는 본래 pipeline 의 몫이라 capture 는 호출자가
+    검증한 url 을 신뢰하지만, 모바일 재캡처의 리다이렉트는 pipeline 이 보지
+    못하므로 이 루프백 한 가지만 여기서 막는다.
     """
-    original = page.viewport_size  # 보통 1280×720 (컨텍스트 기본값)
+    _, _, _, PlaywrightTimeoutError = browser_engine.get_engine()
+    context_kwargs, jwt_authorization = _context_options(credential, insecure_tls)
+    context_kwargs.update(
+        user_agent=config.MOBILE_SCREENSHOT_USER_AGENT,
+        viewport={"width": config.MOBILE_SCREENSHOT_WIDTH,
+                  "height": config.MOBILE_SCREENSHOT_HEIGHT},
+        is_mobile=True,
+        has_touch=True,
+    )
     try:
-        page.set_viewport_size(
-            {"width": config.MOBILE_SCREENSHOT_WIDTH,
-             "height": config.MOBILE_SCREENSHOT_HEIGHT}
-        )
-        # 뷰포트 변경 후 반응형 재배치·지연 로드가 정착할 짧은 여유
+        context = browser.new_context(**context_kwargs)
+    except Exception as e:  # noqa: BLE001 — 엔진이 isMobile 미지원 등
+        logger.warning("모바일 컨텍스트 생성 실패, 모바일 스크린샷 건너뜀: %s", e)
+        return
+    try:
+        if jwt_authorization and credential is not None:
+            _install_origin_scoped_header(
+                context, credential.origin, jwt_authorization
+            )
+        page = context.new_page()
+        page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
+        try:
+            page.goto(url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS)
+            try:
+                page.wait_for_load_state(
+                    "networkidle", timeout=config.NETWORK_IDLE_TIMEOUT_MS
+                )
+            except PlaywrightTimeoutError:
+                pass  # 분석 스크립트·롱폴링 — 현재 상태로 진행
+        except PlaywrightTimeoutError:
+            # 응답 없는 하위 자원이 load 를 막으면 매달린 로드를 끊고 진행
+            try:
+                page.evaluate("window.stop()")
+            except Exception:  # noqa: BLE001
+                pass
+        # 요청한 호스트와 다른 호스트의 루프백으로 리다이렉트됐으면 생략한다.
+        # (요청 url 자체가 루프백인 경우는 호출자가 검증한 것이므로 신뢰 —
+        #  데스크탑 캡처와 같은 신뢰 모델. pipeline 은 운영에서 루프백 url 을
+        #  애초에 캡처로 넘기지 않는다.)
+        final_host = urlsplit(page.url).hostname or ""
+        if (final_host != (urlsplit(url).hostname or "")
+                and netcheck.classify_host(final_host) == netcheck.LOOPBACK):
+            logger.warning(
+                "모바일 캡처가 루프백으로 리다이렉트됨 — 모바일 스크린샷 생략: %s",
+                page.url,
+            )
+            return
         page.wait_for_timeout(config.MOBILE_SCREENSHOT_SETTLE_MS)
         page.screenshot(
             path=str(out_dir / "screenshot-mobile.png"), full_page=True
@@ -724,11 +779,7 @@ def _capture_mobile_screenshot(page, out_dir: Path) -> None:
         logger.warning("모바일 스크린샷 실패, 건너뜀: %s", e)
         (out_dir / "screenshot-mobile.png").unlink(missing_ok=True)
     finally:
-        if original is not None:
-            try:
-                page.set_viewport_size(original)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("뷰포트 복원 실패: %s", e)
+        context.close()
 
 
 def _collect_document_links(page) -> list[str]:
