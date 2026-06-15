@@ -909,21 +909,34 @@ _CONNECT_ERROR_MARKERS = (
 
 # 봇 차단/사람 확인 챌린지 페이지의 마커 (raw_html·title·final_url 에서 소문자
 # 비교로 탐지). 잡히면 정상 콘텐츠가 아니므로 스냅샷으로 저장하지 않는다 —
-# 차단 페이지를 해시하면 아카이브가 오염된다 (아키텍처 원칙 3). 대부분
-# Cloudflare 관리형 챌린지/Turnstile 의 고정 문자열이라 오탐이 드물지만,
-# 잦으면 이 튜플을 줄인다.
-_CHALLENGE_MARKERS = (
-    "/cdn-cgi/challenge-platform/",        # Cloudflare 챌린지 스크립트 경로
-    "challenges.cloudflare.com",           # Turnstile iframe src
-    "cf-turnstile",                        # Turnstile 위젯 컨테이너
+# 차단 페이지를 해시하면 아카이브가 오염된다 (아키텍처 원칙 3).
+#
+# 두 단계로 나눈다. 폼에 Turnstile 위젯을 박아둔 정상 페이지(그누보드 계열
+# 커뮤니티 등)는 본문이 멀쩡한 채로 위젯 마커를 갖기 때문이다.
+#
+# _INTERSTITIAL_MARKERS — 페이지 자체가 차단/챌린지 인터스티셜이라는 강한 신호.
+#   관리형 챌린지의 오케스트레이트 스크립트·토큰, 인터스티셜 제목, 전면 차단
+#   문구 등. 있으면 HTTP 상태와 무관하게 차단으로 본다.
+_INTERSTITIAL_MARKERS = (
+    "/cdn-cgi/challenge-platform/",        # Cloudflare 챌린지 오케스트레이트 스크립트
     "__cf_chl_",                           # 챌린지 토큰/오케스트레이트
     "cf_chl_opt",
     "just a moment...",                    # Cloudflare 인터스티셜 제목
     "attention required! | cloudflare",    # Cloudflare 차단 제목
+    "enable javascript and cookies to continue",
+    "there was a problem providing the content you requested",  # Elsevier/ScienceDirect 전면 차단
+)
+
+# _WIDGET_MARKERS — Turnstile 위젯이 '박혀 있다'는 약한 신호. 스팸 방지용으로
+#   로그인·글쓰기·검색 폼에 Turnstile 을 넣은 정상 페이지도 본문이 멀쩡한 채
+#   이 마커를 가진다. 따라서 단독으로는 차단으로 보지 않고, 응답 자체가 차단을
+#   가리킬 때(http_status >= 400)만 차단으로 처리한다 — 정상 200 페이지에 폼
+#   위젯으로 박힌 Turnstile 을 오탐하지 않게 한다.
+_WIDGET_MARKERS = (
+    "challenges.cloudflare.com",           # Turnstile iframe / api.js src
+    "cf-turnstile",                        # Turnstile 위젯 컨테이너
     "verify you are human",                # 사람 확인 문구 (영문)
     "사람인지 확인",                         # 사람 확인 문구 (한글)
-    "enable javascript and cookies to continue",
-    "there was a problem providing the content you requested",  # Elsevier/ScienceDirect
 )
 
 
@@ -936,15 +949,25 @@ def challenge_reason(
     """봇 차단/사람 확인 챌린지 페이지면 사유 문자열, 아니면 None.
 
     순수 함수 — Playwright 없이 단위 테스트할 수 있다. raw_html·title·final_url
-    을 소문자로 합쳐 _CHALLENGE_MARKERS 를 찾는다. http_status 는 현재 판정에
-    쓰지 않고 사유에만 덧붙인다 (정상 콘텐츠가 403/503 을 줄 수도 있어 상태만으로는
-    차단으로 보지 않는다).
+    을 소문자로 합쳐 마커를 찾는다.
+
+    _INTERSTITIAL_MARKERS(강한 신호)는 HTTP 상태와 무관하게 차단으로 본다.
+    _WIDGET_MARKERS(약한 신호 — 폼에 박힌 Turnstile 위젯 등 정상 페이지에도
+    나타남)는 응답이 명시적 성공(2xx/3xx)이 아닐 때만 차단으로 본다 — 즉
+    정상 200 페이지의 임베드 위젯은 통과시키되(오탐 방지), 4xx/5xx 차단 응답과
+    상태 미상(http_status=None — 챌린지 통과 대기/라이브 재검사 폴링 경로)에서는
+    보수적으로 차단으로 둔다 (마커 없는 4xx/5xx 는 정상 콘텐츠일 수 있어
+    상태만으로는 차단으로 보지 않는다).
     """
     haystack = "\n".join(s for s in (raw_html, title or "", final_url) if s).lower()
-    for marker in _CHALLENGE_MARKERS:
+    status = f"http {http_status} · " if http_status else ""
+    for marker in _INTERSTITIAL_MARKERS:
         if marker in haystack:
-            status = f"http {http_status} · " if http_status else ""
             return f"봇 차단/사람 확인 챌린지 감지 ({status}마커: {marker!r})"
+    if http_status is None or http_status >= 400:
+        for marker in _WIDGET_MARKERS:
+            if marker in haystack:
+                return f"봇 차단/사람 확인 챌린지 감지 ({status}마커: {marker!r})"
     return None
 
 

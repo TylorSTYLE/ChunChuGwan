@@ -29,9 +29,26 @@ def test_reason_detects_sciencedirect_block():
     assert reason is not None
 
 
-def test_reason_detects_turnstile_iframe_src():
+def test_reason_widget_marker_blocks_on_error_status():
+    # 약한 위젯 마커(Turnstile iframe)라도 응답이 차단(4xx/5xx)이면 차단으로 본다
     html = "<html><body><iframe src='https://challenges.cloudflare.com/...'></iframe></body></html>"
-    assert capture.challenge_reason(html, None, "https://x/", None)
+    assert capture.challenge_reason(html, 403, "https://x/", None)
+
+
+def test_reason_embedded_turnstile_on_normal_page_passes():
+    # 정상 200 페이지에 폼 스팸방지용으로 박힌 Turnstile 위젯은 오탐하지 않는다
+    # (damoang.net/new 등 그누보드 계열 커뮤니티 — 본문은 멀쩡하다)
+    html = (
+        "<html><head><title>새글 - 다모앙</title></head><body>"
+        "<ul class='new-list'><li>게시글 1</li><li>게시글 2</li></ul>"
+        "<form id='search'><div class='cf-turnstile'></div>"
+        "<script src='https://challenges.cloudflare.com/turnstile/v0/api.js'></script>"
+        "</form></body></html>"
+    )
+    assert capture.challenge_reason(html, 200, "https://damoang.net/new", "새글 - 다모앙") is None
+    # 단, 상태 미상(None — 통과 대기/라이브 재검사 폴링)에서는 보수적으로 차단으로
+    # 둔다 (그 경로는 이미 진짜 챌린지로 진입한 뒤라, 위젯이 남아 있으면 미통과)
+    assert capture.challenge_reason(html, None, "https://damoang.net/new", "새글 - 다모앙")
 
 
 def test_reason_passes_normal_page():
