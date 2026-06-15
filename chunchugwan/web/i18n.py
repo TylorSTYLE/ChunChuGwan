@@ -305,6 +305,9 @@ _EN: dict[str, str] = {
     "30일": "30 days",
     # ---- 스냅샷 뷰어 (snapshot) ----
     "타임라인으로": "Back to timeline",
+    "인증됨": "Authenticated",
+    "로그인 자격증명으로 캡처된 스냅샷입니다 — 소유자/관리자만 볼 수 있습니다.":
+        "Captured with login credentials — visible only to the owner and admins.",
     "최종 URL": "Final URL",
     "렌더링": "Rendered",
     "스크린샷": "Screenshot",

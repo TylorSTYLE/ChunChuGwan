@@ -120,8 +120,11 @@ def _snapshot_json(snap: sqlite3.Row) -> dict:
 def api_pages(request: Request, url: str | None = None):
     """아카이브된 페이지 목록. url 쿼리로 단일 페이지 조회 (정규화 후 일치)."""
     _require_view(request)
+    from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
+
+    # 인증 스냅샷은 소유자/관리자만 카운트·시각에 반영 (집계 메타데이터 누출 차단)
     with db.connect() as conn:
-        pages = db.list_pages(conn)
+        pages = db.list_pages(conn, viewer=webapp._snapshot_viewer(request))
     if url is not None:
         try:
             norm = storage.normalize_url(url)
@@ -140,6 +143,13 @@ def api_page(request: Request, page_id: int):
         if page is None:
             raise HTTPException(404, "페이지 없음")
         snaps = db.list_snapshots(conn, page_id)
+    from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
+
+    # 로그인 캡처 스냅샷은 소유자/관리자에게만 노출 — 메타데이터도 가린다
+    snaps = [
+        s for s in snaps
+        if not s["authenticated"] or webapp._may_view_authenticated(request, s)
+    ]
     return {
         "id": page["id"],
         "url": page["url"],
@@ -156,6 +166,11 @@ def api_snapshot(request: Request, snapshot_id: int):
     with db.connect() as conn:
         snap = db.get_snapshot(conn, snapshot_id)
     if snap is None:
+        raise HTTPException(404, "스냅샷 없음")
+    from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
+
+    # 로그인 캡처 스냅샷은 소유자/관리자만 (존재 은폐 404)
+    if snap["authenticated"] and not webapp._may_view_authenticated(request, snap):
         raise HTTPException(404, "스냅샷 없음")
     body = _snapshot_json(snap)
     body["page_url"] = snap["page_url"]

@@ -430,6 +430,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN search_indexed INTEGER NOT NULL DEFAULT 0"
         )
+    # 로그인 자격증명으로 캡처된(로그인 뒤 콘텐츠) 스냅샷 표식 — 소유자/관리자만
+    # 열람. authenticated_by 는 캡처에 쓰인 자격증명의 등록자(없으면 NULL=admin 전용).
+    if cols and "authenticated" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN authenticated INTEGER NOT NULL DEFAULT 0"
+        )
+    if cols and "authenticated_by" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN authenticated_by INTEGER REFERENCES users(id)"
+        )
     _ensure_search_index(conn)
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
@@ -763,18 +773,22 @@ def get_site_certificate(
     ).fetchone()
 
 
-def list_sites_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def list_sites_overview(
+    conn: sqlite3.Connection, *, viewer: "tuple[int | None, bool] | None" = None
+) -> list[sqlite3.Row]:
     """사이트 목록 + 페이지·스냅샷·크롤 회차·스케줄 집계 (아카이브 목록 화면용).
 
     last_activity_at 은 마지막 스냅샷과 마지막 크롤 활동(완료 또는 생성) 중
-    더 최근 시각 — 목록 정렬 기준이다.
+    더 최근 시각 — 목록 정렬 기준이다. viewer 를 주면 인증(로그인) 스냅샷은
+    소유자/관리자만 스냅샷 수·마지막 활동에 반영한다 (메타데이터 누출 차단).
     """
+    sv, params = _visible_snapshot_filter(viewer)
     return conn.execute(
-        """
+        f"""
         SELECT st.*,
                (SELECT COUNT(*) FROM pages p WHERE p.site_id = st.id) AS page_count,
                (SELECT COUNT(*) FROM snapshots s JOIN pages p ON p.id = s.page_id
-                 WHERE p.site_id = st.id) AS snapshot_count,
+                 WHERE p.site_id = st.id{sv}) AS snapshot_count,
                (SELECT COUNT(*) FROM crawls c WHERE c.site_id = st.id) AS crawl_count,
                (SELECT COUNT(*) FROM crawls c
                  WHERE c.site_id = st.id AND c.status = 'running') AS running_crawl_count,
@@ -785,13 +799,14 @@ def list_sites_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                MAX(
                    COALESCE((SELECT MAX(s.taken_at) FROM snapshots s
                              JOIN pages p ON p.id = s.page_id
-                             WHERE p.site_id = st.id), ''),
+                             WHERE p.site_id = st.id{sv}), ''),
                    COALESCE((SELECT MAX(COALESCE(c.finished_at, c.created_at))
                              FROM crawls c WHERE c.site_id = st.id), '')
                ) AS last_activity_at
         FROM sites st
         ORDER BY last_activity_at DESC, st.site_key
-        """
+        """,
+        params,
     ).fetchall()
 
 
@@ -851,7 +866,8 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed", "css_externalized", "search_indexed"}
+     "note", "resources_indexed", "css_externalized", "search_indexed",
+     "authenticated", "authenticated_by"}
 )
 
 
@@ -1227,16 +1243,40 @@ def prune_system_logs(conn: sqlite3.Connection, keep: int) -> int:
     return cur.rowcount
 
 
-def list_pages(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """페이지 목록 + 스냅샷 수 + 마지막 캡처 시각 (대시보드/CLI list 용)."""
+def _visible_snapshot_filter(
+    viewer: "tuple[int | None, bool] | None", alias: str = "s"
+) -> tuple[str, dict]:
+    """집계 쿼리용 — 요청자가 볼 수 있는 스냅샷 조건절(과 named 파라미터).
+
+    viewer=None 이면 전체(CLI·신뢰 호출, 빈 조건). (viewer_id, is_admin) 를 주면
+    인증 스냅샷은 관리자이거나 등록자 본인일 때만 포함한다 (앞에 ' AND ' 붙음).
+    """
+    if viewer is None:
+        return "", {}
+    viewer_id, is_admin = viewer
+    cond = (f" AND ({alias}.authenticated = 0 OR :sv_admin"
+            f" OR {alias}.authenticated_by = :sv_uid)")
+    return cond, {"sv_admin": 1 if is_admin else 0, "sv_uid": viewer_id}
+
+
+def list_pages(
+    conn: sqlite3.Connection, *, viewer: "tuple[int | None, bool] | None" = None
+) -> list[sqlite3.Row]:
+    """페이지 목록 + 스냅샷 수 + 마지막 캡처 시각 (대시보드/CLI list 용).
+
+    viewer 를 주면 그 요청자가 볼 수 있는 스냅샷만 집계한다 — 인증(로그인)
+    스냅샷은 소유자/관리자만 카운트·시각에 반영(메타데이터 누출 차단). None=전체.
+    """
+    cond, params = _visible_snapshot_filter(viewer)
     return conn.execute(
-        """
+        f"""
         SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
         FROM pages p
-        LEFT JOIN snapshots s ON s.page_id = p.id
+        LEFT JOIN snapshots s ON s.page_id = p.id{cond}
         GROUP BY p.id
         ORDER BY last_taken_at DESC NULLS LAST, p.url
-        """
+        """,
+        params,
     ).fetchall()
 
 
@@ -2976,6 +3016,12 @@ def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
     conn.execute("DELETE FROM api_keys WHERE owner_user_id = ?", (user_id,))
     conn.execute(
         "UPDATE api_keys SET created_by = NULL WHERE created_by = ?", (user_id,)
+    )
+    # 로그인 캡처 스냅샷의 소유자 표기는 NULL 로 끊는다 — 불변 기록은 보존하되
+    # 끊으면 _may_view_authenticated 가 admin 전용으로 좁아져 접근이 넓어지지 않는다
+    conn.execute(
+        "UPDATE snapshots SET authenticated_by = NULL WHERE authenticated_by = ?",
+        (user_id,),
     )
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 

@@ -291,6 +291,7 @@ def _archive_url(
     # CLI 재아카이빙이 저장된 자격증명을 이어 쓰는 경로). 복호화는 키 부재·
     # 실패·삭제된 자격증명이면 인증 없이 진행한다(graceful).
     credential = None
+    authenticated_by = None  # 로그인 캡처 스냅샷의 소유자(자격증명 등록자) — 접근제한용
     try:
         with db.connect() as conn:
             effective_cred_id = credential_id
@@ -302,6 +303,9 @@ def _archive_url(
                 credentials.reveal_for_capture(conn, effective_cred_id)
                 if effective_cred_id is not None else None
             )
+            if revealed is not None:
+                cred_row = db.get_site_credential(conn, effective_cred_id)
+                authenticated_by = cred_row["created_by"] if cred_row else None
         if revealed is not None:
             kind, payload = revealed
             credential = capture.CaptureCredential(
@@ -389,7 +393,8 @@ def _archive_url(
             return _archive_document_url(
                 norm, domain, slug, force, run, tmp_dir,
                 network_tag_id=network_tag_id, credential_id=credential_id,
-                credential=credential, verify=not insecure_tls,
+                credential=credential, authenticated_by=authenticated_by,
+                verify=not insecure_tls,
             )
         run.step(
             "capture",
@@ -512,6 +517,8 @@ def _archive_url(
                 http_status=result.http_status, changed=changed,
                 resources_indexed=1,  # 참조는 바로 아래에서 기록 — 백필 불필요
                 css_externalized=1,   # compact_snapshot_dir 가 위에서 추출 완료
+                authenticated=1 if credential is not None else 0,
+                authenticated_by=authenticated_by if credential is not None else None,
             )
             if doc_manifest:
                 db.insert_snapshot_documents(conn, snapshot_id, doc_manifest)
@@ -614,6 +621,7 @@ def _archive_document_url(
     network_tag_id: str | None,
     credential_id: int | None = None,
     credential: "capture.CaptureCredential | None" = None,
+    authenticated_by: int | None = None,
     verify: bool,
 ) -> ArchiveOutcome:
     """URL 자체가 파일 다운로드인 경우의 아카이빙 — 문서 스냅샷.
@@ -727,6 +735,8 @@ def _archive_document_url(
             http_status=dl.http_status, changed=changed,
             resources_indexed=1,  # 공유 자원 없음 — 백필 불필요
             css_externalized=1,   # 인라인 <style> 없음
+            authenticated=1 if credential is not None else 0,
+            authenticated_by=authenticated_by if credential is not None else None,
         )
         db.insert_snapshot_documents(conn, snapshot_id, manifest)
         _index_snapshot_safe(conn, snapshot_id, run)
