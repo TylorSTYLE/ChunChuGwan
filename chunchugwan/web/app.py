@@ -36,7 +36,7 @@ from fastapi.responses import (
 
 from .. import (
     archive_worker, auth, backup, config, crawler, credentials, crypto, db,
-    deletion, differ, documents, netcheck, resources, scheduler,
+    deletion, differ, documents, live_challenge, netcheck, resources, scheduler,
     searchindex, storage, system_log,
 )
 from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
@@ -1944,6 +1944,137 @@ def log_retry(
     return RedirectResponse(
         f"{next_url}{sep}retry={'queued' if queued else 'active'}", status_code=303
     )
+
+
+# ---- 사람 보조 챌린지 해결 (라이브 세션 뷰어 — 관리자 전용) ----
+# worker 가 자동으로 못 푼 인터랙티브 챌린지를 사람이 직접 클릭/입력해 통과시킨다.
+# 라이브 브라우저는 worker 에서 돌고, 화면(스크린샷 파일)·입력(live_commands DB)으로만
+# 조율한다. 라이브 화면은 스크린샷 이미지 전용 — 아카이빙 DOM 임베드가 아니라 원칙 5
+# 와 무관하고, 서버 위치에서 trusted 입력을 발생시키므로 admin 전용 + 소유자 바인딩.
+
+
+def _live_job_or_404(request: Request, job_id: int):
+    """needs_human 상태의 작업을 반환 (아니면 404). 라이브 라우트 공용."""
+    with db.connect() as conn:
+        job = db.get_archive_job(conn, job_id)
+    if job is None or not job["needs_human_at"] or not job["live_token"]:
+        raise HTTPException(404, t(request, "사람 확인이 필요한 작업이 아닙니다"))
+    return job
+
+
+def _live_owner_or_403(request: Request, job) -> None:
+    """입력 권한 = 이 세션을 클레임한 admin 만 (다른 admin 은 보기만)."""
+    if job["live_owner_id"] != request.state.user["id"]:
+        raise HTTPException(403, t(request, "다른 관리자가 처리 중인 세션입니다"))
+
+
+@app.get("/archive/needs-human")
+def needs_human_list(request: Request):
+    """사람 확인이 필요한 작업 목록 (관리자 전용)."""
+    _require_admin(request)
+    with db.connect() as conn:
+        jobs = db.list_needs_human_jobs(conn)
+    return templates.TemplateResponse(
+        request, "needs_human.html", {"jobs": jobs},
+    )
+
+
+@app.get("/archive/jobs/{job_id}/live")
+def live_view(request: Request, job_id: int):
+    """라이브 챌린지 해결 화면 — 스크린샷을 보고 직접 클릭/입력해 통과시킨다.
+
+    여는 관리자가 세션을 클레임(입력 권한자)한다. 이미 다른 관리자가
+    클레임했으면 보기 전용으로 연다."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    with db.connect() as conn:
+        owned = db.claim_live_session(conn, job_id, request.state.user["id"])
+        job = db.get_archive_job(conn, job_id)
+    audit.log(request, "라이브 챌린지 처리 시작: %s", job["url"])
+    return templates.TemplateResponse(
+        request, "live.html",
+        {
+            "job": job,
+            "owned": owned,
+            "viewport_w": job["live_viewport_w"] or config.LIVE_VIEWPORT_W,
+            "viewport_h": job["live_viewport_h"] or config.LIVE_VIEWPORT_H,
+        },
+    )
+
+
+@app.get("/archive/jobs/{job_id}/live/shot")
+def live_shot(request: Request, job_id: int):
+    """라이브 스크린샷 (관리자 전용). live_token 으로만 경로를 조립한다."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    path = live_challenge.shot_path(job["live_token"])
+    if not path.exists():
+        raise HTTPException(404, t(request, "아직 화면이 준비되지 않았습니다"))
+    return FileResponse(
+        path, media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/archive/jobs/{job_id}/live/state")
+def live_state(request: Request, job_id: int):
+    """라이브 세션 상태 폴링 (JSON). needs_human | done(통과·종료)."""
+    _require_admin(request)
+    with db.connect() as conn:
+        job = db.get_archive_job(conn, job_id)
+    if job is None or not job["needs_human_at"]:
+        return {"status": "done"}  # 통과·취소·종료 — 큐에서 빠졌거나 해제됨
+    return {
+        "status": "needs_human",
+        "owned": job["live_owner_id"] == request.state.user["id"],
+    }
+
+
+@app.post("/archive/jobs/{job_id}/live/click")
+def live_click(
+    request: Request, job_id: int,
+    x: int = Form(...), y: int = Form(...),
+    kind: str = Form("click"), delay_ms: int = Form(0),
+):
+    """클릭/드래그 좌표를 명령 큐에 넣는다 (worker 가 page.mouse 로 재생)."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    _live_owner_or_403(request, job)
+    if kind not in ("click", "move", "down", "up"):
+        raise HTTPException(400, "kind")
+    with db.connect() as conn:
+        db.enqueue_live_command(
+            conn, job["live_token"], kind=kind, x=x, y=y, delay_ms=max(0, delay_ms))
+    return {"ok": True}
+
+
+@app.post("/archive/jobs/{job_id}/live/key")
+def live_key(
+    request: Request, job_id: int,
+    key: str = Form(...), kind: str = Form("text"), delay_ms: int = Form(0),
+):
+    """키 입력/문자열을 명령 큐에 넣는다 (worker 가 page.keyboard 로 재생)."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    _live_owner_or_403(request, job)
+    if kind not in ("key", "text"):
+        raise HTTPException(400, "kind")
+    with db.connect() as conn:
+        db.enqueue_live_command(
+            conn, job["live_token"], kind=kind, key=key[:200], delay_ms=max(0, delay_ms))
+    return {"ok": True}
+
+
+@app.post("/archive/jobs/{job_id}/live/cancel")
+def live_cancel(request: Request, job_id: int):
+    """라이브 세션 취소 — worker 가 다음 폴링에 중단하고 실패 처리한다."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    _live_owner_or_403(request, job)
+    with db.connect() as conn:
+        db.set_live_cancel(conn, job_id)
+    audit.log(request, "라이브 챌린지 취소: %s", job["url"])
+    return RedirectResponse("/archive/needs-human", status_code=303)
 
 
 _BUSY_MSG = "아카이빙이 진행 중인 페이지입니다 — 완료 후 다시 시도하세요"

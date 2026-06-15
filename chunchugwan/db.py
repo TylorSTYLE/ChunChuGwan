@@ -189,12 +189,36 @@ CREATE TABLE IF NOT EXISTS archive_jobs (
     next_attempt_at  TEXT,                -- 재시도 대기 시각 (NULL = 즉시 가능)
     claimed_at       TEXT,                -- in_progress 시작 시각 (중단 복구 판정용)
     error            TEXT,                -- 마지막 실패 사유 (재시도 대기 중 표시용)
-    created_at       TEXT NOT NULL
+    created_at       TEXT NOT NULL,
+    -- 사람 보조 챌린지 해결(라이브) — 자동 통과 실패 시 worker 가 채운다
+    needs_human_at   TEXT,                -- 사람 확인 필요 진입 시각 (NULL = 자동 진행)
+    live_token       TEXT,                -- 라이브 화면/명령 경로 키 (예측불가 난수)
+    live_owner_id    INTEGER REFERENCES users(id),  -- 세션을 클레임한 admin (입력 권한자)
+    live_cancel      INTEGER NOT NULL DEFAULT 0,     -- 1 이면 사람이 취소 → worker 가 중단
+    live_viewport_w  INTEGER,             -- 라이브 뷰포트 (좌표 매핑용, worker 가 기록)
+    live_viewport_h  INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_archive_jobs_status ON archive_jobs(status, next_attempt_at);
 -- 같은 URL 의 활성(대기·진행) 작업은 하나만 — 중복 enqueue 를 DB 레벨에서 차단
 CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_jobs_active
     ON archive_jobs(url) WHERE status IN ('pending', 'in_progress');
+CREATE INDEX IF NOT EXISTS idx_archive_jobs_needs_human
+    ON archive_jobs(needs_human_at) WHERE needs_human_at IS NOT NULL;
+
+-- 라이브 챌린지 세션의 사람 입력 명령 큐 (대시보드 INSERT → worker 가 재생)
+CREATE TABLE IF NOT EXISTS live_commands (
+    id          INTEGER PRIMARY KEY,
+    live_token  TEXT NOT NULL,
+    seq         INTEGER NOT NULL,         -- 명령 순서 (타이밍·드래그 재현)
+    kind        TEXT NOT NULL,            -- click | move | down | up | key | text
+    x           INTEGER,                  -- 0~viewport (worker 가 클램프)
+    y           INTEGER,
+    key         TEXT,                     -- 키 입력/문자열
+    delay_ms    INTEGER NOT NULL DEFAULT 0, -- 직전 명령 이후 간격 (타이밍 재현)
+    created_at  TEXT NOT NULL,
+    consumed_at TEXT                      -- worker 가 재생하면 채움
+);
+CREATE INDEX IF NOT EXISTS idx_live_commands_token ON live_commands(live_token, seq);
 
 CREATE TABLE IF NOT EXISTS crawl_schedules (
     id               INTEGER PRIMARY KEY,
@@ -415,6 +439,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # site_id 인덱스는 컬럼 추가 후에만 만들 수 있다 (SCHEMA 주의 주석 참조)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id)")
+    # 단발 아카이빙 큐의 사람 보조(라이브 챌린지) 컬럼 — archive_jobs 는 SCHEMA 가 먼저 만든다
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(archive_jobs)")}
+    if cols:
+        for col, ddl in (
+            ("needs_human_at", "TEXT"),
+            ("live_token", "TEXT"),
+            ("live_owner_id", "INTEGER REFERENCES users(id)"),
+            ("live_cancel", "INTEGER NOT NULL DEFAULT 0"),
+            ("live_viewport_w", "INTEGER"),
+            ("live_viewport_h", "INTEGER"),
+        ):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE archive_jobs ADD COLUMN {col} {ddl}")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_archive_jobs_needs_human "
+            "ON archive_jobs(needs_human_at) WHERE needs_human_at IS NOT NULL"
+        )
     _backfill_sites(conn)
 
 
@@ -2063,11 +2104,15 @@ def release_archive_job(conn: sqlite3.Connection, job_id: int) -> None:
 
 
 def recover_stale_archive_jobs(conn: sqlite3.Connection, cutoff_iso: str) -> int:
-    """클레임 후 오래 방치된 in_progress 를 pending 으로 복구 (프로세스 중단 대비)."""
+    """클레임 후 오래 방치된 in_progress 를 pending 으로 복구 (프로세스 중단 대비).
+
+    사람 보조 대기 중(needs_human_at)인 작업은 제외한다 — 사람이 분 단위로
+    푸는 동안 claimed_at 이 오래돼도 가로채면 안 된다 (worker 재시작 복구는
+    sweep_needs_human 이 따로 한다)."""
     cur = conn.execute(
         """
         UPDATE archive_jobs SET status = 'pending', claimed_at = NULL
-        WHERE status = 'in_progress' AND claimed_at <= ?
+        WHERE status = 'in_progress' AND claimed_at <= ? AND needs_human_at IS NULL
         """,
         (cutoff_iso,),
     )
@@ -2111,6 +2156,150 @@ def list_active_archive_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         FROM archive_jobs WHERE status IN ('pending', 'in_progress')
         """
     ).fetchall()
+
+
+# ---- 사람 보조 챌린지 해결 (라이브 세션 — live_challenge.py / 대시보드) ----
+
+def get_archive_job(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row | None:
+    """작업 한 건 (대시보드 라이브 뷰가 상태·토큰·소유자를 읽는다)."""
+    return conn.execute(
+        "SELECT * FROM archive_jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+
+
+def list_needs_human_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """사람 확인 필요 상태의 작업들 (대시보드 배지·목록용)."""
+    return conn.execute(
+        """
+        SELECT id, url, needs_human_at, live_owner_id
+        FROM archive_jobs WHERE needs_human_at IS NOT NULL
+        ORDER BY needs_human_at
+        """
+    ).fetchall()
+
+
+def mark_needs_human(
+    conn: sqlite3.Connection, job_id: int, *,
+    token: str, viewport_w: int, viewport_h: int,
+) -> None:
+    """작업을 '사람 확인 필요'로 표시 (worker 가 라이브 진입 시). status 는
+    in_progress 유지 — 활성 불변식·클레임 배제를 보존한다."""
+    conn.execute(
+        """
+        UPDATE archive_jobs
+        SET needs_human_at = ?, live_token = ?, live_cancel = 0,
+            live_owner_id = NULL, live_viewport_w = ?, live_viewport_h = ?
+        WHERE id = ?
+        """,
+        (_utcnow(), token, viewport_w, viewport_h, job_id),
+    )
+
+
+def clear_needs_human(conn: sqlite3.Connection, job_id: int) -> None:
+    """라이브 상태 해제 (통과·취소·실패·worker 재시작 정리). 명령 큐도 비운다."""
+    row = conn.execute(
+        "SELECT live_token FROM archive_jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    if row and row["live_token"]:
+        conn.execute("DELETE FROM live_commands WHERE live_token = ?", (row["live_token"],))
+    conn.execute(
+        """
+        UPDATE archive_jobs
+        SET needs_human_at = NULL, live_token = NULL, live_owner_id = NULL,
+            live_cancel = 0, live_viewport_w = NULL, live_viewport_h = NULL
+        WHERE id = ?
+        """,
+        (job_id,),
+    )
+
+
+def claim_live_session(conn: sqlite3.Connection, job_id: int, owner_id: int) -> bool:
+    """라이브 세션을 admin 이 클레임 (입력 권한자 = 처음 연 admin). 이미 다른
+    소유자면 False. 소유자 정의가 'enqueue 사용자'가 아니라 '여는 admin'이라
+    enqueue 권한(archiver)과 입력 권한(admin)의 충돌이 없다."""
+    cur = conn.execute(
+        """
+        UPDATE archive_jobs SET live_owner_id = ?
+        WHERE id = ? AND needs_human_at IS NOT NULL
+          AND (live_owner_id IS NULL OR live_owner_id = ?)
+        """,
+        (owner_id, job_id, owner_id),
+    )
+    return cur.rowcount == 1
+
+
+def set_live_cancel(conn: sqlite3.Connection, job_id: int) -> None:
+    """사람이 취소 — worker 폴링 루프가 다음 반복에 중단한다."""
+    conn.execute(
+        "UPDATE archive_jobs SET live_cancel = 1 WHERE id = ?", (job_id,)
+    )
+
+
+def enqueue_live_command(
+    conn: sqlite3.Connection, token: str, *,
+    kind: str, x: int | None = None, y: int | None = None,
+    key: str | None = None, delay_ms: int = 0,
+) -> None:
+    """라이브 입력 명령을 큐에 추가 (대시보드 → worker). seq 는 토큰 내 증가."""
+    seq = conn.execute(
+        "SELECT COALESCE(MAX(seq), 0) + 1 FROM live_commands WHERE live_token = ?",
+        (token,),
+    ).fetchone()[0]
+    conn.execute(
+        """
+        INSERT INTO live_commands (live_token, seq, kind, x, y, key, delay_ms, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (token, seq, kind, x, y, key, delay_ms, _utcnow()),
+    )
+
+
+def claim_live_commands(conn: sqlite3.Connection, token: str) -> list[sqlite3.Row]:
+    """미소비 명령을 seq 순으로 가져와 소비 표시 (worker 가 재생). 단일 worker
+    소비라 SELECT→UPDATE 로 충분하다."""
+    rows = conn.execute(
+        """
+        SELECT * FROM live_commands
+        WHERE live_token = ? AND consumed_at IS NULL ORDER BY seq
+        """,
+        (token,),
+    ).fetchall()
+    if rows:
+        conn.execute(
+            "UPDATE live_commands SET consumed_at = ? WHERE live_token = ? AND consumed_at IS NULL",
+            (_utcnow(), token),
+        )
+    return rows
+
+
+def sweep_orphan_needs_human(conn: sqlite3.Connection) -> list[int]:
+    """worker 재시작 시 호출 — 살아있던 라이브 page 가 사라졌으므로 모든
+    needs_human 작업의 라이브 상태를 해제하고 pending 으로 떨군다. 떨군 작업
+    id 목록 반환. 같은 URL 의 활성 중복(부분 UNIQUE)은 idx_archive_jobs_active
+    위반을 피하려 충돌 시 그 작업을 삭제한다."""
+    jobs = conn.execute(
+        "SELECT id, url FROM archive_jobs WHERE needs_human_at IS NOT NULL"
+    ).fetchall()
+    reset: list[int] = []
+    for job in jobs:
+        clear_needs_human(conn, job["id"])
+        # 같은 URL 의 다른 pending/in_progress 가 있으면 중복이 되므로 이 행은 삭제
+        dup = conn.execute(
+            """
+            SELECT 1 FROM archive_jobs
+            WHERE url = ? AND id != ? AND status IN ('pending', 'in_progress')
+            """,
+            (job["url"], job["id"]),
+        ).fetchone()
+        if dup:
+            conn.execute("DELETE FROM archive_jobs WHERE id = ?", (job["id"],))
+        else:
+            conn.execute(
+                "UPDATE archive_jobs SET status = 'pending', claimed_at = NULL WHERE id = ?",
+                (job["id"],),
+            )
+            reset.append(job["id"])
+    return reset
 
 
 def finish_crawl_if_done(conn: sqlite3.Connection, crawl_id: int) -> bool:

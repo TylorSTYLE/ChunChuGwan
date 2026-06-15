@@ -22,6 +22,12 @@ if [ "$(id -u)" = "0" ]; then
     mkdir -p "$archive_root"
     # 소유자가 다른 항목만 보정 — 정상 상태에서는 스캔만 하고 끝난다
     find "$archive_root" ! -user wccg -exec chown wccg:wccg {} +
+    # 로그 파일 디렉토리(볼륨)도 wccg 가 쓸 수 있게 보정
+    if [ -n "${WCCG_LOG_FILE:-}" ]; then
+        log_dir="$(dirname "$WCCG_LOG_FILE")"
+        mkdir -p "$log_dir"
+        find "$log_dir" ! -user wccg -exec chown wccg:wccg {} +
+    fi
     export HOME=/home/wccg
     # 소유자 보정 후 wccg 로 강등하고 엔트리포인트를 다시 타 Xvfb 분기를 적용한다
     exec gosu wccg "$0" "$@"
