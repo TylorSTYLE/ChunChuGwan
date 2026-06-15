@@ -120,8 +120,11 @@ def _snapshot_json(snap: sqlite3.Row) -> dict:
 def api_pages(request: Request, url: str | None = None):
     """아카이브된 페이지 목록. url 쿼리로 단일 페이지 조회 (정규화 후 일치)."""
     _require_view(request)
+    from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
+
+    # 인증 스냅샷은 소유자/관리자만 카운트·시각에 반영 (집계 메타데이터 누출 차단)
     with db.connect() as conn:
-        pages = db.list_pages(conn)
+        pages = db.list_pages(conn, viewer=webapp._snapshot_viewer(request))
     if url is not None:
         try:
             norm = storage.normalize_url(url)

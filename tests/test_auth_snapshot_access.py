@@ -178,3 +178,60 @@ def test_delete_user_nulls_authenticated_by(client):
         db.delete_user(conn, owner)  # FK 위반 없이 성공
         snap = db.list_snapshots(conn, page_id)[0]
         assert snap["authenticated"] == 1 and snap["authenticated_by"] is None
+
+
+# ---- 집계 메타데이터 누출 차단 (snapshot_count / last_taken_at / checks) ----
+
+
+def test_list_pages_count_is_viewer_aware(client):
+    owner = _uid("arch@test.co")
+    _insert_auth_snapshots(owner, [
+        ("publichashBB", "공개", 0, None),       # 2026-06-01 (public)
+        ("secrethashAA", "비밀", 1, owner),       # 2026-06-02 (authenticated, 더 최근)
+    ])
+    other = _uid("arch2@test.co")
+    with db.connect() as conn:
+        allp = {p["url"]: p for p in db.list_pages(conn)}                  # viewer=None=전체
+        otherp = {p["url"]: p for p in db.list_pages(conn, viewer=(other, False))}
+        ownp = {p["url"]: p for p in db.list_pages(conn, viewer=(owner, False))}
+        admp = {p["url"]: p for p in db.list_pages(conn, viewer=(_uid("boss@test.co"), True))}
+    assert allp[URL]["snapshot_count"] == 2
+    assert otherp[URL]["snapshot_count"] == 1        # 인증 제외
+    assert otherp[URL]["last_taken_at"] == "2026-06-01T00:00:00+00:00"  # 공개분만
+    assert ownp[URL]["snapshot_count"] == 2          # 소유자 포함
+    assert admp[URL]["snapshot_count"] == 2          # admin 전부
+
+
+def test_api_pages_count_hides_authenticated(client):
+    owner = _uid("arch@test.co")
+    _insert_auth_snapshots(owner, [("publichashBB", "공개", 0, None),
+                                   ("secrethashAA", "비밀", 1, owner)])
+    own = client.get("/api/v1/pages", headers=_headers(_ext_token("arch@test.co"))).json()["pages"]
+    other = client.get("/api/v1/pages", headers=_headers(_ext_token("arch2@test.co"))).json()["pages"]
+    assert next(p for p in own if p["url"] == URL)["snapshot_count"] == 2
+    assert next(p for p in other if p["url"] == URL)["snapshot_count"] == 1
+
+
+def test_list_sites_overview_count_is_viewer_aware(client):
+    owner = _uid("arch@test.co")
+    _insert_auth_snapshots(owner, [("publichashBB", "공개", 0, None),
+                                   ("secrethashAA", "비밀", 1, owner)])
+    with db.connect() as conn:
+        other = next(s for s in db.list_sites_overview(conn, viewer=(_uid("arch2@test.co"), False))
+                     if s["site_key"] == "example.com")
+        own = next(s for s in db.list_sites_overview(conn, viewer=(owner, False))
+                   if s["site_key"] == "example.com")
+    assert other["snapshot_count"] == 1 and own["snapshot_count"] == 2
+
+
+def test_timeline_hides_checks_hash_for_non_owner(client):
+    owner = _uid("arch@test.co")
+    page_id = _insert_auth_snapshots(owner, [("publichashBB", "공개", 0, None),
+                                             ("secrethashAA", "비밀", 1, owner)])
+    with db.connect() as conn:
+        db.insert_check(conn, page_id, "checkhashCC9")  # 변경없음 확인 기록 (표시 [:12] = 전체)
+    _login(client, "viewer@test.co")
+    body = client.get(f"/page/{page_id}").text
+    assert "checkhashCC9" not in body   # 가려진 인증 스냅샷 있으면 checks 도 숨김
+    _login(client, "arch@test.co")       # 소유자
+    assert "checkhashCC9" in client.get(f"/page/{page_id}").text

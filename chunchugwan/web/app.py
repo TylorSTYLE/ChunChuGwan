@@ -380,7 +380,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
     """
     active = _active_snapshot()
     with db.connect() as conn:
-        sites = db.list_sites_overview(conn)
+        sites = db.list_sites_overview(conn, viewer=_snapshot_viewer(request))
         running = [c for c in db.list_crawls(conn) if c["status"] == "running"]
         snap_dirs = db.list_snapshot_dirs(conn)
         tag_rows = db.list_site_network_tags(conn)
@@ -989,10 +989,15 @@ def timeline(
 
     # 로그인 캡처 스냅샷은 소유자/관리자에게만 — 비소유자에겐 존재·해시·diff
     # 링크를 노출하지 않는다 (API 히스토리 목록과 동일 정책)
-    snaps = [
+    visible = [
         s for s in snaps
         if not s["authenticated"] or _may_view_authenticated(request, s)
     ]
+    if len(visible) != len(snaps):
+        # 가려진 인증 스냅샷이 있으면, 같은 content_hash 를 가질 수 있는 변경없음
+        # 확인 기록(checks)도 숨긴다 (해시 메타데이터 누출 차단)
+        checks = []
+    snaps = visible
     log_by_snap = {row["snapshot_id"]: row for row in snap_logs}
     items = []
     for i, s in enumerate(snaps, 1):
@@ -1162,6 +1167,23 @@ def _may_view_authenticated(request: Request, snap) -> bool:
         if key is not None and key["owner_user_id"] is not None:
             return key["owner_user_id"] == owner_id
     return False
+
+
+def _snapshot_viewer(request: Request) -> "tuple[int | None, bool] | None":
+    """집계(목록·카운트)에서 인증 스냅샷을 가릴 기준 — (viewer_id, is_admin).
+
+    인증 off 면 None(전체 허용). 세션 사용자는 (본인 id, admin 여부), API 키는
+    (소유자 id, False) — 시스템 키는 소유자 None 이라 인증 스냅샷이 제외된다.
+    """
+    if not config.AUTH_ENABLED:
+        return None
+    user = request.state.user
+    if user is not None:
+        return (user["id"], user["role"] == "admin")
+    key = getattr(request.state, "api_key", None)
+    if key is not None:
+        return (key["owner_user_id"], False)
+    return (None, False)
 
 
 def _load_snapshot(request: Request, snapshot_id: int):
