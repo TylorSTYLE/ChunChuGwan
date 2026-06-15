@@ -167,7 +167,9 @@ def test_site_pages_pagination(client, monkeypatch):
     assert "https://example.com/post" in page1.text
     assert url2 not in page1.text
     assert url2 in page2.text
-    assert "https://example.com/post</a>" not in page2.text
+    # post 행은 1페이지에만 — 페이지 표 링크 형태(/page/N">URL)로 확인한다.
+    # (문서 섹션의 출처 링크는 title 속성이 붙어 형태가 달라 안 걸린다)
+    assert '/page/1">https://example.com/post</a>' not in page2.text
     # 범위를 넘는 페이지 번호는 마지막 페이지로 보정
     assert url2 in client.get(f"/sites/{site['id']}?page=99").text
 
@@ -563,6 +565,16 @@ def test_documents_list_page(client):
     assert "저장공간 최적화" in res.text
     # 헤더 메뉴에도 문서 링크가 있다
     assert 'href="/documents"' in client.get("/").text
+
+
+def test_site_detail_lists_documents(client):
+    """사이트 상세 — 해당 사이트가 아카이빙한 문서가 다운로드 링크와 함께 보인다."""
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert res.status_code == 200
+    assert "guide-aabbccdd.pdf" in res.text
+    assert f"/document/{GUIDE_SHA}/guide-aabbccdd.pdf" in res.text
 
 
 def test_document_download_route(client):

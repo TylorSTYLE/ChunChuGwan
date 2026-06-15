@@ -1758,6 +1758,40 @@ def list_document_groups(
     ).fetchall()
 
 
+def list_site_document_groups(
+    conn: sqlite3.Connection, site_id: int, limit: int = 100, offset: int = 0
+) -> list[sqlite3.Row]:
+    """사이트 상세용 — 해당 사이트 스냅샷이 참조하는 문서 목록 (sha256 그룹).
+
+    list_document_groups 의 사이트 스코프 버전. 그룹 집계(참조 스냅샷·페이지
+    수, 최근 저장)는 이 사이트에 속한 스냅샷만으로 계산하고, 표시용 파일명·
+    출처는 그 안에서 가장 최근 참조 행의 값을 쓴다 (최근 저장 순)."""
+    return conn.execute(
+        """
+        SELECT g.sha256, g.snapshot_count, g.page_count, g.first_seen, g.last_seen,
+               d.file, d.url, d.bytes, d.content_type, d.snapshot_id,
+               s.page_id, p.url AS page_url
+        FROM (
+            SELECT d2.sha256 AS sha256, MAX(d2.id) AS doc_id,
+                   COUNT(*) AS snapshot_count,
+                   COUNT(DISTINCT s2.page_id) AS page_count,
+                   MIN(s2.taken_at) AS first_seen, MAX(s2.taken_at) AS last_seen
+            FROM snapshot_documents d2
+            JOIN snapshots s2 ON s2.id = d2.snapshot_id
+            JOIN pages p2 ON p2.id = s2.page_id
+            WHERE p2.site_id = ?
+            GROUP BY d2.sha256
+        ) g
+        JOIN snapshot_documents d ON d.id = g.doc_id
+        JOIN snapshots s ON s.id = d.snapshot_id
+        JOIN pages p ON p.id = s.page_id
+        ORDER BY g.last_seen DESC, g.sha256
+        LIMIT ? OFFSET ?
+        """,
+        (site_id, limit, offset),
+    ).fetchall()
+
+
 def document_totals(conn: sqlite3.Connection) -> sqlite3.Row:
     """문서 목록 화면 요약 — 고유 문서 수(groups)·저장 용량(unique_bytes)·
     중복 제거로 절약된 용량(saved_bytes = 참조 수 - 1 만큼의 중복분)."""
