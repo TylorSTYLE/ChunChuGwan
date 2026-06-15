@@ -262,14 +262,21 @@ def test_page_renders(client):
 def test_create_http_basic(client):
     _login_admin(client)
     sid = _sid()
-    r = client.post(f"/sites/{sid}/credentials", data=_basic(), follow_redirects=False)
+    # base64url 알파벳에 없는 문자(_.- 외 구두점)를 섞은 식별 가능한 평문 —
+    # Fernet 암호문(랜덤 IV)에 부분문자열로 우연히 나타날 수 없게 한다.
+    secret_pw = "p@ssw0rd!sentinel#NOT-base64?value"
+    r = client.post(
+        f"/sites/{sid}/credentials", data=_basic(password=secret_pw), follow_redirects=False
+    )
     assert r.status_code == 303
     with db.connect() as conn:
         creds = db.list_site_credentials(conn, sid)
         assert len(creds) == 1 and creds[0]["kind"] == "http_basic"
         cid = creds[0]["id"]
-        assert credentials.reveal(conn, cid) == {"username": "u", "password": "pw"}
-        assert "pw" not in db.get_site_credential(conn, cid)["secret"]
+        assert credentials.reveal(conn, cid) == {"username": "u", "password": secret_pw}
+        # 평문이 그대로 저장되지 않았는지(암호화됐는지) 확인
+        stored = db.get_site_credential(conn, cid)["secret"]
+        assert secret_pw not in stored and stored != secret_pw
 
 
 def test_create_session(client):
