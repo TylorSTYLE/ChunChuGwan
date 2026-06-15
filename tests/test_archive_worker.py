@@ -1,7 +1,7 @@
 """단발 아카이빙 작업 큐 + 소비자 테스트 (archive_worker.py / db.py). 캡처 없이 모킹."""
 import pytest
 
-from chunchugwan import archive_worker, config, crawler, db, storage
+from chunchugwan import archive_worker, config, crawler, db, live_challenge, storage
 from chunchugwan.pipeline import ArchiveOutcome
 
 URL = "https://example.com/post"
@@ -136,3 +136,57 @@ def test_claim_conflict_releases_and_skips(archive_env):
     with db.connect() as conn:
         status = conn.execute("SELECT status FROM archive_jobs").fetchone()["status"]
     assert status == "pending"  # 반납되어 다음 폴링에서 재시도
+
+
+# ---- 사람 보조(라이브) 세션 주입 게이트 (_live_session_for) ----
+
+_ITEM = {"id": 7, "network_tag_id": None}
+
+
+def test_live_session_for_disabled_returns_none(monkeypatch):
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", False)
+    assert archive_worker._live_session_for(_ITEM) is None
+
+
+def test_live_session_for_stealth_creates_session(monkeypatch):
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    monkeypatch.setattr(config, "CAPTURE_ENGINE", "patchright")
+    monkeypatch.setattr(config, "CAPTURE_HEADFUL", False)
+    sess = archive_worker._live_session_for(_ITEM)
+    assert isinstance(sess, live_challenge.LiveChallengeSession)
+    assert sess.job_id == 7
+
+
+def test_live_session_for_headful_creates_session(monkeypatch):
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    monkeypatch.setattr(config, "CAPTURE_ENGINE", "playwright")
+    monkeypatch.setattr(config, "CAPTURE_HEADFUL", True)
+    assert archive_worker._live_session_for(_ITEM) is not None
+
+
+def test_live_session_for_gate_unmet_warns_once(monkeypatch, caplog):
+    # 기능은 켰는데 엔진이 headless playwright → 라이브 미작동 + 한 번만 경고
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    monkeypatch.setattr(config, "CAPTURE_ENGINE", "playwright")
+    monkeypatch.setattr(config, "CAPTURE_HEADFUL", False)
+    monkeypatch.setattr(archive_worker, "_warned_live_gate", False)
+    with caplog.at_level("WARNING", logger="chunchugwan.archive_worker"):
+        assert archive_worker._live_session_for(_ITEM) is None
+        assert archive_worker._live_session_for(_ITEM) is None  # 두 번째 호출
+    warnings = [r for r in caplog.records if "patchright" in r.getMessage()]
+    assert len(warnings) == 1  # 도배하지 않고 프로세스당 한 번만
+
+
+def test_process_next_injects_live_session_when_enabled(archive_env, monkeypatch):
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    monkeypatch.setattr(config, "CAPTURE_ENGINE", "patchright")
+    seen = {}
+
+    def fake(url, force=False, source="web", **kw):
+        seen["live_session"] = kw.get("live_session")
+        return _outcome("new")
+
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, URL, source="web")
+    archive_worker.process_next(archive_fn=fake)
+    assert isinstance(seen["live_session"], live_challenge.LiveChallengeSession)

@@ -7,6 +7,10 @@
 </div>
 {% if not jobs %}
 <p class="muted">{{ _("사람 확인이 필요한 작업이 없습니다.") }}</p>
+{% if can_view_logs %}
+<p class="muted">{{ _("사람 처리 창(기본 5분)을 놓쳐 실패한 작업은") }}
+  <a href="/logs">{{ _("아카이빙 로그") }}</a>{{ _("에서 다시 시도하면 라이브 세션이 다시 열립니다.") }}</p>
+{% endif %}
 {% else %}
 <div class="table-wrap wide cards">
 <table>

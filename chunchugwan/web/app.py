@@ -833,9 +833,20 @@ def site_credentials_delete(request: Request, site_id: int, cred_id: int):
 
 
 @app.get("/archive/active")
-def archive_active() -> dict:
-    """진행 중 아카이빙 URL 목록 (목록 화면 자동 갱신 폴링용)."""
-    return {"active": sorted(_active_snapshot())}
+def archive_active(request: Request) -> dict:
+    """진행 중 아카이빙 URL 목록 (목록 화면 자동 갱신 폴링용).
+
+    라이브 챌린지가 켜진 관리자에게는 사람 확인 대기 작업(needs_human)도 함께
+    내려보낸다 — 사용자가 보고 있는 진행 화면에서 바로 '사람 확인 필요' 안내를
+    띄우기 위함 (전역 배너 폴링이 이 키를 읽는다)."""
+    data: dict = {"active": sorted(_active_snapshot())}
+    if config.LIVE_CHALLENGE and permissions.system_allowed(
+        getattr(request.state, "user", None)
+    ):
+        with db.connect() as conn:
+            jobs = db.list_needs_human_jobs(conn)
+        data["needs_human"] = [{"id": j["id"], "url": j["url"]} for j in jobs]
+    return data
 
 
 def _period_starts(now: datetime) -> dict[str, str]:
