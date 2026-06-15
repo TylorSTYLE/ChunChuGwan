@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
 from .. import __version__, auth, backup as backup_mod
-from .. import config, crawler, crypto, db, mailer, optimize, resources, storage
+from .. import config, crawler, crypto, db, documents, mailer, optimize, resources, storage
 from . import audit, permissions
 from .i18n import t
 from .templating import filesize, templates
@@ -54,6 +54,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         network_tags = db.list_network_tags(conn)
         ext_credential_ttl_hours = db.ext_credential_ttl_hours(conn)
         mobile_screenshot_enabled = db.mobile_screenshot_enabled(conn)
+        doc_limits = documents.limits(conn)
     usage = storage.archive_disk_usage()
     return templates.TemplateResponse(
         request, "system.html",
@@ -82,6 +83,19 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "mobile_screenshot_enabled": mobile_screenshot_enabled,
             "mobile_screenshot_size":
                 f"{config.MOBILE_SCREENSHOT_WIDTH} × {config.MOBILE_SCREENSHOT_HEIGHT}",
+            "document_limits": {
+                "max_count": doc_limits.max_count,
+                "max_mb": doc_limits.max_bytes // (1024 * 1024),
+                "timeout_seconds": doc_limits.timeout_seconds,
+            },
+            "document_limit_ranges": {
+                "count_min": config.DOCUMENT_MAX_COUNT_MIN,
+                "count_max": config.DOCUMENT_MAX_COUNT_MAX,
+                "mb_min": config.DOCUMENT_MAX_MB_MIN,
+                "mb_max": config.DOCUMENT_MAX_MB_MAX,
+                "timeout_min": config.DOCUMENT_FETCH_TIMEOUT_MIN,
+                "timeout_max": config.DOCUMENT_FETCH_TIMEOUT_MAX,
+            },
             "credential_key_set": crypto.is_configured(),
             "archive_root": str(config.ARCHIVE_ROOT),
             "db_bytes": usage["db"],
@@ -344,6 +358,44 @@ def system_capture_settings(
         "켜짐" if mobile_screenshot_enabled else "꺼짐",
     )
     return _system_redirect(notice=t(request, "캡처 설정을 저장했습니다."))
+
+
+@router.post("/document-settings")
+def system_document_settings(
+    request: Request,
+    document_max_count: int = Form(...),
+    document_max_mb: int = Form(...),
+    document_fetch_timeout: int = Form(...),
+):
+    """문서 아카이브 한도 저장 — 스냅샷당 수·문서 1개 크기(MB)·다운로드 타임아웃(초).
+
+    이후 새로 저장되는 스냅샷의 문서 다운로드에 적용된다.
+    """
+    ranges = (
+        ("document_max_count", document_max_count,
+         config.DOCUMENT_MAX_COUNT_MIN, config.DOCUMENT_MAX_COUNT_MAX,
+         "문서 수 한도는 {lo} ~ {hi}개 사이여야 합니다."),
+        ("document_max_mb", document_max_mb,
+         config.DOCUMENT_MAX_MB_MIN, config.DOCUMENT_MAX_MB_MAX,
+         "문서 크기 한도는 {lo} ~ {hi}MB 사이여야 합니다."),
+        ("document_fetch_timeout", document_fetch_timeout,
+         config.DOCUMENT_FETCH_TIMEOUT_MIN, config.DOCUMENT_FETCH_TIMEOUT_MAX,
+         "문서 다운로드 타임아웃은 {lo} ~ {hi}초 사이여야 합니다."),
+    )
+    for _name, value, lo, hi, msg in ranges:
+        if not (lo <= value <= hi):
+            return _system_redirect(error=t(request, msg, lo=lo, hi=hi))
+    with db.connect() as conn:
+        db.set_setting(conn, db.DOCUMENT_MAX_COUNT_KEY, str(document_max_count))
+        db.set_setting(conn, db.DOCUMENT_MAX_MB_KEY, str(document_max_mb))
+        db.set_setting(
+            conn, db.DOCUMENT_FETCH_TIMEOUT_KEY, str(document_fetch_timeout)
+        )
+    audit.log(
+        request, "문서 아카이브 설정 변경: 최대 %d개, 개당 %dMB, 타임아웃 %d초",
+        document_max_count, document_max_mb, document_fetch_timeout,
+    )
+    return _system_redirect(notice=t(request, "문서 아카이브 설정을 저장했습니다."))
 
 
 # ---- 로컬 네트워크 태그 ----

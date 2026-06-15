@@ -637,6 +637,23 @@ _EN: dict[str, str] = {
         "afterward (existing snapshots are unchanged).",
     "모바일 해상도 스크린샷도 함께 저장": "Also save a mobile-resolution screenshot",
     "캡처 설정을 저장했습니다.": "Capture settings saved.",
+    # ---- 문서 아카이브 설정 (system) ----
+    "문서 아카이브 설정": "Document archive settings",
+    "아카이빙하는 페이지가 링크한 문서 파일(PDF·워드·한글 등)을 받을 때의 한도입니다. 한 스냅샷에서 받는 문서 수, 문서 1개의 최대 크기, 다운로드 타임아웃을 정합니다. 이후 새로 저장되는 스냅샷에 적용됩니다(기존 스냅샷은 그대로).":
+        "Limits for downloading document files (PDF, Word, HWP, etc.) linked from the "
+        "page being archived. Sets how many documents are saved per snapshot, the "
+        "maximum size of a single document, and the download timeout. Applies to "
+        "snapshots saved afterward (existing snapshots are unchanged).",
+    "스냅샷당 문서 수": "Documents per snapshot",
+    "문서 1개 크기 한도(MB)": "Per-document size limit (MB)",
+    "다운로드 타임아웃(초)": "Download timeout (seconds)",
+    "문서 수 한도는 {lo} ~ {hi}개 사이여야 합니다.":
+        "Document count limit must be between {lo} and {hi}.",
+    "문서 크기 한도는 {lo} ~ {hi}MB 사이여야 합니다.":
+        "Document size limit must be between {lo} and {hi} MB.",
+    "문서 다운로드 타임아웃은 {lo} ~ {hi}초 사이여야 합니다.":
+        "Document download timeout must be between {lo} and {hi} seconds.",
+    "문서 아카이브 설정을 저장했습니다.": "Document archive settings saved.",
     # ---- 사이트 로그인 자격증명 (site_credentials) ----
     "로그인 자격증명": "Login credentials",
     "이 사이트를 아카이빙할 때 춘추관이 로그인하는 데 쓸 자격증명입니다. 비밀은 WCCG_SECRET_KEY 로 대칭 암호화해 저장하며, 화면에는 다시 표시되지 않습니다.":

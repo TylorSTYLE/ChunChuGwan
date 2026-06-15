@@ -309,7 +309,12 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   캡처 설정 (`mobile_screenshot_enabled` on/off 기본 off — 켜면 캡처가
   데스크탑 외에 모바일 뷰포트(390×844)로 재배치한 screenshot-mobile 도
   찍는다. pipeline 이 `db.mobile_screenshot_enabled` 로 읽어 capture 에 전달,
-  켠 뒤 새 스냅샷에만 적용)
+  켠 뒤 새 스냅샷에만 적용)과 문서 아카이브 설정
+  (`document_max_count`/`document_max_mb`/`document_fetch_timeout_seconds` —
+  페이지가 링크한 문서를 받을 때의 스냅샷당 수·문서 1개 크기(MB)·다운로드
+  타임아웃(초). 해석·클램핑은 `documents.limits`(오염·범위 밖이면 config
+  기본값), pipeline 이 읽어 `documents.download_documents`/`download_direct`
+  에 전달, 이후 저장되는 스냅샷에 적용)
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
 - `api_keys` — 외부 소프트웨어용 API 키 (`/api/v1` REST API 인증).
   키마다 보기/아카이브 권한과 만료 시각(NULL=영구), 토큰은 SHA-256 해시만

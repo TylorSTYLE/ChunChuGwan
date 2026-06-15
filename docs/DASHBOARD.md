@@ -193,7 +193,11 @@
   테이블, 재시도 대기는 진행 중 크롤에도 즉시 적용)·캡처 설정
   (`POST /system/capture-settings` — 모바일 해상도(390×844) 스크린샷도 함께
   저장할지. `settings` 테이블 `mobile_screenshot_enabled`, 기본 꺼짐, 켠 뒤
-  새로 만들어지는 스냅샷에만 적용)·로컬 네트워크 태그
+  새로 만들어지는 스냅샷에만 적용)·문서 아카이브 설정
+  (`POST /system/document-settings` — 페이지가 링크한 문서를 받을 때의 한도:
+  스냅샷당 문서 수·문서 1개 크기(MB)·다운로드 타임아웃(초). `settings` 테이블
+  `document_max_count`/`document_max_mb`/`document_fetch_timeout_seconds`,
+  값 해석·클램핑은 `documents.limits`, 이후 저장되는 스냅샷에 적용)·로컬 네트워크 태그
   (`POST /system/network-tags`, `POST /system/network-tags/{id}/delete`,
   `POST /system/network-tags/merge` — 사설 IP 대역 아카이빙을 허용하는 태그.
   id 는 GUID 자동 발급, 이름은 유일·60자, 설명 200자. 페이지·크롤·크롤
