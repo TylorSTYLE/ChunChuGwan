@@ -108,6 +108,8 @@ def archive_url(
     link_rewriter: capture.LinkRewriter | None = None,
     browser_session: capture.BrowserSession | None = None,
     network_tag_id: str | None = None,
+    storage_state: dict | None = None,
+    authenticated_by: int | None = None,
 ) -> ArchiveOutcome:
     """URL 아카이빙 전체 흐름.
 
@@ -125,7 +127,7 @@ def archive_url(
     run = _RunLog(url, source)
     try:
         outcome = _archive_url(url, force, run, link_rewriter, browser_session,
-                               network_tag_id)
+                               network_tag_id, storage_state, authenticated_by)
     except Exception as e:
         _log_failure(run, e)
         raise
@@ -251,6 +253,8 @@ def _archive_url(
     link_rewriter: capture.LinkRewriter | None = None,
     browser_session: capture.BrowserSession | None = None,
     network_tag_id: str | None = None,
+    storage_state: dict | None = None,
+    authenticated_by: int | None = None,
 ) -> ArchiveOutcome:
     norm = storage.normalize_url(url)
     domain = urlsplit(norm).hostname or ""
@@ -275,6 +279,11 @@ def _archive_url(
                 slug = storage.url_to_slug(norm)
                 run.url = norm
 
+    # 인증 캡처(storage_state)는 평문 http 로드를 금지한다 — 주입된 세션 쿠키가
+    # 평문으로 전송되는 것을 막는다 (https 승격 실패·명시적 http 입력 모두 차단).
+    if storage_state is not None and norm.startswith("http://"):
+        raise ValueError("인증 캡처는 https 대상만 허용합니다 (http 평문 전송 금지)")
+
     rules = config.load_domain_rules(domain)
     run.step("normalize", f"{norm} → {domain}/{slug}"
              + (" (도메인 룰 적용)" if rules else ""))
@@ -286,6 +295,9 @@ def _archive_url(
         session=browser_session,
         resource_fallback=_resource_fallback,
     )
+    # 인증 캡처일 때만 storage_state 를 넘긴다 — 비인증 캡처의 호출은 그대로 유지
+    if storage_state is not None:
+        capture_kwargs["storage_state"] = storage_state
     insecure_tls = False
     is_download = False  # 탐색이 파일 다운로드로 전환 — 문서 아카이빙으로 분기
     tmp_dir = Path(tempfile.mkdtemp(prefix="wccg-"))
@@ -319,8 +331,10 @@ def _archive_url(
                 # 시도한다: 스킴 생략 입력에 https 를 추정 보완한 경우는 모든
                 # 캡처 실패에서, 명시적 https 는 서버 연결 자체가 안 된 실패에
                 # 한해서만.
-                retriable = storage.scheme_inferred(url) or isinstance(
-                    e, capture.CaptureConnectError
+                # 인증 캡처는 http 다운그레이드 폴백을 타지 않는다 (평문 쿠키 금지)
+                retriable = storage_state is None and (
+                    storage.scheme_inferred(url)
+                    or isinstance(e, capture.CaptureConnectError)
                 )
                 if not (retriable and norm.startswith("https://")):
                     raise
@@ -335,6 +349,10 @@ def _archive_url(
                     result = capture.capture(norm, tmp_dir, **capture_kwargs)
                 except capture.CaptureDownloadError:
                     is_download = True
+        if is_download and storage_state is not None:
+            # 문서 다운로드는 익명 httpx 로 받으므로 세션을 실을 수 없고, 받더라도
+            # 비인증 스냅샷으로 저장돼 접근제한을 우회한다 — 인증 캡처에선 거부한다
+            raise ValueError("인증 캡처는 파일 다운로드 대상을 지원하지 않습니다")
         if is_download:
             run.step("capture", "탐색이 파일 다운로드로 전환 — 문서 파일로 아카이빙")
             return _archive_document_url(
@@ -446,6 +464,7 @@ def _archive_url(
                 http_status=result.http_status,
                 title=result.title,
                 documents=doc_manifest or None,
+                authenticated=storage_state is not None,
             )
             snap_dir = storage.finalize_snapshot(
                 tmp_dir, domain, slug, meta, normalized, taken_at
@@ -458,6 +477,8 @@ def _archive_url(
                 http_status=result.http_status, changed=changed,
                 resources_indexed=1,  # 참조는 바로 아래에서 기록 — 백필 불필요
                 css_externalized=1,   # compact_snapshot_dir 가 위에서 추출 완료
+                authenticated=1 if storage_state is not None else 0,
+                authenticated_by=authenticated_by if storage_state is not None else None,
             )
             if doc_manifest:
                 db.insert_snapshot_documents(conn, snapshot_id, doc_manifest)

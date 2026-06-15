@@ -29,6 +29,8 @@ class SnapshotMeta:
     # 함께 저장된 문서 파일 목록 [{url, file, bytes, sha256, content_type}].
     # files/ 하위 파일은 이 목록에 있는 이름만 서빙된다 (구형 meta 는 None).
     documents: list[dict] | None = None
+    # 1회성 인증 캡처 여부 — 로그인 뒤 콘텐츠가 담긴 스냅샷 표식.
+    authenticated: bool = False
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}

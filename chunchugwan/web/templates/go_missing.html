@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ _("아카이브 없음") }} — {{ _("춘추관") }}{% endblock %}
+{% block content %}
+<div class="auth-card">
+  <h2>{{ _("아카이브된 스냅샷이 없습니다") }}</h2>
+  <p class="muted">{{ _("이 URL 은 아직 아카이브되지 않았습니다.") }}</p>
+  <p class="mono" style="word-break:break-all">{{ url }}</p>
+  <p style="margin-top:12px">
+    <a href="/archive/new">{{ _("새 아카이빙") }}</a> ·
+    <a href="/">{{ _("현황") }}</a>
+  </p>
+</div>
+{% endblock %}

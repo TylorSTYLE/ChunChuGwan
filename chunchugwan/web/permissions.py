@@ -37,3 +37,20 @@ def can_view_logs(user: sqlite3.Row | None) -> bool:
     return not config.AUTH_ENABLED or bool(
         user and user["role"] in ("admin", "archiver", "viewer")
     )
+
+
+# 확장 토큰(사용자 귀속 API 키)이 동작할 수 있는 역할 — 그 외(pending/blocked/
+# withdrawn)는 토큰 자체가 무효 취급된다 (_api_auth 가 매 요청 재평가).
+TOKEN_ROLES = ("admin", "archiver", "viewer")
+
+
+def token_permissions_for_role(role: str) -> tuple[bool, bool]:
+    """사용자 역할에서 확장 토큰 권한(can_view, can_archive)을 파생한다.
+
+    보기=viewer 이상, 아카이브=archiver 이상. pending/blocked/withdrawn 은
+    둘 다 False — 발급 거부 및 토큰 무효화의 근거가 된다. AUTH_ENABLED 여부는
+    여기서 보지 않는다 (게이트 계층의 몫).
+    """
+    can_view = role in ("admin", "archiver", "viewer")
+    can_archive = role in ("admin", "archiver")
+    return can_view, can_archive

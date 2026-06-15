@@ -308,7 +308,7 @@ def test_post_archive_private_with_tag_queued(client, monkeypatch):
     seen = {}
 
     def fake_run(url, force=False, interval_seconds=None, run_at=None,
-                 source="web", network_tag_id=None):
+                 source="web", network_tag_id=None, auth_capsule_id=None):
         seen.update(url=url, network_tag_id=network_tag_id)
 
     monkeypatch.setattr(web_app, "_run_archive", fake_run)

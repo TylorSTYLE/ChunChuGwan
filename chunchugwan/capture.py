@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
-from urllib.parse import urldefrag, urljoin
+from urllib.parse import urldefrag, urljoin, urlsplit
 
 from . import config, documents, trackers
 
@@ -344,6 +344,7 @@ def capture(
     session: BrowserSession | None = None,
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
+    storage_state: dict | None = None,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
 
@@ -352,6 +353,8 @@ def capture(
     link_rewriter 가 있으면(사이트 전체 아카이브) page.html 의 앵커를
     반환된 매핑대로 재작성한다 — raw.html/content_html 은 원본 유지.
     session 이 있으면 그 브라우저를 재사용한다 (없으면 1회용 기동).
+    storage_state 가 있으면(1회성 인증 캡처) 그 쿠키로 로그인된 상태로
+    캡처하고, 자원 폴백을 same-origin 으로 제한해 쿠키 누출을 막는다.
 
     일부 서버(구형 IIS 등)는 HTTP/2 구현이 깨져 chromium 만
     net::ERR_HTTP2_* 로 실패한다 (curl 등은 정상) — 이 경우 HTTP/2 를
@@ -361,7 +364,7 @@ def capture(
     try:
         return _capture_once(url, out_dir, remove_selectors, link_rewriter,
                              session=session, resource_fallback=resource_fallback,
-                             insecure_tls=insecure_tls)
+                             insecure_tls=insecure_tls, storage_state=storage_state)
     except CaptureError as e:
         if "ERR_HTTP2" not in str(e):
             raise
@@ -370,7 +373,7 @@ def capture(
             url, out_dir, remove_selectors, link_rewriter,
             browser_args=("--disable-http2",),
             resource_fallback=resource_fallback,
-            insecure_tls=insecure_tls,
+            insecure_tls=insecure_tls, storage_state=storage_state,
         )
 
 
@@ -383,6 +386,7 @@ def _capture_once(
     session: BrowserSession | None = None,
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
+    storage_state: dict | None = None,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
     from playwright.sync_api import Error as PlaywrightError
@@ -392,14 +396,14 @@ def _capture_once(
         if session is not None and not browser_args:
             return _capture_in_browser(
                 session.browser(), url, out_dir, remove_selectors, link_rewriter,
-                resource_fallback, insecure_tls,
+                resource_fallback, insecure_tls, storage_state,
             )
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True, args=list(browser_args))
             try:
                 return _capture_in_browser(
                     browser, url, out_dir, remove_selectors, link_rewriter,
-                    resource_fallback, insecure_tls,
+                    resource_fallback, insecure_tls, storage_state,
                 )
             finally:
                 browser.close()
@@ -419,6 +423,7 @@ def _capture_in_browser(
     link_rewriter: LinkRewriter | None,
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
+    storage_state: dict | None = None,
 ) -> CaptureResult:
     """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다.
 
@@ -426,15 +431,28 @@ def _capture_in_browser(
     서빙하는 사이트(사설 NAS 등)의 재시도 경로(pipeline)에서만 켠다.
     컨텍스트 옵션이라 페이지의 하위 자원 요청·context.request 폴백에도
     적용된다.
+    storage_state 가 있으면 그 쿠키를 컨텍스트에 주입해 로그인된 상태로
+    캡처한다 — 이때 컨텍스트 쿠키가 context.request 폴백으로 외부 호스트에
+    새지 않도록 자원 폴백을 same-origin 으로 제한한다.
     """
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
     context = browser.new_context(
-        user_agent=config.USER_AGENT, ignore_https_errors=insecure_tls
+        user_agent=config.USER_AGENT,
+        ignore_https_errors=insecure_tls,
+        **({"storage_state": storage_state} if storage_state else {}),
     )
+    same_origin_only = storage_state is not None
     try:
         page = context.new_page()
         page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
+        if same_origin_only:
+            # 인증 캡처 — 브라우저가 자동 로드하는 모든 하위 요청(img/css/js/
+            # iframe/폰트/픽셀)을 네트워크 계층에서 가로채, 대상 오리진이 아닌
+            # 호스트로는 보내지 않는다. 주입된 세션 쿠키가 형제 서브도메인·
+            # CDN·제3자·http 다운그레이드 경로로 새는 것을 원천 차단한다
+            # (같은 오리진 자원만 로드 — 인증 캡처의 보안 우선 절충).
+            page.route("**/*", _block_cross_origin_route(url))
         _expose_sha256_binding(page)
         try:
             response = page.goto(
@@ -488,7 +506,7 @@ def _capture_in_browser(
 
         page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
         page_html, resource_urls = _inline_resources(
-            page, raw_html, resource_fallback
+            page, raw_html, resource_fallback, same_origin_only=same_origin_only
         )
         (out_dir / "page.html").write_text(page_html, encoding="utf-8")
 
@@ -568,7 +586,8 @@ def _expose_sha256_binding(page) -> None:
 
 
 def _inline_resources(
-    page, raw_html: str, resource_fallback: ResourceFallback | None = None
+    page, raw_html: str, resource_fallback: ResourceFallback | None = None,
+    *, same_origin_only: bool = False,
 ) -> tuple[str, dict[str, str]]:
     """<img src>, <link rel=stylesheet>, 폰트를 data URI로 치환한 단일 HTML 생성.
 
@@ -588,7 +607,9 @@ def _inline_resources(
             i["sha256"]: i["url"] for i in result["inlined"] if i.get("sha256")
         }
         if failed:
-            failed = _retry_inline_via_context(page, failed, resource_urls)
+            failed = _retry_inline_via_context(
+                page, failed, resource_urls, same_origin_only=same_origin_only
+            )
         if failed and resource_fallback is not None:
             failed = _apply_resource_fallback(
                 page, failed, resource_fallback, resource_urls
@@ -604,13 +625,16 @@ def _inline_resources(
 
 
 def _retry_inline_via_context(
-    page, failed: list[dict], resource_urls: dict[str, str]
+    page, failed: list[dict], resource_urls: dict[str, str],
+    *, same_origin_only: bool = False,
 ) -> list[dict]:
     """CORS 로 막힌 자원을 브라우저 밖 API 요청(context.request)으로 재시도.
 
     context.request 는 CORS 제약이 없고 컨텍스트의 쿠키/UA 를 공유한다.
     핫링크 보호 대비 Referer 를 현재 페이지로 보낸다. 성공분은 DOM 에 반영하고
     (sha256 → URL 을 resource_urls 에 기록), 끝내 실패한 항목만 돌려준다.
+    same_origin_only(인증 캡처)면 다른 호스트 자원은 건너뛴다 — 컨텍스트
+    쿠키가 외부로 새지 않게 한다.
     """
     replacements: list[dict] = []
     still_failed: list[dict] = []
@@ -621,7 +645,9 @@ def _retry_inline_via_context(
             still_failed.append(item)
             continue
         if url not in fetched:
-            fetched[url] = _fetch_via_context(page, url)
+            fetched[url] = _fetch_via_context(
+                page, url, same_origin_only=same_origin_only
+            )
         result = fetched[url]
         if result is None:
             still_failed.append(item)
@@ -672,8 +698,47 @@ def _apply_resource_fallback(
     return still_failed
 
 
-def _fetch_via_context(page, url: str) -> tuple[str, bytes] | None:
-    """자원 1개를 context.request 로 받아 (content-type, body) 반환. 실패 시 None."""
+def _origin(url: str) -> tuple[str | None, str | None, int | None]:
+    """(scheme, host, port) — 기본 포트는 스킴으로 보정해 동일 오리진을 정확 비교."""
+    p = urlsplit(url)
+    port = p.port or (443 if p.scheme == "https" else 80 if p.scheme == "http" else None)
+    return (p.scheme, p.hostname, port)
+
+
+def _same_origin(a: str, b: str) -> bool:
+    """두 URL 이 같은 오리진(scheme+host+port)인지 — 스킴 다운그레이드도 다름으로 본다."""
+    return _origin(a) == _origin(b)
+
+
+def _block_cross_origin_route(target_url: str):
+    """인증 캡처용 page.route 핸들러 — 대상 오리진이 아닌 모든 요청을 차단.
+
+    주입된 세션 쿠키가 (a)형제/상위 도메인 서브리소스 (b)CDN·제3자
+    (c)http 다운그레이드 동일호스트 자원 으로 전송되는 것을 네트워크 계층에서
+    원천 차단한다. abort 라 쿠키가 실린 요청 자체가 나가지 않는다(헤더 조작보다
+    확실). 같은 오리진 자원만 로드된다.
+    """
+    def handler(route) -> None:
+        if _same_origin(route.request.url, target_url):
+            route.continue_()
+        else:
+            route.abort()
+
+    return handler
+
+
+def _fetch_via_context(
+    page, url: str, *, same_origin_only: bool = False
+) -> tuple[str, bytes] | None:
+    """자원 1개를 context.request 로 받아 (content-type, body) 반환. 실패 시 None.
+
+    same_origin_only(인증 캡처)면 현재 페이지와 오리진(scheme+host+port)이 다른
+    자원은 받지 않는다 — context.request 가 컨텍스트의 인증 쿠키를 공유하므로,
+    cross-origin·스킴 다운그레이드 요청으로 그 쿠키가 새는 것을 막는다(이중 방어 —
+    page.route 가 1차 차단).
+    """
+    if same_origin_only and not _same_origin(url, page.url):
+        return None
     try:
         resp = page.context.request.get(
             url,

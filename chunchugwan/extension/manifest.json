@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "춘추관 아카이버",
+  "version": "0.4.0",
+  "default_locale": "ko",
+  "description": "__MSG_ext_description__",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "춘추관 아카이버"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["storage", "cookies", "tabs", "activeTab"],
+  "optional_host_permissions": ["*://*/*"]
+}

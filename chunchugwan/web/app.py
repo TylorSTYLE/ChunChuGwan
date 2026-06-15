@@ -15,9 +15,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import threading
+import zipfile
 from contextlib import asynccontextmanager
 import zoneinfo
 from datetime import date, datetime, timedelta, timezone
@@ -30,11 +32,12 @@ from fastapi.responses import (
     HTMLResponse,
     PlainTextResponse,
     RedirectResponse,
+    Response,
 )
 
 from .. import (
-    auth, backup, config, crawler, db, deletion, differ, documents, netcheck,
-    pipeline, resources, scheduler, storage, system_log,
+    __version__, auth, backup, config, crawler, credentials, db, deletion, differ,
+    documents, netcheck, pipeline, resources, scheduler, storage, system_log,
 )
 from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
 from .i18n import t
@@ -131,7 +134,10 @@ async def auth_gate(request: Request, call_next):
     request.state.session = None
     request.state.locale = i18n.resolve_locale(request)
 
-    if request.method == "POST":
+    # /api/ POST 는 Bearer/X-API-Key 토큰이 자격증명이라 쿠키 기반 CSRF 가
+    # 성립하지 않는다 (확장 background fetch 는 Origin 이 없거나 chrome-extension://).
+    # 키 검증·권한 가드는 그대로 강제되므로 Origin 검사만 면제한다.
+    if request.method == "POST" and not request.url.path.startswith("/api/"):
         origin = request.headers.get("origin") or request.headers.get("referer")
         if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
             return PlainTextResponse(t(request, "CSRF 검증 실패"), status_code=403)
@@ -273,6 +279,46 @@ _FAVICON_PATH = Path(__file__).parent / "static" / "favicon.svg"
 def favicon() -> FileResponse:
     """SVG 파비콘 (OS 라이트/다크 자동) — 인증 없이 서빙 (_BROWSER_ICON_PATHS)."""
     return FileResponse(_FAVICON_PATH, media_type="image/svg+xml")
+
+
+# 크롬 확장(MV3) 소스 — 패키지에 함께 실린다 (Docker·휠 모두 chunchugwan 포함)
+_EXTENSION_DIR = Path(__file__).resolve().parent.parent / "extension"
+
+
+def _build_extension_zip() -> bytes:
+    """chunchugwan/extension/ 를 요청 시 zip 으로 묶는다.
+
+    manifest 의 version 은 서버 버전으로 맞춰 항상 최신을 서빙한다 (깃에
+    빌드 산출물·바이너리를 두지 않는다). 크롬은 자체호스팅 .crx 드래그 설치를
+    막으므로 unpacked ZIP 으로 주고, 사용자는 압축 해제 후 '개발자 모드 →
+    압축해제된 확장 프로그램을 로드' 로 설치한다.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(_EXTENSION_DIR.rglob("*")):
+            if not path.is_file():
+                continue
+            arc = path.relative_to(_EXTENSION_DIR).as_posix()
+            if arc == "manifest.json":
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["version"] = __version__
+                zf.writestr(arc, json.dumps(data, ensure_ascii=False, indent=2))
+            else:
+                zf.write(path, arc)
+    return buf.getvalue()
+
+
+@app.get("/extension/download")
+def extension_download(request: Request) -> Response:
+    """크롬 확장(unpacked) ZIP 다운로드 — 세션 인증. 압축 해제 후 개발자 모드 로드."""
+    if not _EXTENSION_DIR.is_dir():
+        raise HTTPException(404, t(request, "확장 파일을 찾을 수 없습니다"))
+    filename = f"wccg-chrome-extension-v{__version__}.zip"
+    return Response(
+        content=_build_extension_zip(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _snapshot_dir_size(domain: str, slug: str, dir_name: str) -> int:
@@ -689,7 +735,37 @@ def dashboard(request: Request):
             "recent_snaps": recent_snaps,
             "sizes": sizes,
             "recent_logs": recent_logs,
+            "extension_version": __version__,
         },
+    )
+
+
+@app.get("/go", response_class=HTMLResponse)
+def go(request: Request, url: str):
+    """URL → 타임라인 딥링크 (확장·북마크용). 세션 인증 라우트.
+
+    입력 URL 을 정규화해 페이지를 찾으면 타임라인(/page/{id})으로 302 한다.
+    http↔https 승격으로 스킴이 어긋난 경우를 대비해 반대 스킴도 한 번 더
+    찾아본다. 없으면 안내 화면. 미인증이면 미들웨어가 /login 으로 보낸다.
+    """
+    try:
+        norm = storage.normalize_url(url)
+    except ValueError:
+        raise HTTPException(400, t(request, "잘못된 URL"))
+    scheme, rest = norm.split("://", 1)
+    candidates = [norm]
+    try:
+        other = "http" if scheme == "https" else "https"
+        candidates.append(storage.normalize_url(f"{other}://{rest}"))
+    except ValueError:
+        pass
+    with db.connect() as conn:
+        for cand in candidates:
+            page = db.get_page(conn, cand)
+            if page is not None:
+                return RedirectResponse(f"/page/{page['id']}", status_code=302)
+    return templates.TemplateResponse(
+        request, "go_missing.html", {"url": norm}, status_code=404
     )
 
 
@@ -740,6 +816,12 @@ def timeline(
         site = db.get_site(conn, page["site_id"]) if page["site_id"] else None
         snap_logs = db.list_snapshot_archive_logs(conn, page_id)
 
+    # 인증 스냅샷은 소유자/관리자에게만 — 비소유자에겐 존재·해시·파일목록·diff
+    # 링크를 노출하지 않는다 (API 히스토리 목록과 동일 정책)
+    snaps = [
+        s for s in snaps
+        if not s["authenticated"] or _may_view_authenticated(request, s)
+    ]
     log_by_snap = {row["snapshot_id"]: row for row in snap_logs}
     items = []
     for i, s in enumerate(snaps, 1):
@@ -889,10 +971,32 @@ def schedules_view(request: Request):
     )
 
 
+def _may_view_authenticated(request: Request, snap) -> bool:
+    """인증 스냅샷(로그인 뒤 콘텐츠) 열람 가능 여부 — 소유자 또는 관리자만.
+
+    세션 사용자(본인/admin) 또는 그 사용자에게 귀속된 확장 토큰(api_key의
+    owner_user_id)으로 인증된 경우만 허용한다. 시스템 키(owner=NULL)는 불가.
+    인증 off(loopback) 단일 사용자 환경은 전부 허용.
+    """
+    if not config.AUTH_ENABLED:
+        return True
+    owner_id = snap["authenticated_by"]
+    user = request.state.user
+    if user is not None and (user["role"] == "admin" or user["id"] == owner_id):
+        return True
+    key = getattr(request.state, "api_key", None)
+    if key is not None and key["owner_user_id"] is not None:
+        return key["owner_user_id"] == owner_id
+    return False
+
+
 def _load_snapshot(request: Request, snapshot_id: int):
     with db.connect() as conn:
         snap = db.get_snapshot(conn, snapshot_id)
     if snap is None:
+        raise HTTPException(404, t(request, "스냅샷 없음", ctx="one"))
+    # 인증 스냅샷은 소유자/관리자만 — 그 외에는 존재를 은폐(404)
+    if snap["authenticated"] and not _may_view_authenticated(request, snap):
         raise HTTPException(404, t(request, "스냅샷 없음", ctx="one"))
     return snap
 
@@ -1138,7 +1242,12 @@ def _resolve_diff_pair(
             t(request, "잘못된 범위: from={f} to={t} (1 ~ {n})",
               f=from_idx, t=to_idx, n=len(snaps)),
         )
-    return page, snaps, from_idx, to_idx, snaps[from_idx - 1], snaps[to_idx - 1]
+    old_snap, new_snap = snaps[from_idx - 1], snaps[to_idx - 1]
+    # 인증 스냅샷은 소유자/관리자만 — diff(본문·스크린샷) 양쪽 진입을 한 곳에서 가린다
+    for snap in (old_snap, new_snap):
+        if snap["authenticated"] and not _may_view_authenticated(request, snap):
+            raise HTTPException(404, t(request, "스냅샷 없음", ctx="one"))
+    return page, snaps, from_idx, to_idx, old_snap, new_snap
 
 
 def _screenshot_paths(page, old_snap, new_snap) -> tuple[Path | None, Path | None]:
@@ -1329,15 +1438,36 @@ def _run_archive(
     run_at: str | None = None,
     source: str = "web",
     network_tag_id: str | None = None,
+    auth_capsule_id: int | None = None,
 ) -> None:
     """백그라운드 아카이빙. 결과는 archive_logs 에 기록된다 (source 포함).
 
     interval_seconds 가 있으면 실행 후 자동 재아카이빙 주기를 등록한다 —
     신규 URL 은 아카이빙이 끝나야 pages 행이 생기므로 등록을 여기서 한다.
+    auth_capsule_id 가 있으면 1회성 인증 캡처 — 캡슐을 복호해 로그인 세션으로
+    캡처하고, 성공·실패와 무관하게 캡처 직후 캡슐을 삭제한다.
     """
+    storage_state = None
+    authenticated_by = None
     try:
+        if auth_capsule_id is not None:
+            with db.connect() as conn:
+                capsule = db.get_auth_capsule(conn, auth_capsule_id)
+            if capsule is None:
+                logger.warning("인증 캡슐 없음(이미 소비/만료): %s", url)
+                return
+            try:
+                storage_state = json.loads(credentials.decrypt(capsule["ciphertext"]))
+                authenticated_by = capsule["owner_user_id"]
+            except Exception:
+                # 복호 실패(키 회전 등) — 비인증으로 진행하지 않고 중단한다
+                logger.exception("인증 캡슐 복호 실패 — 캡처 중단: %s", url)
+                return
         # network_tag_id 는 줄 때만 넘긴다 (사설 대역 — 폼에서 선택)
         extra = {"network_tag_id": network_tag_id} if network_tag_id else {}
+        if storage_state is not None:
+            extra["storage_state"] = storage_state
+            extra["authenticated_by"] = authenticated_by
         outcome = pipeline.archive_url(url, force=force, source=source, **extra)
         logger.info("아카이빙 완료: %s [%s]", url, outcome.status)
     except Exception:
@@ -1349,6 +1479,10 @@ def _run_archive(
             except ValueError as e:
                 # 아카이빙 실패로 pages 행이 안 생겼으면 주기 등록도 불가
                 logger.warning("자동 재아카이빙 등록 실패: %s — %s", url, e)
+        if auth_capsule_id is not None:
+            # 1회성 — 성공/실패 무관 소비 즉시 삭제 (만료 GC 는 누락 안전망)
+            with db.connect() as conn:
+                db.delete_auth_capsule(conn, auth_capsule_id)
         _unregister_job(url)
 
 
@@ -1360,15 +1494,19 @@ def _queue_archive(
     run_at: str | None = None,
     source: str = "web",
     network_tag_id: str | None = None,
+    auth_capsule_id: int | None = None,
 ) -> bool:
     """진행 목록 등록 후 백그라운드 작업 추가. 이미 진행 중이면 무시(False).
 
     등록은 응답 전(동기)에 해서 리다이렉트된 목록 화면이 바로 진행 상태를 본다.
+    이미 진행 중이라 False 를 돌려줄 땐 캡슐을 정리하지 않으므로(아직 소비 전),
+    호출부가 미사용 캡슐을 직접 삭제한다.
     """
     if not _register_job(url):
         return False
     background.add_task(
-        _run_archive, url, force, interval_seconds, run_at, source, network_tag_id
+        _run_archive, url, force, interval_seconds, run_at, source,
+        network_tag_id, auth_capsule_id,
     )
     return True
 

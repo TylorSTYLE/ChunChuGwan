@@ -79,6 +79,17 @@ CRAWL_WORKERS_LIMIT = 8
 # 보관 한도 행 수 — 핸들러가 적재 중 주기적으로 한도를 넘는 오래된 행을 정리한다.
 SYSTEM_LOG_MAX_ROWS = int(os.environ.get("WCCG_SYSTEM_LOG_MAX_ROWS", "20000"))
 
+# ---- 1회성 인증 캡처 (자격증명 캡슐 — credentials.py) ----
+# 확장이 보낸 로그인 세션 캡슐(쿠키)을 암호화해 잠깐 보관했다가 캡처 직후
+# 삭제한다. 마스터 키는 index.db 밖(env)에 둬 DB·백업 단독 유출로는 복호 불가.
+# 빈 값이면 인증 캡처 기능 비활성. base64 또는 hex 로 인코딩한 32바이트(AES-256).
+CREDENTIAL_KEY = os.environ.get("WCCG_CREDENTIAL_KEY", "").strip()
+# 캡슐 미삭제 안전망 TTL(시간) — 정상 흐름은 캡처 직후 삭제, 이 값은 누락 대비.
+# 시스템 설정(settings 테이블, db.CREDENTIAL_TTL_HOURS_KEY)이 우선한다.
+CREDENTIAL_TTL_HOURS_DEFAULT = 24
+CREDENTIAL_TTL_HOURS_MIN = 1
+CREDENTIAL_TTL_HOURS_MAX = 168       # 7일 — 1회성이라 더 길 이유가 없다
+
 # 기본 127.0.0.1 (localhost 전용). 컨테이너 등에서만 WCCG_HOST=0.0.0.0 으로 오버라이드.
 DASHBOARD_HOST = os.environ.get("WCCG_HOST", "127.0.0.1")
 DASHBOARD_PORT = 8765

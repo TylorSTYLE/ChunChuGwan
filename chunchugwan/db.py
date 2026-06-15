@@ -292,6 +292,20 @@ CREATE TABLE IF NOT EXISTS oidc_states (
     redirect_to TEXT NOT NULL DEFAULT '/',
     created_at  TEXT NOT NULL
 );
+
+-- 1회성 인증 캡처용 자격증명 캡슐 — 암호문만 저장(키는 index.db 밖, credentials.py).
+-- 정상 흐름은 캡처 직후 삭제, expires_at 만료분은 GC(delete_expired_auth_capsules).
+CREATE TABLE IF NOT EXISTS auth_capsules (
+    id             INTEGER PRIMARY KEY,
+    url            TEXT NOT NULL,         -- 정규화된 캡처 대상 URL
+    scope_host     TEXT NOT NULL,         -- 캡슐 쿠키가 유효한 호스트(스코프)
+    owner_user_id  INTEGER NOT NULL REFERENCES users(id),  -- 발급 사용자(접근제한·감사)
+    ciphertext     BLOB NOT NULL,         -- AES-256-GCM(storage_state JSON)
+    network_tag_id TEXT REFERENCES network_tags(id),       -- 사설 대역이면 태그
+    created_at     TEXT NOT NULL,
+    expires_at     TEXT NOT NULL          -- _later(ttl) — 항상 만료(영구 없음)
+);
+CREATE INDEX IF NOT EXISTS idx_auth_capsules_expires ON auth_capsules(expires_at);
 """
 
 
@@ -347,6 +361,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN css_externalized INTEGER NOT NULL DEFAULT 0"
         )
+    # 1회성 인증 캡처로 만들어진 스냅샷 — 로그인 뒤 콘텐츠라 소유자/관리자만 열람.
+    if cols and "authenticated" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN authenticated INTEGER NOT NULL DEFAULT 0"
+        )
+    if cols and "authenticated_by" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN authenticated_by INTEGER REFERENCES users(id)"
+        )
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -357,6 +380,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # site_id 인덱스는 컬럼 추가 후에만 만들 수 있다 (SCHEMA 주의 주석 참조)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id)")
+    # API 키 소유자 — NULL=관리자 발급 시스템 키(공동관리), 값=그 사용자 귀속
+    # 확장 토큰. 기존 키는 전부 시스템 키이므로 NULL 그대로가 정확한 의미(백필 없음).
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(api_keys)")}
+    if cols and "owner_user_id" not in cols:
+        conn.execute(
+            "ALTER TABLE api_keys ADD COLUMN owner_user_id INTEGER REFERENCES users(id)"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys(owner_user_id)"
+    )
     _backfill_sites(conn)
 
 
@@ -686,7 +719,8 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed", "css_externalized"}
+     "note", "resources_indexed", "css_externalized",
+     "authenticated", "authenticated_by"}
 )
 
 
@@ -2327,10 +2361,27 @@ def withdraw_user(conn: sqlite3.Connection, user_id: int) -> None:
 
 
 def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
-    """사용자와 종속 데이터(세션·OIDC 연결·패스키)를 일괄 삭제 (관리자의 계정 정보 삭제)."""
+    """사용자와 종속 데이터(세션·OIDC 연결·패스키·확장 토큰)를 일괄 삭제.
+
+    FK(foreign_keys=ON)가 강제되므로 users 행을 지우기 전에 참조를 정리한다.
+    본인 귀속 확장 토큰은 함께 폐기하고, 발급자(created_by)로만 참조되는
+    시스템 키는 보존하되 발급자 표기만 끊는다(기록용 컬럼).
+    """
     conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM identities WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM webauthn_credentials WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM api_keys WHERE owner_user_id = ?", (user_id,))
+    conn.execute(
+        "UPDATE api_keys SET created_by = NULL WHERE created_by = ?", (user_id,)
+    )
+    # 미소비 1회성 인증 캡슐은 소유자와 함께 폐기 (캡슐은 소유자보다 오래 남지 않는다)
+    conn.execute("DELETE FROM auth_capsules WHERE owner_user_id = ?", (user_id,))
+    # 인증 스냅샷은 불변 기록이라 보존하되 소유자 표기만 끊는다 — NULL 이면
+    # _may_view_authenticated 가 admin 전용으로 좁히므로 접근이 넓어지지 않는다
+    conn.execute(
+        "UPDATE snapshots SET authenticated_by = NULL WHERE authenticated_by = ?",
+        (user_id,),
+    )
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
 
@@ -2578,6 +2629,22 @@ def signup_default_role(conn: sqlite3.Connection) -> str:
     return role if role in SIGNUP_ROLES else "pending"
 
 
+CREDENTIAL_TTL_HOURS_KEY = "credential_ttl_hours"
+
+
+def credential_ttl_hours(conn: sqlite3.Connection) -> int:
+    """1회성 자격증명 캡슐의 만료 안전망 TTL(시간) — 기본·오염 시 config 기본값."""
+    raw = get_setting(conn, CREDENTIAL_TTL_HOURS_KEY)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return config.CREDENTIAL_TTL_HOURS_DEFAULT
+    return max(
+        config.CREDENTIAL_TTL_HOURS_MIN,
+        min(config.CREDENTIAL_TTL_HOURS_MAX, value),
+    )
+
+
 # ---- API 키 ----
 
 
@@ -2591,20 +2658,32 @@ def create_api_key(
     can_archive: bool,
     created_by: int | None,
     ttl_seconds: int | None,
+    owner_user_id: int | None = None,
 ) -> int:
-    """API 키 row 생성 후 id 반환. ttl_seconds=None 이면 영구 키."""
+    """API 키 row 생성 후 id 반환. ttl_seconds=None 이면 영구 키.
+
+    owner_user_id=None 이면 관리자 발급 시스템 키, 값이 있으면 그 사용자에게
+    귀속된 확장 토큰(권한은 _api_auth 가 소유자 현재 역할로 매 요청 재평가).
+    """
     expires_at = _later(ttl_seconds) if ttl_seconds is not None else None
     cur = conn.execute(
         """
         INSERT INTO api_keys
             (name, token_hash, prefix, can_view, can_archive,
-             created_by, created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             created_by, created_at, expires_at, owner_user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (name, token_hash, prefix, int(can_view), int(can_archive),
-         created_by, _utcnow(), expires_at),
+         created_by, _utcnow(), expires_at, owner_user_id),
     )
     return cur.lastrowid
+
+
+def get_api_key(conn: sqlite3.Connection, key_id: int) -> sqlite3.Row | None:
+    """API 키 단건 조회 (만료 여부 무관 — 폐기·소유 검증용). 없으면 None."""
+    return conn.execute(
+        "SELECT * FROM api_keys WHERE id = ?", (key_id,)
+    ).fetchone()
 
 
 def get_api_key_by_hash(
@@ -2633,6 +2712,39 @@ def list_api_keys(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def list_system_api_keys(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """관리자 발급 시스템 키만 (owner_user_id IS NULL) — /system/api-keys 화면용.
+
+    사용자 귀속 확장 토큰(owner 값 보유)은 제외해 두 관리 영역을 분리한다.
+    """
+    return conn.execute(
+        """
+        SELECT k.*, u.email AS creator_email,
+               (k.expires_at IS NOT NULL AND k.expires_at <= ?) AS expired
+        FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+        WHERE k.owner_user_id IS NULL
+        ORDER BY k.created_at, k.id
+        """,
+        (_utcnow(),),
+    ).fetchall()
+
+
+def list_api_keys_for_owner(
+    conn: sqlite3.Connection, user_id: int
+) -> list[sqlite3.Row]:
+    """특정 사용자에게 귀속된 확장 토큰 목록 — 계정 설정 화면용. 만료분 포함."""
+    return conn.execute(
+        """
+        SELECT k.*,
+               (k.expires_at IS NOT NULL AND k.expires_at <= ?) AS expired
+        FROM api_keys k
+        WHERE k.owner_user_id = ?
+        ORDER BY k.created_at, k.id
+        """,
+        (_utcnow(), user_id),
+    ).fetchall()
+
+
 def touch_api_key(conn: sqlite3.Connection, key_id: int) -> None:
     """API 키 마지막 사용 시각 갱신."""
     conn.execute(
@@ -2644,6 +2756,53 @@ def delete_api_key(conn: sqlite3.Connection, key_id: int) -> bool:
     """API 키 폐기 — 즉시 무효화된다. 없으면 False."""
     cur = conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
     return cur.rowcount == 1
+
+
+# ---- 1회성 인증 캡슐 (auth_capsules) ----
+
+
+def create_auth_capsule(
+    conn: sqlite3.Connection,
+    *,
+    url: str,
+    scope_host: str,
+    owner_user_id: int,
+    ciphertext: bytes,
+    network_tag_id: str | None,
+    ttl_seconds: int,
+) -> int:
+    """암호화된 자격증명 캡슐 행 생성 후 id 반환. expires_at 은 항상 설정된다."""
+    cur = conn.execute(
+        """
+        INSERT INTO auth_capsules
+            (url, scope_host, owner_user_id, ciphertext, network_tag_id,
+             created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (url, scope_host, owner_user_id, ciphertext, network_tag_id,
+         _utcnow(), _later(ttl_seconds)),
+    )
+    return cur.lastrowid
+
+
+def get_auth_capsule(conn: sqlite3.Connection, capsule_id: int) -> sqlite3.Row | None:
+    """캡슐 단건 조회 (만료 여부 무관 — 소비 직전 사용). 없으면 None."""
+    return conn.execute(
+        "SELECT * FROM auth_capsules WHERE id = ?", (capsule_id,)
+    ).fetchone()
+
+
+def delete_auth_capsule(conn: sqlite3.Connection, capsule_id: int) -> None:
+    """캡슐 즉시 폐기 (캡처 소비 직후·취소)."""
+    conn.execute("DELETE FROM auth_capsules WHERE id = ?", (capsule_id,))
+
+
+def delete_expired_auth_capsules(conn: sqlite3.Connection) -> int:
+    """만료된 캡슐 일괄 정리 (삭제 누락 안전망 GC). 삭제된 행 수 반환."""
+    cur = conn.execute(
+        "DELETE FROM auth_capsules WHERE expires_at <= ?", (_utcnow(),)
+    )
+    return cur.rowcount
 
 
 # ---- 패스키 (WebAuthn) ----
