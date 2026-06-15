@@ -136,6 +136,13 @@ LOG_FILE = os.environ.get("WCCG_LOG_FILE", "").strip()
 LOG_FILE_MAX_BYTES = int(os.environ.get("WCCG_LOG_FILE_MAX_BYTES", str(10 * 1024 * 1024)))
 LOG_FILE_BACKUPS = int(os.environ.get("WCCG_LOG_FILE_BACKUPS", "5"))
 
+# ---- 확장 1회성 세션 자격증명 만료 (site_credentials.expires_at 안전망 TTL) ----
+# 확장이 보낸 쿠키로 만든 세션 자격증명은 캡처 직후 삭제되지만, 오류·재기동으로
+# 삭제가 누락된 행을 정리하는 안전망 만료 시간(시간). 시스템 설정이 우선한다.
+EXT_CREDENTIAL_TTL_HOURS_DEFAULT = 24
+EXT_CREDENTIAL_TTL_HOURS_MIN = 1
+EXT_CREDENTIAL_TTL_HOURS_MAX = 168
+
 # 기본 127.0.0.1 (localhost 전용). 컨테이너 등에서만 WCCG_HOST=0.0.0.0 으로 오버라이드.
 DASHBOARD_HOST = os.environ.get("WCCG_HOST", "127.0.0.1")
 DASHBOARD_PORT = 8765

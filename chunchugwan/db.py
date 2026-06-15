@@ -439,6 +439,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # site_id 인덱스는 컬럼 추가 후에만 만들 수 있다 (SCHEMA 주의 주석 참조)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id)")
+    # API 키 소유자 — NULL=관리자 발급 시스템 키(공동관리), 값=그 사용자 귀속
+    # 확장 토큰. 기존 키는 전부 시스템 키이므로 NULL 그대로가 정확한 의미(백필 없음).
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(api_keys)")}
+    if cols and "owner_user_id" not in cols:
+        conn.execute(
+            "ALTER TABLE api_keys ADD COLUMN owner_user_id INTEGER REFERENCES users(id)"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys(owner_user_id)"
+    )
+    # 확장 1회성 세션 자격증명의 만료 안전망 — site_credentials 는 SCHEMA 가 먼저 만든다.
+    # NULL=영속(대시보드 등록), 값=확장이 만든 1회성(캡처 후 삭제, 만료 GC).
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(site_credentials)")}
+    if cols and "expires_at" not in cols:
+        conn.execute("ALTER TABLE site_credentials ADD COLUMN expires_at TEXT")
     # 단발 아카이빙 큐의 사람 보조(라이브 챌린지) 컬럼 — archive_jobs 는 SCHEMA 가 먼저 만든다
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(archive_jobs)")}
     if cols:
@@ -2947,10 +2962,19 @@ def withdraw_user(conn: sqlite3.Connection, user_id: int) -> None:
 
 
 def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
-    """사용자와 종속 데이터(세션·OIDC 연결·패스키)를 일괄 삭제 (관리자의 계정 정보 삭제)."""
+    """사용자와 종속 데이터(세션·OIDC 연결·패스키·확장 토큰)를 일괄 삭제.
+
+    FK(foreign_keys=ON)가 강제되므로 users 행을 지우기 전에 참조를 정리한다.
+    본인 귀속 확장 토큰은 함께 폐기하고, 발급자(created_by)로만 참조되는
+    시스템 키는 보존하되 발급자 표기만 끊는다(기록용 컬럼).
+    """
     conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM identities WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM webauthn_credentials WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM api_keys WHERE owner_user_id = ?", (user_id,))
+    conn.execute(
+        "UPDATE api_keys SET created_by = NULL WHERE created_by = ?", (user_id,)
+    )
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
 
@@ -3241,6 +3265,22 @@ def signup_default_role(conn: sqlite3.Connection) -> str:
     return role if role in SIGNUP_ROLES else "pending"
 
 
+EXT_CREDENTIAL_TTL_HOURS_KEY = "ext_credential_ttl_hours"
+
+
+def ext_credential_ttl_hours(conn: sqlite3.Connection) -> int:
+    """확장 1회성 세션 자격증명의 만료 안전망 TTL(시간) — 기본·오염 시 config 기본값."""
+    raw = get_setting(conn, EXT_CREDENTIAL_TTL_HOURS_KEY)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return config.EXT_CREDENTIAL_TTL_HOURS_DEFAULT
+    return max(
+        config.EXT_CREDENTIAL_TTL_HOURS_MIN,
+        min(config.EXT_CREDENTIAL_TTL_HOURS_MAX, value),
+    )
+
+
 # ---- API 키 ----
 
 
@@ -3254,20 +3294,32 @@ def create_api_key(
     can_archive: bool,
     created_by: int | None,
     ttl_seconds: int | None,
+    owner_user_id: int | None = None,
 ) -> int:
-    """API 키 row 생성 후 id 반환. ttl_seconds=None 이면 영구 키."""
+    """API 키 row 생성 후 id 반환. ttl_seconds=None 이면 영구 키.
+
+    owner_user_id=None 이면 관리자 발급 시스템 키, 값이 있으면 그 사용자에게
+    귀속된 확장 토큰(권한은 _api_auth 가 소유자 현재 역할로 매 요청 재평가).
+    """
     expires_at = _later(ttl_seconds) if ttl_seconds is not None else None
     cur = conn.execute(
         """
         INSERT INTO api_keys
             (name, token_hash, prefix, can_view, can_archive,
-             created_by, created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             created_by, created_at, expires_at, owner_user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (name, token_hash, prefix, int(can_view), int(can_archive),
-         created_by, _utcnow(), expires_at),
+         created_by, _utcnow(), expires_at, owner_user_id),
     )
     return cur.lastrowid
+
+
+def get_api_key(conn: sqlite3.Connection, key_id: int) -> sqlite3.Row | None:
+    """API 키 단건 조회 (만료 여부 무관 — 폐기·소유 검증용). 없으면 None."""
+    return conn.execute(
+        "SELECT * FROM api_keys WHERE id = ?", (key_id,)
+    ).fetchone()
 
 
 def get_api_key_by_hash(
@@ -3293,6 +3345,39 @@ def list_api_keys(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         ORDER BY k.created_at, k.id
         """,
         (_utcnow(),),
+    ).fetchall()
+
+
+def list_system_api_keys(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """관리자 발급 시스템 키만 (owner_user_id IS NULL) — /system/api-keys 화면용.
+
+    사용자 귀속 확장 토큰(owner 값 보유)은 제외해 두 관리 영역을 분리한다.
+    """
+    return conn.execute(
+        """
+        SELECT k.*, u.email AS creator_email,
+               (k.expires_at IS NOT NULL AND k.expires_at <= ?) AS expired
+        FROM api_keys k LEFT JOIN users u ON u.id = k.created_by
+        WHERE k.owner_user_id IS NULL
+        ORDER BY k.created_at, k.id
+        """,
+        (_utcnow(),),
+    ).fetchall()
+
+
+def list_api_keys_for_owner(
+    conn: sqlite3.Connection, user_id: int
+) -> list[sqlite3.Row]:
+    """특정 사용자에게 귀속된 확장 토큰 목록 — 계정 설정 화면용. 만료분 포함."""
+    return conn.execute(
+        """
+        SELECT k.*,
+               (k.expires_at IS NOT NULL AND k.expires_at <= ?) AS expired
+        FROM api_keys k
+        WHERE k.owner_user_id = ?
+        ORDER BY k.created_at, k.id
+        """,
+        (_utcnow(), user_id),
     ).fetchall()
 
 
@@ -3323,21 +3408,71 @@ def create_site_credential(
     secret: str,
     *,
     created_by: int | None,
+    ttl_seconds: int | None = None,
 ) -> int:
     """사이트 자격증명 row 생성 후 id 반환. secret 은 암호문(평문 금지).
 
     같은 사이트 안에서 label 은 UNIQUE — 호출부가 중복을 먼저 검사한다.
+    ttl_seconds 가 있으면 expires_at 이 설정된 1회성(확장) 자격증명이 된다 —
+    캡처 직후 삭제되고, 누락분은 delete_expired_ext_credentials 가 정리한다.
     """
     now = _utcnow()
+    expires_at = _later(ttl_seconds) if ttl_seconds is not None else None
     cur = conn.execute(
         """
         INSERT INTO site_credentials
-            (site_id, label, kind, secret, created_by, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (site_id, label, kind, secret, created_by, created_at, updated_at,
+             expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (site_id, label, kind, secret, created_by, now, now),
+        (site_id, label, kind, secret, created_by, now, now, expires_at),
     )
     return cur.lastrowid
+
+
+def delete_ephemeral_credential(conn: sqlite3.Connection, cred_id: int) -> None:
+    """1회성(expires_at 보유) 자격증명을 즉시 폐기 (캡처 소비 직후).
+
+    영속 자격증명(expires_at IS NULL)은 건드리지 않는다. 참조(pages/crawls/
+    crawl_schedules)는 1회성이라 보통 없지만, 방어적으로 NULL 로 끊는다.
+    """
+    row = conn.execute(
+        "SELECT expires_at FROM site_credentials WHERE id = ?", (cred_id,)
+    ).fetchone()
+    if row is None or row["expires_at"] is None:
+        return
+    for table in ("pages", "crawls", "crawl_schedules"):
+        conn.execute(
+            f"UPDATE {table} SET credential_id = NULL WHERE credential_id = ?",
+            (cred_id,),
+        )
+    conn.execute("DELETE FROM site_credentials WHERE id = ?", (cred_id,))
+
+
+def delete_expired_ext_credentials(conn: sqlite3.Connection) -> int:
+    """만료된 1회성(확장) 자격증명을 정리 (삭제 누락 안전망 GC). 삭제 행 수 반환.
+
+    아직 큐에 남아 처리되지 않은 작업(archive_jobs)이 참조 중인 행은 FK 보호를
+    위해 건드리지 않는다. 참조 없는 만료분만 지운다.
+    """
+    rows = conn.execute(
+        """
+        SELECT id FROM site_credentials
+        WHERE expires_at IS NOT NULL AND expires_at <= ?
+          AND id NOT IN (
+              SELECT credential_id FROM archive_jobs WHERE credential_id IS NOT NULL
+          )
+        """,
+        (_utcnow(),),
+    ).fetchall()
+    for row in rows:
+        for table in ("pages", "crawls", "crawl_schedules"):
+            conn.execute(
+                f"UPDATE {table} SET credential_id = NULL WHERE credential_id = ?",
+                (row["id"],),
+            )
+        conn.execute("DELETE FROM site_credentials WHERE id = ?", (row["id"],))
+    return len(rows)
 
 
 def get_site_credential(

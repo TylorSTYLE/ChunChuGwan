@@ -84,6 +84,94 @@
   <p class="muted">{{ _("SSO 로그인은 IdP(Authentik)의 2FA 를 사용합니다.") }}</p>
   {% endif %}
 
+  <h3>{{ _("확장 토큰") }}</h3>
+  <p class="muted" style="font-size:12px; max-width:680px">
+    {{ _("크롬 확장이 Authorization: Bearer 헤더로 /api/v1 에 접근할 때 쓰는 본인 전용 토큰입니다. 권한은 내 역할에서 자동으로 부여되며, 원문은 발급 직후 한 번만 표시됩니다. 폐기하면 그 토큰을 쓰는 확장의 접근이 즉시 차단됩니다.") }}
+  </p>
+
+  {% if new_token %}
+  <div class="notice" style="word-break: break-all">
+    <strong class="mono" style="font-size:13px">{{ new_token }}</strong>
+    <button type="button" onclick="navigator.clipboard.writeText({{ new_token|tojson }})
+            .then(() => this.textContent = {{ _('복사됨')|tojson }})">{{ _("복사") }}</button>
+  </div>
+  {% endif %}
+
+  <div class="table-wrap wide">
+  <table>
+    <thead>
+      <tr><th>{{ _("이름") }}</th><th>{{ _("키") }}</th><th>{{ _("권한") }}</th>
+          <th>{{ _("등록", ctx="th") }}</th><th>{{ _("만료") }}</th>
+          <th>{{ _("마지막 사용") }}</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for tk in ext_tokens %}
+      <tr>
+        <td>{{ tk['name'] }}</td>
+        <td class="mono muted">{{ tk['prefix'] }}…</td>
+        <td>
+          {% if tk['can_view'] %}<span class="badge role-viewer">{{ _("보기") }}</span>{% endif %}
+          {% if tk['can_archive'] %}<span class="badge role-archiver">{{ _("아카이브", ctx="perm") }}</span>{% endif %}
+        </td>
+        <td class="mono">{{ tk['created_at'] | ts('date') }}</td>
+        <td class="mono">
+          {% if tk['expires_at'] %}
+            {{ tk['expires_at'] | ts('date') }}
+            {% if tk['expired'] %}<span class="badge error">{{ _("만료됨") }}</span>{% endif %}
+          {% else %}
+            <span class="muted">{{ _("영구") }}</span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ tk['last_used_at'] | ts if tk['last_used_at'] else '-' }}</td>
+        <td>
+          <form class="inline" method="post"
+                action="/settings/account/extension-tokens/{{ tk['id'] }}/delete"
+                onsubmit="return confirm({{ _('{name} 토큰을 폐기할까요? 이 토큰을 쓰는 확장의 접근이 즉시 차단됩니다.', name=tk['name'])|tojson }})">
+            <button type="submit" class="danger">{{ _("폐기") }}</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">{{ _("발급한 토큰이 없습니다.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  {% if ext_can_view or ext_can_archive %}
+  <form class="inline" method="post" action="/settings/account/extension-tokens"
+        id="ext-token-form" style="margin-top:8px">
+    <input type="text" name="name" placeholder="{{ _('토큰 이름 (예: chrome-ext)') }}"
+           size="20" maxlength="50" required>
+    <select name="expiry" id="ext-token-expiry">
+      {% for value, label in ext_expiry_options %}
+      <option value="{{ value }}">{{ _(label) }}</option>
+      {% endfor %}
+    </select>
+    <input type="number" name="custom_days" id="ext-token-custom-days" value="30"
+           min="1" max="{{ ext_max_custom_days }}" style="width:80px; display:none"
+           title="{{ _('만료까지 일 수') }}">
+    <button type="submit">{{ _("발급") }}</button>
+  </form>
+  <p class="muted" style="font-size:12px; margin:4px 0">
+    {{ _("이 토큰에 부여될 권한:") }}
+    <span class="badge role-viewer">{{ _("보기") }}</span>
+    {% if ext_can_archive %}<span class="badge role-archiver">{{ _("아카이브", ctx="perm") }}</span>{% endif %}
+  </p>
+  <script>
+  /* 만료 '사용자 지정' 선택 시에만 일 수 입력을 노출 */
+  (function () {
+    var select = document.getElementById("ext-token-expiry");
+    var days = document.getElementById("ext-token-custom-days");
+    function apply() { days.style.display = select.value === "custom" ? "" : "none"; }
+    select.addEventListener("change", apply);
+    apply();
+  })();
+  </script>
+  {% else %}
+  <p class="muted" style="font-size:12px">{{ _("현재 권한으로는 토큰을 발급할 수 없습니다.") }}</p>
+  {% endif %}
+
   {% if role != 'admin' %}
   <fieldset class="danger-zone">
     <legend>{{ _("위험 영역") }}</legend>

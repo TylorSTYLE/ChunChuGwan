@@ -15,9 +15,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import threading
+import zipfile
 from contextlib import asynccontextmanager
 import zoneinfo
 from datetime import date, datetime, timedelta, timezone
@@ -32,11 +34,12 @@ from fastapi.responses import (
     HTMLResponse,
     PlainTextResponse,
     RedirectResponse,
+    Response,
 )
 
 from .. import (
-    archive_worker, auth, backup, config, crawler, credentials, crypto, db,
-    deletion, differ, documents, live_challenge, netcheck, resources, scheduler,
+    __version__, archive_worker, auth, backup, config, crawler, credentials, crypto,
+    db, deletion, differ, documents, live_challenge, netcheck, resources, scheduler,
     searchindex, storage, system_log,
 )
 from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
@@ -142,7 +145,10 @@ async def auth_gate(request: Request, call_next):
     request.state.session = None
     request.state.locale = i18n.resolve_locale(request)
 
-    if request.method == "POST":
+    # /api/ POST 는 Bearer/X-API-Key 토큰이 자격증명이라 쿠키 기반 CSRF 가
+    # 성립하지 않는다 (확장 background fetch 는 Origin 이 없거나 chrome-extension://).
+    # 키 검증·권한 가드는 그대로 강제되므로 Origin 검사만 면제한다.
+    if request.method == "POST" and not request.url.path.startswith("/api/"):
         origin = request.headers.get("origin") or request.headers.get("referer")
         if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
             return PlainTextResponse(t(request, "CSRF 검증 실패"), status_code=403)
@@ -289,6 +295,46 @@ _FAVICON_PATH = Path(__file__).parent / "static" / "favicon.svg"
 def favicon() -> FileResponse:
     """SVG 파비콘 (OS 라이트/다크 자동) — 인증 없이 서빙 (_BROWSER_ICON_PATHS)."""
     return FileResponse(_FAVICON_PATH, media_type="image/svg+xml")
+
+
+# 크롬 확장(MV3) 소스 — 패키지에 함께 실린다 (Docker·휠 모두 chunchugwan 포함)
+_EXTENSION_DIR = Path(__file__).resolve().parent.parent / "extension"
+
+
+def _build_extension_zip() -> bytes:
+    """chunchugwan/extension/ 를 요청 시 zip 으로 묶는다.
+
+    manifest 의 version 은 서버 버전으로 맞춰 항상 최신을 서빙한다 (깃에
+    빌드 산출물·바이너리를 두지 않는다). 크롬은 자체호스팅 .crx 드래그 설치를
+    막으므로 unpacked ZIP 으로 주고, 사용자는 압축 해제 후 '개발자 모드 →
+    압축해제된 확장 프로그램을 로드' 로 설치한다.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in sorted(_EXTENSION_DIR.rglob("*")):
+            if not path.is_file():
+                continue
+            arc = path.relative_to(_EXTENSION_DIR).as_posix()
+            if arc == "manifest.json":
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["version"] = __version__
+                zf.writestr(arc, json.dumps(data, ensure_ascii=False, indent=2))
+            else:
+                zf.write(path, arc)
+    return buf.getvalue()
+
+
+@app.get("/extension/download")
+def extension_download(request: Request) -> Response:
+    """크롬 확장(unpacked) ZIP 다운로드 — 세션 인증. 압축 해제 후 개발자 모드 로드."""
+    if not _EXTENSION_DIR.is_dir():
+        raise HTTPException(404, t(request, "확장 파일을 찾을 수 없습니다"))
+    filename = f"wccg-chrome-extension-v{__version__}.zip"
+    return Response(
+        content=_build_extension_zip(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _snapshot_dir_size(domain: str, slug: str, dir_name: str) -> int:
@@ -860,7 +906,37 @@ def dashboard(request: Request):
             "recent_snaps": recent_snaps,
             "sizes": sizes,
             "recent_logs": recent_logs,
+            "extension_version": __version__,
         },
+    )
+
+
+@app.get("/go", response_class=HTMLResponse)
+def go(request: Request, url: str):
+    """URL → 타임라인 딥링크 (확장·북마크용). 세션 인증 라우트.
+
+    입력 URL 을 정규화해 페이지를 찾으면 타임라인(/page/{id})으로 302 한다.
+    http↔https 승격으로 스킴이 어긋난 경우를 대비해 반대 스킴도 한 번 더
+    찾아본다. 없으면 안내 화면. 미인증이면 미들웨어가 /login 으로 보낸다.
+    """
+    try:
+        norm = storage.normalize_url(url)
+    except ValueError:
+        raise HTTPException(400, t(request, "잘못된 URL"))
+    scheme, rest = norm.split("://", 1)
+    candidates = [norm]
+    try:
+        other = "http" if scheme == "https" else "https"
+        candidates.append(storage.normalize_url(f"{other}://{rest}"))
+    except ValueError:
+        pass
+    with db.connect() as conn:
+        for cand in candidates:
+            page = db.get_page(conn, cand)
+            if page is not None:
+                return RedirectResponse(f"/page/{page['id']}", status_code=302)
+    return templates.TemplateResponse(
+        request, "go_missing.html", {"url": norm}, status_code=404
     )
 
 

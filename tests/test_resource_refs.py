@@ -149,7 +149,7 @@ def test_inline_fallback_reuses_previous_capture(archive_env, monkeypatch):
         def content(self):
             return "<html></html>"
 
-    monkeypatch.setattr(capture, "_fetch_via_context", lambda page, url: None)
+    monkeypatch.setattr(capture, "_fetch_via_context", lambda page, url, **kw: None)
     page = FakePage()
     html, resource_urls = capture._inline_resources(
         page, "<html></html>",
@@ -173,7 +173,7 @@ def test_inline_fallback_miss_keeps_original_url(archive_env, monkeypatch):
         def content(self):
             return "<html></html>"
 
-    monkeypatch.setattr(capture, "_fetch_via_context", lambda page, url: None)
+    monkeypatch.setattr(capture, "_fetch_via_context", lambda page, url, **kw: None)
     html, resource_urls = capture._inline_resources(
         FakePage(), "<html></html>", resource_fallback=lambda url: None
     )

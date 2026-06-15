@@ -128,6 +128,10 @@ def process_next(
 
     with db.connect() as conn:
         db.finish_archive_job(conn, item["id"])
+        if item["credential_id"]:
+            # 확장 1회성 세션 자격증명은 소비 후 폐기 (영속 자격증명은 보존).
+            # 실패·재시도 분은 만료 GC(delete_expired_ext_credentials)가 정리한다.
+            db.delete_ephemeral_credential(conn, item["credential_id"])
     # interval 이 있으면 아카이빙 후 자동 재아카이빙 주기를 등록한다 — 신규 URL 은
     # 아카이빙이 끝나야 pages 행이 생기므로 등록을 여기서 한다.
     if item["interval_seconds"]:

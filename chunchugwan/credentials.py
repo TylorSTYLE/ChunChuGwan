@@ -390,14 +390,17 @@ def add(
     payload: dict,
     *,
     created_by: int | None,
+    ttl_seconds: int | None = None,
 ) -> int:
     """payload 를 암호화해 자격증명을 저장하고 id 반환.
 
     crypto 키 미설정이면 crypto.SecretKeyMissing 이 전파된다(호출부가 처리).
+    ttl_seconds 가 있으면 만료가 설정된 1회성(확장) 자격증명으로 저장된다.
     """
     secret = crypto.encrypt(json.dumps(payload, ensure_ascii=False))
     return db.create_site_credential(
-        conn, site_id, label, kind, secret, created_by=created_by
+        conn, site_id, label, kind, secret, created_by=created_by,
+        ttl_seconds=ttl_seconds,
     )
 
 
