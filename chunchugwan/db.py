@@ -202,8 +202,10 @@ CREATE INDEX IF NOT EXISTS idx_archive_jobs_status ON archive_jobs(status, next_
 -- 같은 URL 의 활성(대기·진행) 작업은 하나만 — 중복 enqueue 를 DB 레벨에서 차단
 CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_jobs_active
     ON archive_jobs(url) WHERE status IN ('pending', 'in_progress');
-CREATE INDEX IF NOT EXISTS idx_archive_jobs_needs_human
-    ON archive_jobs(needs_human_at) WHERE needs_human_at IS NOT NULL;
+-- needs_human_at(라이브 챌린지) 인덱스는 SCHEMA 에 두지 않는다 — 그 컬럼은
+-- _migrate 가 ALTER 로 추가하므로, 기존 DB 에서 executescript(SCHEMA)가 이
+-- 인덱스를 먼저 만들려다 'no such column' 으로 실패한다 (site_id 인덱스와 같은
+-- 이유, 439행 주석 참조). 인덱스는 _migrate 가 컬럼 추가 후 만든다.
 
 -- 라이브 챌린지 세션의 사람 입력 명령 큐 (대시보드 INSERT → worker 가 재생)
 CREATE TABLE IF NOT EXISTS live_commands (
