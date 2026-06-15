@@ -91,10 +91,14 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 2단계를 건너뛴다.
 | `WCCG_SCHEDULER` | `on` | `off` 면 serve 가 스케줄·크롤을 실행하지 않음 — `wccg worker` 나 cron 으로 대체 |
 | `WCCG_CRAWL_WORKERS` | `2` | `wccg worker` 의 크롤 스레드 수 = 동시 진행 크롤(사이트) 수 (1~8) |
 | `WCCG_SYSTEM_LOG_MAX_ROWS` | `20000` | 시스템 로그(`/system/logs`) 보관 한도 행 수 — 초과분은 오래된 것부터 자동 정리 |
+| `WCCG_LOG_FILE` | (없음) | 설정 시 콘솔 로그(INFO 이상)를 그 경로에 회전 파일로도 남긴다 — 도커는 볼륨에 마운트해 호스트에서 읽는다. 프로세스(dashboard/worker/cli)별로 다른 파일을 쓸 것(회전 경합 방지). `WCCG_LOG_FILE_MAX_BYTES`(기본 10MB)·`WCCG_LOG_FILE_BACKUPS`(기본 5)로 회전 조정 |
 | `WCCG_CAPTURE_ENGINE` | `playwright` | `patchright` 면 스텔스 캡처 엔진 사용 (Cloudflare 등의 `Runtime.enable` 봇 탐지 우회). 도커 이미지에 포함, 비도커는 `uv sync --extra stealth`. 미설치 시 playwright 로 자동 폴백 |
 | `WCCG_CAPTURE_HEADFUL` | `off` | `on` 이면 헤드리스 대신 헤드풀로 캡처 — 서버(디스플레이 없음)에서는 Xvfb 가 필요하다 (도커 엔트리포인트가 `xvfb-run` 으로 자동 래핑). Turnstile 류는 헤드풀이 사실상 필수 |
 | `WCCG_CAPTURE_CHANNEL` | (없음) | `chrome` 이면 번들 chromium 대신 시스템 real Chrome 사용 (TLS/HTTP2 지문이 진짜라 네트워크 레벨 탐지에 강함). 도커는 amd64 에만 Chrome 이 설치됨 — arm64 는 Chrome 이 없어 자동으로 번들 chromium 으로 폴백한다(동작은 하되 stealth 가 다소 약함). amd64·arm64 혼용이면 그냥 `chrome` 으로 둬도 안전 |
 | `WCCG_CAPTURE_FORCE_UA` | `off` | 헤드풀일 때 기본은 고정 UA(`config.USER_AGENT`)를 해제해 real Chrome UA/Client Hints 와 맞춘다. `on` 이면 헤드풀에서도 고정 UA 를 강제 |
+| `WCCG_CHALLENGE_WAIT_SECONDS` | `25` | 스텔스 캡처에서 챌린지 감지 시 자동 통과(비상호작용)를 기다리는 최대 시간(초). 풀리면 그 콘텐츠로 진행, 초과면 차단 처리 |
+| `WCCG_LIVE_CHALLENGE` | `off` | `on` 이면 자동으로 못 푼 인터랙티브 챌린지를 관리자가 대시보드(`/archive/needs-human`)에서 직접 클릭/입력해 통과시키는 최후 수단 활성. 스텔스(patchright/headful)일 때만 의미. worker 가 해당 작업을 멈추고 사람을 기다린다 — **데이터센터 IP 에서는 사람이 눌러도 통과 미보장** |
+| `WCCG_LIVE_CHALLENGE_TIMEOUT_SECONDS` | `300` | 라이브 세션에서 사람 입력을 기다리는 하드 타임아웃(초). 초과 시 차단 처리 |
 
 OIDC 변수 3개가 모두 설정되면 로그인 페이지에 "Authentik으로 로그인" 버튼이
 나타난다. HTTPS 종료(HSTS 포함)는 리버스 프록시 책임이다.
@@ -106,6 +110,12 @@ OIDC 변수 3개가 모두 설정되면 로그인 페이지에 "Authentik으로 
 > 못 고친다. (3) 봇 차단 우회는 대상 사이트·Cloudflare ToS 의 회색지대다.
 > 통과하지 못한 차단 페이지는 감지되어 깨끗한 실패로 기록되고 아카이브를
 > 오염시키지 않는다 (`/logs` 에 "봇 차단/사람 확인 챌린지 감지").
+>
+> **사람 보조(최후 수단).** `WCCG_LIVE_CHALLENGE=on` 이면 자동으로 못 푼
+> 인터랙티브 챌린지를 관리자가 대시보드(`/archive/needs-human` → 라이브 화면)에서
+> 스크린샷을 보고 직접 클릭/입력해 통과시킬 수 있다. worker 가 그 작업을 멈추고
+> 사람을 기다린다. 봇월이 아닌 인터랙티브 페이지(로그인·동의)엔 확실히 듣지만,
+> Cloudflare 는 데이터센터 IP 평판으로 사람이 눌러도 막을 수 있다.
 
 ## Authentik 설정 절차
 

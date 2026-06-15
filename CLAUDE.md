@@ -5,7 +5,7 @@
 
 ## 참고 문서 (해당 작업 시 읽을 것)
 
-- `docs/DASHBOARD.md` — 대시보드 화면 17개의 라우트·권한·세부 동작 레퍼런스.
+- `docs/DASHBOARD.md` — 대시보드 화면 19개의 라우트·권한·세부 동작 레퍼런스.
   웹 UI 화면을 추가/수정하기 전에 읽는다.
 - `docs/ROADMAP.md` — 완료된 구현 로드맵 히스토리(M1~M8, A1~A11 상세).
   기능의 도입 배경·구현 범위가 궁금할 때 읽는다.
@@ -253,7 +253,16 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   무시). 회차·범위·링크추적·페이싱이 없어 단순하며, 완료/최종실패 행은 삭제하고
   결과·오류는 `archive_logs` 가 보존한다. interval 이 실리면 소비자가 캡처 후
   주기를 `schedules` 에 등록한다. `wccg worker`/serve(`WCCG_SCHEDULER`)/`wccg archive
-  run` 이 소비한다. 진행 상태(`/archive/active` 폴링)의 데이터 소스
+  run` 이 소비한다. 진행 상태(`/archive/active` 폴링)의 데이터 소스.
+  `WCCG_LIVE_CHALLENGE=on` 이면 자동으로 못 푼 인터랙티브 챌린지를 사람이
+  대시보드에서 직접 푸는 라이브 세션 컬럼(`needs_human_at`·`live_token`·
+  `live_owner_id`·`live_cancel`·`live_viewport_w/h`)을 쓴다 — worker 가 살아있는
+  page 를 붙든 채(큐 진행 멈춤) 화면(스크린샷 파일 `cache/live/`)·입력
+  (`live_commands` 테이블)으로 대시보드와 조율한다 (live_challenge.py, 원칙 7
+  의 사설/루프백 가드를 라이브 매 폴링에 적용). 데이터센터 IP 평판으로는
+  사람이 눌러도 통과가 보장되지 않는 최후 수단
+- `live_commands` — 라이브 챌린지 세션의 사람 입력 명령 큐 (대시보드 INSERT →
+  worker 가 seq 순으로 page.mouse/keyboard 재생, 타이밍·드래그 재현)
 - `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1개월, 다음 실행 시각,
   1일 단위 주기는 `run_at_time` HH:MM 으로 실행 시각 지정 — 서버 로컬 시간)
 - `crawls` / `crawl_pages` — 사이트 전체 아카이브의 실행 회차. 크롤(범위
@@ -344,14 +353,16 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
 
 ## 대시보드 디자인 방향
 
-- 화면 17개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
+- 화면 19개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
   사이트 상세(`/sites/{id}` — 소속 페이지·크롤 회차·스케줄·사이트 삭제),
   사이트 로그인 자격증명(`/sites/{id}/credentials` — 관리자 전용),
   문서(`/documents` — 문서 파일 통합 목록),
   검색(`/search` — 본문·문서 전문 검색, viewer 이상), 새 아카이빙(`/archive/new`),
   사이트 아카이브 진행(`/crawls/{id}` — 크롤 회차 상세), 스케줄(`/schedules`),
   타임라인, 스냅샷 뷰어, diff 뷰어, 아카이빙 로그(`/logs` — viewer 이상),
-  시스템 로그(`/system/logs` — 관리자 전용), 시스템, 사용자, API 키.
+  시스템 로그(`/system/logs` — 관리자 전용), 시스템, 사용자, API 키,
+  사람 확인 필요(`/archive/needs-human` — 관리자 전용, `WCCG_LIVE_CHALLENGE` 켜짐 시)·
+  라이브 챌린지 처리(`/archive/jobs/{id}/live` — 관리자, 스크린샷 보고 직접 클릭/입력).
   권한이 없는 메뉴는 헤더에 표시하지 않는다 (`templating._auth_context` 의
   노출 플래그). 화면별 라우트·권한·세부 동작은 `docs/DASHBOARD.md` 참조.
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지

@@ -13,6 +13,7 @@ import base64
 import hashlib
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -493,6 +494,7 @@ def capture(
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
+    live_session: "object | None" = None,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
 
@@ -510,7 +512,8 @@ def capture(
     try:
         return _capture_once(url, out_dir, remove_selectors, link_rewriter,
                              session=session, resource_fallback=resource_fallback,
-                             insecure_tls=insecure_tls, credential=credential)
+                             insecure_tls=insecure_tls, credential=credential,
+                             live_session=live_session)
     except CaptureError as e:
         if "ERR_HTTP2" not in str(e):
             raise
@@ -520,6 +523,7 @@ def capture(
             browser_args=("--disable-http2",),
             resource_fallback=resource_fallback,
             insecure_tls=insecure_tls, credential=credential,
+            live_session=live_session,
         )
 
 
@@ -533,6 +537,7 @@ def _capture_once(
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
+    live_session: "object | None" = None,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
     _, sync_playwright, PlaywrightError, _ = browser_engine.get_engine()
@@ -541,14 +546,14 @@ def _capture_once(
         if session is not None and not browser_args:
             return _capture_in_browser(
                 session.browser(), url, out_dir, remove_selectors, link_rewriter,
-                resource_fallback, insecure_tls, credential,
+                resource_fallback, insecure_tls, credential, live_session,
             )
         with sync_playwright() as p:
             browser = _launch(p, browser_args)
             try:
                 return _capture_in_browser(
                     browser, url, out_dir, remove_selectors, link_rewriter,
-                    resource_fallback, insecure_tls, credential,
+                    resource_fallback, insecure_tls, credential, live_session,
                 )
             finally:
                 browser.close()
@@ -569,6 +574,7 @@ def _capture_in_browser(
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
+    live_session: "object | None" = None,
 ) -> CaptureResult:
     """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다.
 
@@ -625,6 +631,14 @@ def _capture_in_browser(
         reason = challenge_reason(
             raw_html, response.status if response else None, page.url, page.title()
         )
+        if reason:
+            # 스텔스 캡처면 비상호작용 챌린지가 자동 통과하도록 잠시 기다린다.
+            # 풀리면 갱신된 raw_html 로 진행, 끝내 안 풀리면 차단으로 실패.
+            raw_html, reason = _await_challenge_clear(page, raw_html, reason)
+        if reason and live_session is not None and config.LIVE_CHALLENGE:
+            # 자동으로 안 풀린 인터랙티브 챌린지 — 최후 수단으로 사람이 대시보드
+            # 에서 직접 풀게 한다 (page 가 살아있는 이 지점에서 그대로 이어간다).
+            raw_html, reason = live_session.solve(page, reason)
         if reason:
             raise CaptureChallengeError(f"{url}: {reason}")
         (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
@@ -932,6 +946,44 @@ def challenge_reason(
             status = f"http {http_status} · " if http_status else ""
             return f"봇 차단/사람 확인 챌린지 감지 ({status}마커: {marker!r})"
     return None
+
+
+def _stealth_active() -> bool:
+    """스텔스 캡처가 켜졌는지 — patchright 엔진 또는 헤드풀.
+
+    켜져 있으면 비상호작용 챌린지가 자동 통과할 가망이 있어 대기한다. 헤드리스
+    기본(playwright)에선 가망이 없어 챌린지를 즉시 실패시킨다(기존 동작 유지).
+    """
+    return config.CAPTURE_ENGINE == "patchright" or config.CAPTURE_HEADFUL
+
+
+def _await_challenge_clear(page, raw_html: str, reason: str) -> tuple[str, str | None]:
+    """챌린지가 감지되면 자동 통과(비상호작용)를 기다린다.
+
+    스텔스 캡처에서만 대기한다. config.CHALLENGE_WAIT_SECONDS 동안 폴링하며
+    챌린지 마커가 사라지면 (갱신된 raw_html, None) 을, 시간 초과면 (raw_html,
+    reason) 을 반환한다. 하드 블록(403 인터스티셜·인터랙티브 Turnstile)은
+    풀리지 않아 시간 초과로 실패하고, 사람 개입이 필요하다.
+    """
+    if not _stealth_active():
+        return raw_html, reason
+    logger.info(
+        "챌린지 감지 — 자동 통과 대기 (최대 %ds): %s",
+        config.CHALLENGE_WAIT_SECONDS, page.url,
+    )
+    deadline = time.monotonic() + config.CHALLENGE_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            page.wait_for_timeout(config.CHALLENGE_WAIT_POLL_MS)
+            raw_html = page.content()
+            title = page.title()
+        except Exception:
+            break  # 페이지가 닫혔거나 네비게이션 중 — 현재 상태로 판정
+        if challenge_reason(raw_html, None, page.url, title) is None:
+            logger.info("챌린지 통과 — 캡처 진행: %s", page.url)
+            return raw_html, None
+    logger.warning("챌린지 대기 시간 초과 — 차단으로 처리: %s", page.url)
+    return raw_html, reason
 
 
 def _remove_trackers(page) -> tuple[int, int]:

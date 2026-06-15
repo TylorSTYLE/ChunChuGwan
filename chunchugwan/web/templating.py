@@ -14,15 +14,30 @@ from markupsafe import Markup, escape
 def _auth_context(request: Request) -> dict:
     """미들웨어가 적재한 로그인 사용자와 메뉴/버튼 노출 여부를 모든 템플릿에 주입."""
     from . import permissions
+    from .. import config
 
     user = getattr(request.state, "user", None)
+    admin = permissions.system_allowed(user)
+    # 사람 보조(라이브 챌린지) 기능이 켜진 관리자에게만 '사람 확인' 메뉴를 띄운다.
+    # 대기 건수는 작은 인덱스 조회 — 기능 off(기본)면 질의하지 않는다.
+    needs_human = 0
+    if admin and config.LIVE_CHALLENGE:
+        from .. import db
+
+        try:
+            with db.connect() as conn:
+                needs_human = len(db.list_needs_human_jobs(conn))
+        except Exception:
+            needs_human = 0
     return {
         "user": user,
-        "system_allowed": permissions.system_allowed(user),
+        "system_allowed": admin,
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
         "can_view_logs": permissions.can_view_logs(user),
         "can_search": permissions.can_search(user),
+        "live_challenge_enabled": config.LIVE_CHALLENGE,
+        "needs_human_count": needs_human,
     }
 
 

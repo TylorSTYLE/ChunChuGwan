@@ -39,6 +39,23 @@ def main(ctx: click.Context, verbose: bool) -> None:
         # 그대로 두기 위해 stderr 핸들러에 레벨을 직접 박는다.
         for handler in root.handlers:
             handler.setLevel(level)
+        # WCCG_LOG_FILE 가 있으면 회전 파일에도 남긴다 (도커는 볼륨으로 노출).
+        # 콘솔 레벨과 무관하게 INFO 이상을 담아 진단에 쓸 수 있게 한다.
+        if config.LOG_FILE:
+            from logging.handlers import RotatingFileHandler
+            try:
+                Path(config.LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+                file_handler = RotatingFileHandler(
+                    config.LOG_FILE, maxBytes=config.LOG_FILE_MAX_BYTES,
+                    backupCount=config.LOG_FILE_BACKUPS, encoding="utf-8",
+                )
+                file_handler.setLevel(logging.INFO)
+                file_handler.setFormatter(logging.Formatter(
+                    "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+                root.addHandler(file_handler)
+            except OSError as e:
+                logging.getLogger(__name__).warning(
+                    "로그 파일(%s) 설정 실패 — 콘솔만 사용: %s", config.LOG_FILE, e)
     # 시스템 로그 적재 — serve/worker 는 별도 출처, 나머지 명령은 'cli'
     source = ctx.invoked_subcommand
     system_log.install(source if source in ("serve", "worker") else "cli")

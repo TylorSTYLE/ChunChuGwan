@@ -234,6 +234,9 @@ button.danger:hover { background: var(--red-hover); }
     {% if can_view_logs %}
     <a href="/logs">{{ _("아카이빙 로그") }}</a>
     {% endif %}
+    {% if system_allowed and live_challenge_enabled and needs_human_count %}
+    <a href="/archive/needs-human" class="nav-alert">{{ _("사람 확인") }} ({{ needs_human_count }})</a>
+    {% endif %}
     {% if system_allowed %}
     <a href="/system/logs">{{ _("시스템 로그") }}</a>
     <a href="/system/users">{{ _("사용자") }}</a>

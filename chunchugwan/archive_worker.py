@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from . import capture, config, crawler, db, pipeline, scheduler
+from . import capture, config, crawler, db, live_challenge, pipeline, scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,15 @@ def process_next(
                 extra["network_tag_id"] = item["network_tag_id"]
             if item["credential_id"]:
                 extra["credential_id"] = item["credential_id"]
+            # 사람 보조(라이브) 모드: 자동으로 안 풀리는 인터랙티브 챌린지를
+            # 대시보드에서 사람이 풀 수 있게 세션을 주입한다. 스텔스 + 기능 켜짐일
+            # 때만 (헤드리스 기본은 가망 없어 진입 안 함). 작업에 바인딩.
+            if config.LIVE_CHALLENGE and (
+                config.CAPTURE_ENGINE == "patchright" or config.CAPTURE_HEADFUL
+            ):
+                extra["live_session"] = live_challenge.LiveChallengeSession(
+                    item["id"], network_tag_id=item["network_tag_id"]
+                )
             # 기본 캡처 함수는 호출 시점에 참조한다 (테스트의 monkeypatch 반영)
             fn = archive_fn if archive_fn is not None else pipeline.archive_url
             outcome = fn(
@@ -142,6 +151,12 @@ def run_loop(
     쉰다. 브라우저는 작업 간 재사용하고, 큐가 비면 내려서 메모리 점유를 피한다.
     """
     logger.info("아카이빙 워커 시작 (폴링 %ds)", poll_seconds)
+    # 재시작 — 사람 확인 대기였던 작업은 살아있던 라이브 page 가 사라졌으므로
+    # 라이브 상태를 풀고 pending 으로 떨궈 다시 시도하게 한다.
+    with db.connect() as conn:
+        reset = db.sweep_orphan_needs_human(conn)
+    if reset:
+        logger.warning("재시작 — 사람 확인 대기였던 작업 %d개를 복구", len(reset))
     with capture.BrowserSession() as session:
         while not stop.is_set():
             step = None

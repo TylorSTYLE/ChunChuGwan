@@ -48,6 +48,26 @@ CAPTURE_CHANNEL = os.environ.get("WCCG_CAPTURE_CHANNEL", "").strip()
 # 헤드풀 스텔스 경로에선 고정 UA 강제가 real Chrome UA/Client Hints 와 불일치해
 # 오히려 탐지 신호가 된다 — 기본은 헤드풀일 때 UA 오버라이드 해제. on 이면 강제.
 CAPTURE_FORCE_USER_AGENT = os.environ.get("WCCG_CAPTURE_FORCE_UA", "off") == "on"
+# 챌린지 자동 통과 대기 — 스텔스 캡처(patchright/headful)에서 비상호작용 챌린지
+# (Cloudflare JS 챌린지 등)는 몇 초 뒤 자동 통과한다. 챌린지가 감지되면 이 시간만큼
+# 폴링하며 풀리길 기다리고, 풀리면 캡처를 진행한다(초과 시 차단으로 보고 실패).
+# 헤드리스 기본 경로는 자동 통과 가망이 없어 대기하지 않고 즉시 실패한다(기존 동작).
+CHALLENGE_WAIT_SECONDS = int(os.environ.get("WCCG_CHALLENGE_WAIT_SECONDS", "25"))
+CHALLENGE_WAIT_POLL_MS = 2000
+
+# 사람 보조 챌린지 해결 (live_challenge.py) — 위 자동 대기로도 안 풀린 인터랙티브
+# 챌린지(클릭/입력이 필요한 Turnstile 등)를 사람이 대시보드에서 직접 조작해
+# 통과시키는 최후 수단. 기본 off. 스텔스(patchright/headful)일 때만 의미가 있다.
+# 켜면 worker 가 그 작업의 캡처 스레드를 점유한 채(= 큐 진행 일시중단) 사람
+# 입력을 기다린다 — 개인 도구 전제의 단일 세션 직렬화. 데이터센터 IP 평판으로는
+# 사람이 눌러도 통과가 보장되지 않는다(README 참조).
+LIVE_CHALLENGE = os.environ.get("WCCG_LIVE_CHALLENGE", "off") == "on"
+LIVE_CHALLENGE_TIMEOUT_SECONDS = int(
+    os.environ.get("WCCG_LIVE_CHALLENGE_TIMEOUT_SECONDS", "300"))
+LIVE_SHOT_INTERVAL_MS = 800     # 라이브 스크린샷 갱신 간격 (worker→화면)
+LIVE_POLL_INTERVAL_MS = 300     # 입력 명령 폴링 간격 (화면→worker)
+LIVE_VIEWPORT_W = 1280          # 라이브 세션 뷰포트 (좌표 매핑 단순화용 고정)
+LIVE_VIEWPORT_H = 800
 
 # ---- 저장 압축 (resources.py) ----
 SCREENSHOT_WEBP_QUALITY = 85    # 스크린샷 PNG → WebP 변환 품질 (손실 압축)
@@ -106,6 +126,15 @@ CRAWL_WORKERS_LIMIT = 8
 # ---- 시스템 로그 (system_log.py — DB 적재, 대시보드 /system/logs 에서 열람) ----
 # 보관 한도 행 수 — 핸들러가 적재 중 주기적으로 한도를 넘는 오래된 행을 정리한다.
 SYSTEM_LOG_MAX_ROWS = int(os.environ.get("WCCG_SYSTEM_LOG_MAX_ROWS", "20000"))
+
+# ---- 로그 파일 (선택 — 콘솔 로그를 회전 파일로도 남긴다, cli.py 가 설치) ----
+# WCCG_LOG_FILE 가 설정되면 그 경로에 INFO 이상 로그를 회전 파일로 기록한다
+# (도커는 볼륨에 마운트해 호스트에서 읽기 — compose.example.yaml 참조). 미설정
+# 이면 콘솔(stderr)·DB(system_logs) 만. 다중 프로세스(dashboard/worker)는 서로
+# 다른 파일을 써야 한다 — 회전이 같은 파일에서 경합하면 깨질 수 있다.
+LOG_FILE = os.environ.get("WCCG_LOG_FILE", "").strip()
+LOG_FILE_MAX_BYTES = int(os.environ.get("WCCG_LOG_FILE_MAX_BYTES", str(10 * 1024 * 1024)))
+LOG_FILE_BACKUPS = int(os.environ.get("WCCG_LOG_FILE_BACKUPS", "5"))
 
 # 기본 127.0.0.1 (localhost 전용). 컨테이너 등에서만 WCCG_HOST=0.0.0.0 으로 오버라이드.
 DASHBOARD_HOST = os.environ.get("WCCG_HOST", "127.0.0.1")
