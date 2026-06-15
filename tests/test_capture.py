@@ -85,6 +85,39 @@ def test_capture_artifacts_and_inlining(site_url, tmp_path):
     assert result.document_links == [f"{base}/report.pdf"]
 
 
+def test_capture_no_mobile_screenshot_by_default(site_url, tmp_path):
+    """mobile_screenshot 기본값(False)에선 모바일 스크린샷을 만들지 않는다."""
+    out = tmp_path / "out"
+    out.mkdir()
+    capture.capture(site_url, out)
+    assert (out / "screenshot.png").is_file()
+    assert not (out / "screenshot-mobile.png").is_file()
+
+
+def test_capture_mobile_screenshot(site_url, tmp_path):
+    """mobile_screenshot=True 면 데스크탑·모바일 두 스크린샷을 모두 저장한다.
+
+    모바일 스크린샷은 모바일 뷰포트 너비(config.MOBILE_SCREENSHOT_WIDTH)로
+    재배치해 찍히고, 데스크탑은 그보다 넓다(기본 뷰포트).
+    """
+    from chunchugwan import config
+
+    out = tmp_path / "out"
+    out.mkdir()
+    capture.capture(site_url, out, mobile_screenshot=True)
+
+    desktop = out / "screenshot.png"
+    mobile = out / "screenshot-mobile.png"
+    assert desktop.is_file()
+    assert mobile.is_file()
+
+    with Image.open(mobile) as im:
+        assert im.width == config.MOBILE_SCREENSHOT_WIDTH
+    with Image.open(desktop) as im:
+        desktop_width = im.width
+    assert desktop_width > config.MOBILE_SCREENSHOT_WIDTH
+
+
 def test_capture_records_resource_url_mapping(site_url, tmp_path):
     """인라인 성공 자원의 sha256 → 원본 URL 매핑이 기록된다 (보안 컨텍스트)."""
     out = tmp_path / "out"
@@ -200,7 +233,8 @@ def test_capture_retries_with_http2_disabled(monkeypatch, tmp_path):
 
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
                   browser_args=(), session=None, resource_fallback=None,
-                  insecure_tls=False, credential=None, live_session=None):
+                  insecure_tls=False, credential=None, live_session=None,
+                  mobile_screenshot=False):
         calls.append(browser_args)
         if not browser_args:
             raise capture.CaptureError(
@@ -219,7 +253,8 @@ def test_capture_does_not_retry_other_errors(monkeypatch, tmp_path):
 
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
                   browser_args=(), session=None, resource_fallback=None,
-                  insecure_tls=False, credential=None, live_session=None):
+                  insecure_tls=False, credential=None, live_session=None,
+                  mobile_screenshot=False):
         calls.append(browser_args)
         raise capture.CaptureError(f"{url} 캡처 실패: net::ERR_NAME_NOT_RESOLVED")
 

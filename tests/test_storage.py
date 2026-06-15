@@ -176,3 +176,26 @@ def test_finalize_snapshot_moves_webp_skip_marker(tmp_path, monkeypatch):
     assert (snap_dir / storage.WEBP_SKIP_MARKER).is_file()
     from chunchugwan import resources
     assert not resources.needs_compaction(snap_dir)
+
+
+def test_find_mobile_screenshot(tmp_path):
+    """모바일 스크린샷 탐색 — WebP 우선·PNG 폴백, 없으면 None."""
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    assert storage.find_mobile_screenshot(snap) is None  # 모바일 스크린샷은 선택적
+
+    (snap / "screenshot-mobile.png").write_bytes(b"\x89PNG")
+    assert storage.find_mobile_screenshot(snap).name == "screenshot-mobile.png"
+    (snap / "screenshot-mobile.webp").write_bytes(b"RIFFwebp")
+    assert storage.find_mobile_screenshot(snap).name == "screenshot-mobile.webp"
+    # 데스크탑 탐색과 서로 간섭하지 않는다
+    assert storage.find_screenshot(snap) is None
+
+
+def test_mobile_screenshot_artifacts_listed():
+    """모바일 스크린샷 산출물이 캡처 산출물·표시 목록에 포함된다."""
+    for name in ("screenshot-mobile.png", "screenshot-mobile.webp",
+                 storage.MOBILE_WEBP_SKIP_MARKER):
+        assert name in storage.CAPTURE_ARTIFACTS
+    assert "screenshot-mobile.webp" in storage.SNAPSHOT_FILES
+    assert "screenshot-mobile.png" in storage.SNAPSHOT_FILES

@@ -244,6 +244,10 @@ _HTML_TYPE = "text/html; charset=utf-8"
 _ALLOWED_FILES: dict[str, tuple[tuple[str, str], ...]] = {
     "page.html": (("page.html.gz", _HTML_TYPE), ("page.html", _HTML_TYPE)),
     "screenshot": (("screenshot.webp", "image/webp"), ("screenshot.png", "image/png")),
+    "screenshot-mobile": (
+        ("screenshot-mobile.webp", "image/webp"),
+        ("screenshot-mobile.png", "image/png"),
+    ),
     "content.md": (("content.md", "text/plain; charset=utf-8"),),
 }
 _ALLOWED_FILES["screenshot.png"] = _ALLOWED_FILES["screenshot"]
@@ -1236,9 +1240,13 @@ def snapshot_view(request: Request, snapshot_id: int):
             "documents": documents,
             "page_html_url": f"/snapshot/{snapshot_id}/file/page.html",
             "screenshot_url": f"/snapshot/{snapshot_id}/file/screenshot",
+            "mobile_screenshot_url": f"/snapshot/{snapshot_id}/file/screenshot-mobile",
             "content_url": f"/snapshot/{snapshot_id}/file/content.md",
             # 문서 스냅샷(URL 자체가 파일 다운로드)은 스크린샷이 없다 — 탭 숨김
             "has_screenshot": storage.find_screenshot(_snapshot_dir(snap)) is not None,
+            # 모바일 스크린샷은 시스템 설정이 켜져 있을 때 찍힌 스냅샷에만 있다
+            "has_mobile_screenshot":
+                storage.find_mobile_screenshot(_snapshot_dir(snap)) is not None,
         },
     )
 

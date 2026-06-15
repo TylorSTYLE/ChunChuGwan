@@ -314,8 +314,12 @@ _EN: dict[str, str] = {
     "최종 URL": "Final URL",
     "렌더링": "Rendered",
     "스크린샷": "Screenshot",
+    "데스크탑 스크린샷": "Desktop screenshot",
+    "모바일 스크린샷": "Mobile screenshot",
     "텍스트": "Text",
     "전체 페이지 스크린샷": "Full-page screenshot",
+    "전체 페이지 데스크탑 스크린샷": "Full-page desktop screenshot",
+    "전체 페이지 모바일 스크린샷": "Full-page mobile screenshot",
     "첨부 문서 ({n})": "Attached documents ({n})",
     "순번": "No.",
     "문서명": "Document name",
@@ -615,6 +619,15 @@ _EN: dict[str, str] = {
     "자격증명 보관 시간은 {lo} ~ {hi}시간 사이여야 합니다.":
         "Credential retention must be between {lo} and {hi} hours.",
     "확장 자격증명 설정을 저장했습니다.": "Extension credential settings saved.",
+    # ---- 캡처 설정 (system) ----
+    "캡처 설정": "Capture settings",
+    "아카이빙할 때 데스크탑 스크린샷 외에 모바일 해상도(화면비율) 스크린샷도 함께 저장합니다. 같은 페이지를 모바일 뷰포트 너비로 재배치해 한 장 더 찍으며, 이후 새로 만들어지는 스냅샷에만 적용됩니다(기존 스냅샷은 그대로).":
+        "When archiving, also save a mobile-resolution (aspect-ratio) screenshot "
+        "in addition to the desktop one. The same page is re-laid-out at the mobile "
+        "viewport width for one extra shot; this applies only to snapshots created "
+        "afterward (existing snapshots are unchanged).",
+    "모바일 해상도 스크린샷도 함께 저장": "Also save a mobile-resolution screenshot",
+    "캡처 설정을 저장했습니다.": "Capture settings saved.",
     # ---- 사이트 로그인 자격증명 (site_credentials) ----
     "로그인 자격증명": "Login credentials",
     "이 사이트를 아카이빙할 때 춘추관이 로그인하는 데 쓸 자격증명입니다. 비밀은 WCCG_SECRET_KEY 로 대칭 암호화해 저장하며, 화면에는 다시 표시되지 않습니다.":

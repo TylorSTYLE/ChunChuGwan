@@ -294,7 +294,7 @@ def test_pipeline_archives_linked_documents(doc_server, tmp_path, monkeypatch):
     html = "<html><body><p>본문 텍스트</p></body></html>"
 
     def fake_capture(url, out_dir, remove_selectors=(), link_rewriter=None,
-                     session=None, resource_fallback=None):
+                     session=None, resource_fallback=None, **kwargs):
         (out_dir / "raw.html").write_text(html, encoding="utf-8")
         (out_dir / "page.html").write_text(html, encoding="utf-8")
         return capture.CaptureResult(

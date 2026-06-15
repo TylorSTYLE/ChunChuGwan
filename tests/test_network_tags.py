@@ -45,7 +45,7 @@ def _fake_capture(monkeypatch, final_url: str | None = None):
     calls: list[str] = []
 
     def fake(url, out_dir, remove_selectors=(), link_rewriter=None, session=None,
-             resource_fallback=None):
+             resource_fallback=None, **kwargs):
         calls.append(url)
         return capture.CaptureResult(
             final_url=final_url or url, http_status=200, title="제목",

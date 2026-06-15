@@ -3313,6 +3313,18 @@ def signup_default_role(conn: sqlite3.Connection) -> str:
     return role if role in SIGNUP_ROLES else "pending"
 
 
+MOBILE_SCREENSHOT_ENABLED_KEY = "mobile_screenshot_enabled"  # 'on' | 'off' (기본 off)
+
+
+def mobile_screenshot_enabled(conn: sqlite3.Connection) -> bool:
+    """모바일 해상도 스크린샷도 함께 저장할지 (기본 off — 옵트인).
+
+    켜면 캡처가 데스크탑 스크린샷 외에 모바일 뷰포트(config.MOBILE_SCREENSHOT_*)
+    너비로 재배치한 스크린샷을 한 장 더 찍는다 (capture._capture_mobile_screenshot).
+    """
+    return get_setting(conn, MOBILE_SCREENSHOT_ENABLED_KEY) == "on"
+
+
 EXT_CREDENTIAL_TTL_HOURS_KEY = "ext_credential_ttl_hours"
 
 

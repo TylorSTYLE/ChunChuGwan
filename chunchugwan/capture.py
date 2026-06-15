@@ -3,8 +3,11 @@
 산출물 4종을 스냅샷 디렉토리에 저장한다:
 - raw.html        렌더링 완료 후 DOM 소스 (page.content())
 - page.html       이미지/CSS를 base64로 인라인한 단일 HTML
-- screenshot.png  전체 페이지 스크린샷 (full_page=True)
+- screenshot.png  전체 페이지(데스크탑 뷰포트) 스크린샷 (full_page=True)
 - content.md      extract.py 가 생성 (이 모듈 밖)
+
+mobile_screenshot 가 켜져 있으면 같은 페이지를 모바일 뷰포트 너비
+(config.MOBILE_SCREENSHOT_*)로 재배치해 screenshot-mobile.png 한 장을 더 찍는다.
 """
 
 from __future__ import annotations
@@ -495,6 +498,7 @@ def capture(
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
     live_session: "object | None" = None,
+    mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
 
@@ -503,6 +507,7 @@ def capture(
     link_rewriter 가 있으면(사이트 전체 아카이브) page.html 의 앵커를
     반환된 매핑대로 재작성한다 — raw.html/content_html 은 원본 유지.
     session 이 있으면 그 브라우저를 재사용한다 (없으면 1회용 기동).
+    mobile_screenshot 가 켜져 있으면 screenshot-mobile.png 도 함께 저장한다.
 
     일부 서버(구형 IIS 등)는 HTTP/2 구현이 깨져 chromium 만
     net::ERR_HTTP2_* 로 실패한다 (curl 등은 정상) — 이 경우 HTTP/2 를
@@ -513,7 +518,8 @@ def capture(
         return _capture_once(url, out_dir, remove_selectors, link_rewriter,
                              session=session, resource_fallback=resource_fallback,
                              insecure_tls=insecure_tls, credential=credential,
-                             live_session=live_session)
+                             live_session=live_session,
+                             mobile_screenshot=mobile_screenshot)
     except CaptureError as e:
         if "ERR_HTTP2" not in str(e):
             raise
@@ -523,7 +529,7 @@ def capture(
             browser_args=("--disable-http2",),
             resource_fallback=resource_fallback,
             insecure_tls=insecure_tls, credential=credential,
-            live_session=live_session,
+            live_session=live_session, mobile_screenshot=mobile_screenshot,
         )
 
 
@@ -538,6 +544,7 @@ def _capture_once(
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
     live_session: "object | None" = None,
+    mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
     _, sync_playwright, PlaywrightError, _ = browser_engine.get_engine()
@@ -547,6 +554,7 @@ def _capture_once(
             return _capture_in_browser(
                 session.browser(), url, out_dir, remove_selectors, link_rewriter,
                 resource_fallback, insecure_tls, credential, live_session,
+                mobile_screenshot,
             )
         with sync_playwright() as p:
             browser = _launch(p, browser_args)
@@ -554,6 +562,7 @@ def _capture_once(
                 return _capture_in_browser(
                     browser, url, out_dir, remove_selectors, link_rewriter,
                     resource_fallback, insecure_tls, credential, live_session,
+                    mobile_screenshot,
                 )
             finally:
                 browser.close()
@@ -575,6 +584,7 @@ def _capture_in_browser(
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
     live_session: "object | None" = None,
+    mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다.
 
@@ -663,6 +673,11 @@ def _capture_in_browser(
             _rewrite_links(page, link_rewriter, page_links)
 
         page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
+        if mobile_screenshot:
+            # 데스크탑 스크린샷 직후, 자원 인라인 전에 찍는다 — 같은 렌더링
+            # 상태에서 뷰포트만 모바일 너비로 바꿔 반응형 레이아웃을 캡처하고,
+            # 끝나면 원래 뷰포트로 되돌려 이후 인라인에 영향을 주지 않는다.
+            _capture_mobile_screenshot(page, out_dir)
         page_html, resource_urls = _inline_resources(
             page, raw_html, resource_fallback
         )
@@ -680,6 +695,40 @@ def _capture_in_browser(
         )
     finally:
         context.close()
+
+
+def _capture_mobile_screenshot(page, out_dir: Path) -> None:
+    """모바일 뷰포트 너비로 재배치한 전체 페이지 스크린샷을 screenshot-mobile.png 로 저장.
+
+    데이터센터 IP 평판·재네비게이션 비용(봇 챌린지 재발 위험 포함)을 늘리지
+    않으려고 새 컨텍스트를 만들지 않고, 이미 로드된 page 의 뷰포트만
+    config.MOBILE_SCREENSHOT_* 로 바꿔 한 장 더 찍는다. 반응형 CSS(@media)는
+    뷰포트 너비에 반응하므로 모바일 레이아웃으로 흐른다. 찍은 뒤에는 원래
+    뷰포트로 되돌려 이후 단계(자원 인라인)가 영향을 받지 않게 한다.
+
+    부가 산출물이므로 실패해도 캡처 전체를 막지 않는다(best-effort) — 모바일
+    스크린샷만 빠지고 나머지 산출물은 그대로 저장된다.
+    """
+    original = page.viewport_size  # 보통 1280×720 (컨텍스트 기본값)
+    try:
+        page.set_viewport_size(
+            {"width": config.MOBILE_SCREENSHOT_WIDTH,
+             "height": config.MOBILE_SCREENSHOT_HEIGHT}
+        )
+        # 뷰포트 변경 후 반응형 재배치·지연 로드가 정착할 짧은 여유
+        page.wait_for_timeout(config.MOBILE_SCREENSHOT_SETTLE_MS)
+        page.screenshot(
+            path=str(out_dir / "screenshot-mobile.png"), full_page=True
+        )
+    except Exception as e:  # noqa: BLE001 — 부가 산출물 실패가 캡처를 깨지 않게
+        logger.warning("모바일 스크린샷 실패, 건너뜀: %s", e)
+        (out_dir / "screenshot-mobile.png").unlink(missing_ok=True)
+    finally:
+        if original is not None:
+            try:
+                page.set_viewport_size(original)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("뷰포트 복원 실패: %s", e)
 
 
 def _collect_document_links(page) -> list[str]:
