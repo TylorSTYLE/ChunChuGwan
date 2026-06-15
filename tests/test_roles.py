@@ -112,6 +112,34 @@ def test_archiver_sees_retry_button(client):
     assert f"/logs/{log_id}/retry" in page
 
 
+def _seed_needs_human(url: str = "https://sd.test/article") -> int:
+    """사람 확인(라이브 진입) 상태의 작업 1건을 만든다."""
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, url, source="web")
+        job = db.claim_due_archive_job(conn, "2099-01-01T00:00:00+00:00")
+        db.mark_needs_human(conn, job["id"], token="tok", viewport_w=1280, viewport_h=800)
+    return job["id"]
+
+
+def test_archive_active_needs_human_admin_only(client, monkeypatch):
+    """AUTH on 에서 /archive/active 의 needs_human(진행 중 챌린지 URL 목록)은
+    관리자에게만 노출된다 — viewer/archiver 로 새지 않게 하는 게이트 회귀 방지."""
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    url = "https://sd.test/article"
+    job_id = _seed_needs_human(url)
+
+    # 비관리자(viewer·archiver)는 active 목록만 받고 needs_human 키는 없다
+    for email in ("viewer@test.co", "archiver@test.co"):
+        _login(client, email)
+        data = client.get("/archive/active").json()
+        assert "needs_human" not in data, email
+
+    # 관리자(boss)는 seed 한 작업을 받는다
+    _login(client, "boss@test.co", "bosspass1234")
+    data = client.get("/archive/active").json()
+    assert data["needs_human"] == [{"id": job_id, "url": url}]
+
+
 def test_viewer_cannot_manage_schedule(client):
     """주기적 재아카이빙 설정/해제도 아카이빙 트리거 — viewer 는 403."""
     _login(client, "viewer@test.co")

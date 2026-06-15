@@ -23,6 +23,35 @@ from . import capture, config, crawler, db, live_challenge, pipeline, scheduler
 
 logger = logging.getLogger(__name__)
 
+# 사람 보조(라이브 챌린지)가 기능은 켜졌으나 엔진 게이트 미달로 비활성일 때
+# 한 번만 경고하기 위한 프로세스 단위 플래그 (매 작업마다 로그를 도배하지 않게).
+_warned_live_gate = False
+
+
+def _live_session_for(item) -> "live_challenge.LiveChallengeSession | None":
+    """이 작업에 줄 라이브 챌린지 세션. 기능 켜짐 + 스텔스 엔진(patchright/headful)일
+    때만 만든다 (헤드리스 기본은 사람이 눌러도 가망이 없어 진입하지 않는다).
+
+    기능은 켰는데 엔진이 patchright/headful 이 아니면, 자동으로 못 푼 챌린지가
+    조용히 실패로만 떨어진다 — 왜 사람 단계로 안 넘어갔는지 한 번 경고로 남겨
+    /system/logs 에서 원인을 알 수 있게 한다 (C)."""
+    if not config.LIVE_CHALLENGE:
+        return None
+    if config.CAPTURE_ENGINE == "patchright" or config.CAPTURE_HEADFUL:
+        return live_challenge.LiveChallengeSession(
+            item["id"], network_tag_id=item["network_tag_id"]
+        )
+    global _warned_live_gate
+    if not _warned_live_gate:
+        _warned_live_gate = True
+        logger.warning(
+            "WCCG_LIVE_CHALLENGE=on 이지만 캡처 엔진이 스텔스(patchright/headful)가 "
+            "아니라 사람 보조가 비활성입니다 — 자동으로 못 푼 챌린지는 그대로 실패 "
+            "처리됩니다. WCCG_CAPTURE_ENGINE=patchright 또는 WCCG_CAPTURE_HEADFUL=on "
+            "으로 설정하세요."
+        )
+    return None
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -108,12 +137,9 @@ def process_next(
             # 사람 보조(라이브) 모드: 자동으로 안 풀리는 인터랙티브 챌린지를
             # 대시보드에서 사람이 풀 수 있게 세션을 주입한다. 스텔스 + 기능 켜짐일
             # 때만 (헤드리스 기본은 가망 없어 진입 안 함). 작업에 바인딩.
-            if config.LIVE_CHALLENGE and (
-                config.CAPTURE_ENGINE == "patchright" or config.CAPTURE_HEADFUL
-            ):
-                extra["live_session"] = live_challenge.LiveChallengeSession(
-                    item["id"], network_tag_id=item["network_tag_id"]
-                )
+            live_session = _live_session_for(item)
+            if live_session is not None:
+                extra["live_session"] = live_session
             # 기본 캡처 함수는 호출 시점에 참조한다 (테스트의 monkeypatch 반영)
             fn = archive_fn if archive_fn is not None else pipeline.archive_url
             outcome = fn(

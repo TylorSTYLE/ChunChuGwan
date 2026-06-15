@@ -766,6 +766,55 @@ def test_archive_registers_active_job_and_clears_on_finish(client, monkeypatch):
     assert client.get("/archive/active").json() == {"active": []}
 
 
+def _enter_needs_human(url: str) -> int:
+    """needs_human(라이브 진입) 상태의 작업 1건을 만든다 — 테스트용."""
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, url, source="web")
+        job = db.claim_due_archive_job(conn, "2099-01-01T00:00:00+00:00")
+        db.mark_needs_human(conn, job["id"], token="tok", viewport_w=1280, viewport_h=800)
+    return job["id"]
+
+
+def test_archive_active_omits_needs_human_when_disabled(client):
+    # LIVE_CHALLENGE 기본 off → needs_human 키 없음 (기존 폴링 응답 호환)
+    _enter_needs_human("https://sd.test/a")
+    assert "needs_human" not in client.get("/archive/active").json()
+
+
+def test_archive_active_surfaces_needs_human_when_enabled(client, monkeypatch):
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    job_id = _enter_needs_human("https://sd.test/a")
+    data = client.get("/archive/active").json()
+    assert data["needs_human"] == [{"id": job_id, "url": "https://sd.test/a"}]
+
+
+def test_header_and_banner_present_when_live_enabled(client, monkeypatch):
+    # 대기 0건이어도 헤더 '사람 확인' 메뉴와 전역 배너 요소가 항상 노출된다
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    html = client.get("/").text
+    assert "/archive/needs-human" in html
+    assert 'id="needs-human-banner"' in html
+    # 대기 0건이면 알림 색(nav-alert)·카운트 배지는 붙지 않는다
+    assert 'class="nav-alert"' not in html
+    assert "사람 확인 (" not in html
+
+
+def test_header_alert_badge_when_jobs_pending(client, monkeypatch):
+    # 대기 건이 있으면 헤더 메뉴에 알림 색 + 건수 배지가 붙는다
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    _enter_needs_human("https://sd.test/a")
+    html = client.get("/").text
+    assert 'class="nav-alert"' in html
+    assert "사람 확인 (1)" in html
+
+
+def test_header_hides_human_check_when_live_disabled(client):
+    # 기능 off(기본)면 메뉴·배너 요소 모두 렌더하지 않는다 (CSS 규칙은 무관)
+    html = client.get("/").text
+    assert "/archive/needs-human" not in html
+    assert 'id="needs-human-banner"' not in html
+
+
 def test_active_job_cleared_even_on_failure(client, monkeypatch):
     def boom(url, **kw):
         raise RuntimeError("캡처 실패")
