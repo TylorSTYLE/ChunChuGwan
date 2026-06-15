@@ -3405,8 +3405,9 @@ MOBILE_SCREENSHOT_ENABLED_KEY = "mobile_screenshot_enabled"  # 'on' | 'off' (기
 def mobile_screenshot_enabled(conn: sqlite3.Connection) -> bool:
     """모바일 해상도 스크린샷도 함께 저장할지 (기본 off — 옵트인).
 
-    켜면 캡처가 데스크탑 스크린샷 외에 모바일 뷰포트(config.MOBILE_SCREENSHOT_*)
-    너비로 재배치한 스크린샷을 한 장 더 찍는다 (capture._capture_mobile_screenshot).
+    켜면 캡처가 데스크탑 스크린샷 외에, 안드로이드 크롬으로 위장한 모바일
+    컨텍스트(config.MOBILE_SCREENSHOT_*)로 같은 URL 을 한 번 더 열어 스크린샷을
+    찍는다 (capture._capture_mobile_screenshot).
     """
     return get_setting(conn, MOBILE_SCREENSHOT_ENABLED_KEY) == "on"
 

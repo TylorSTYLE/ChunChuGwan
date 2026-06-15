@@ -310,9 +310,12 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   = 길이 + 1, 진행 중 크롤에도 즉시 적용. 해석·검증은
   `crawler.crawl_defaults`/`retry_backoff`, 오염 시 config 기본값 폴백)과
   캡처 설정 (`mobile_screenshot_enabled` on/off 기본 off — 켜면 캡처가
-  데스크탑 외에 모바일 뷰포트(390×844)로 재배치한 screenshot-mobile 도
-  찍는다. pipeline 이 `db.mobile_screenshot_enabled` 로 읽어 capture 에 전달,
-  켠 뒤 새 스냅샷에만 적용)과 문서 아카이브 설정
+  데스크탑 외에, 같은 URL 을 안드로이드 크롬으로 위장한 모바일 컨텍스트
+  (UA·뷰포트 390×844·isMobile/hasTouch)로 한 번 더 열어 screenshot-mobile 을
+  찍는다. UA 가 컨텍스트 옵션이라 재네비게이션이 필요하다. pipeline 이
+  `db.mobile_screenshot_enabled` 로 읽어 capture 에 전달, 켠 뒤 새 스냅샷에만
+  적용. 모바일 UA 로만 다른 호스트의 루프백으로 리다이렉트되면 모바일
+  스크린샷만 생략한다 — 대시보드 누수 방지, 원칙 7·netcheck)과 문서 아카이브 설정
   (`document_max_count`/`document_max_mb`/`document_fetch_timeout_seconds` —
   페이지가 링크한 문서를 받을 때의 스냅샷당 수·문서 1개 크기(MB)·다운로드
   타임아웃(초). 해석·클램핑은 `documents.limits`(오염·범위 밖이면 config
