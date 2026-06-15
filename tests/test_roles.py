@@ -121,10 +121,10 @@ def _seed_needs_human(url: str = "https://sd.test/article") -> int:
     return job["id"]
 
 
-def test_archive_active_needs_human_admin_only(client, monkeypatch):
+def test_archive_active_needs_human_admin_only(client):
     """AUTH on 에서 /archive/active 의 needs_human(진행 중 챌린지 URL 목록)은
-    관리자에게만 노출된다 — viewer/archiver 로 새지 않게 하는 게이트 회귀 방지."""
-    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    관리자에게만 노출된다 — viewer/archiver 로 새지 않게 하는 게이트 회귀 방지.
+    serve 의 WCCG_LIVE_CHALLENGE 는 켜지 않는다 (DB 사실만으로 노출돼야 한다)."""
     url = "https://sd.test/article"
     job_id = _seed_needs_human(url)
 
@@ -134,16 +134,16 @@ def test_archive_active_needs_human_admin_only(client, monkeypatch):
         data = client.get("/archive/active").json()
         assert "needs_human" not in data, email
 
-    # 관리자(boss)는 seed 한 작업을 받는다
+    # 관리자(boss)는 serve LIVE_CHALLENGE off 여도 seed 한 작업을 받는다
     _login(client, "boss@test.co", "bosspass1234")
     data = client.get("/archive/active").json()
     assert data["needs_human"] == [{"id": job_id, "url": url}]
 
 
-def test_archives_needs_human_badge_admin_only(client, monkeypatch):
+def test_archives_needs_human_badge_admin_only(client):
     """/archives 의 '사람 확인 대기' 상태 배지(라이브 화면 링크)는 관리자에게만
-    노출된다 — viewer 는 진행만 보이고('아카이빙 중') 챌린지 링크는 못 받는다."""
-    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    노출된다 — viewer 는 진행만 보이고('아카이빙 중') 챌린지 링크는 못 받는다.
+    serve 의 WCCG_LIVE_CHALLENGE 는 켜지 않는다 (워커가 DB 에 기록만 했으면 보임)."""
     job_id = _seed_needs_human("https://sd.test/article")
 
     _login(client, "viewer@test.co")
