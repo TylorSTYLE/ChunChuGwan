@@ -88,17 +88,25 @@
   <!-- 연결 -->
   <section class="tab active" id="tab-connect">
     <h3 data-i18n="tab_connect"></h3>
-    <p class="muted" data-i18n="connect_intro"></p>
-    <label data-i18n="connect_base_url"></label>
-    <input type="text" id="base-url" placeholder="https://archive.example.com">
-    <button class="btn" id="open-issue" data-i18n="connect_open_issue"></button>
-    <label data-i18n="connect_token"></label>
-    <input type="password" id="token" class="mono" placeholder="wccg_…">
-    <div class="note warn" data-i18n="connect_warn"></div>
-    <div class="row">
+
+    <!-- 미연결: 주소 + 토큰 입력 폼 -->
+    <div id="connect-form">
+      <p class="muted" data-i18n="connect_intro"></p>
+      <label data-i18n="connect_base_url"></label>
+      <input type="text" id="base-url" placeholder="https://archive.example.com">
+      <button class="btn" id="open-issue" data-i18n="connect_open_issue"></button>
+      <label data-i18n="connect_token"></label>
+      <input type="password" id="token" class="mono" placeholder="wccg_…">
+      <div class="note warn" data-i18n="connect_warn"></div>
       <button class="btn primary" id="connect-btn" data-i18n="connect_save"></button>
+    </div>
+
+    <!-- 연결됨: 연결 정보 + 해제 -->
+    <div id="connected-info" style="display:none">
+      <div class="note" id="connected-detail"></div>
       <button class="btn danger" id="disconnect-btn" data-i18n="connect_disconnect"></button>
     </div>
+
     <div class="note" id="connect-result" style="display:none"></div>
   </section>
 

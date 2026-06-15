@@ -58,6 +58,12 @@ def test_download_serves_zip(client):
     manifest = json.loads(zf.read("manifest.json"))
     assert manifest["version"] == __version__
     assert manifest["manifest_version"] == 3
+    # 아이콘이 함께 묶이고 manifest 가 참조한다 (툴바·확장 목록 아이콘)
+    for size in ("16", "32", "48", "128"):
+        assert f"icons/icon{size}.png" in names
+        assert manifest["icons"][size] == f"icons/icon{size}.png"
+        assert manifest["action"]["default_icon"][size] == f"icons/icon{size}.png"
+    assert zf.read("icons/icon16.png")[:8] == b"\x89PNG\r\n\x1a\n"  # 실제 PNG
     # _locales 가 유효 JSON
     assert "tab_archive" in json.loads(zf.read("_locales/ko/messages.json"))
 
