@@ -66,6 +66,33 @@ def test_system_page_shows_version(client):
     assert f"v{__version__}" in res.text
 
 
+def test_capture_settings_toggle_mobile_screenshot(client):
+    """캡처 설정 — 모바일 스크린샷 활성화 토글이 설정에 반영된다 (기본 off)."""
+    res = client.get("/system")
+    assert "캡처 설정" in res.text
+    assert "모바일 해상도 스크린샷도 함께 저장" in res.text
+    with db.connect() as conn:
+        assert db.mobile_screenshot_enabled(conn) is False  # 기본 off
+
+    res = client.post(
+        "/system/capture-settings",
+        data={"mobile_screenshot_enabled": "on"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.mobile_screenshot_enabled(conn) is True
+    assert "checked" in client.get("/system").text
+
+    # 체크박스 미포함 = off
+    res = client.post(
+        "/system/capture-settings", data={}, follow_redirects=False
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.mobile_screenshot_enabled(conn) is False
+
+
 def test_backup_download_and_restore_upload(client, tmp_path, monkeypatch):
     res = client.post("/system/backup")
     assert res.status_code == 200

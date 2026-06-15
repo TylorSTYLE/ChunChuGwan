@@ -153,8 +153,12 @@ archive/
                 │                   #   /resource/*.css 로 추출해 스냅샷 간 공유
                 ├── raw.html.gz     # 렌더링 후 DOM 소스 (gzip)
                 ├── content.md      # 추출+정규화 텍스트
-                ├── screenshot.webp # 전체 페이지 (WebP 한도 초과·역효과면
-                │                   #   screenshot.png 유지 + .keep 마커 — 카운트 제외)
+                ├── screenshot.webp # 전체 페이지 데스크탑 스크린샷 (WebP 한도
+                │                   #   초과·역효과면 screenshot.png 유지 + .keep
+                │                   #   마커 — 카운트 제외)
+                ├── screenshot-mobile.webp # (선택) 모바일 해상도(390×844) 스크린샷 —
+                │                   #   시스템 '캡처 설정'(mobile_screenshot_enabled)이
+                │                   #   켜졌을 때 찍힌 스냅샷에만 있다
                 ├── files/          # (구형 스냅샷만) 문서 파일 — wccg compact 가
                 │                   #   문서 CAS 로 이전한다. 신규 스냅샷은 없음
                 └── meta.json       # url, final_url, 시각, 해시, http 정보,
@@ -301,7 +305,11 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   `crawl_default_delay_seconds` — 새 크롤 옵션 기본값,
   `crawl_retry_backoff_seconds` — 실패 재시도 대기 쉼표 목록(초), 최대 시도
   = 길이 + 1, 진행 중 크롤에도 즉시 적용. 해석·검증은
-  `crawler.crawl_defaults`/`retry_backoff`, 오염 시 config 기본값 폴백)
+  `crawler.crawl_defaults`/`retry_backoff`, 오염 시 config 기본값 폴백)과
+  캡처 설정 (`mobile_screenshot_enabled` on/off 기본 off — 켜면 캡처가
+  데스크탑 외에 모바일 뷰포트(390×844)로 재배치한 screenshot-mobile 도
+  찍는다. pipeline 이 `db.mobile_screenshot_enabled` 로 읽어 capture 에 전달,
+  켠 뒤 새 스냅샷에만 적용)
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
 - `api_keys` — 외부 소프트웨어용 API 키 (`/api/v1` REST API 인증).
   키마다 보기/아카이브 권한과 만료 시각(NULL=영구), 토큰은 SHA-256 해시만

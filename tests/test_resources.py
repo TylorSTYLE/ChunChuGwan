@@ -211,6 +211,40 @@ def test_compact_snapshot_dir(cas_env, tmp_path):
     assert again.before_bytes == 0 and again.externalized == 0
 
 
+def test_compact_converts_mobile_screenshot(cas_env, tmp_path):
+    """모바일 스크린샷(screenshot-mobile.png)도 데스크탑과 같이 WebP 로 변환된다."""
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    Image.new("RGB", (8, 8), (200, 0, 0)).save(snap / "screenshot.png")
+    Image.new("RGB", (8, 16), (0, 100, 200)).save(snap / "screenshot-mobile.png")
+
+    resources.compact_snapshot_dir(snap)
+
+    assert not (snap / "screenshot.png").exists()
+    assert not (snap / "screenshot-mobile.png").exists()
+    with Image.open(snap / "screenshot.webp") as im:
+        assert im.format == "WEBP" and im.size == (8, 8)
+    with Image.open(snap / "screenshot-mobile.webp") as im:
+        assert im.format == "WEBP" and im.size == (8, 16)
+    assert not resources.needs_compaction(snap)
+
+
+def test_compact_keeps_mobile_png_independently(cas_env, tmp_path):
+    """모바일 PNG 만 변환 불가여도 데스크탑은 변환되고, 각자 마커로 관리된다."""
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    Image.new("RGB", (8, 8), (200, 0, 0)).save(snap / "screenshot.png")
+    (snap / "screenshot-mobile.png").write_bytes(b"\x89PNG not really")
+
+    resources.compact_snapshot_dir(snap)
+
+    assert (snap / "screenshot.webp").is_file()             # 데스크탑은 변환됨
+    assert (snap / "screenshot-mobile.png").is_file()       # 모바일은 폴백 유지
+    assert (snap / storage.MOBILE_WEBP_SKIP_MARKER).is_file()
+    assert not (snap / storage.WEBP_SKIP_MARKER).is_file()
+    assert not resources.needs_compaction(snap)
+
+
 def test_needs_compaction_and_count(cas_env, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
     assert resources.compactable_count() == 0  # 스냅샷 자체가 없음

@@ -427,6 +427,30 @@ def test_snapshot_view_sandboxed_iframe(client):
     assert tokens == {"allow-top-navigation-by-user-activation", ""}
 
 
+def test_snapshot_view_mobile_screenshot_tab(client):
+    """모바일 스크린샷이 있는 스냅샷만 뷰어에 모바일 탭을 노출하고 파일을 서빙한다."""
+    # 기본 fixture 스냅샷에는 모바일 스크린샷이 없다 → 데스크탑 탭만, 모바일 탭 미노출
+    res = client.get("/snapshot/1")
+    assert "데스크탑 스크린샷" in res.text
+    assert "모바일 스크린샷" not in res.text
+    assert client.get("/snapshot/1/file/screenshot-mobile").status_code == 404
+
+    # 스냅샷 2 에 모바일 스크린샷을 추가하면 탭과 서빙 경로가 나타난다
+    snap_dir = storage.page_dir(
+        "example.com", storage.url_to_slug("https://example.com/post")
+    ) / "2026-06-02T00-00-00"
+    Image.new("RGB", (390, 60), (0, 120, 240)).save(snap_dir / "screenshot-mobile.png")
+
+    res = client.get("/snapshot/2")
+    assert "데스크탑 스크린샷" in res.text
+    assert "모바일 스크린샷" in res.text
+    assert "/snapshot/2/file/screenshot-mobile" in res.text
+
+    served = client.get("/snapshot/2/file/screenshot-mobile")
+    assert served.status_code == 200
+    assert served.headers["content-type"] == "image/png"
+
+
 def test_theme_toggle_present(client):
     """모든 화면(base.html)에 테마 변수·토글·기억(localStorage) 스크립트가 있다."""
     res = client.get("/")

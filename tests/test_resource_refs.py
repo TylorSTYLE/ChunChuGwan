@@ -36,7 +36,7 @@ def _fake_capture(monkeypatch, body: str = "내용"):
     """캡처 모킹 — page.html 에 큰 이미지 data URI 를 남기고 URL 매핑을 돌려준다."""
 
     def fake(url, out_dir, remove_selectors=(), link_rewriter=None, session=None,
-             resource_fallback=None):
+             resource_fallback=None, **kwargs):
         uri = f"data:image/png;base64,{base64.b64encode(IMG_BYTES).decode()}"
         html = f'<html><body><img src="{uri}">{body}</body></html>'
         (out_dir / "page.html").write_text(html, encoding="utf-8")
@@ -63,6 +63,48 @@ def test_pipeline_records_resource_refs(archive_env, monkeypatch):
     assert rows[0]["name"] == IMG_NAME
     assert rows[0]["url"] == IMG_URL
     assert resources.resource_path(IMG_NAME).read_bytes() == IMG_BYTES
+
+
+def test_pipeline_forwards_mobile_screenshot_setting(archive_env, monkeypatch):
+    """시스템 '캡처 설정'이 켜지면 pipeline 이 capture 에 mobile_screenshot 를
+    전달하고, 찍힌 모바일 스크린샷이 압축(WebP)·확정을 거쳐 스냅샷에 남는다.
+
+    pipeline → capture_kwargs → compact_snapshot_dir → finalize_snapshot 전체
+    경로를 검증한다 (실제 브라우저는 capture 단위 테스트가 본다)."""
+    from PIL import Image
+
+    seen: dict[str, bool] = {}
+
+    def fake(url, out_dir, mobile_screenshot=False, **kwargs):
+        seen["mobile"] = mobile_screenshot
+        html = "<html><body>본문</body></html>"
+        (out_dir / "page.html").write_text(html, encoding="utf-8")
+        (out_dir / "raw.html").write_text(html, encoding="utf-8")
+        Image.new("RGB", (8, 8), (10, 20, 30)).save(out_dir / "screenshot.png")
+        if mobile_screenshot:
+            Image.new("RGB", (8, 16), (40, 50, 60)).save(
+                out_dir / "screenshot-mobile.png"
+            )
+        return capture.CaptureResult(
+            final_url=url, http_status=200, title="제목",
+            raw_html=html, content_html=html,
+        )
+
+    monkeypatch.setattr(pipeline.capture, "capture", fake)
+
+    # 기본(off): 모바일 스크린샷을 요청하지 않고, 산출물도 없다
+    out = pipeline.archive_url("https://example.com/a")
+    assert seen["mobile"] is False
+    assert storage.find_screenshot(out.snapshot_dir) is not None
+    assert storage.find_mobile_screenshot(out.snapshot_dir) is None
+
+    # 설정 on: pipeline 이 mobile_screenshot=True 를 전달 → screenshot-mobile.webp 확정
+    with db.connect() as conn:
+        db.set_setting(conn, db.MOBILE_SCREENSHOT_ENABLED_KEY, "on")
+    out2 = pipeline.archive_url("https://example.com/b")
+    assert seen["mobile"] is True
+    mobile = storage.find_mobile_screenshot(out2.snapshot_dir)
+    assert mobile is not None and mobile.name == "screenshot-mobile.webp"
 
 
 def test_insert_refs_idempotent(archive_env):

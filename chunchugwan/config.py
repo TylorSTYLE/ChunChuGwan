@@ -69,6 +69,16 @@ LIVE_POLL_INTERVAL_MS = 300     # 입력 명령 폴링 간격 (화면→worker)
 LIVE_VIEWPORT_W = 1280          # 라이브 세션 뷰포트 (좌표 매핑 단순화용 고정)
 LIVE_VIEWPORT_H = 800
 
+# ---- 모바일 해상도 스크린샷 (capture.py) ----
+# 데스크탑 스크린샷과 별도로, 같은 페이지를 모바일 뷰포트 너비로 재배치해
+# 한 장 더 찍는다 (반응형 CSS 가 모바일 레이아웃으로 흐른다). 활성화 여부는
+# 시스템 설정(db.mobile_screenshot_enabled)에서 켠다. 해상도 기준은 iPhone 12/13/14
+# 계열의 CSS 뷰포트(390 × 844) — 데이터센터 IP·재네비게이션 비용을 늘리지
+# 않으려고 새 컨텍스트를 띄우지 않고 로드된 페이지의 뷰포트만 바꿔 찍는다.
+MOBILE_SCREENSHOT_WIDTH = 390
+MOBILE_SCREENSHOT_HEIGHT = 844
+MOBILE_SCREENSHOT_SETTLE_MS = 400   # 뷰포트 변경 후 반응형 재배치·지연 로드 정착 여유
+
 # ---- 저장 압축 (resources.py) ----
 SCREENSHOT_WEBP_QUALITY = 85    # 스크린샷 PNG → WebP 변환 품질 (손실 압축)
 RESOURCE_MIN_BYTES = 4096       # 이보다 작은 data URI 자원은 추출하지 않고 인라인 유지

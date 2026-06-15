@@ -319,12 +319,18 @@ def _archive_url(
     except (crypto.SecretKeyMissing, crypto.SecretDecryptError) as e:
         logger.warning("자격증명 복호화 실패 — 인증 없이 진행: %s (%s)", norm, e)
 
+    # 모바일 해상도 스크린샷도 함께 저장할지 — 시스템 설정(기본 off). 켜져
+    # 있으면 캡처가 데스크탑 외에 모바일 뷰포트 스크린샷을 한 장 더 찍는다.
+    with db.connect() as conn:
+        mobile_screenshot = db.mobile_screenshot_enabled(conn)
+
     # 해시가 같으면 스냅샷 디렉토리를 만들지 않도록 임시 디렉토리에 먼저 캡처
     capture_kwargs = dict(
         remove_selectors=tuple(rules.get("remove_selectors") or ()),
         link_rewriter=link_rewriter,
         session=browser_session,
         resource_fallback=_resource_fallback,
+        mobile_screenshot=mobile_screenshot,
     )
     if credential is not None:
         capture_kwargs["credential"] = credential

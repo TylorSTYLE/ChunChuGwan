@@ -53,6 +53,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         crawl_backoff = crawler.retry_backoff(conn)
         network_tags = db.list_network_tags(conn)
         ext_credential_ttl_hours = db.ext_credential_ttl_hours(conn)
+        mobile_screenshot_enabled = db.mobile_screenshot_enabled(conn)
     usage = storage.archive_disk_usage()
     return templates.TemplateResponse(
         request, "system.html",
@@ -78,6 +79,9 @@ def system_view(request: Request, notice: str = "", error: str = ""):
                 "min": config.EXT_CREDENTIAL_TTL_HOURS_MIN,
                 "max": config.EXT_CREDENTIAL_TTL_HOURS_MAX,
             },
+            "mobile_screenshot_enabled": mobile_screenshot_enabled,
+            "mobile_screenshot_size":
+                f"{config.MOBILE_SCREENSHOT_WIDTH} × {config.MOBILE_SCREENSHOT_HEIGHT}",
             "credential_key_set": crypto.is_configured(),
             "archive_root": str(config.ARCHIVE_ROOT),
             "db_bytes": usage["db"],
@@ -320,6 +324,26 @@ def system_credential_settings(
         )
     audit.log(request, "확장 자격증명 설정 변경: 보관 %d시간", ext_credential_ttl_hours)
     return _system_redirect(notice=t(request, "확장 자격증명 설정을 저장했습니다."))
+
+
+@router.post("/capture-settings")
+def system_capture_settings(
+    request: Request, mobile_screenshot_enabled: bool = Form(False)
+):
+    """캡처 설정 저장 — 모바일 해상도 스크린샷도 함께 저장할지 (기본 off).
+
+    이후 새로 만들어지는 스냅샷에만 적용된다 (기존 스냅샷은 그대로).
+    """
+    with db.connect() as conn:
+        db.set_setting(
+            conn, db.MOBILE_SCREENSHOT_ENABLED_KEY,
+            "on" if mobile_screenshot_enabled else "off",
+        )
+    audit.log(
+        request, "캡처 설정 변경: 모바일 스크린샷 %s",
+        "켜짐" if mobile_screenshot_enabled else "꺼짐",
+    )
+    return _system_redirect(notice=t(request, "캡처 설정을 저장했습니다."))
 
 
 # ---- 로컬 네트워크 태그 ----

@@ -224,6 +224,25 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
+    <h4>{{ _("캡처 설정") }}</h4>
+    <form method="post" action="/system/capture-settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1">
+      <p>
+        {{ _("아카이빙할 때 데스크탑 스크린샷 외에 모바일 해상도(화면비율) 스크린샷도 함께 저장합니다. 같은 페이지를 모바일 뷰포트 너비로 재배치해 한 장 더 찍으며, 이후 새로 만들어지는 스냅샷에만 적용됩니다(기존 스냅샷은 그대로).") }}
+      </p>
+      <label class="mode">
+        <input type="checkbox" name="mobile_screenshot_enabled" value="on"
+               {% if mobile_screenshot_enabled %}checked{% endif %}>
+        {{ _("모바일 해상도 스크린샷도 함께 저장") }}
+        <span class="mono" style="color:var(--muted); margin-left:6px">{{ mobile_screenshot_size }}</span>
+      </label>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="sys-card">
     <h4>{{ _("로컬 네트워크 태그") }}</h4>
     <p>
       {{ _("사설 IP 대역(로컬 네트워크)의 웹서버를 아카이빙할 때 어느 네트워크인지 구분하는 태그입니다. 사설 대역 주소는 태그를 지정해야 아카이빙할 수 있고, 루프백 주소는 항상 아카이빙할 수 없습니다. ID(GUID)는 자동 발급됩니다.") }}

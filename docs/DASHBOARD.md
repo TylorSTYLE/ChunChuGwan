@@ -153,7 +153,10 @@
   실행 로그의 단계별 소요를 보여준다 (`_snapshot_detail.html` 매크로 공용).
 - **스냅샷 뷰어** (snapshot) / **diff 뷰어** (diff) — 스냅샷 뷰어의
   메타데이터 표에는 사설 대역 페이지면 로컬 네트워크 태그 뱃지 행이
-  붙는다. 문서 스냅샷
+  붙는다. 탭은 렌더링·데스크탑 스크린샷·텍스트가 기본이며, 시스템 "캡처
+  설정"을 켜고 찍은 스냅샷처럼 모바일 해상도 스크린샷
+  (`screenshot-mobile.*`)이 있으면 "모바일 스크린샷" 탭이 추가로 노출된다
+  (모바일 뷰포트 390×844 너비로 재배치해 찍은 전체 페이지). 문서 스냅샷
   (URL 자체가 파일 다운로드인 페이지, pipeline `_archive_document_url`)은
   스크린샷이 없으므로 스크린샷 탭을 숨긴다. 렌더링 탭에는 생성된 안내
   page.html, 텍스트 탭에는 문서 메타데이터 content.md 가 보이고 파일
@@ -187,7 +190,10 @@
   권한없음/보기 전용/아카이브, 기본 권한없음 — `settings` 테이블)·사이트
   아카이브 설정(`POST /system/crawl-settings` — 크롤 기본 옵션 3종 + 실패
   재시도 대기 쉼표 목록, 대기 횟수 + 1 = 페이지당 최대 시도. `settings`
-  테이블, 재시도 대기는 진행 중 크롤에도 즉시 적용)·로컬 네트워크 태그
+  테이블, 재시도 대기는 진행 중 크롤에도 즉시 적용)·캡처 설정
+  (`POST /system/capture-settings` — 모바일 해상도(390×844) 스크린샷도 함께
+  저장할지. `settings` 테이블 `mobile_screenshot_enabled`, 기본 꺼짐, 켠 뒤
+  새로 만들어지는 스냅샷에만 적용)·로컬 네트워크 태그
   (`POST /system/network-tags`, `POST /system/network-tags/{id}/delete`,
   `POST /system/network-tags/merge` — 사설 IP 대역 아카이빙을 허용하는 태그.
   id 는 GUID 자동 발급, 이름은 유일·60자, 설명 200자. 페이지·크롤·크롤

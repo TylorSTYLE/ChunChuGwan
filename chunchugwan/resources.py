@@ -347,28 +347,32 @@ def _gzip_replace(src: Path) -> Path:
 
 
 def _screenshot_to_webp(png: Path) -> Path | None:
-    """screenshot.png → screenshot.webp 변환 후 원본 삭제. 변환 안 하면 None.
+    """스크린샷 PNG → 같은 이름의 WebP 변환 후 원본 삭제. 변환 안 하면 None.
+
+    screenshot.png → screenshot.webp, screenshot-mobile.png →
+    screenshot-mobile.webp 처럼 베이스 이름은 입력 PNG 에서 파생한다.
 
     WebP 는 한 변 16383px 제한이 있어 아주 긴 전체 페이지 스크린샷은 변환에
     실패할 수 있고, 변환 결과가 원본보다 커질 수도 있다 — 두 경우 모두 원본
-    PNG 를 유지하고 마커(storage.WEBP_SKIP_MARKER)를 남겨 이후 재시도와
-    압축 대상 카운트(needs_compaction)에서 제외한다.
+    PNG 를 유지하고 마커(<png 이름>.keep)를 남겨 이후 재시도와 압축 대상
+    카운트(needs_compaction)에서 제외한다.
     """
     from PIL import Image
 
-    dst = png.with_name("screenshot.webp")
+    dst = png.with_suffix(".webp")
+    marker = png.with_name(png.name + ".keep")
     try:
         with Image.open(png) as im:
             im.save(dst, "WEBP", quality=config.SCREENSHOT_WEBP_QUALITY, method=4)
     except Exception as e:
         logger.warning("스크린샷 WebP 변환 실패, PNG 유지: %s (%s)", png, e)
         dst.unlink(missing_ok=True)
-        png.with_name(storage.WEBP_SKIP_MARKER).touch()
+        marker.touch()
         return None
     if dst.stat().st_size >= png.stat().st_size:
         logger.info("WebP 가 PNG 보다 작지 않아 변환 생략, PNG 유지: %s", png)
         dst.unlink()
-        png.with_name(storage.WEBP_SKIP_MARKER).touch()
+        marker.touch()
         return None
     png.unlink()
     return dst
@@ -397,6 +401,7 @@ def compact_snapshot_dir(
     - page.html → data URI·인라인 <style> 추출 후 gzip → page.html.gz
     - raw.html → gzip → raw.html.gz
     - screenshot.png → screenshot.webp (변환 실패 시 PNG 유지)
+    - screenshot-mobile.png → screenshot-mobile.webp (있을 때만, 같은 규칙)
 
     파이프라인이 임시 캡처 디렉토리에, ``wccg compact`` 가 기존 스냅샷에
     같은 변환을 적용한다 (스냅샷 불변 원칙의 유일한 예외 — 내용 보존 변환).
@@ -427,13 +432,18 @@ def compact_snapshot_dir(
         stats.before_bytes += raw.stat().st_size
         stats.after_bytes += _gzip_replace(raw).stat().st_size
 
-    png = snap_dir / "screenshot.png"
-    if png.is_file() and not (snap_dir / storage.WEBP_SKIP_MARKER).is_file():
-        before = png.stat().st_size
-        webp = _screenshot_to_webp(png)
-        if webp is not None:
-            stats.before_bytes += before
-            stats.after_bytes += webp.stat().st_size
+    # 데스크탑·모바일 스크린샷 모두 같은 규칙으로 WebP 변환 (마커가 있으면 생략)
+    for png_name, marker_name in (
+        ("screenshot.png", storage.WEBP_SKIP_MARKER),
+        ("screenshot-mobile.png", storage.MOBILE_WEBP_SKIP_MARKER),
+    ):
+        png = snap_dir / png_name
+        if png.is_file() and not (snap_dir / marker_name).is_file():
+            before = png.stat().st_size
+            webp = _screenshot_to_webp(png)
+            if webp is not None:
+                stats.before_bytes += before
+                stats.after_bytes += webp.stat().st_size
 
     return stats
 
@@ -452,18 +462,24 @@ def snapshot_dirs() -> list[Path]:
 
 
 # compact_snapshot_dir 가 변환하는 구형 산출물 이름
-_LEGACY_NAMES = ("page.html", "raw.html", "screenshot.png")
+_LEGACY_NAMES = ("page.html", "raw.html", "screenshot.png", "screenshot-mobile.png")
 
 
 def needs_compaction(snap_dir: Path) -> bool:
     """압축 변환이 필요한 구형 산출물(또는 files/ 의 구형 문서)이 남아 있는지.
 
-    WebP 변환을 하지 않기로 확정한 PNG(storage.WEBP_SKIP_MARKER 보유 —
-    한도 초과·용량 역효과)는 변환할 것이 없으므로 대상으로 세지 않는다.
+    WebP 변환을 하지 않기로 확정한 PNG(<png 이름>.keep 마커 보유 — 한도
+    초과·용량 역효과)는 변환할 것이 없으므로 대상으로 세지 않는다. 데스크탑·
+    모바일 스크린샷 각각의 마커를 따로 본다.
     """
     names: tuple[str, ...] = _LEGACY_NAMES
+    skip = []
     if (snap_dir / storage.WEBP_SKIP_MARKER).is_file():
-        names = tuple(n for n in names if n != "screenshot.png")
+        skip.append("screenshot.png")
+    if (snap_dir / storage.MOBILE_WEBP_SKIP_MARKER).is_file():
+        skip.append("screenshot-mobile.png")
+    if skip:
+        names = tuple(n for n in names if n not in skip)
     return any(
         (snap_dir / name).is_file() for name in names
     ) or documents.has_legacy_documents(snap_dir)
