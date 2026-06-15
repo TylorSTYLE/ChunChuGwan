@@ -60,28 +60,47 @@ function hostKind(u) {
 
 // ---- 탭 전환 ----
 
+function activateTab(name) {
+  document.querySelectorAll("nav button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab").forEach((t) =>
+    t.classList.toggle("active", t.id === "tab-" + name));
+  if (name === "history") loadHistory();
+  if (name === "login") initLogin();
+}
+
 function initTabs() {
   for (const btn of document.querySelectorAll("nav button")) {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll("nav button").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-      btn.classList.add("active");
-      $("#tab-" + btn.dataset.tab).classList.add("active");
-      if (btn.dataset.tab === "history") loadHistory();
-      if (btn.dataset.tab === "login") initLogin();
-    });
+    btn.addEventListener("click", () => activateTab(btn.dataset.tab));
   }
 }
 
 // ---- 연결 ----
 
-async function refreshStatus() {
-  const st = await send("status", {});
-  $("#conn-dot").classList.toggle("on", st.connected);
-  $("#conn-text").textContent = st.connected
+// 연결 상태를 UI 에 반영: 헤더 점·탭 노출·연결/해제 폼 전환.
+// 미연결이면 연결 외 탭을 숨기고 연결 탭으로 되돌린다.
+function applyConnState(st) {
+  const on = !!st.connected;
+  $("#conn-dot").classList.toggle("on", on);
+  $("#conn-text").textContent = on
     ? msg("connect_status_connected") + " " + st.prefix + "…"
     : msg("header_not_connected");
+  for (const b of document.querySelectorAll("nav button")) {
+    if (b.dataset.tab !== "connect") b.style.display = on ? "" : "none";
+  }
+  if (!on) activateTab("connect");
+  $("#connect-form").style.display = on ? "none" : "";
+  $("#connected-info").style.display = on ? "" : "none";
+  if (on) {
+    $("#connected-detail").textContent =
+      msg("connect_connected_to", [st.base_url, st.prefix]);
+  }
+}
+
+async function refreshStatus() {
+  const st = await send("status", {});
   $("#base-url").value = st.base_url || "";
+  applyConnState(st);
   return st;
 }
 
@@ -107,7 +126,12 @@ function initConnect() {
     showNote("#connect-result", msg("msg_disconnected"), "");
     refreshStatus();
   });
-  $("#open-issue").addEventListener("click", () => send("openIssue", {}));
+  // 토큰 발급 화면 열기 — 아직 연결 전이라 저장된 base_url 이 없을 수 있으므로
+  // 지금 입력칸에 적힌 주소를 함께 보낸다 (없으면 안내).
+  $("#open-issue").addEventListener("click", async () => {
+    const res = await send("openIssue", { base_url: $("#base-url").value });
+    if (!res || !res.ok) showNote("#connect-result", msg("err_need_base_url"), "err");
+  });
 }
 
 // ---- 아카이브 ----

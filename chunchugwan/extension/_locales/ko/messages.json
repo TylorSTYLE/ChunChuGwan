@@ -2,6 +2,7 @@
   "ext_description": { "message": "춘추관에 빠르게 아카이브하고 히스토리를 확인합니다" },
   "header_not_connected": { "message": "미연결" },
   "connect_status_connected": { "message": "연결됨" },
+  "connect_connected_to": { "message": "연결됨 — $1 ($2…)", "placeholders": {} },
   "tab_connect": { "message": "연결" },
   "tab_archive": { "message": "아카이브" },
   "tab_login": { "message": "로그인 페이지" },
@@ -48,5 +49,6 @@
   "err_permission": { "message": "사이트 접근 권한이 필요합니다." },
   "err_no_cookies": { "message": "전송할 쿠키가 없습니다." },
   "err_loopback": { "message": "루프백 주소는 아카이빙할 수 없습니다." },
+  "err_need_base_url": { "message": "춘추관 주소를 먼저 입력하세요." },
   "err_generic": { "message": "요청을 처리하지 못했습니다." }
 }

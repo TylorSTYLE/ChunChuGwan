@@ -2,6 +2,7 @@
   "ext_description": { "message": "Quickly archive to ChunChuGwan and view history" },
   "header_not_connected": { "message": "Not connected" },
   "connect_status_connected": { "message": "Connected" },
+  "connect_connected_to": { "message": "Connected — $1 ($2…)", "placeholders": {} },
   "tab_connect": { "message": "Connect" },
   "tab_archive": { "message": "Archive" },
   "tab_login": { "message": "Logged-in page" },
@@ -48,5 +49,6 @@
   "err_permission": { "message": "Site access permission is required." },
   "err_no_cookies": { "message": "No cookies to send." },
   "err_loopback": { "message": "Loopback addresses can't be archived." },
+  "err_need_base_url": { "message": "Enter the ChunChuGwan address first." },
   "err_generic": { "message": "The request failed." }
 }

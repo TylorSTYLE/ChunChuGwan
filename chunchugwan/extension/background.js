@@ -214,11 +214,21 @@ const HANDLERS = {
     return { ok: true };
   },
 
-  openIssue: async () => {
-    const { base_url } = await getConfig();
-    const target = base_url ? base_url + "/settings/account" : null;
-    if (target) await chrome.tabs.create({ url: target });
-    return { ok: !!target };
+  openIssue: async (m) => {
+    // 연결 전에는 저장된 base_url 이 없으므로 팝업이 입력칸 주소를 함께 보낸다.
+    // 입력값을 우선 쓰고(정규화), 없으면 저장된 값으로 폴백한다.
+    const typed = normalizeBaseUrl(m && m.payload ? m.payload.base_url : "");
+    let base = typed;
+    if (!base) {
+      const { base_url } = await getConfig();
+      base = base_url || "";
+    }
+    if (!base) return { ok: false, error: "no_base_url" };
+    // 입력한 주소를 기억해 둔다 (팝업이 닫혀도 다음에 채워지도록). 토큰이 없으면
+    // status 의 connected 는 여전히 false 라 연결로 오인되지 않는다.
+    if (typed) await chrome.storage.local.set({ base_url: typed });
+    await chrome.tabs.create({ url: base + "/settings/account#ext-token-form" });
+    return { ok: true };
   },
 };
 
