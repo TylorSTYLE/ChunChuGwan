@@ -8,9 +8,10 @@
 #schedules th:first-child, #crawl-schedules th:first-child { width: 35%; }
 /* 주기·실행 시각 데이터 셀은 한 줄 유지 (액션 셀은 제외) */
 #schedules td.mono, #crawl-schedules td.mono { white-space: nowrap; }
-/* 액션 셀: 폼 세 개(주기 변경·다음 실행 변경·해제)를 세로로 쌓아 컬럼이
-   넓어져 표가 컨테이너를 넘고 버튼이 가로로 잘려 안 보이던 문제 해결.
-   각 폼 안의 입력·버튼은 flex row 라 한 줄 유지된다. */
+/* 액션 셀: 폼 세 개를 세로로 쌓아 컬럼이 넓어져 표가 컨테이너를 넘고
+   버튼이 가로로 잘려 안 보이던 문제 해결. 각 폼 안의 입력·버튼은
+   flex row 라 한 줄 유지된다. (주석에 버튼 라벨 문자열을 넣지 말 것 —
+   viewer 화면 노출 검사 test_viewer_sees_schedules_readonly 에 걸린다) */
 #schedules td:last-child form.inline,
 #crawl-schedules td:last-child form.inline {
   display: flex; gap: 6px; align-items: center; margin: 3px 0;
