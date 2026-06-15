@@ -14,21 +14,26 @@ from markupsafe import Markup, escape
 def _auth_context(request: Request) -> dict:
     """미들웨어가 적재한 로그인 사용자와 메뉴/버튼 노출 여부를 모든 템플릿에 주입."""
     from . import permissions
-    from .. import config
 
     user = getattr(request.state, "user", None)
     admin = permissions.system_allowed(user)
-    # 사람 보조(라이브 챌린지) 기능이 켜진 관리자에게만 '사람 확인' 메뉴를 띄운다.
-    # 대기 건수는 작은 인덱스 조회 — 기능 off(기본)면 질의하지 않는다.
-    needs_human = 0
-    if admin and config.LIVE_CHALLENGE:
+    # 사람 확인 대기 작업은 워커가 기록하는 DB 사실이다 — 대시보드(serve)의
+    # WCCG_LIVE_CHALLENGE 설정과 무관하게, 관리자에겐 대기 작업이 있으면 헤더
+    # 메뉴·배너로 안내한다 (워커와 serve 의 env 가 달라도 누락되지 않게). 대기
+    # 건수는 작은 인덱스 조회(idx_archive_jobs_needs_human) — 평소엔 0 건이라 즉시
+    # 반환된다. 단건 링크용으로 작업 목록(id·url)도 함께 넘긴다.
+    needs_human_jobs: list = []
+    if admin:
         from .. import db
 
         try:
             with db.connect() as conn:
-                needs_human = len(db.list_needs_human_jobs(conn))
+                needs_human_jobs = [
+                    {"id": j["id"], "url": j["url"]}
+                    for j in db.list_needs_human_jobs(conn)
+                ]
         except Exception:
-            needs_human = 0
+            needs_human_jobs = []
     return {
         "user": user,
         "system_allowed": admin,
@@ -36,8 +41,8 @@ def _auth_context(request: Request) -> dict:
         "can_delete": permissions.can_delete(user),
         "can_view_logs": permissions.can_view_logs(user),
         "can_search": permissions.can_search(user),
-        "live_challenge_enabled": config.LIVE_CHALLENGE,
-        "needs_human_count": needs_human,
+        "needs_human_jobs": needs_human_jobs,
+        "needs_human_count": len(needs_human_jobs),
     }
 
 

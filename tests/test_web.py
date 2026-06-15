@@ -737,7 +737,7 @@ def test_archive_interval_skipped_when_page_missing(client, monkeypatch):
     )
     assert res.status_code == 303
     _drain_archive_jobs()  # 캡처 실패 → 주기 등록 안 됨
-    assert client.get("/archive/active").json() == {"active": []}
+    assert client.get("/archive/active").json()["active"] == []
     with db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM schedules").fetchone()[0] == 0
 
@@ -759,11 +759,11 @@ def test_archive_registers_active_job_and_clears_on_finish(client, monkeypatch):
     )
     assert res.status_code == 303
     # enqueue 직후엔 대기(pending) 작업이 진행 목록에 보인다
-    assert client.get("/archive/active").json() == {"active": ["https://example.com/new"]}
+    assert client.get("/archive/active").json()["active"] == ["https://example.com/new"]
     _drain_archive_jobs()
     # 캡처 실행 중에도 진행 목록에 있었고(in_progress), 끝나면 비워진다
     assert seen == [["https://example.com/new"]]
-    assert client.get("/archive/active").json() == {"active": []}
+    assert client.get("/archive/active").json()["active"] == []
 
 
 def _enter_needs_human(url: str) -> int:
@@ -775,43 +775,64 @@ def _enter_needs_human(url: str) -> int:
     return job["id"]
 
 
-def test_archive_active_omits_needs_human_when_disabled(client):
-    # LIVE_CHALLENGE 기본 off → needs_human 키 없음 (기존 폴링 응답 호환)
-    _enter_needs_human("https://sd.test/a")
-    assert "needs_human" not in client.get("/archive/active").json()
+# needs_human 표시는 워커가 DB 에 기록하는 사실에만 의존한다 — serve 프로세스의
+# WCCG_LIVE_CHALLENGE 설정과 무관하다 (워커·serve env 가 달라도 누락 안 되게).
+# 아래 테스트는 모두 serve LIVE_CHALLENGE 를 켜지 않은 기본 off 상태로 검증한다.
+
+def test_archive_active_needs_human_key_present_for_admin(client):
+    # 관리자(인증 off=관리자)면 대기 0건이어도 needs_human 키가 빈 배열로 온다
+    assert client.get("/archive/active").json()["needs_human"] == []
 
 
-def test_archive_active_surfaces_needs_human_when_enabled(client, monkeypatch):
-    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+def test_archive_active_surfaces_needs_human(client):
+    # serve LIVE_CHALLENGE off 여도 DB 에 대기 작업이 있으면 내려보낸다
     job_id = _enter_needs_human("https://sd.test/a")
     data = client.get("/archive/active").json()
     assert data["needs_human"] == [{"id": job_id, "url": "https://sd.test/a"}]
 
 
-def test_header_and_banner_present_when_live_enabled(client, monkeypatch):
-    # 대기 0건이어도 헤더 '사람 확인' 메뉴와 전역 배너 요소가 항상 노출된다
-    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+def test_header_and_banner_absent_when_no_jobs(client):
+    # 대기 0건이면 헤더 '사람 확인' 메뉴도 전역 배너도 렌더하지 않는다
     html = client.get("/").text
-    assert "/archive/needs-human" in html
-    assert 'id="needs-human-banner"' in html
-    # 대기 0건이면 알림 색(nav-alert)·카운트 배지는 붙지 않는다
-    assert 'class="nav-alert"' not in html
-    assert "사람 확인 (" not in html
+    assert "/archive/needs-human" not in html
+    assert 'id="needs-human-banner"' not in html
 
 
-def test_header_alert_badge_when_jobs_pending(client, monkeypatch):
-    # 대기 건이 있으면 헤더 메뉴에 알림 색 + 건수 배지가 붙는다
-    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
-    _enter_needs_human("https://sd.test/a")
+def test_header_and_banner_present_when_jobs_pending(client):
+    # 대기 건이 있으면(LIVE off 여도) 헤더 알림 메뉴 + 라이브로 가는 전역 배너가 뜬다
+    job_id = _enter_needs_human("https://sd.test/a")
     html = client.get("/").text
     assert 'class="nav-alert"' in html
     assert "사람 확인 (1)" in html
+    assert 'id="needs-human-banner"' in html
+    assert f"/archive/jobs/{job_id}/live" in html  # 단건이면 라이브 화면 직행
 
 
-def test_archives_status_badge_becomes_needs_human(client, monkeypatch):
-    # 진행 중 작업이 사람 확인 대기로 전환되면 상태 배지가 '아카이빙 중' 대신
-    # 라이브 화면 링크('사람 확인 대기')로 바뀐다
-    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+def test_banner_poller_order_matches_endpoint(client):
+    # 배너 폴러 초기값(initial) 순서는 /archive/active 의 needs_human url 순서와
+    # 정확히 같아야 폴러가 매번 새로고침을 유발하지 않는다. 경로 대소문자만 다른
+    # 두 작업으로, Jinja sort(기본 대소문자 무시) vs 파이썬 sorted(코드포인트)
+    # 비대칭에 의한 무한 새로고침을 회귀 방지한다.
+    import json
+    import re
+
+    _enter_needs_human("https://example.com/Zebra")
+    _enter_needs_human("https://example.com/apple")
+    html = client.get("/").text
+    m = re.search(r"var initial = (\[[^\]]*\]);", html)
+    assert m, "배너 폴러 initial 배열을 찾지 못함"
+    initial = json.loads(m.group(1))
+    endpoint = [j["url"] for j in client.get("/archive/active").json()["needs_human"]]
+    assert initial == endpoint  # 동일 순서 → 폴러가 스스로 새로고침을 유발하지 않음
+    # 코드포인트 순서라 대문자 경로가 앞선다 (대소문자 무시였다면 apple 이 앞)
+    assert initial == [
+        "https://example.com/Zebra", "https://example.com/apple"
+    ]
+
+
+def test_archives_status_badge_becomes_needs_human(client):
+    # 진행 중 작업이 사람 확인 대기로 전환되면(serve LIVE off 여도) 상태 배지가
+    # '아카이빙 중' 대신 라이브 화면 링크('사람 확인 대기')로 바뀐다
     job_id = _enter_needs_human("https://example.com/post")  # 픽스처 사이트의 페이지
     html = client.get("/archives").text
     assert 'class="badge needs-human"' in html
@@ -820,16 +841,7 @@ def test_archives_status_badge_becomes_needs_human(client, monkeypatch):
     assert "아카이빙 중" not in html  # 같은 행이 배지로 대체됨 (다른 활성 없음)
 
 
-def test_archives_status_badge_archiving_when_live_disabled(client):
-    # 기능 off(기본)면 needs_human 작업도 그대로 '아카이빙 중'
-    _enter_needs_human("https://example.com/post")
-    html = client.get("/archives").text
-    assert "사람 확인 대기" not in html
-    assert "아카이빙 중" in html
-
-
-def test_site_detail_status_badge_becomes_needs_human(client, monkeypatch):
-    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+def test_site_detail_status_badge_becomes_needs_human(client):
     job_id = _enter_needs_human("https://example.com/post")
     with db.connect() as conn:
         site_id = db.get_page(conn, "https://example.com/post")["site_id"]
@@ -837,13 +849,6 @@ def test_site_detail_status_badge_becomes_needs_human(client, monkeypatch):
     assert 'class="badge needs-human"' in html
     assert "사람 확인 대기" in html
     assert f"/archive/jobs/{job_id}/live" in html
-
-
-def test_header_hides_human_check_when_live_disabled(client):
-    # 기능 off(기본)면 메뉴·배너 요소 모두 렌더하지 않는다 (CSS 규칙은 무관)
-    html = client.get("/").text
-    assert "/archive/needs-human" not in html
-    assert 'id="needs-human-banner"' not in html
 
 
 def test_active_job_cleared_even_on_failure(client, monkeypatch):
@@ -854,7 +859,7 @@ def test_active_job_cleared_even_on_failure(client, monkeypatch):
     monkeypatch.setattr(crawler, "retry_backoff", lambda conn: ())  # 재시도 없이 종결
     client.post("/archive", data={"url": "https://example.com/new"}, follow_redirects=False)
     _drain_archive_jobs()
-    assert client.get("/archive/active").json() == {"active": []}
+    assert client.get("/archive/active").json()["active"] == []
 
 
 def test_index_shows_active_jobs(client):
@@ -874,9 +879,9 @@ def test_index_shows_active_jobs(client):
 def test_archive_active_endpoint_sorted(client):
     web_app._register_job("https://b.example.com/x")
     web_app._register_job("https://a.example.com/x")
-    assert client.get("/archive/active").json() == {
-        "active": ["https://a.example.com/x", "https://b.example.com/x"]
-    }
+    assert client.get("/archive/active").json()["active"] == [
+        "https://a.example.com/x", "https://b.example.com/x"
+    ]
 
 
 def test_archive_duplicate_url_not_requeued(client):

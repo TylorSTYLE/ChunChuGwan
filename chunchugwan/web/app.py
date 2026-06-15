@@ -289,11 +289,13 @@ def _needs_human_urls(request: Request) -> dict[str, int]:
     needs_human 은 진행 중 작업이 자동으로 못 푼 챌린지를 만나 사람을 기다리는
     상태다 — 진행 목록에는 그대로 '활성'으로 남아 있으므로, 목록 화면이 이
     매핑으로 '아카이빙 중' 대신 '사람 확인 대기'(라이브 화면 링크)를 보여준다.
-    진행 중 챌린지 URL 은 관리자 정보라, 기능 켜짐 + 관리자일 때만 채운다
-    (그 외 사용자에겐 빈 dict → 기존처럼 '아카이빙 중')."""
-    if not config.LIVE_CHALLENGE or not permissions.system_allowed(
-        getattr(request.state, "user", None)
-    ):
+
+    중요: 이 상태는 **워커가** WCCG_LIVE_CHALLENGE 로 판단해 DB 에 기록하는 사실
+    이다. 대시보드(serve) 프로세스의 LIVE_CHALLENGE 설정에 묶지 않는다 — 워커와
+    serve 의 env 가 다르거나 serve 에 그 플래그가 없어도 대기 작업이 누락 없이
+    보이게, 대기 작업의 존재(DB)만으로 안내한다. 진행 중 챌린지 URL 은 관리자
+    정보라 관리자일 때만 채운다 (그 외 사용자에겐 빈 dict → 기존처럼 '아카이빙 중')."""
+    if not permissions.system_allowed(getattr(request.state, "user", None)):
         return {}
     with db.connect() as conn:
         return {j["url"]: j["id"] for j in db.list_needs_human_jobs(conn)}
@@ -493,7 +495,7 @@ def site_view(
     돌았던 실행 기록이다 — 회차 상세(/crawls/{id})는 그대로 유지된다.
     """
     active = _active_snapshot()
-    nh_urls = _needs_human_urls(request)  # url→job_id (관리자+기능 켜짐일 때만)
+    nh_urls = _needs_human_urls(request)  # url→job_id (관리자에게만, serve LIVE 설정 무관)
     if per_page not in _SITE_PAGES_PER_PAGE_CHOICES:
         per_page = _SITE_PAGES_PER_PAGE
     with db.connect() as conn:
@@ -863,13 +865,11 @@ def site_credentials_delete(request: Request, site_id: int, cred_id: int):
 def archive_active(request: Request) -> dict:
     """진행 중 아카이빙 URL 목록 (목록 화면 자동 갱신 폴링용).
 
-    라이브 챌린지가 켜진 관리자에게는 사람 확인 대기 작업(needs_human)도 함께
-    내려보낸다 — 목록 화면 폴링이 이 키의 변화를 보고 새로고침해 상태 배지를
-    '사람 확인 대기'로 갱신하고, 전역 배너도 이 키를 읽는다."""
+    관리자에게는 사람 확인 대기 작업(needs_human)도 함께 내려보낸다 — 목록 화면
+    폴링이 이 키의 변화를 보고 새로고침해 상태 배지를 '사람 확인 대기'로 갱신하고,
+    전역 배너도 이 키를 읽는다. (serve 의 LIVE_CHALLENGE 설정과 무관 — DB 사실 기준.)"""
     data: dict = {"active": sorted(_active_snapshot())}
-    if config.LIVE_CHALLENGE and permissions.system_allowed(
-        getattr(request.state, "user", None)
-    ):
+    if permissions.system_allowed(getattr(request.state, "user", None)):
         # url 기준 정렬 — 초기 needs_human_urls(=sorted(nh_urls))와 같은 파이썬
         # 코드포인트 순서로 내려보내, 폴링 JS 가 다시 정렬하지 않고 그대로 비교해
         # 비-BMP(이모지 IDN 등) 문자에서 정렬 순서가 어긋나 무한 새로고침 되는 걸 막는다
