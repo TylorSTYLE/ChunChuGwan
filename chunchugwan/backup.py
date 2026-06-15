@@ -110,23 +110,6 @@ def read_manifest(src: Path) -> dict:
 # ---- 전체 백업/복원 ----
 
 
-def _strip_auth_capsules(db_file: Path) -> None:
-    """백업 사본에서 1회성 자격증명 캡슐을 비운다.
-
-    마스터 키는 백업 밖(env)이라 암호문만으론 복호 불가하지만, 1회성 캡슐을
-    백업에 남길 이유가 없으므로 노출 표면을 최소화한다 (사본에서만 삭제 —
-    원본 DB 는 그대로).
-    """
-    conn = sqlite3.connect(db_file)
-    try:
-        conn.execute("DELETE FROM auth_capsules")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass  # 구형 백업 사본에 테이블이 없을 수 있다 — 무시
-    finally:
-        conn.close()
-
-
 def create_backup(dest: Path) -> Path:
     """전체 백업 tar.gz 생성 후 경로 반환. DB(인증 포함)·sites·rules.json 포함."""
     config.ensure_dirs()
@@ -142,7 +125,6 @@ def create_backup(dest: Path) -> Path:
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         _consistent_db_copy(tmp / "index.db")
-        _strip_auth_capsules(tmp / "index.db")
         (tmp / MANIFEST_NAME).write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -511,6 +493,7 @@ def _wipe_archive_data(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM schedules")
     conn.execute("DELETE FROM snapshot_documents")
     conn.execute("DELETE FROM snapshot_resources")
+    db.clear_search_index(conn)
     conn.execute("DELETE FROM checks")
     conn.execute("DELETE FROM snapshots")
     conn.execute("DELETE FROM pages")

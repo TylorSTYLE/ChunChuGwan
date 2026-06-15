@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
 from .. import __version__, auth, backup as backup_mod
-from .. import config, crawler, credentials, db, mailer, optimize, resources, storage
+from .. import config, crawler, crypto, db, mailer, optimize, resources, storage
 from . import audit, permissions
 from .i18n import t
 from .templating import filesize, templates
@@ -52,7 +52,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         crawl_defaults = crawler.crawl_defaults(conn)
         crawl_backoff = crawler.retry_backoff(conn)
         network_tags = db.list_network_tags(conn)
-        credential_ttl_hours = db.credential_ttl_hours(conn)
+        ext_credential_ttl_hours = db.ext_credential_ttl_hours(conn)
     usage = storage.archive_disk_usage()
     return templates.TemplateResponse(
         request, "system.html",
@@ -73,12 +73,12 @@ def system_view(request: Request, notice: str = "", error: str = ""):
                 "min_delay": config.CRAWL_MIN_DELAY_SECONDS,
                 "max_delay": config.CRAWL_MAX_DELAY_SECONDS,
             },
-            "credential_ttl_hours": credential_ttl_hours,
-            "credential_ttl_limits": {
-                "min": config.CREDENTIAL_TTL_HOURS_MIN,
-                "max": config.CREDENTIAL_TTL_HOURS_MAX,
+            "ext_credential_ttl_hours": ext_credential_ttl_hours,
+            "ext_credential_ttl_limits": {
+                "min": config.EXT_CREDENTIAL_TTL_HOURS_MIN,
+                "max": config.EXT_CREDENTIAL_TTL_HOURS_MAX,
             },
-            "credential_key_set": credentials.is_enabled(),
+            "credential_key_set": crypto.is_configured(),
             "archive_root": str(config.ARCHIVE_ROOT),
             "db_bytes": usage["db"],
             "sites_bytes": usage["sites"],
@@ -305,19 +305,21 @@ def system_crawl_settings(
 
 @router.post("/credential-settings")
 def system_credential_settings(
-    request: Request, credential_ttl_hours: int = Form(...)
+    request: Request, ext_credential_ttl_hours: int = Form(...)
 ):
-    """인증 캡처 설정 저장 — 1회성 자격증명 캡슐의 만료 안전망 TTL(시간)."""
-    lo, hi = config.CREDENTIAL_TTL_HOURS_MIN, config.CREDENTIAL_TTL_HOURS_MAX
-    if not (lo <= credential_ttl_hours <= hi):
+    """확장 1회성 세션 자격증명의 만료 안전망 TTL(시간) 저장."""
+    lo, hi = config.EXT_CREDENTIAL_TTL_HOURS_MIN, config.EXT_CREDENTIAL_TTL_HOURS_MAX
+    if not (lo <= ext_credential_ttl_hours <= hi):
         return _system_redirect(
             error=t(request, "자격증명 보관 시간은 {lo} ~ {hi}시간 사이여야 합니다.",
                     lo=lo, hi=hi)
         )
     with db.connect() as conn:
-        db.set_setting(conn, db.CREDENTIAL_TTL_HOURS_KEY, str(credential_ttl_hours))
-    audit.log(request, "인증 캡처 설정 변경: 자격증명 보관 %d시간", credential_ttl_hours)
-    return _system_redirect(notice=t(request, "인증 캡처 설정을 저장했습니다."))
+        db.set_setting(
+            conn, db.EXT_CREDENTIAL_TTL_HOURS_KEY, str(ext_credential_ttl_hours)
+        )
+    audit.log(request, "확장 자격증명 설정 변경: 보관 %d시간", ext_credential_ttl_hours)
+    return _system_redirect(notice=t(request, "확장 자격증명 설정을 저장했습니다."))
 
 
 # ---- 로컬 네트워크 태그 ----
@@ -379,6 +381,53 @@ def network_tags_delete(request: Request, tag_id: str):
     return _system_redirect(
         notice=t(request, "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.",
                  name=tag["name"])
+    )
+
+
+@router.post("/network-tags/merge")
+def network_tags_merge(
+    request: Request, source: str = Form(...), target: str = Form(...)
+):
+    """두 로컬 네트워크 태그 병합 — source 의 참조를 target 으로 옮기고 source 삭제.
+
+    같은 사설 IP:포트(같은 사이트)를 가리킬 때만 허용한다 — 두 태그의 site_id
+    집합이 완전히 같을 때다 (network_tag_site_ids). 참조가 없는 태그는 삭제를 쓴다.
+    검증·병합을 한 트랜잭션 안에서 처리해 경합(TOCTOU)을 피한다.
+    """
+    with db.connect() as conn:
+        src = db.get_network_tag(conn, source)
+        tgt = db.get_network_tag(conn, target)
+        if src is None or tgt is None:
+            raise HTTPException(404, t(request, "로컬 네트워크 태그 없음"))
+        if source == target:
+            return _system_redirect(
+                error=t(request, "같은 태그끼리는 병합할 수 없습니다.")
+            )
+        src_sites = db.network_tag_site_ids(conn, source)
+        tgt_sites = db.network_tag_site_ids(conn, target)
+        if not src_sites or not tgt_sites:
+            return _system_redirect(
+                error=t(request,
+                        "참조가 없는 태그는 병합할 수 없습니다 — 삭제를 사용하세요.")
+            )
+        if src_sites != tgt_sites:
+            return _system_redirect(
+                error=t(request,
+                        "두 태그가 같은 사설 네트워크(같은 IP·포트)를 가리킬 때만 "
+                        "병합할 수 있습니다.")
+            )
+        moved = db.merge_network_tags(conn, source, target)
+    audit.log(
+        request, "로컬 네트워크 태그 병합: '%s' → '%s' (페이지 %d·크롤 %d·스케줄 %d)",
+        src["name"], tgt["name"],
+        moved["pages"], moved["crawls"], moved["crawl_schedules"],
+    )
+    return _system_redirect(
+        notice=t(request,
+                 "'{src}' 태그를 '{tgt}'(으)로 병합했습니다 "
+                 "(페이지 {p}개·크롤 {c}개·스케줄 {s}개 이전).",
+                 src=src["name"], tgt=tgt["name"],
+                 p=moved["pages"], c=moved["crawls"], s=moved["crawl_schedules"])
     )
 
 

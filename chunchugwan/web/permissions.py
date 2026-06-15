@@ -39,6 +39,15 @@ def can_view_logs(user: sqlite3.Row | None) -> bool:
     )
 
 
+def can_search(user: sqlite3.Row | None) -> bool:
+    """아카이브 전문 검색(/search) 가능 여부 — viewer 이상.
+
+    전문검색은 모든 아카이브 본문을 훑는 강한 열람 권한이라 로그 열람과
+    같은 하한(viewer)을 둔다. pending/blocked 는 미들웨어가 이미 차단한다.
+    """
+    return can_view_logs(user)
+
+
 # 확장 토큰(사용자 귀속 API 키)이 동작할 수 있는 역할 — 그 외(pending/blocked/
 # withdrawn)는 토큰 자체가 무효 취급된다 (_api_auth 가 매 요청 재평가).
 TOKEN_ROLES = ("admin", "archiver", "viewer")

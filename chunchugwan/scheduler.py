@@ -179,8 +179,8 @@ def run_due(
     (오류 내용은 pipeline 이 archive_logs 에 남긴다).
     """
     with db.connect() as conn:
-        # 만료된 1회성 자격증명 캡슐 정리 (캡처 직후 삭제 누락 안전망)
-        db.delete_expired_auth_capsules(conn)
+        # 만료된 확장 1회성 세션 자격증명 정리 (캡처 직후 삭제 누락 안전망)
+        db.delete_expired_ext_credentials(conn)
         due = db.list_due_schedules(conn, _iso(_utcnow()))
 
     results: list[DueResult] = []

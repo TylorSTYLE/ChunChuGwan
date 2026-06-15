@@ -10,12 +10,12 @@ from pathlib import Path
 import click
 
 from . import __version__
+from . import archive_worker
 from . import backup as backup_mod
-from . import capture as capture_mod
 from . import worker as worker_mod
 from . import (
-    config, crawler, db, deletion, differ, optimize, pipeline, resources,
-    scheduler, storage, system_log,
+    config, crawler, db, deletion, differ, optimize, resources,
+    scheduler, searchindex, storage, system_log,
 )
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
@@ -39,6 +39,23 @@ def main(ctx: click.Context, verbose: bool) -> None:
         # 그대로 두기 위해 stderr 핸들러에 레벨을 직접 박는다.
         for handler in root.handlers:
             handler.setLevel(level)
+        # WCCG_LOG_FILE 가 있으면 회전 파일에도 남긴다 (도커는 볼륨으로 노출).
+        # 콘솔 레벨과 무관하게 INFO 이상을 담아 진단에 쓸 수 있게 한다.
+        if config.LOG_FILE:
+            from logging.handlers import RotatingFileHandler
+            try:
+                Path(config.LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+                file_handler = RotatingFileHandler(
+                    config.LOG_FILE, maxBytes=config.LOG_FILE_MAX_BYTES,
+                    backupCount=config.LOG_FILE_BACKUPS, encoding="utf-8",
+                )
+                file_handler.setLevel(logging.INFO)
+                file_handler.setFormatter(logging.Formatter(
+                    "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+                root.addHandler(file_handler)
+            except OSError as e:
+                logging.getLogger(__name__).warning(
+                    "로그 파일(%s) 설정 실패 — 콘솔만 사용: %s", config.LOG_FILE, e)
     # 시스템 로그 적재 — serve/worker 는 별도 출처, 나머지 명령은 'cli'
     source = ctx.invoked_subcommand
     system_log.install(source if source in ("serve", "worker") else "cli")
@@ -48,22 +65,55 @@ def main(ctx: click.Context, verbose: bool) -> None:
 @click.argument("url")
 @click.option("--force", is_flag=True, help="콘텐츠가 동일해도 스냅샷 강제 저장")
 def add(url: str, force: bool) -> None:
-    """URL을 아카이빙한다."""
-    try:
-        outcome = pipeline.archive_url(url, force=force)
-    except (ValueError, capture_mod.CaptureError) as e:
-        raise click.ClickException(str(e))
+    """URL 아카이빙 작업을 큐에 추가한다.
 
-    if outcome.status == "unchanged":
-        click.echo(f"변경 없음 (마지막 스냅샷 {outcome.last_taken_at})")
-        return
-    click.echo(f"저장됨 [{_STATUS_LABELS[outcome.status]}]: {outcome.snapshot_dir}")
-    click.echo(
-        f"  hash {outcome.content_hash[:12]}  http {outcome.http_status}  "
-        f"title {outcome.title or '-'}"
-    )
-    if outcome.documents:
-        click.echo(f"  첨부 문서 {outcome.documents}개 저장 (files/)")
+    실제 캡처는 `wccg worker`(또는 serve 단일 프로세스)나 `wccg archive run`
+    이 큐를 소비해 실행한다 — 모든 아카이빙을 한 프로세스로 통일해 스텔스
+    캡처 설정(WCCG_CAPTURE_*)이 그 프로세스에만 있으면 되게 한다.
+    """
+    try:
+        norm = storage.normalize_url(url)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    with db.connect() as conn:
+        queued = db.enqueue_archive_job(conn, norm, force=force, source="cli")
+    if queued:
+        click.echo(f"아카이빙 작업을 큐에 추가했습니다: {norm}")
+        click.echo("  `wccg worker` 또는 `wccg archive run` 이 처리합니다.")
+    else:
+        click.echo(f"이미 큐에 있어 건너뜁니다: {norm}")
+
+
+_ARCHIVE_STATUS_LABELS = {
+    "new": "신규", "changed": "변경", "unchanged": "변경 없음",
+    "forced_same": "동일(강제 저장)", "retry": "재시도 예약",
+    "failed": "실패", "skipped": "건너뜀",
+}
+
+
+@main.group()
+def archive() -> None:
+    """단발 아카이빙 작업 큐 (add·대시보드·API 가 넣은 작업)."""
+
+
+@archive.command("run")
+def archive_run() -> None:
+    """기한이 된 단발 아카이빙 작업을 모두 처리하고 종료 (cron 용).
+
+    `wccg crawl run`/`schedule run` 과 대칭. worker 를 상주시키지 않는 배포에서
+    cron 으로 돌려 큐를 소비한다 (serve/worker 가 돌고 있으면 자동 처리되므로 불필요).
+    """
+    ran = 0
+    while True:
+        step = archive_worker.process_next()
+        if step is None:
+            break
+        ran += 1
+        label = _ARCHIVE_STATUS_LABELS.get(step.status, step.status)
+        click.echo(f"{step.url} — {label}"
+                   + (f" ({step.error})" if step.error else ""))
+    if ran == 0:
+        click.echo("처리할 아카이빙 작업이 없습니다.")
 
 
 @main.command("list")
@@ -598,6 +648,100 @@ def compact(yes: bool) -> None:
         click.echo(
             f"고아 자원 정리: {result.swept}개 삭제 ({_fmt_mb(result.swept_bytes)})"
         )
+
+
+class _SearchGroup(click.Group):
+    """`wccg search <검색어>` 와 하위 명령(reindex/status)을 함께 지원.
+
+    첫 인자가 알려진 하위 명령이 아니고 옵션도 아니면 검색어로 보고 숨김
+    'query' 명령으로 넘긴다 (variadic 인자와 하위 명령이 충돌하지 않게).
+    """
+
+    def parse_args(self, ctx, args):
+        if args and args[0] not in self.commands and not args[0].startswith("-"):
+            args = ["query"] + args
+        return super().parse_args(ctx, args)
+
+
+@main.group(cls=_SearchGroup)
+def search() -> None:
+    """아카이브 전문 검색 — wccg search <검색어> | reindex | status.
+
+    한국어는 부분문자열(3글자 이상)로 찾고, 1~2글자는 부분일치로 폴백한다.
+    """
+
+
+@search.command("query", hidden=True)
+@click.argument("query", nargs=-1)
+@click.option("--domain", "-d", default=None, help="도메인 한정 (예: example.com)")
+@click.option("--limit", "-n", type=int, default=20, show_default=True, help="결과 수")
+@click.option("--latest", is_flag=True, help="URL 당 최신 스냅샷 1건만")
+def search_query(
+    query: tuple[str, ...],
+    domain: str | None,
+    limit: int,
+    latest: bool,
+) -> None:
+    """검색 수행 (wccg search <검색어> 의 실제 동작)."""
+    text = " ".join(query).strip()
+    if not text:
+        click.echo("검색어를 입력하세요 — 예: wccg search 헌법")
+        return
+    if not searchindex.available():
+        raise click.ClickException(
+            "검색 인덱스를 쓸 수 없습니다 — 이 SQLite 빌드에 FTS5 가 없습니다."
+        )
+    results = searchindex.search(text, domain=domain, latest_only=latest, limit=limit)
+    if results.mode == "empty":
+        click.echo("검색어가 비어 있습니다.")
+        return
+    if not results.hits:
+        click.echo("일치하는 결과가 없습니다.")
+        return
+    mode_note = " (부분일치 폴백)" if results.mode == "like" else ""
+    click.echo(f"총 {results.total}건{mode_note} — 상위 {len(results.hits)}건:\n")
+    for hit in results.hits:
+        when = hit.taken_at[:19].replace("T", " ")
+        click.echo(f"  {when}  {hit.page_url}")
+        if hit.title:
+            click.echo(f"    {hit.title}")
+        if hit.snippet:
+            click.echo(f"    {hit.snippet}")
+        click.echo(f"    snapshot #{hit.snapshot_id}")
+        click.echo("")
+
+
+@search.command("reindex")
+@click.option("--all", "rebuild", is_flag=True, help="전체 재색인 (인덱스 비우고 다시 빌드)")
+def search_reindex(rebuild: bool) -> None:
+    """미색인 스냅샷을 검색 인덱스에 백필 (--all 은 전체 재색인)."""
+    if not searchindex.available():
+        raise click.ClickException(
+            "검색 인덱스를 쓸 수 없습니다 — 이 SQLite 빌드에 FTS5 가 없습니다."
+        )
+    if rebuild:
+        count = searchindex.reindex_all()
+        click.echo(f"전체 재색인 완료 — 스냅샷 {count}개")
+    else:
+        pending = searchindex.pending_count()
+        if pending == 0:
+            click.echo("색인할 스냅샷이 없습니다 — 모두 최신 상태입니다.")
+            return
+        count = searchindex.backfill_all()
+        click.echo(f"검색 인덱스 백필 완료 — 스냅샷 {count}개")
+
+
+@search.command("status")
+def search_status() -> None:
+    """검색 인덱스 상태 — 가용 여부와 미색인 스냅샷 수."""
+    if not searchindex.available():
+        click.echo("검색 인덱스: 비활성 (이 SQLite 빌드에 FTS5 없음)")
+        return
+    pending = searchindex.pending_count()
+    if pending:
+        click.echo(f"검색 인덱스: 활성 · 미색인 스냅샷 {pending}개 (wccg search reindex 로 색인)")
+    else:
+        click.echo("검색 인덱스: 활성 · 모든 스냅샷 색인됨")
 
 
 def _counts_label(manifest: dict) -> str:

@@ -17,6 +17,7 @@ from fastapi import Request
 
 from .. import config
 from ..auth import MAX_API_KEY_NAME_LENGTH, MAX_DISPLAY_NAME_LENGTH
+from ..credentials import MAX_JWT_LENGTH, MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH
 
 DEFAULT_LOCALE = "ko"
 SUPPORTED_LOCALES = ("ko", "en")
@@ -40,8 +41,30 @@ _EN: dict[str, str] = {
     "시스템 로그": "System logs",
     "사용자": "Users",
     "시스템": "System",
+    "검색": "Search",
     "계정": "Account",
     "로그아웃": "Log out",
+    # 사람 보조 챌린지 해결 (라이브)
+    "사람 확인": "Human check",
+    "사람 확인 필요": "Human check needed",
+    "사람 확인 처리": "Human-assisted solve",
+    "자동으로 통과하지 못한 챌린지 — 직접 풀어서 통과시킵니다": "Challenges that auto-solve couldn't pass — solve them yourself",
+    "사람 확인이 필요한 작업이 없습니다.": "No jobs need human check.",
+    "진입 시각": "Entered at",
+    "처리": "Solve",
+    "처리되었습니다 — 캡처를 이어서 진행합니다. 잠시 후 결과는 로그에서 확인하세요.": "Solved — capture is continuing. Check the result in the logs shortly.",
+    "다른 관리자가 처리 중입니다 — 보기 전용입니다.": "Another admin is handling this — view only.",
+    "화면 갱신": "Refresh screen",
+    "입력할 문자열…": "Text to type…",
+    "문자 입력": "Send text",
+    "이 작업을 취소할까요?": "Cancel this job?",
+    "화면 위를 클릭하면 서버 브라우저의 같은 위치를 누릅니다. 드래그도 그대로 전달됩니다. 챌린지(체크박스·그림 찾기 등)를 통과시키면 자동으로 캡처가 이어집니다.": "Clicking on the screen clicks the same spot in the server browser. Drags are relayed too. Once you pass the challenge (checkbox, image-select, etc.) capture continues automatically.",
+    "클릭": "click",
+    "누름": "down",
+    "뗌": "up",
+    "드래그": "drag",
+    "입력": "type",
+    "처리됨": "solved",
     "메뉴": "Menu",
     "테마 전환 (자동 → 라이트 → 다크)": "Switch theme (auto → light → dark)",
     "테마: 자동": "Theme: auto",
@@ -575,22 +598,100 @@ _EN: dict[str, str] = {
     "아카이브 없음": "Not archived",
     "아카이브된 스냅샷이 없습니다": "No archived snapshot",
     "이 URL 은 아직 아카이브되지 않았습니다.": "This URL has not been archived yet.",
-    # ---- 인증 캡처 (1회성 자격증명) ----
-    "인증 캡처 설정": "Authenticated capture",
-    "크롬 확장의 ‘로그인 페이지 아카이브’가 보낸 로그인 세션을 자동 폐기하기까지의 최대 보관 시간입니다. 정상 흐름에선 캡처 직후 삭제되며, 이 값은 오류·재기동으로 삭제가 누락된 캡슐을 정리하는 안전망입니다.":
-        "Maximum time to keep a login session sent by the Chrome extension's "
-        "‘archive logged-in page’ before discarding it. Normally it is deleted right "
-        "after capture; this value is a safety net that cleans up capsules left behind "
-        "by errors or restarts.",
+    # ---- 확장 1회성 세션 자격증명 (시스템 설정) ----
+    "확장 자격증명 설정": "Extension credentials",
+    "크롬 확장의 ‘로그인 페이지 아카이브’가 보낸 1회성 세션 자격증명을 자동 폐기하기까지의 최대 보관 시간입니다. 정상 흐름에선 캡처 직후 삭제되며, 이 값은 오류·재기동으로 삭제가 누락된 자격증명을 정리하는 안전망입니다.":
+        "Maximum time to keep a one-shot session credential sent by the Chrome "
+        "extension's “archive logged-in page” before discarding it. Normally it is "
+        "deleted right after capture; this value is a safety net that cleans up "
+        "credentials left behind by errors or restarts.",
     "자격증명 보관 시간(시간)": "Credential retention (hours)",
-    "WCCG_CREDENTIAL_KEY 가 설정되지 않아 인증 캡처가 비활성 상태입니다.":
-        "Authenticated capture is disabled because WCCG_CREDENTIAL_KEY is not set.",
     "자격증명 보관 시간은 {lo} ~ {hi}시간 사이여야 합니다.":
         "Credential retention must be between {lo} and {hi} hours.",
-    "인증 캡처 설정을 저장했습니다.": "Authenticated capture settings saved.",
-    "인증됨": "Authenticated",
-    "로그인된 상태로 캡처된 스냅샷입니다 — 소유자/관리자만 볼 수 있습니다.":
-        "Captured while logged in — visible only to the owner and admins.",
+    "확장 자격증명 설정을 저장했습니다.": "Extension credential settings saved.",
+    # ---- 사이트 로그인 자격증명 (site_credentials) ----
+    "로그인 자격증명": "Login credentials",
+    "이 사이트를 아카이빙할 때 춘추관이 로그인하는 데 쓸 자격증명입니다. 비밀은 WCCG_SECRET_KEY 로 대칭 암호화해 저장하며, 화면에는 다시 표시되지 않습니다.":
+        "Credentials ChunChuGwan uses to log in when archiving this site. Secrets are "
+        "stored symmetrically encrypted with WCCG_SECRET_KEY and are never shown again.",
+    "이 사이트 로그인이 필요한 경우 쓸 자격증명을 관리합니다 (관리자 전용).":
+        "Manage credentials to use when this site requires login (admin only).",
+    "WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.":
+        "WCCG_SECRET_KEY is not set, so credentials cannot be stored.",
+    "환경변수 WCCG_SECRET_KEY 에 임의의 비밀 문자열을 설정하고 대시보드를 다시 시작하면 등록할 수 있습니다.":
+        "Set any secret string in the WCCG_SECRET_KEY environment variable and "
+        "restart the dashboard to register credentials.",
+    "종류": "Type",
+    "만든 사람": "Created by",
+    "이 자격증명을 삭제합니다. 되돌릴 수 없습니다.":
+        "Delete this credential. This cannot be undone.",
+    "등록된 자격증명이 없습니다.": "No credentials registered yet.",
+    "새 자격증명 등록": "Add a credential",
+    "예: 관리자 계정": "e.g. admin account",
+    "사용자명": "Username",
+    "비밀번호": "Password",
+    "세션 상태 (storage_state JSON)": "Session state (storage_state JSON)",
+    "브라우저에서 로그인한 뒤 Playwright 의 storage_state() 등으로 추출한 JSON 을 붙여넣으세요. 쿠키·localStorage 가 포함됩니다.":
+        "Log in in your browser, then paste the JSON exported via Playwright's "
+        "storage_state() or similar. It includes cookies and localStorage.",
+    "또는 HAR 파일 업로드": "Or upload a HAR file",
+    "로그인한 상태로 기록한 HAR 파일(브라우저 개발자도구 네트워크 탭 → 내보내기)을 올리면 쿠키를 자동 추출해 세션 상태로 저장합니다. 이 사이트 도메인의 쿠키만 가져오며, HAR 을 올리면 위 JSON 입력은 무시되고 localStorage 는 포함되지 않습니다.":
+        "Upload a HAR file recorded while logged in (browser DevTools Network tab "
+        "→ export) to automatically extract its cookies into the session state. "
+        "Only cookies for this site's domain are imported; when a HAR is uploaded "
+        "the JSON field above is ignored and localStorage is not included.",
+    "로그인한 상태로 기록한 HAR 파일을 올리면 쿠키를 자동 추출해 세션 상태로 저장합니다. HAR 을 올리면 위 JSON 입력은 무시됩니다.":
+        "Upload a HAR file recorded while logged in to automatically extract its "
+        "cookies into the session state. When a HAR is uploaded the JSON field "
+        "above is ignored.",
+    # HAR 파싱 오류 (credentials.storage_state_from_har)
+    "HAR 파일이 너무 큽니다.": "The HAR file is too large.",
+    "HAR 파일을 UTF-8 로 읽을 수 없습니다.": "The HAR file could not be read as UTF-8.",
+    "HAR 파일이 올바른 JSON 이 아닙니다.": "The HAR file is not valid JSON.",
+    "올바른 HAR 파일이 아닙니다 (log.entries 가 없습니다).":
+        "Not a valid HAR file (missing log.entries).",
+    "HAR 파일에서 쿠키를 찾지 못했습니다.": "No cookies were found in the HAR file.",
+    # 종류 라벨 (credentials.KIND_LABELS)
+    "HTTP 기본 인증": "HTTP basic auth",
+    "세션 쿠키": "Session cookie",
+    "JWT (Bearer 토큰)": "JWT (Bearer token)",
+    "Bearer 토큰": "Bearer token",
+    "캡처 시 Authorization: Bearer 헤더로 주입됩니다. 'Bearer ' 접두사 없이 토큰 값만 넣으세요.":
+        "Injected as an Authorization: Bearer header during capture. "
+        "Enter only the token value, without the 'Bearer ' prefix.",
+    "토큰을 입력하세요.": "Enter a token.",
+    "토큰에 공백·줄바꿈을 넣을 수 없습니다.":
+        "The token cannot contain spaces or line breaks.",
+    # 라우트·검증 메시지
+    "자격증명 없음": "Credential not found",
+    "잘못된 자격증명 종류입니다.": "Invalid credential type.",
+    "로그인 자격증명 추가": "Add login credentials",
+    "이 사이트에 로그인이 필요하면 자격증명을 등록합니다. 비밀은 WCCG_SECRET_KEY 로 암호화 저장되며, 사이트 상세에서도 관리할 수 있습니다.":
+        "Register credentials if this site requires login. Secrets are stored "
+        "encrypted with WCCG_SECRET_KEY and can also be managed from the site detail page.",
+    "비우면 자동 지정": "Auto-named if left blank",
+    "이 사이트에 이미 같은 이름의 자격증명이 있습니다: {name}":
+        "This site already has a credential with that name: {name}",
+    "연결 안 함": "Don't connect",
+    "새 자격증명 추가…": "Add new credential…",
+    "이 도메인에 등록된 자격증명이 있으면 골라서 연결하고, 없으면 새로 추가할 수 있습니다. 아카이빙 시 로그인에 사용됩니다 (사이트 상세에서도 관리).":
+        "If this domain has registered credentials you can pick one to connect; "
+        "otherwise add a new one. Used to log in during archiving "
+        "(also managed from the site detail page).",
+    "잘못된 자격증명 선택입니다.": "Invalid credential selection.",
+    "이 도메인에 등록된 자격증명이 아닙니다.": "Not a credential registered for this domain.",
+    "이미 있는 이름입니다: {name}": "Name already exists: {name}",
+    "자격증명을 등록했습니다.": "Credential added.",
+    "자격증명을 삭제했습니다.": "Credential deleted.",
+    "이름을 입력하세요.": "Enter a name.",
+    "사용자명을 입력하세요.": "Enter a username.",
+    "비밀번호를 입력하세요.": "Enter a password.",
+    "세션 상태(storage_state) JSON 을 입력하세요.":
+        "Enter the session state (storage_state) JSON.",
+    "세션 상태 JSON 이 너무 큽니다.": "The session state JSON is too large.",
+    "세션 상태가 올바른 JSON 이 아닙니다.": "The session state is not valid JSON.",
+    "세션 상태 JSON 형식이 아닙니다 (cookies 키가 필요합니다).":
+        "Not a session state JSON (a 'cookies' key is required).",
     # ---- 계정 설정 (account) ----
     "계정 설정": "Account settings",
     # 확장 토큰
@@ -806,6 +907,30 @@ _EN: dict[str, str] = {
         "The tag '{name}' is in use and cannot be deleted ({n} reference(s)).",
     "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.":
         "Deleted local network tag '{name}'.",
+    # 로컬 네트워크 태그 병합 (같은 IP:포트의 중복 태그 정리)
+    "같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 "
+    "페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.":
+        "Merges two tags that point to the same private IP and port into one. "
+        "The source tag's pages and crawls move to the target tag, and the "
+        "source tag is deleted.",
+    "출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 "
+    "같은 IP·포트를 가리킬 때만 병합됩니다.":
+        "Merge the source tag into the target tag? The source tag is deleted, "
+        "and the merge only proceeds when both tags point to the same IP and port.",
+    "출처 태그(삭제됨)": "Source tag (deleted)",
+    "대상 태그(유지)": "Target tag (kept)",
+    "병합": "Merge",
+    "같은 태그끼리는 병합할 수 없습니다.": "A tag cannot be merged with itself.",
+    "참조가 없는 태그는 병합할 수 없습니다 — 삭제를 사용하세요.":
+        "A tag with no references cannot be merged — use delete instead.",
+    "두 태그가 같은 사설 네트워크(같은 IP·포트)를 가리킬 때만 "
+    "병합할 수 있습니다.":
+        "Tags can only be merged when they point to the same private network "
+        "(same IP and port).",
+    "'{src}' 태그를 '{tgt}'(으)로 병합했습니다 "
+    "(페이지 {p}개·크롤 {c}개·스케줄 {s}개 이전).":
+        "Merged tag '{src}' into '{tgt}' "
+        "({p} page(s), {c} crawl(s), {s} schedule(s) moved).",
     # 사이트(서브도메인) 단위 아카이브 — 목록·사이트 상세
     "사이트 {n}개": "{n} site(s)",
     "사이트 필터…": "Filter sites…",
@@ -866,6 +991,21 @@ _EN: dict[str, str] = {
         "it finishes",
     "사이트 삭제됨: {key} (페이지 {p}개, 스냅샷 {s}개, 크롤 {c}개)":
         "Site deleted: {key} ({p} page(s), {s} snapshot(s), {c} crawl(s))",
+    # ---- 검색 (/search) ----
+    "아카이브 본문·문서에서 검색…": "Search archived text and documents…",
+    "도메인 (선택)": "Domain (optional)",
+    "URL당 최신만": "Latest per URL",
+    "한국어는 3글자 이상이 정확합니다 — 1~2글자 검색어는 부분일치로 처리되어 결과가 많거나 느릴 수 있습니다. 검색 대상은 페이지 본문과 첨부 문서(PDF·워드·한글 등) 본문입니다.":
+        "Korean queries of 3+ characters are most accurate — 1–2 character queries "
+        "fall back to substring matching, which can be slow or return many results. "
+        "Search covers page text and attached document bodies (PDF, Word, HWP, etc.).",
+    "이 환경의 SQLite 빌드에 FTS5 가 없어 검색을 쓸 수 없습니다. 기존 아카이빙은 영향받지 않습니다.":
+        "Search is unavailable because this SQLite build lacks FTS5. Existing "
+        "archiving is unaffected.",
+    "검색어를 입력하세요.": "Enter a search query.",
+    "일치하는 결과가 없습니다.": "No matching results.",
+    "짧은 검색어라 부분일치로 찾았습니다.": "Short query — matched by substring.",
+    "검색 권한이 없습니다": "You do not have permission to search",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다
@@ -880,6 +1020,16 @@ _EN[f"이름은 {MAX_DISPLAY_NAME_LENGTH}자 이하여야 합니다."] = (
 )
 _EN[f"키 이름은 {MAX_API_KEY_NAME_LENGTH}자 이하여야 합니다."] = (
     f"The key name must be at most {MAX_API_KEY_NAME_LENGTH} characters."
+)
+# 자격증명 길이 제한 (이름은 MAX_DISPLAY_NAME_LENGTH 과 같은 50자라 위에서 이미 등록됨)
+_EN[f"사용자명은 {MAX_USERNAME_LENGTH}자 이하여야 합니다."] = (
+    f"The username must be at most {MAX_USERNAME_LENGTH} characters."
+)
+_EN[f"비밀번호는 {MAX_PASSWORD_LENGTH}자 이하여야 합니다."] = (
+    f"The password must be at most {MAX_PASSWORD_LENGTH} characters."
+)
+_EN[f"토큰은 {MAX_JWT_LENGTH}자 이하여야 합니다."] = (
+    f"The token must be at most {MAX_JWT_LENGTH} characters."
 )
 
 CATALOGS: dict[str, dict[str, str]] = {"en": _EN}

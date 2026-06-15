@@ -1,4 +1,4 @@
-"""초대 메일 발송 — 표준 smtplib 사용. WCCG_SMTP_* 환경변수로 설정 (README 인증 절 참조)."""
+"""초대 메일 발송 — 표준 smtplib 사용. WCCG_SMTP_* 환경변수로 설정 (docs/AUTHENTICATION.md 참조)."""
 
 from __future__ import annotations
 

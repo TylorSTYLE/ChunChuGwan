@@ -29,8 +29,6 @@ class SnapshotMeta:
     # 함께 저장된 문서 파일 목록 [{url, file, bytes, sha256, content_type}].
     # files/ 하위 파일은 이 목록에 있는 이름만 서빙된다 (구형 meta 는 None).
     documents: list[dict] | None = None
-    # 1회성 인증 캡처 여부 — 로그인 뒤 콘텐츠가 담긴 스냅샷 표식.
-    authenticated: bool = False
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -140,6 +138,23 @@ def site_key(normalized_url: str) -> str:
     사이트를 뜻한다 (예: localhost 게이트와 무관한 192.168.x.x:8080).
     """
     return netloc_site_key(urlsplit(normalized_url).netloc)
+
+
+def url_origin(url: str) -> str:
+    """URL 의 origin (`scheme://host[:비기본포트]`) — 소문자, 기본 포트 생략.
+
+    로그인 자격증명을 대상 origin 으로만 스코프할 때 쓴다 (캡처 연동) —
+    Basic 인증·Bearer 토큰이 페이지의 서드파티 하위 자원으로 새지 않게
+    한다. 같은 origin 판정은 scheme·host·유효 포트가 모두 같을 때다.
+    """
+    parts = urlsplit(url)
+    scheme = (parts.scheme or "").lower()
+    host = (parts.hostname or "").lower()
+    port = parts.port
+    default_port = {"https": 443, "http": 80}.get(scheme)
+    if port is not None and port != default_port:
+        return f"{scheme}://{host}:{port}"
+    return f"{scheme}://{host}"
 
 
 def scheme_inferred(raw: str) -> bool:

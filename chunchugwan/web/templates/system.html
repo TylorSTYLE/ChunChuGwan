@@ -202,20 +202,20 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
-    <h4>{{ _("인증 캡처 설정") }}</h4>
+    <h4>{{ _("확장 자격증명 설정") }}</h4>
     <form method="post" action="/system/credential-settings"
           style="display:flex; flex-direction:column; gap:10px; flex:1">
       <p>
-        {{ _("크롬 확장의 ‘로그인 페이지 아카이브’가 보낸 로그인 세션을 자동 폐기하기까지의 최대 보관 시간입니다. 정상 흐름에선 캡처 직후 삭제되며, 이 값은 오류·재기동으로 삭제가 누락된 캡슐을 정리하는 안전망입니다.") }}
+        {{ _("크롬 확장의 ‘로그인 페이지 아카이브’가 보낸 1회성 세션 자격증명을 자동 폐기하기까지의 최대 보관 시간입니다. 정상 흐름에선 캡처 직후 삭제되며, 이 값은 오류·재기동으로 삭제가 누락된 자격증명을 정리하는 안전망입니다.") }}
       </p>
       <label class="mode">
         {{ _("자격증명 보관 시간(시간)") }}
-        <input type="number" name="credential_ttl_hours" required
-               style="width:6em; margin-left:6px" value="{{ credential_ttl_hours }}"
-               min="{{ credential_ttl_limits['min'] }}" max="{{ credential_ttl_limits['max'] }}">
+        <input type="number" name="ext_credential_ttl_hours" required
+               style="width:6em; margin-left:6px" value="{{ ext_credential_ttl_hours }}"
+               min="{{ ext_credential_ttl_limits['min'] }}" max="{{ ext_credential_ttl_limits['max'] }}">
       </label>
       {% if not credential_key_set %}
-      <p class="muted">{{ _("WCCG_CREDENTIAL_KEY 가 설정되지 않아 인증 캡처가 비활성 상태입니다.") }}</p>
+      <p class="muted">{{ _("WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.") }}</p>
       {% endif %}
       <div class="actions">
         <button type="submit">{{ _("저장") }}</button>
@@ -229,6 +229,7 @@ h3.danger-heading { color: var(--red); }
       {{ _("사설 IP 대역(로컬 네트워크)의 웹서버를 아카이빙할 때 어느 네트워크인지 구분하는 태그입니다. 사설 대역 주소는 태그를 지정해야 아카이빙할 수 있고, 루프백 주소는 항상 아카이빙할 수 없습니다. ID(GUID)는 자동 발급됩니다.") }}
     </p>
     {% if network_tags %}
+    <div class="table-wrap cards">
     <table style="font-size:12px; border-collapse:collapse; width:100%">
       <thead>
         <tr style="text-align:left; color:var(--muted)">
@@ -254,6 +255,7 @@ h3.danger-heading { color: var(--red); }
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
     <p class="muted" style="font-size:12px">{{ _("등록된 태그가 없습니다 — 사설 IP 대역 아카이빙이 모두 거부됩니다.") }}</p>
     {% endif %}
@@ -264,6 +266,22 @@ h3.danger-heading { color: var(--red); }
              placeholder="{{ _('설명 (선택)') }}">
       <button type="submit">{{ _("추가") }}</button>
     </form>
+    {% if network_tags and network_tags|length >= 2 %}
+    <p class="muted" style="font-size:11px; margin:8px 0 4px">
+      {{ _("같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.") }}
+    </p>
+    <form method="post" action="/system/network-tags/merge" class="actions"
+          onsubmit="return confirm({{ _('출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 같은 IP·포트를 가리킬 때만 병합됩니다.')|tojson }})">
+      <select name="source" aria-label="{{ _('출처 태그(삭제됨)') }}" style="font-size:11px">
+        {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
+      </select>
+      <span style="font-size:11px; color:var(--muted)">&rarr;</span>
+      <select name="target" aria-label="{{ _('대상 태그(유지)') }}" style="font-size:11px">
+        {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
+      </select>
+      <button type="submit" style="font-size:11px; padding:1px 8px">{{ _("병합") }}</button>
+    </form>
+    {% endif %}
   </div>
 
   <div class="sys-card">

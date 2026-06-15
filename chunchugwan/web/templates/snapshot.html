@@ -11,9 +11,6 @@
 {% block content %}
 <div class="toolbar">
   <h2 style="margin:0">{{ title or snap['page_url'] }}</h2>
-  {% if snap['authenticated'] %}
-  <span class="badge" title="{{ _('로그인된 상태로 캡처된 스냅샷입니다 — 소유자/관리자만 볼 수 있습니다.') }}">{{ _("인증됨") }}</span>
-  {% endif %}
   <span class="spacer"></span>
   <a href="/logs?snapshot_id={{ snap['id'] }}">{{ _("아카이빙 로그") }}</a>
   <a href="/page/{{ snap['page_id'] }}">{{ _("타임라인으로") }}</a>

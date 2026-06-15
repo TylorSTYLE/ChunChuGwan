@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 import uuid
@@ -10,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
 from . import config, storage
+
+logger = logging.getLogger(__name__)
 
 # 쓰기 락 대기 한도(초) — WAL 에서도 쓰기는 한 번에 하나라, 동시 쓰기가
 # 겹치면 이 시간만큼 기다린 뒤 OperationalError.
@@ -70,6 +73,7 @@ CREATE TABLE IF NOT EXISTS pages (
     slug        TEXT NOT NULL,          -- 디렉토리명 {slug}-{hash8}
     site_id     INTEGER REFERENCES sites(id),  -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id),  -- 사설 대역 페이지의 로컬 네트워크 태그
+    credential_id INTEGER REFERENCES site_credentials(id),  -- 아카이빙 시 쓸 로그인 자격증명(선택)
     created_at  TEXT NOT NULL           -- ISO 8601 UTC
 );
 -- 주의: 마이그레이션으로 추가되는 컬럼(site_id 등)의 인덱스는 SCHEMA 가
@@ -88,8 +92,10 @@ CREATE TABLE IF NOT EXISTS snapshots (
     note          TEXT,
     resources_indexed INTEGER NOT NULL DEFAULT 0, -- 자원 참조(snapshot_resources) 기록 여부.
                                                   --   0 이면 저장공간 최적화의 백필 대상
-    css_externalized INTEGER NOT NULL DEFAULT 0   -- 인라인 <style> 의 CAS 추출 여부.
+    css_externalized INTEGER NOT NULL DEFAULT 0,  -- 인라인 <style> 의 CAS 추출 여부.
                                                   --   0 이면 저장공간 최적화의 추출 대상
+    search_indexed INTEGER NOT NULL DEFAULT 0     -- 텍스트 검색 인덱스(snapshot_fts) 반영 여부.
+                                                  --   0 이면 'wccg search reindex' 백필 대상
 );
 
 CREATE TABLE IF NOT EXISTS checks (
@@ -147,6 +153,7 @@ CREATE TABLE IF NOT EXISTS crawls (
     source         TEXT NOT NULL DEFAULT 'web',      -- 'web' | 'cli'
     site_id        INTEGER REFERENCES sites(id),     -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id), -- 사설 대역 크롤의 로컬 네트워크 태그
+    credential_id  INTEGER REFERENCES site_credentials(id), -- 크롤 페이지에 적용할 로그인 자격증명(선택)
     created_at     TEXT NOT NULL,
     finished_at    TEXT,
     next_page_at   TEXT NOT NULL       -- 다음 페이지 처리 가능 시각 (ISO 8601 UTC)
@@ -168,6 +175,51 @@ CREATE TABLE IF NOT EXISTS crawl_pages (
 );
 CREATE INDEX IF NOT EXISTS idx_crawl_pages_status ON crawl_pages(crawl_id, status);
 
+CREATE TABLE IF NOT EXISTS archive_jobs (
+    id               INTEGER PRIMARY KEY,
+    url              TEXT NOT NULL,                 -- 정규화 URL
+    force            INTEGER NOT NULL DEFAULT 0,
+    source           TEXT NOT NULL DEFAULT 'web',   -- cli|web|api
+    network_tag_id   TEXT REFERENCES network_tags(id),         -- 사설 대역의 로컬 네트워크 태그
+    credential_id    INTEGER REFERENCES site_credentials(id),  -- 적용할 로그인 자격증명(선택)
+    interval_seconds INTEGER,             -- 아카이빙 후 자동 재아카이빙 주기 등록용(선택)
+    run_at           TEXT,                -- 'HH:MM' 서버 로컬 (1일 단위 주기 실행 시각)
+    status           TEXT NOT NULL DEFAULT 'pending', -- pending|in_progress (done/failed 는 삭제)
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at  TEXT,                -- 재시도 대기 시각 (NULL = 즉시 가능)
+    claimed_at       TEXT,                -- in_progress 시작 시각 (중단 복구 판정용)
+    error            TEXT,                -- 마지막 실패 사유 (재시도 대기 중 표시용)
+    created_at       TEXT NOT NULL,
+    -- 사람 보조 챌린지 해결(라이브) — 자동 통과 실패 시 worker 가 채운다
+    needs_human_at   TEXT,                -- 사람 확인 필요 진입 시각 (NULL = 자동 진행)
+    live_token       TEXT,                -- 라이브 화면/명령 경로 키 (예측불가 난수)
+    live_owner_id    INTEGER REFERENCES users(id),  -- 세션을 클레임한 admin (입력 권한자)
+    live_cancel      INTEGER NOT NULL DEFAULT 0,     -- 1 이면 사람이 취소 → worker 가 중단
+    live_viewport_w  INTEGER,             -- 라이브 뷰포트 (좌표 매핑용, worker 가 기록)
+    live_viewport_h  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_archive_jobs_status ON archive_jobs(status, next_attempt_at);
+-- 같은 URL 의 활성(대기·진행) 작업은 하나만 — 중복 enqueue 를 DB 레벨에서 차단
+CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_jobs_active
+    ON archive_jobs(url) WHERE status IN ('pending', 'in_progress');
+CREATE INDEX IF NOT EXISTS idx_archive_jobs_needs_human
+    ON archive_jobs(needs_human_at) WHERE needs_human_at IS NOT NULL;
+
+-- 라이브 챌린지 세션의 사람 입력 명령 큐 (대시보드 INSERT → worker 가 재생)
+CREATE TABLE IF NOT EXISTS live_commands (
+    id          INTEGER PRIMARY KEY,
+    live_token  TEXT NOT NULL,
+    seq         INTEGER NOT NULL,         -- 명령 순서 (타이밍·드래그 재현)
+    kind        TEXT NOT NULL,            -- click | move | down | up | key | text
+    x           INTEGER,                  -- 0~viewport (worker 가 클램프)
+    y           INTEGER,
+    key         TEXT,                     -- 키 입력/문자열
+    delay_ms    INTEGER NOT NULL DEFAULT 0, -- 직전 명령 이후 간격 (타이밍 재현)
+    created_at  TEXT NOT NULL,
+    consumed_at TEXT                      -- worker 가 재생하면 채움
+);
+CREATE INDEX IF NOT EXISTS idx_live_commands_token ON live_commands(live_token, seq);
+
 CREATE TABLE IF NOT EXISTS crawl_schedules (
     id               INTEGER PRIMARY KEY,
     start_url        TEXT NOT NULL UNIQUE,  -- 정규화된 시작 URL
@@ -180,6 +232,7 @@ CREATE TABLE IF NOT EXISTS crawl_schedules (
     run_at_time      TEXT,                  -- 'HH:MM' 서버 로컬 시간 (1일 단위 주기 전용)
     site_id          INTEGER REFERENCES sites(id),       -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id   TEXT REFERENCES network_tags(id),  -- 사설 대역 사이트의 로컬 네트워크 태그
+    credential_id    INTEGER REFERENCES site_credentials(id),  -- 주기 크롤에 적용할 로그인 자격증명(선택)
     created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_crawl_schedules_next ON crawl_schedules(next_run_at);
@@ -280,6 +333,20 @@ CREATE TABLE IF NOT EXISTS api_keys (
     last_used_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS site_credentials (
+    id          INTEGER PRIMARY KEY,
+    site_id     INTEGER NOT NULL REFERENCES sites(id),
+    label       TEXT NOT NULL,           -- 사람이 식별하는 이름 (예: '관리자 계정')
+    kind        TEXT NOT NULL,           -- 종류: http_basic | session (확장형)
+    secret      TEXT NOT NULL,           -- 암호화된 payload (crypto.encrypt — 평문 금지)
+    created_by  INTEGER REFERENCES users(id),  -- 등록한 관리자 (기록용)
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    UNIQUE (site_id, label)
+);
+CREATE INDEX IF NOT EXISTS idx_site_credentials_site
+    ON site_credentials(site_id);
+
 CREATE TABLE IF NOT EXISTS settings (
     key         TEXT PRIMARY KEY,
     value       TEXT NOT NULL,
@@ -292,20 +359,6 @@ CREATE TABLE IF NOT EXISTS oidc_states (
     redirect_to TEXT NOT NULL DEFAULT '/',
     created_at  TEXT NOT NULL
 );
-
--- 1회성 인증 캡처용 자격증명 캡슐 — 암호문만 저장(키는 index.db 밖, credentials.py).
--- 정상 흐름은 캡처 직후 삭제, expires_at 만료분은 GC(delete_expired_auth_capsules).
-CREATE TABLE IF NOT EXISTS auth_capsules (
-    id             INTEGER PRIMARY KEY,
-    url            TEXT NOT NULL,         -- 정규화된 캡처 대상 URL
-    scope_host     TEXT NOT NULL,         -- 캡슐 쿠키가 유효한 호스트(스코프)
-    owner_user_id  INTEGER NOT NULL REFERENCES users(id),  -- 발급 사용자(접근제한·감사)
-    ciphertext     BLOB NOT NULL,         -- AES-256-GCM(storage_state JSON)
-    network_tag_id TEXT REFERENCES network_tags(id),       -- 사설 대역이면 태그
-    created_at     TEXT NOT NULL,
-    expires_at     TEXT NOT NULL          -- _later(ttl) — 항상 만료(영구 없음)
-);
-CREATE INDEX IF NOT EXISTS idx_auth_capsules_expires ON auth_capsules(expires_at);
 """
 
 
@@ -350,6 +403,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN network_tag_id TEXT REFERENCES network_tags(id)"
             )
+    # 로그인 자격증명 참조 — site_credentials 는 SCHEMA 가 먼저 만든다
+    for table in ("pages", "crawls", "crawl_schedules"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if cols and "credential_id" not in cols:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN credential_id INTEGER REFERENCES site_credentials(id)"
+            )
     # 자원 참조 인덱스 여부 — 0 인 스냅샷은 저장공간 최적화가 백필한다
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
     if cols and "resources_indexed" not in cols:
@@ -361,15 +421,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN css_externalized INTEGER NOT NULL DEFAULT 0"
         )
-    # 1회성 인증 캡처로 만들어진 스냅샷 — 로그인 뒤 콘텐츠라 소유자/관리자만 열람.
-    if cols and "authenticated" not in cols:
+    # 텍스트 검색 인덱스 반영 여부 — 0 인 스냅샷은 'wccg search reindex' 백필 대상.
+    # (마이그레이션은 컬럼만 추가하고 실제 색인은 명시 명령으로 채운다 — connect
+    #  마다 content.md 수천 개를 읽어 첫 연결이 느려지는 것을 막는다.)
+    if cols and "search_indexed" not in cols:
         conn.execute(
-            "ALTER TABLE snapshots ADD COLUMN authenticated INTEGER NOT NULL DEFAULT 0"
+            "ALTER TABLE snapshots ADD COLUMN search_indexed INTEGER NOT NULL DEFAULT 0"
         )
-    if cols and "authenticated_by" not in cols:
-        conn.execute(
-            "ALTER TABLE snapshots ADD COLUMN authenticated_by INTEGER REFERENCES users(id)"
-        )
+    _ensure_search_index(conn)
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -390,7 +449,62 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys(owner_user_id)"
     )
+    # 확장 1회성 세션 자격증명의 만료 안전망 — site_credentials 는 SCHEMA 가 먼저 만든다.
+    # NULL=영속(대시보드 등록), 값=확장이 만든 1회성(캡처 후 삭제, 만료 GC).
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(site_credentials)")}
+    if cols and "expires_at" not in cols:
+        conn.execute("ALTER TABLE site_credentials ADD COLUMN expires_at TEXT")
+    # 단발 아카이빙 큐의 사람 보조(라이브 챌린지) 컬럼 — archive_jobs 는 SCHEMA 가 먼저 만든다
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(archive_jobs)")}
+    if cols:
+        for col, ddl in (
+            ("needs_human_at", "TEXT"),
+            ("live_token", "TEXT"),
+            ("live_owner_id", "INTEGER REFERENCES users(id)"),
+            ("live_cancel", "INTEGER NOT NULL DEFAULT 0"),
+            ("live_viewport_w", "INTEGER"),
+            ("live_viewport_h", "INTEGER"),
+        ):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE archive_jobs ADD COLUMN {col} {ddl}")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_archive_jobs_needs_human "
+            "ON archive_jobs(needs_human_at) WHERE needs_human_at IS NOT NULL"
+        )
     _backfill_sites(conn)
+
+
+def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    """이름의 테이블/가상테이블/뷰가 존재하는지 (FTS5 가용성 분기 등)."""
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+        (name,),
+    ).fetchone() is not None
+
+
+def _ensure_search_index(conn: sqlite3.Connection) -> None:
+    """텍스트 검색용 FTS5 가상테이블 생성 (trigram 토크나이저).
+
+    rowid = snapshots.id 라 결과를 snapshots/pages 와 JOIN 한다. 색인 컬럼은
+    content(본문 = content.md + 첨부 문서 본문)·title·url. trigram 은 한국어
+    부분문자열(길이 3+) 검색을 CJK 단어분절 없이 지원한다 (searchindex.py).
+
+    SQLite 가 FTS5 없이 빌드된 환경에서는 생성이 실패하지만, 검색 기능만
+    비활성화될 뿐 기존 아카이빙은 영향받지 않는다 (graceful degradation —
+    인증 암호화가 키 부재 시 그 기능만 끄는 원칙 6 과 같은 방식).
+    가상테이블은 ALTER 로 못 바꾸므로 executescript(SCHEMA)가 아니라 여기서
+    try/except 로 만든다.
+    """
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS snapshot_fts "
+            "USING fts5(content, title, url, tokenize='trigram')"
+        )
+    except sqlite3.OperationalError as e:
+        logger.warning(
+            "SQLite FTS5 미지원 — 텍스트 검색 기능이 비활성화됩니다 (%s). "
+            "기존 아카이빙에는 영향이 없습니다.", e
+        )
 
 
 def _backfill_sites(conn: sqlite3.Connection) -> None:
@@ -546,10 +660,12 @@ def prune_site_if_empty(conn: sqlite3.Connection, site_id: int | None) -> bool:
 
     페이지·크롤 스케줄 삭제 경로가 호출한다 — 크롤 회차는 개별 삭제가
     없으므로(사이트 단위 삭제뿐) 회차가 남아 있는 한 사이트도 남는다.
-    인증서 이력은 사이트의 부가 기록이라 함께 지운다.
+    인증서 이력·로그인 자격증명은 사이트의 부가 기록이라 함께 지운다
+    (자격증명은 FK 로 사이트를 참조하므로 사이트 행 삭제 전에 비워야 한다).
     """
     if site_id is None or not _site_is_empty(conn, site_id):
         return False
+    conn.execute("DELETE FROM site_credentials WHERE site_id = ?", (site_id,))
     conn.execute("DELETE FROM site_certificates WHERE site_id = ?", (site_id,))
     cur = conn.execute("DELETE FROM sites WHERE id = ?", (site_id,))
     return cur.rowcount == 1
@@ -562,6 +678,10 @@ def prune_empty_sites(conn: sqlite3.Connection) -> int:
           AND NOT EXISTS (SELECT 1 FROM crawls WHERE site_id = sites.id)
           AND NOT EXISTS (SELECT 1 FROM crawl_schedules WHERE site_id = sites.id)
     """
+    conn.execute(
+        "DELETE FROM site_credentials WHERE site_id IN "
+        f"(SELECT id FROM sites WHERE {empty_filter})"
+    )
     conn.execute(
         "DELETE FROM site_certificates WHERE site_id IN "
         f"(SELECT id FROM sites WHERE {empty_filter})"
@@ -679,6 +799,7 @@ def get_or_create_page(
     domain: str,
     slug: str,
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> int:
     """정규화 URL로 page row를 찾거나 생성하고 id 반환.
 
@@ -687,9 +808,12 @@ def get_or_create_page(
     network_tag_id 를 주면 기존 페이지의 태그도 갱신한다 — 태그 없이
     만들어진 사설 대역 페이지를 새 아카이빙 폼에서 태그를 골라 다시
     제출하는 것이 태그 지정/변경 경로다.
+    credential_id 를 주면 아카이빙에 쓸 로그인 자격증명을 페이지에 연결한다
+    (기존 페이지도 갱신) — 새 아카이빙 폼에서 도메인의 자격증명을 골라
+    연결하는 경로다. 캡처 연동 단계에서 이 자격증명을 실제 로그인에 쓴다.
     """
     row = conn.execute(
-        "SELECT id, network_tag_id FROM pages WHERE url = ?", (url,)
+        "SELECT id, network_tag_id, credential_id FROM pages WHERE url = ?", (url,)
     ).fetchone()
     if row is not None:
         if network_tag_id is not None and row["network_tag_id"] != network_tag_id:
@@ -697,14 +821,20 @@ def get_or_create_page(
                 "UPDATE pages SET network_tag_id = ? WHERE id = ?",
                 (network_tag_id, row["id"]),
             )
+        if credential_id is not None and row["credential_id"] != credential_id:
+            conn.execute(
+                "UPDATE pages SET credential_id = ? WHERE id = ?",
+                (credential_id, row["id"]),
+            )
         return row["id"]
     site_id = get_or_create_site(conn, storage.site_key(url))
     cur = conn.execute(
         """
-        INSERT INTO pages (url, domain, slug, site_id, network_tag_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO pages
+            (url, domain, slug, site_id, network_tag_id, credential_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (url, domain, slug, site_id, network_tag_id, _utcnow()),
+        (url, domain, slug, site_id, network_tag_id, credential_id, _utcnow()),
     )
     return cur.lastrowid
 
@@ -719,8 +849,7 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed", "css_externalized",
-     "authenticated", "authenticated_by"}
+     "note", "resources_indexed", "css_externalized", "search_indexed"}
 )
 
 
@@ -783,6 +912,8 @@ def delete_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> bool:
     conn.execute(
         "DELETE FROM snapshot_resources WHERE snapshot_id = ?", (snapshot_id,)
     )
+    if _table_exists(conn, "snapshot_fts"):
+        conn.execute("DELETE FROM snapshot_fts WHERE rowid = ?", (snapshot_id,))
     conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
     if nxt is not None:
         changed = 1 if prev is None else int(prev["content_hash"] != nxt["content_hash"])
@@ -832,6 +963,12 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
         """,
         (page_id,),
     )
+    if _table_exists(conn, "snapshot_fts"):
+        conn.execute(
+            "DELETE FROM snapshot_fts WHERE rowid IN "
+            "(SELECT id FROM snapshots WHERE page_id = ?)",
+            (page_id,),
+        )
     conn.execute("DELETE FROM checks WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM schedules WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM snapshots WHERE page_id = ?", (page_id,))
@@ -1286,6 +1423,192 @@ def list_all_resource_names(conn: sqlite3.Connection) -> set[str]:
     }
 
 
+# ---- 텍스트 검색 인덱스 (snapshot_fts — FTS5 trigram, searchindex.py) ----
+# 색인 본문은 스냅샷의 content.md(정규화 텍스트) + 첨부 문서 본문. rowid =
+# snapshots.id 라 결과를 snapshots/pages 와 JOIN 한다. 색인 쓰기/조회는 모두
+# 여기를 거친다 (원칙 1 — 쓰기는 코어). 텍스트 조립·문서 추출·스니펫 생성은
+# searchindex.py 가 맡는다.
+
+
+def search_index_available(conn: sqlite3.Connection) -> bool:
+    """FTS5 검색 인덱스 테이블이 존재하는지 (FTS5 미지원 환경이면 False)."""
+    return _table_exists(conn, "snapshot_fts")
+
+
+def clear_search_index(conn: sqlite3.Connection) -> None:
+    """검색 인덱스 전체 비우기 (가져오기 overwrite 등) — 테이블 없으면 무시."""
+    if _table_exists(conn, "snapshot_fts"):
+        conn.execute("DELETE FROM snapshot_fts")
+
+
+def upsert_snapshot_fts(
+    conn: sqlite3.Connection,
+    snapshot_id: int,
+    content: str,
+    title: str | None,
+    url: str | None,
+) -> None:
+    """스냅샷의 검색 인덱스 행 갱신 (rowid=snapshot_id). 재색인에 멱등."""
+    conn.execute(
+        "INSERT OR REPLACE INTO snapshot_fts (rowid, content, title, url) "
+        "VALUES (?, ?, ?, ?)",
+        (snapshot_id, content, title or "", url or ""),
+    )
+
+
+def count_unindexed_search_snapshots(conn: sqlite3.Connection) -> int:
+    """검색 인덱스에 아직 반영되지 않은 스냅샷 수 — reindex 백필 대상."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots WHERE search_indexed = 0"
+    ).fetchone()["c"]
+
+
+def list_unindexed_search_snapshots(
+    conn: sqlite3.Connection, limit: int | None = None
+) -> list[sqlite3.Row]:
+    """검색 인덱스 백필 대상 스냅샷 (+ 위치·URL) — content.md 읽기용."""
+    sql = """
+        SELECT s.id, s.dir_name, p.url AS page_url, p.domain, p.slug
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.search_indexed = 0 ORDER BY s.id
+    """
+    if limit is not None:
+        return conn.execute(sql + " LIMIT ?", (limit,)).fetchall()
+    return conn.execute(sql).fetchall()
+
+
+def mark_snapshot_search_indexed(conn: sqlite3.Connection, snapshot_id: int) -> None:
+    """스냅샷의 검색 인덱스 반영 완료 표시 — 이후 백필 대상에서 제외."""
+    conn.execute(
+        "UPDATE snapshots SET search_indexed = 1 WHERE id = ?", (snapshot_id,)
+    )
+
+
+def reset_search_indexed(conn: sqlite3.Connection) -> None:
+    """모든 스냅샷을 미색인으로 표시 (전체 재색인 — reindex --all)."""
+    conn.execute("UPDATE snapshots SET search_indexed = 0")
+
+
+# 검색 결과 행의 공통 투영 — FTS/LIKE 양쪽이 같은 형태를 돌려준다.
+# (url 은 pages.url 과 snapshot_fts.url 이 겹치므로 반드시 테이블로 한정한다.)
+_SEARCH_SELECT = """
+    SELECT snapshot_fts.rowid AS snapshot_id, s.page_id, s.taken_at, s.changed,
+           p.url AS page_url, p.domain,
+           snapshot_fts.content AS content, snapshot_fts.title AS title
+    FROM snapshot_fts
+    JOIN snapshots s ON s.id = snapshot_fts.rowid
+    JOIN pages p ON p.id = s.page_id
+"""
+# 같은 URL 의 여러 스냅샷 중 최신 1건만 (현재 본문 검색 토글)
+_SEARCH_LATEST_CLAUSE = (
+    " AND s.id = (SELECT id FROM snapshots s2 WHERE s2.page_id = s.page_id"
+    " ORDER BY s2.taken_at DESC, s2.id DESC LIMIT 1)"
+)
+
+
+def search_snapshots_fts(
+    conn: sqlite3.Connection,
+    match: str,
+    *,
+    domain: str | None = None,
+    latest_only: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """FTS MATCH 검색 (bm25 랭킹 순). match 는 searchindex 가 조립한 안전한 질의."""
+    sql = _SEARCH_SELECT + " WHERE snapshot_fts MATCH ?"
+    params: list[object] = [match]
+    if domain:
+        sql += " AND p.domain = ?"
+        params.append(domain)
+    if latest_only:
+        sql += _SEARCH_LATEST_CLAUSE
+    sql += " ORDER BY bm25(snapshot_fts), s.taken_at DESC, s.id DESC LIMIT ? OFFSET ?"
+    params += [limit, offset]
+    return conn.execute(sql, params).fetchall()
+
+
+def count_search_snapshots_fts(
+    conn: sqlite3.Connection,
+    match: str,
+    *,
+    domain: str | None = None,
+    latest_only: bool = False,
+) -> int:
+    """FTS MATCH 결과 총 건수 (페이징용)."""
+    sql = (
+        "SELECT COUNT(*) AS c FROM snapshot_fts "
+        "JOIN snapshots s ON s.id = snapshot_fts.rowid "
+        "JOIN pages p ON p.id = s.page_id WHERE snapshot_fts MATCH ?"
+    )
+    params: list[object] = [match]
+    if domain:
+        sql += " AND p.domain = ?"
+        params.append(domain)
+    if latest_only:
+        sql += _SEARCH_LATEST_CLAUSE
+    return conn.execute(sql, params).fetchone()["c"]
+
+
+def _like_where(patterns: list[str]) -> tuple[str, list[object]]:
+    """짧은 쿼리(LIKE 폴백)의 WHERE 절 — 각 패턴이 content/title/url 중 하나에
+    부분일치(AND). 패턴은 searchindex 가 % _ \\ 이스케이프해 만든다."""
+    clause = " AND ".join(
+        "(snapshot_fts.content LIKE ? ESCAPE '\\' "
+        "OR snapshot_fts.title LIKE ? ESCAPE '\\' "
+        "OR snapshot_fts.url LIKE ? ESCAPE '\\')"
+        for _ in patterns
+    )
+    params: list[object] = []
+    for p in patterns:
+        params += [p, p, p]
+    return clause, params
+
+
+def search_snapshots_like(
+    conn: sqlite3.Connection,
+    patterns: list[str],
+    *,
+    domain: str | None = None,
+    latest_only: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """LIKE 부분일치 검색 (최신순) — trigram 이 못 잡는 1~2글자 쿼리 폴백."""
+    clause, params = _like_where(patterns)
+    sql = _SEARCH_SELECT + " WHERE " + clause
+    if domain:
+        sql += " AND p.domain = ?"
+        params.append(domain)
+    if latest_only:
+        sql += _SEARCH_LATEST_CLAUSE
+    sql += " ORDER BY s.taken_at DESC, s.id DESC LIMIT ? OFFSET ?"
+    params += [limit, offset]
+    return conn.execute(sql, params).fetchall()
+
+
+def count_search_snapshots_like(
+    conn: sqlite3.Connection,
+    patterns: list[str],
+    *,
+    domain: str | None = None,
+    latest_only: bool = False,
+) -> int:
+    """LIKE 폴백 결과 총 건수 (페이징용)."""
+    clause, params = _like_where(patterns)
+    sql = (
+        "SELECT COUNT(*) AS c FROM snapshot_fts "
+        "JOIN snapshots s ON s.id = snapshot_fts.rowid "
+        "JOIN pages p ON p.id = s.page_id WHERE " + clause
+    )
+    if domain:
+        sql += " AND p.domain = ?"
+        params.append(domain)
+    if latest_only:
+        sql += _SEARCH_LATEST_CLAUSE
+    return conn.execute(sql, params).fetchone()["c"]
+
+
 # ---- 함께 저장된 문서 파일 (문서 CAS 참조) ----
 
 
@@ -1518,6 +1841,7 @@ def insert_crawl(
     delay_seconds: int,
     source: str,
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> int:
     """크롤 row 생성 후 id 반환. next_page_at 은 지금 — 즉시 시작 가능.
 
@@ -1529,11 +1853,12 @@ def insert_crawl(
         """
         INSERT INTO crawls
             (start_url, scope_host, scope_path, max_pages, max_depth,
-             delay_seconds, source, site_id, network_tag_id, created_at, next_page_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             delay_seconds, source, site_id, network_tag_id, credential_id,
+             created_at, next_page_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (start_url, scope_host, scope_path, max_pages, max_depth,
-         delay_seconds, source, site_id, network_tag_id, now, now),
+         delay_seconds, source, site_id, network_tag_id, credential_id, now, now),
     )
     return cur.lastrowid
 
@@ -1627,7 +1952,7 @@ def claim_due_crawl_page(
     """
     sql = """
         SELECT cp.*, c.scope_host, c.scope_path, c.max_pages, c.max_depth,
-               c.delay_seconds, c.network_tag_id
+               c.delay_seconds, c.network_tag_id, c.credential_id
         FROM crawl_pages cp JOIN crawls c ON c.id = cp.crawl_id
         WHERE c.status = 'running' AND c.next_page_at <= ?
           AND cp.status = 'pending'
@@ -1717,6 +2042,279 @@ def fail_crawl_page(
         """,
         (status, attempts, error, next_attempt_at, crawl_page_id),
     )
+
+
+# ---- 단발 아카이빙 작업 큐 (archive_jobs — archive_worker.py 가 소비) ----
+
+def enqueue_archive_job(
+    conn: sqlite3.Connection,
+    url: str,
+    *,
+    force: bool = False,
+    source: str = "web",
+    network_tag_id: str | None = None,
+    credential_id: int | None = None,
+    interval_seconds: int | None = None,
+    run_at: str | None = None,
+) -> bool:
+    """단발 아카이빙 작업을 큐에 추가. 같은 URL 의 활성 작업이 이미 있으면 무시(False).
+
+    중복 차단은 부분 UNIQUE 인덱스(idx_archive_jobs_active)가 한다 — INSERT OR
+    IGNORE 가 활성 중복이면 0행을 넣고 False 를 반환한다 (현재 _register_job 의
+    중복-방지 역할 대체).
+    """
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO archive_jobs
+            (url, force, source, network_tag_id, credential_id,
+             interval_seconds, run_at, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        """,
+        (url, 1 if force else 0, source, network_tag_id, credential_id,
+         interval_seconds, run_at, _utcnow()),
+    )
+    return cur.rowcount == 1
+
+
+def claim_due_archive_job(
+    conn: sqlite3.Connection, now_iso: str
+) -> sqlite3.Row | None:
+    """기한이 된 대기 작업 하나를 원자적으로 클레임 (in_progress). 없으면 None.
+
+    조건부 UPDATE 의 status='pending' 가 멀티 프로세스(serve 폴링 + worker +
+    CLI) 경합을 막는다 — 경합 시 rowcount!=1 → None.
+    """
+    row = conn.execute(
+        """
+        SELECT * FROM archive_jobs
+        WHERE status = 'pending'
+          AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+        ORDER BY id LIMIT 1
+        """,
+        (now_iso,),
+    ).fetchone()
+    if row is None:
+        return None
+    cur = conn.execute(
+        """
+        UPDATE archive_jobs SET status = 'in_progress', claimed_at = ?
+        WHERE id = ? AND status = 'pending'
+        """,
+        (now_iso, row["id"]),
+    )
+    if cur.rowcount != 1:
+        return None
+    return row
+
+
+def release_archive_job(conn: sqlite3.Connection, job_id: int) -> None:
+    """클레임 반납 (in_progress → pending, 시도 수 미증가) — 다음 폴링에서 재시도."""
+    conn.execute(
+        """
+        UPDATE archive_jobs SET status = 'pending', claimed_at = NULL
+        WHERE id = ? AND status = 'in_progress'
+        """,
+        (job_id,),
+    )
+
+
+def recover_stale_archive_jobs(conn: sqlite3.Connection, cutoff_iso: str) -> int:
+    """클레임 후 오래 방치된 in_progress 를 pending 으로 복구 (프로세스 중단 대비).
+
+    사람 보조 대기 중(needs_human_at)인 작업은 제외한다 — 사람이 분 단위로
+    푸는 동안 claimed_at 이 오래돼도 가로채면 안 된다 (worker 재시작 복구는
+    sweep_needs_human 이 따로 한다)."""
+    cur = conn.execute(
+        """
+        UPDATE archive_jobs SET status = 'pending', claimed_at = NULL
+        WHERE status = 'in_progress' AND claimed_at <= ? AND needs_human_at IS NULL
+        """,
+        (cutoff_iso,),
+    )
+    return cur.rowcount
+
+
+def finish_archive_job(conn: sqlite3.Connection, job_id: int) -> None:
+    """작업 성공 — 큐에서 삭제한다. 결과는 archive_logs 가 보존한다."""
+    conn.execute("DELETE FROM archive_jobs WHERE id = ?", (job_id,))
+
+
+def fail_archive_job(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    attempts: int,
+    error: str,
+    next_attempt_at: str | None,
+) -> None:
+    """작업 실패 — 재시도 시각이 있으면 pending 으로 되돌리고, 없으면(최종 실패)
+    큐에서 삭제한다. 최종 실패 사유는 pipeline 이 archive_logs(error)에 남겼다."""
+    if next_attempt_at:
+        conn.execute(
+            """
+            UPDATE archive_jobs
+            SET status = 'pending', attempts = ?, error = ?,
+                next_attempt_at = ?, claimed_at = NULL
+            WHERE id = ?
+            """,
+            (attempts, error, next_attempt_at, job_id),
+        )
+    else:
+        conn.execute("DELETE FROM archive_jobs WHERE id = ?", (job_id,))
+
+
+def list_active_archive_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """활성(pending|in_progress) 작업의 url·시각 — 진행 표시(_active_snapshot)용."""
+    return conn.execute(
+        """
+        SELECT url, COALESCE(claimed_at, created_at) AS activity_at
+        FROM archive_jobs WHERE status IN ('pending', 'in_progress')
+        """
+    ).fetchall()
+
+
+# ---- 사람 보조 챌린지 해결 (라이브 세션 — live_challenge.py / 대시보드) ----
+
+def get_archive_job(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row | None:
+    """작업 한 건 (대시보드 라이브 뷰가 상태·토큰·소유자를 읽는다)."""
+    return conn.execute(
+        "SELECT * FROM archive_jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+
+
+def list_needs_human_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """사람 확인 필요 상태의 작업들 (대시보드 배지·목록용)."""
+    return conn.execute(
+        """
+        SELECT id, url, needs_human_at, live_owner_id
+        FROM archive_jobs WHERE needs_human_at IS NOT NULL
+        ORDER BY needs_human_at
+        """
+    ).fetchall()
+
+
+def mark_needs_human(
+    conn: sqlite3.Connection, job_id: int, *,
+    token: str, viewport_w: int, viewport_h: int,
+) -> None:
+    """작업을 '사람 확인 필요'로 표시 (worker 가 라이브 진입 시). status 는
+    in_progress 유지 — 활성 불변식·클레임 배제를 보존한다."""
+    conn.execute(
+        """
+        UPDATE archive_jobs
+        SET needs_human_at = ?, live_token = ?, live_cancel = 0,
+            live_owner_id = NULL, live_viewport_w = ?, live_viewport_h = ?
+        WHERE id = ?
+        """,
+        (_utcnow(), token, viewport_w, viewport_h, job_id),
+    )
+
+
+def clear_needs_human(conn: sqlite3.Connection, job_id: int) -> None:
+    """라이브 상태 해제 (통과·취소·실패·worker 재시작 정리). 명령 큐도 비운다."""
+    row = conn.execute(
+        "SELECT live_token FROM archive_jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    if row and row["live_token"]:
+        conn.execute("DELETE FROM live_commands WHERE live_token = ?", (row["live_token"],))
+    conn.execute(
+        """
+        UPDATE archive_jobs
+        SET needs_human_at = NULL, live_token = NULL, live_owner_id = NULL,
+            live_cancel = 0, live_viewport_w = NULL, live_viewport_h = NULL
+        WHERE id = ?
+        """,
+        (job_id,),
+    )
+
+
+def claim_live_session(conn: sqlite3.Connection, job_id: int, owner_id: int) -> bool:
+    """라이브 세션을 admin 이 클레임 (입력 권한자 = 처음 연 admin). 이미 다른
+    소유자면 False. 소유자 정의가 'enqueue 사용자'가 아니라 '여는 admin'이라
+    enqueue 권한(archiver)과 입력 권한(admin)의 충돌이 없다."""
+    cur = conn.execute(
+        """
+        UPDATE archive_jobs SET live_owner_id = ?
+        WHERE id = ? AND needs_human_at IS NOT NULL
+          AND (live_owner_id IS NULL OR live_owner_id = ?)
+        """,
+        (owner_id, job_id, owner_id),
+    )
+    return cur.rowcount == 1
+
+
+def set_live_cancel(conn: sqlite3.Connection, job_id: int) -> None:
+    """사람이 취소 — worker 폴링 루프가 다음 반복에 중단한다."""
+    conn.execute(
+        "UPDATE archive_jobs SET live_cancel = 1 WHERE id = ?", (job_id,)
+    )
+
+
+def enqueue_live_command(
+    conn: sqlite3.Connection, token: str, *,
+    kind: str, x: int | None = None, y: int | None = None,
+    key: str | None = None, delay_ms: int = 0,
+) -> None:
+    """라이브 입력 명령을 큐에 추가 (대시보드 → worker). seq 는 토큰 내 증가."""
+    seq = conn.execute(
+        "SELECT COALESCE(MAX(seq), 0) + 1 FROM live_commands WHERE live_token = ?",
+        (token,),
+    ).fetchone()[0]
+    conn.execute(
+        """
+        INSERT INTO live_commands (live_token, seq, kind, x, y, key, delay_ms, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (token, seq, kind, x, y, key, delay_ms, _utcnow()),
+    )
+
+
+def claim_live_commands(conn: sqlite3.Connection, token: str) -> list[sqlite3.Row]:
+    """미소비 명령을 seq 순으로 가져와 소비 표시 (worker 가 재생). 단일 worker
+    소비라 SELECT→UPDATE 로 충분하다."""
+    rows = conn.execute(
+        """
+        SELECT * FROM live_commands
+        WHERE live_token = ? AND consumed_at IS NULL ORDER BY seq
+        """,
+        (token,),
+    ).fetchall()
+    if rows:
+        conn.execute(
+            "UPDATE live_commands SET consumed_at = ? WHERE live_token = ? AND consumed_at IS NULL",
+            (_utcnow(), token),
+        )
+    return rows
+
+
+def sweep_orphan_needs_human(conn: sqlite3.Connection) -> list[int]:
+    """worker 재시작 시 호출 — 살아있던 라이브 page 가 사라졌으므로 모든
+    needs_human 작업의 라이브 상태를 해제하고 pending 으로 떨군다. 떨군 작업
+    id 목록 반환. 같은 URL 의 활성 중복(부분 UNIQUE)은 idx_archive_jobs_active
+    위반을 피하려 충돌 시 그 작업을 삭제한다."""
+    jobs = conn.execute(
+        "SELECT id, url FROM archive_jobs WHERE needs_human_at IS NOT NULL"
+    ).fetchall()
+    reset: list[int] = []
+    for job in jobs:
+        clear_needs_human(conn, job["id"])
+        # 같은 URL 의 다른 pending/in_progress 가 있으면 중복이 되므로 이 행은 삭제
+        dup = conn.execute(
+            """
+            SELECT 1 FROM archive_jobs
+            WHERE url = ? AND id != ? AND status IN ('pending', 'in_progress')
+            """,
+            (job["url"], job["id"]),
+        ).fetchone()
+        if dup:
+            conn.execute("DELETE FROM archive_jobs WHERE id = ?", (job["id"],))
+        else:
+            conn.execute(
+                "UPDATE archive_jobs SET status = 'pending', claimed_at = NULL WHERE id = ?",
+                (job["id"],),
+            )
+            reset.append(job["id"])
+    return reset
 
 
 def finish_crawl_if_done(conn: sqlite3.Connection, crawl_id: int) -> bool:
@@ -2138,6 +2736,7 @@ def upsert_crawl_schedule(
     next_run_at: str,
     run_at_time: str | None = None,
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> None:
     """시작 URL 의 크롤 스케줄 등록 (이미 있으면 옵션·주기·다음 실행 시각 교체).
 
@@ -2148,8 +2747,9 @@ def upsert_crawl_schedule(
         """
         INSERT INTO crawl_schedules
             (start_url, max_pages, max_depth, delay_seconds, interval_seconds,
-             next_run_at, run_at_time, site_id, network_tag_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             next_run_at, run_at_time, site_id, network_tag_id, credential_id,
+             created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(start_url) DO UPDATE SET
             max_pages = excluded.max_pages,
             max_depth = excluded.max_depth,
@@ -2158,10 +2758,11 @@ def upsert_crawl_schedule(
             next_run_at = excluded.next_run_at,
             run_at_time = excluded.run_at_time,
             site_id = excluded.site_id,
-            network_tag_id = excluded.network_tag_id
+            network_tag_id = excluded.network_tag_id,
+            credential_id = excluded.credential_id
         """,
         (start_url, max_pages, max_depth, delay_seconds, interval_seconds,
-         next_run_at, run_at_time, site_id, network_tag_id, _utcnow()),
+         next_run_at, run_at_time, site_id, network_tag_id, credential_id, _utcnow()),
     )
 
 
@@ -2374,14 +2975,6 @@ def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
     conn.execute(
         "UPDATE api_keys SET created_by = NULL WHERE created_by = ?", (user_id,)
     )
-    # 미소비 1회성 인증 캡슐은 소유자와 함께 폐기 (캡슐은 소유자보다 오래 남지 않는다)
-    conn.execute("DELETE FROM auth_capsules WHERE owner_user_id = ?", (user_id,))
-    # 인증 스냅샷은 불변 기록이라 보존하되 소유자 표기만 끊는다 — NULL 이면
-    # _may_view_authenticated 가 admin 전용으로 좁히므로 접근이 넓어지지 않는다
-    conn.execute(
-        "UPDATE snapshots SET authenticated_by = NULL WHERE authenticated_by = ?",
-        (user_id,),
-    )
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
 
@@ -2581,6 +3174,49 @@ def delete_network_tag(conn: sqlite3.Connection, tag_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def network_tag_site_ids(conn: sqlite3.Connection, tag_id: str) -> set[int]:
+    """태그를 참조하는 pages·crawls·crawl_schedules 의 site_id 집합 (NULL 제외).
+
+    storage.site_key 가 호스트+포트라 같은 IP:포트 = 같은 site_id 다. 두 태그의
+    이 집합을 비교하면 '같은 사설 네트워크'를 가리키는지 판정할 수 있다 (병합 가드용).
+    """
+    rows = conn.execute(
+        """
+        SELECT site_id FROM pages
+         WHERE network_tag_id = ? AND site_id IS NOT NULL
+        UNION
+        SELECT site_id FROM crawls
+         WHERE network_tag_id = ? AND site_id IS NOT NULL
+        UNION
+        SELECT site_id FROM crawl_schedules
+         WHERE network_tag_id = ? AND site_id IS NOT NULL
+        """,
+        (tag_id, tag_id, tag_id),
+    ).fetchall()
+    return {row["site_id"] for row in rows}
+
+
+def merge_network_tags(
+    conn: sqlite3.Connection, source_id: str, target_id: str
+) -> dict[str, int]:
+    """source 태그의 모든 참조를 target 으로 옮긴 뒤 source 태그를 삭제한다.
+
+    pages·crawls·crawl_schedules 의 network_tag_id 를 일괄 갱신하고(테이블별
+    이전 행 수를 dict 로 반환) source 를 지운다. 검증(같은 사이트·미존재·동일
+    태그)은 호출부가 한다 — 여기선 단순 이전이다. UPDATE 가 모두 끝난 뒤
+    DELETE 하므로 FK(foreign_keys=ON) 위반이 없다.
+    """
+    moved: dict[str, int] = {}
+    for table in ("pages", "crawls", "crawl_schedules"):
+        cur = conn.execute(
+            f"UPDATE {table} SET network_tag_id = ? WHERE network_tag_id = ?",
+            (target_id, source_id),
+        )
+        moved[table] = cur.rowcount
+    conn.execute("DELETE FROM network_tags WHERE id = ?", (source_id,))
+    return moved
+
+
 # ---- 설정 (key-value) ----
 # 대시보드에서 변경 가능한 런타임 설정. 환경변수 설정(config.py)과 달리
 # DB 에 저장돼 재시작 없이 반영되고 백업/복원에 포함된다.
@@ -2629,19 +3265,19 @@ def signup_default_role(conn: sqlite3.Connection) -> str:
     return role if role in SIGNUP_ROLES else "pending"
 
 
-CREDENTIAL_TTL_HOURS_KEY = "credential_ttl_hours"
+EXT_CREDENTIAL_TTL_HOURS_KEY = "ext_credential_ttl_hours"
 
 
-def credential_ttl_hours(conn: sqlite3.Connection) -> int:
-    """1회성 자격증명 캡슐의 만료 안전망 TTL(시간) — 기본·오염 시 config 기본값."""
-    raw = get_setting(conn, CREDENTIAL_TTL_HOURS_KEY)
+def ext_credential_ttl_hours(conn: sqlite3.Connection) -> int:
+    """확장 1회성 세션 자격증명의 만료 안전망 TTL(시간) — 기본·오염 시 config 기본값."""
+    raw = get_setting(conn, EXT_CREDENTIAL_TTL_HOURS_KEY)
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        return config.CREDENTIAL_TTL_HOURS_DEFAULT
+        return config.EXT_CREDENTIAL_TTL_HOURS_DEFAULT
     return max(
-        config.CREDENTIAL_TTL_HOURS_MIN,
-        min(config.CREDENTIAL_TTL_HOURS_MAX, value),
+        config.EXT_CREDENTIAL_TTL_HOURS_MIN,
+        min(config.EXT_CREDENTIAL_TTL_HOURS_MAX, value),
     )
 
 
@@ -2758,51 +3394,141 @@ def delete_api_key(conn: sqlite3.Connection, key_id: int) -> bool:
     return cur.rowcount == 1
 
 
-# ---- 1회성 인증 캡슐 (auth_capsules) ----
+# ---- 사이트 로그인 자격증명 ----
+# 아카이빙 대상 사이트에 춘추관이 로그인하기 위한 외부 자격증명. secret 은
+# 암호문만 저장한다 (crypto 로 대칭 암호화 — CLAUDE.md 원칙 6 예외). 쓰기는
+# credentials.py 코어 모듈을 거친다.
 
 
-def create_auth_capsule(
+def create_site_credential(
     conn: sqlite3.Connection,
+    site_id: int,
+    label: str,
+    kind: str,
+    secret: str,
     *,
-    url: str,
-    scope_host: str,
-    owner_user_id: int,
-    ciphertext: bytes,
-    network_tag_id: str | None,
-    ttl_seconds: int,
+    created_by: int | None,
+    ttl_seconds: int | None = None,
 ) -> int:
-    """암호화된 자격증명 캡슐 행 생성 후 id 반환. expires_at 은 항상 설정된다."""
+    """사이트 자격증명 row 생성 후 id 반환. secret 은 암호문(평문 금지).
+
+    같은 사이트 안에서 label 은 UNIQUE — 호출부가 중복을 먼저 검사한다.
+    ttl_seconds 가 있으면 expires_at 이 설정된 1회성(확장) 자격증명이 된다 —
+    캡처 직후 삭제되고, 누락분은 delete_expired_ext_credentials 가 정리한다.
+    """
+    now = _utcnow()
+    expires_at = _later(ttl_seconds) if ttl_seconds is not None else None
     cur = conn.execute(
         """
-        INSERT INTO auth_capsules
-            (url, scope_host, owner_user_id, ciphertext, network_tag_id,
-             created_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO site_credentials
+            (site_id, label, kind, secret, created_by, created_at, updated_at,
+             expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (url, scope_host, owner_user_id, ciphertext, network_tag_id,
-         _utcnow(), _later(ttl_seconds)),
+        (site_id, label, kind, secret, created_by, now, now, expires_at),
     )
     return cur.lastrowid
 
 
-def get_auth_capsule(conn: sqlite3.Connection, capsule_id: int) -> sqlite3.Row | None:
-    """캡슐 단건 조회 (만료 여부 무관 — 소비 직전 사용). 없으면 None."""
+def delete_ephemeral_credential(conn: sqlite3.Connection, cred_id: int) -> None:
+    """1회성(expires_at 보유) 자격증명을 즉시 폐기 (캡처 소비 직후).
+
+    영속 자격증명(expires_at IS NULL)은 건드리지 않는다. 참조(pages/crawls/
+    crawl_schedules)는 1회성이라 보통 없지만, 방어적으로 NULL 로 끊는다.
+    """
+    row = conn.execute(
+        "SELECT expires_at FROM site_credentials WHERE id = ?", (cred_id,)
+    ).fetchone()
+    if row is None or row["expires_at"] is None:
+        return
+    for table in ("pages", "crawls", "crawl_schedules"):
+        conn.execute(
+            f"UPDATE {table} SET credential_id = NULL WHERE credential_id = ?",
+            (cred_id,),
+        )
+    conn.execute("DELETE FROM site_credentials WHERE id = ?", (cred_id,))
+
+
+def delete_expired_ext_credentials(conn: sqlite3.Connection) -> int:
+    """만료된 1회성(확장) 자격증명을 정리 (삭제 누락 안전망 GC). 삭제 행 수 반환.
+
+    아직 큐에 남아 처리되지 않은 작업(archive_jobs)이 참조 중인 행은 FK 보호를
+    위해 건드리지 않는다. 참조 없는 만료분만 지운다.
+    """
+    rows = conn.execute(
+        """
+        SELECT id FROM site_credentials
+        WHERE expires_at IS NOT NULL AND expires_at <= ?
+          AND id NOT IN (
+              SELECT credential_id FROM archive_jobs WHERE credential_id IS NOT NULL
+          )
+        """,
+        (_utcnow(),),
+    ).fetchall()
+    for row in rows:
+        for table in ("pages", "crawls", "crawl_schedules"):
+            conn.execute(
+                f"UPDATE {table} SET credential_id = NULL WHERE credential_id = ?",
+                (row["id"],),
+            )
+        conn.execute("DELETE FROM site_credentials WHERE id = ?", (row["id"],))
+    return len(rows)
+
+
+def get_site_credential(
+    conn: sqlite3.Connection, cred_id: int
+) -> sqlite3.Row | None:
+    """자격증명 id 로 조회 (암호문 secret 포함, 없으면 None)."""
     return conn.execute(
-        "SELECT * FROM auth_capsules WHERE id = ?", (capsule_id,)
+        "SELECT * FROM site_credentials WHERE id = ?", (cred_id,)
     ).fetchone()
 
 
-def delete_auth_capsule(conn: sqlite3.Connection, capsule_id: int) -> None:
-    """캡슐 즉시 폐기 (캡처 소비 직후·취소)."""
-    conn.execute("DELETE FROM auth_capsules WHERE id = ?", (capsule_id,))
+def list_site_credentials(
+    conn: sqlite3.Connection, site_id: int
+) -> list[sqlite3.Row]:
+    """사이트의 자격증명 목록 (라벨순, 암호문 secret 제외 — 관리 화면용)."""
+    return conn.execute(
+        """
+        SELECT c.id, c.site_id, c.label, c.kind, c.created_by,
+               c.created_at, c.updated_at, u.email AS creator_email
+        FROM site_credentials c LEFT JOIN users u ON u.id = c.created_by
+        WHERE c.site_id = ? ORDER BY c.label, c.id
+        """,
+        (site_id,),
+    ).fetchall()
 
 
-def delete_expired_auth_capsules(conn: sqlite3.Connection) -> int:
-    """만료된 캡슐 일괄 정리 (삭제 누락 안전망 GC). 삭제된 행 수 반환."""
-    cur = conn.execute(
-        "DELETE FROM auth_capsules WHERE expires_at <= ?", (_utcnow(),)
-    )
-    return cur.rowcount
+def get_site_credential_by_label(
+    conn: sqlite3.Connection, site_id: int, label: str
+) -> sqlite3.Row | None:
+    """사이트의 라벨로 자격증명 조회 (중복 검사용, 없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM site_credentials WHERE site_id = ? AND label = ?",
+        (site_id, label),
+    ).fetchone()
+
+
+def count_site_credentials(conn: sqlite3.Connection, site_id: int) -> int:
+    """사이트의 자격증명 수 (사이트 상세 표시용)."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM site_credentials WHERE site_id = ?", (site_id,)
+    ).fetchone()["c"]
+
+
+def delete_site_credential(conn: sqlite3.Connection, cred_id: int) -> bool:
+    """자격증명 삭제. 없으면 False.
+
+    이 자격증명을 연결한 페이지·크롤·크롤 스케줄(credential_id)은 NULL 로
+    끊는다 — FK 가 RESTRICT 라 끊지 않으면 삭제가 막힌다.
+    """
+    for table in ("pages", "crawls", "crawl_schedules"):
+        conn.execute(
+            f"UPDATE {table} SET credential_id = NULL WHERE credential_id = ?",
+            (cred_id,),
+        )
+    cur = conn.execute("DELETE FROM site_credentials WHERE id = ?", (cred_id,))
+    return cur.rowcount == 1
 
 
 # ---- 패스키 (WebAuthn) ----

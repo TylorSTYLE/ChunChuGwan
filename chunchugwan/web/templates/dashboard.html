@@ -65,7 +65,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
 {% if not recent_snaps %}
 <p class="muted">{{ _("아직 스냅샷이 없습니다.") }}</p>
 {% else %}
-<div class="table-wrap">
+<div class="table-wrap cards">
 <table>
   <thead><tr><th>{{ _("시각") }}</th><th>{{ _("상태") }}</th><th>URL</th><th>{{ _("용량") }}</th><th></th></tr></thead>
   <tbody>
@@ -93,7 +93,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
 {% if not recent_logs %}
 <p class="muted">{{ _("로그가 없습니다. 아카이빙을 실행하면 결과가 여기에 기록됩니다.") }}</p>
 {% else %}
-<div class="table-wrap wide">
+<div class="table-wrap wide cards">
 <table>
   <thead><tr><th>{{ _("시각") }}</th><th>{{ _("상태") }}</th><th>URL</th><th>{{ _("소요") }}</th><th>{{ _("출처") }}</th><th></th></tr></thead>
   <tbody>

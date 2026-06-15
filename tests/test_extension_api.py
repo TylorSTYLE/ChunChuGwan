@@ -121,8 +121,7 @@ def test_api_crawl_private_requires_valid_tag(client):
 # ---- POST /api/v1/archive network_tag ----
 
 
-def test_api_archive_private_with_tag(client, monkeypatch):
-    monkeypatch.setattr(web_app.pipeline, "archive_url", lambda *a, **k: None)
+def test_api_archive_private_with_tag(client):
     token = _issue()
     assert client.post(
         "/api/v1/archive", json={"url": "https://192.168.0.10/x"},
@@ -141,8 +140,7 @@ def test_api_archive_private_with_tag(client, monkeypatch):
 # ---- CSRF 면제 (/api/ POST) ----
 
 
-def test_api_post_csrf_exempt_with_foreign_origin(client, monkeypatch):
-    monkeypatch.setattr(web_app.pipeline, "archive_url", lambda *a, **k: None)
+def test_api_post_csrf_exempt_with_foreign_origin(client):
     token = _issue()
     r = client.post(
         "/api/v1/archive", json={"url": "https://example.com/new"},

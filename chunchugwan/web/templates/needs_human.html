@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ _("사람 확인 필요") }} — {{ _("춘추관") }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h2 style="margin:0">{{ _("사람 확인 필요") }}</h2>
+  <span class="muted">{{ _("자동으로 통과하지 못한 챌린지 — 직접 풀어서 통과시킵니다") }}</span>
+</div>
+{% if not jobs %}
+<p class="muted">{{ _("사람 확인이 필요한 작업이 없습니다.") }}</p>
+{% else %}
+<div class="table-wrap wide cards">
+<table>
+  <thead>
+    <tr><th>URL</th><th>{{ _("진입 시각") }}</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for j in jobs %}
+    <tr>
+      <td>{{ j['url'] }}</td>
+      <td class="mono">{{ j['needs_human_at'] | ts }}</td>
+      <td><a class="btn" href="/archive/jobs/{{ j['id'] }}/live">{{ _("처리") }}</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

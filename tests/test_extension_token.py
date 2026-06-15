@@ -113,11 +113,8 @@ def test_get_api_key_returns_regardless_of_expiry(client):
 # ---- 매 요청 권한 재평가 (_api_auth) ----
 
 
-def test_owner_token_permissions_follow_current_role(client, monkeypatch):
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": None,
-    )
+def test_owner_token_permissions_follow_current_role(client):
+    # 단발 아카이빙은 큐에 enqueue 만 하므로 캡처 모킹이 필요 없다 (worker 가 소비)
     # viewer 로 발급 — 저장 컬럼은 can_archive=0
     token = _issue_owned("ext", "viewer@test.co", can_view=True, can_archive=False)
     assert client.get("/api/v1/pages", headers=_headers(token)).status_code == 200
@@ -286,3 +283,64 @@ def test_delete_user_cleans_owner_tokens_keeps_system_keys(client):
         system = db.list_system_api_keys(conn)
         assert [k["name"] for k in system] == ["sys"]
         assert system[0]["created_by"] is None
+
+
+# ---- 1회성 세션 자격증명 (POST /api/v1/auth-profiles → site_credentials) ----
+
+_COOKIES = [{"name": "sid", "value": "secret", "domain": "example.com", "path": "/"}]
+
+
+def _ext_token(email):
+    return _issue_owned("ext", email, can_view=True, can_archive=True)
+
+
+def _auth_profile(client, token, url="https://example.com/secret", cookies=None):
+    return client.post(
+        "/api/v1/auth-profiles",
+        json={"url": url, "storage_state": {"cookies": cookies or _COOKIES, "origins": []}},
+        headers=_headers(token),
+    )
+
+
+def test_auth_profile_creates_oneshot_session_credential(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret-passphrase")
+    token = _ext_token("arch@test.co")
+    r = _auth_profile(client, token)
+    assert r.status_code == 202 and r.json()["authenticated"] is True
+    with db.connect() as conn:
+        cred = conn.execute("SELECT * FROM site_credentials").fetchone()
+        # kind=session, 1회성(expires_at 설정), 소유자=발급 사용자
+        assert cred["kind"] == "session" and cred["expires_at"] is not None
+        assert cred["created_by"] == _uid("arch@test.co")
+        # 아카이빙 작업이 그 credential_id 로 큐에 들어갔다
+        job = conn.execute(
+            "SELECT * FROM archive_jobs WHERE credential_id = ?", (cred["id"],)
+        ).fetchone()
+        assert job is not None
+
+
+def test_auth_profile_requires_secret_key(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "")
+    assert _auth_profile(client, _ext_token("arch@test.co")).status_code == 503
+
+
+def test_auth_profile_rejects_system_key(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    with db.connect() as conn:
+        sys_token = auth.issue_api_key(
+            conn, "sys", can_view=True, can_archive=True, created_by=1, ttl_seconds=None
+        )
+    assert _auth_profile(client, sys_token).status_code == 403  # 사용자 토큰만
+
+
+def test_auth_profile_https_only(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    r = _auth_profile(client, _ext_token("arch@test.co"), url="http://example.com/x")
+    assert r.status_code == 400
+
+
+def test_auth_profile_scopes_cookies_to_target(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    token = _ext_token("arch@test.co")
+    foreign = [{"name": "s", "value": "v", "domain": "evil.com", "path": "/"}]
+    assert _auth_profile(client, token, cookies=foreign).status_code == 400
