@@ -152,19 +152,25 @@ def test_download_documents_failure_does_not_block_others(doc_server, tmp_path):
     assert failed == [urls[0]]
 
 
-def test_download_documents_size_limit(doc_server, tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DOCUMENT_MAX_BYTES", 1024)
+def test_download_documents_size_limit(doc_server, tmp_path):
+    limits = documents.DocumentLimits(max_count=20, max_bytes=1024, timeout_seconds=30)
     url = f"{doc_server}/big.pdf"
-    manifest, failed = documents.download_documents([url], tmp_path / "files")
+    manifest, failed = documents.download_documents(
+        [url], tmp_path / "files", limits=limits
+    )
     assert manifest == [] and failed == [url]
     # 부분 다운로드 잔재가 남지 않는다
     assert list((tmp_path / "files").glob("*.pdf")) == []
 
 
-def test_download_documents_count_limit(doc_server, tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DOCUMENT_MAX_COUNT", 1)
+def test_download_documents_count_limit(doc_server, tmp_path):
+    limits = documents.DocumentLimits(
+        max_count=1, max_bytes=50 * 1024 * 1024, timeout_seconds=30
+    )
     urls = [f"{doc_server}/ok.pdf", f"{doc_server}/second.pdf"]
-    manifest, failed = documents.download_documents(urls, tmp_path / "files")
+    manifest, failed = documents.download_documents(
+        urls, tmp_path / "files", limits=limits
+    )
     assert len(manifest) == 1 and manifest[0]["url"] == urls[0]
     assert failed == []
 

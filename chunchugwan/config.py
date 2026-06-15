@@ -94,9 +94,17 @@ DOCUMENT_EXTENSIONS = (
     ".hwp", ".hwpx", ".odt", ".odp", ".ods", ".rtf",
     ".pages", ".key", ".numbers", ".epub", ".zip",
 )
-DOCUMENT_MAX_COUNT = 20                     # 스냅샷당 문서 수 한도
-DOCUMENT_MAX_BYTES = 50 * 1024 * 1024       # 문서 1개 크기 한도 (50MB)
-DOCUMENT_FETCH_TIMEOUT_SECONDS = 30
+# 한도 기본값과 허용 범위 — 시스템 설정(settings 테이블, 대시보드 시스템
+# 화면)이 우선하며, 값 해석·클램핑은 documents.limits 가 맡는다 (오염 시 기본값).
+DOCUMENT_MAX_COUNT_DEFAULT = 20             # 스냅샷당 문서 수 한도
+DOCUMENT_MAX_COUNT_MIN = 1
+DOCUMENT_MAX_COUNT_MAX = 200
+DOCUMENT_MAX_MB_DEFAULT = 50                 # 문서 1개 크기 한도 (MB)
+DOCUMENT_MAX_MB_MIN = 1
+DOCUMENT_MAX_MB_MAX = 1024
+DOCUMENT_FETCH_TIMEOUT_DEFAULT = 120         # 문서 다운로드 타임아웃 (초)
+DOCUMENT_FETCH_TIMEOUT_MIN = 5
+DOCUMENT_FETCH_TIMEOUT_MAX = 3600
 
 # ---- 텍스트 검색 인덱스 (searchindex.py — SQLite FTS5 trigram) ----
 # 색인 원문은 스냅샷의 content.md(정규화 텍스트) + 첨부 문서 본문이다.

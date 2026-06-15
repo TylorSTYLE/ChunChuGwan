@@ -312,7 +312,7 @@ def test_download_documents_origin_scoped(tmp_path, monkeypatch):
     """문서 다운로드 자격증명은 같은 origin 문서에만 실린다 (서드파티 누수 방지)."""
     seen = []
 
-    def fake_one(url, dest_dir, headers, verify=True, cookies=None):
+    def fake_one(url, dest_dir, headers, verify=True, cookies=None, **kwargs):
         seen.append((url, headers.get("Authorization")))
         return {"url": url, "file": "x", "bytes": 1, "sha256": "h",
                 "content_type": "application/pdf"}
@@ -336,7 +336,7 @@ def test_pipeline_document_branch_passes_auth(tmp_db, monkeypatch):
     def fake_capture(url, out_dir, credential=None, **kwargs):
         raise capture.CaptureDownloadError(f"{url} 다운로드 URL")
 
-    def fake_direct(url, dest_dir, verify=True, auth=None):
+    def fake_direct(url, dest_dir, verify=True, auth=None, limits=None):
         seen["auth"] = auth
         raise ValueError("중단(테스트)")
 

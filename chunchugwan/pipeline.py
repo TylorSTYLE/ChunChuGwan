@@ -488,6 +488,7 @@ def _archive_url(
                     auth=(credentials.httpx_auth(credential.kind, credential.payload)
                           if credential else None),
                     auth_origin=credential.origin if credential else None,
+                    limits=documents.limits(conn),
                 )
                 documents.ingest_into_cas(tmp_dir / "files", doc_manifest)
                 run.step(
@@ -645,11 +646,14 @@ def _archive_document_url(
     """
     import httpx
 
+    with db.connect() as conn:
+        doc_limits = documents.limits(conn)
     try:
         dl = documents.download_direct(
             norm, tmp_dir / "files", verify=verify,
             auth=(credentials.httpx_auth(credential.kind, credential.payload)
                   if credential else None),
+            limits=doc_limits,
         )
     except (ValueError, httpx.HTTPError) as e:
         raise capture.CaptureError(f"{norm} 문서 다운로드 실패: {e}") from e

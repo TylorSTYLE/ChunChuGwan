@@ -3348,6 +3348,12 @@ CRAWL_DEFAULT_MAX_DEPTH_KEY = "crawl_default_max_depth"
 CRAWL_DEFAULT_DELAY_KEY = "crawl_default_delay_seconds"
 CRAWL_RETRY_BACKOFF_KEY = "crawl_retry_backoff_seconds"  # 쉼표 구분 초 목록 (예: '300,900')
 
+# 링크된 문서 파일 아카이브 한도. 값 해석·클램핑은 documents.limits 가 맡는다
+# (오염·범위 밖이면 config 기본값). max_mb 는 MB 단위 정수로 저장한다.
+DOCUMENT_MAX_COUNT_KEY = "document_max_count"
+DOCUMENT_MAX_MB_KEY = "document_max_mb"
+DOCUMENT_FETCH_TIMEOUT_KEY = "document_fetch_timeout_seconds"
+
 # 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한.
 # 기본은 권한없음(pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.
 SIGNUP_ROLES = ("pending", "viewer", "archiver")
