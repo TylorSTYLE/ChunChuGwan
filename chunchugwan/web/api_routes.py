@@ -256,8 +256,13 @@ def api_archive(request: Request, payload: ArchiveRequest):
     tag_id = _resolve_network_tag(norm, payload.network_tag)
     from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
 
+    # 사용자 귀속 확장 토큰이면 그 소유자를 요청자로 기록 → '내 아카이브'에 귀속.
+    # 시스템 키(owner=NULL)·인증 off 면 None (주체 없음).
+    key = request.state.api_key
+    owner_id = key["owner_user_id"] if key is not None else None
     queued = webapp._queue_archive(
-        norm, force=payload.force, source="api", network_tag_id=tag_id
+        norm, force=payload.force, source="api", requested_by=owner_id,
+        network_tag_id=tag_id,
     )
     if queued:
         audit.log(request, "새 아카이빙 등록(API): %s", norm)
@@ -378,7 +383,7 @@ def api_auth_profile(request: Request, payload: AuthProfileRequest):
     from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
 
     queued = webapp._queue_archive(
-        norm, force=payload.force, source="api",
+        norm, force=payload.force, source="api", requested_by=owner_id,
         network_tag_id=tag_id, credential_id=cred_id,
     )
     if not queued:

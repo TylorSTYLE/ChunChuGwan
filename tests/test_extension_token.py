@@ -154,7 +154,7 @@ def test_system_key_permissions_use_stored_columns(client):
 def test_account_issues_owner_token(client):
     _login(client, "viewer@test.co")
     r = client.post(
-        "/settings/account/extension-tokens",
+        "/settings/api-keys",
         data={"name": "chrome-ext", "expiry": "permanent"}, follow_redirects=False,
     )
     assert r.status_code == 303
@@ -170,7 +170,7 @@ def test_account_issues_owner_token(client):
 def test_account_archiver_token_gets_archive_perm(client):
     _login(client, "arch@test.co")
     client.post(
-        "/settings/account/extension-tokens",
+        "/settings/api-keys",
         data={"name": "ext", "expiry": "1d"}, follow_redirects=False,
     )
     with db.connect() as conn:
@@ -182,14 +182,14 @@ def test_account_archiver_token_gets_archive_perm(client):
 def test_account_revokes_own_token(client):
     _login(client, "viewer@test.co")
     client.post(
-        "/settings/account/extension-tokens",
+        "/settings/api-keys",
         data={"name": "ext", "expiry": "permanent"}, follow_redirects=False,
     )
     uid = _uid("viewer@test.co")
     with db.connect() as conn:
         token_id = db.list_api_keys_for_owner(conn, uid)[0]["id"]
     r = client.post(
-        f"/settings/account/extension-tokens/{token_id}/delete", follow_redirects=False
+        f"/settings/api-keys/{token_id}/delete", follow_redirects=False
     )
     assert r.status_code == 303
     with db.connect() as conn:
@@ -202,7 +202,7 @@ def test_idor_cannot_delete_others_token(client):
         tok_id = db.list_api_keys_for_owner(conn, _uid("viewer@test.co"))[0]["id"]
     _login(client, "arch@test.co")  # 다른 사용자
     r = client.post(
-        f"/settings/account/extension-tokens/{tok_id}/delete", follow_redirects=False
+        f"/settings/api-keys/{tok_id}/delete", follow_redirects=False
     )
     assert r.status_code == 404
     with db.connect() as conn:
@@ -216,7 +216,7 @@ def test_account_cannot_delete_system_key(client):
         sys_id = db.list_system_api_keys(conn)[0]["id"]
     _login(client, "viewer@test.co")
     r = client.post(
-        f"/settings/account/extension-tokens/{sys_id}/delete", follow_redirects=False
+        f"/settings/api-keys/{sys_id}/delete", follow_redirects=False
     )
     assert r.status_code == 404
 
@@ -224,7 +224,7 @@ def test_account_cannot_delete_system_key(client):
 def test_pending_cannot_issue(client):
     _login(client, "pend@test.co")
     r = client.post(
-        "/settings/account/extension-tokens",
+        "/settings/api-keys",
         data={"name": "x", "expiry": "permanent"}, follow_redirects=False,
     )
     # pending 은 미들웨어가 /pending 으로 돌린다 — 어떤 경로로든 토큰은 생기지 않는다
@@ -233,11 +233,23 @@ def test_pending_cannot_issue(client):
         assert db.list_api_keys_for_owner(conn, _uid("pend@test.co")) == []
 
 
-def test_account_page_shows_extension_section(client):
+def test_api_keys_page_shows_section(client):
+    _login(client, "viewer@test.co")
+    res = client.get("/settings/api-keys")
+    assert res.status_code == 200
+    assert "개인 API Key" in res.text
+    # 발급 폼(이름 입력)이 보여야 한다 — viewer 도 보기 전용 키는 발급 가능
+    assert 'action="/settings/api-keys"' in res.text
+
+
+def test_account_page_links_to_api_keys(client):
+    """계정 화면은 토큰 표 대신 개인 API Key 화면으로의 링크만 남긴다."""
     _login(client, "viewer@test.co")
     res = client.get("/settings/account")
     assert res.status_code == 200
-    assert "확장 토큰" in res.text
+    assert 'href="/settings/api-keys"' in res.text
+    # 발급 표/폼은 더 이상 계정 화면에 없다
+    assert 'action="/settings/api-keys"' not in res.text
 
 
 # ---- 관리 화면 격리 / 사용자 삭제 ----

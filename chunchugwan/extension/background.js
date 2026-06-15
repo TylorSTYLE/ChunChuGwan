@@ -227,7 +227,7 @@ const HANDLERS = {
     // 입력한 주소를 기억해 둔다 (팝업이 닫혀도 다음에 채워지도록). 토큰이 없으면
     // status 의 connected 는 여전히 false 라 연결로 오인되지 않는다.
     if (typed) await chrome.storage.local.set({ base_url: typed });
-    await chrome.tabs.create({ url: base + "/settings/account#ext-token-form" });
+    await chrome.tabs.create({ url: base + "/settings/api-keys#ext-token-form" });
     return { ok: true };
   },
 };

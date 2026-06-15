@@ -134,6 +134,8 @@ def process_next(
                 extra["network_tag_id"] = item["network_tag_id"]
             if item["credential_id"]:
                 extra["credential_id"] = item["credential_id"]
+            if item["requested_by"]:
+                extra["requested_by"] = item["requested_by"]
             # 사람 보조(라이브) 모드: 자동으로 안 풀리는 인터랙티브 챌린지를
             # 대시보드에서 사람이 풀 수 있게 세션을 주입한다. 스텔스 + 기능 켜짐일
             # 때만 (헤드리스 기본은 가망 없어 진입 안 함). 작업에 바인딩.
