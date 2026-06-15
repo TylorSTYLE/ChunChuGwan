@@ -5,7 +5,7 @@
 
 ## 참고 문서 (해당 작업 시 읽을 것)
 
-- `docs/DASHBOARD.md` — 대시보드 화면 19개의 라우트·권한·세부 동작 레퍼런스.
+- `docs/DASHBOARD.md` — 대시보드 화면 21개의 라우트·권한·세부 동작 레퍼런스.
   웹 UI 화면을 추가/수정하기 전에 읽는다.
 - `docs/ROADMAP.md` — 완료된 구현 로드맵 히스토리(M1~M8, A1~A11 상세).
   기능의 도입 배경·구현 범위가 궁금할 때 읽는다.
@@ -237,7 +237,9 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   FTS5 없는 SQLite 빌드에서는 생성이 실패해도 검색만 비활성(graceful) —
   기존 아카이빙은 영향 없음. 재생성 가능한 파생 데이터라 `export` 제외
 - `archive_logs` — 아카이브 실행 로그 (성공/실패, 단계별 소요시간 JSON,
-  출처 cli/web/schedule/api/crawl)
+  출처 cli/web/schedule/api/crawl). `requested_by` 는 직접 요청한 사용자
+  (web·확장 토큰 소유자) — '내 아카이브'(`/settings/archives`)의 필터 기준.
+  큐(archive_jobs.requested_by)를 거쳐 이어지며, cli/schedule/crawl 은 NULL
 - `system_logs` — 앱 동작 로그 (`system_log.py` 의 logging 핸들러가
   chunchugwan 네임스페이스의 INFO 이상 레코드를 적재 — 레벨·로거·출처
   serve/worker/cli·트레이스백). 비차단 큐 + 쓰기 스레드, 보관 한도
@@ -302,8 +304,11 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   `crawler.crawl_defaults`/`retry_backoff`, 오염 시 config 기본값 폴백)
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
 - `api_keys` — 외부 소프트웨어용 API 키 (`/api/v1` REST API 인증).
-  관리자만 발급, 모든 관리자가 공동 관리. 키마다 보기/아카이브 권한과
-  만료 시각(NULL=영구), 토큰은 SHA-256 해시만 저장 (원문은 발급 시 1회 표시)
+  키마다 보기/아카이브 권한과 만료 시각(NULL=영구), 토큰은 SHA-256 해시만
+  저장 (원문은 발급 시 1회 표시). `owner_user_id` NULL=관리자 발급 시스템
+  키(공동 관리, `/system/api-keys`), 값=그 사용자 귀속 개인 API Key(확장
+  토큰, 본인이 `/settings/api-keys` 에서 발급, 권한은 _api_auth 가 소유자
+  현재 역할로 매 요청 재평가)
 - `site_credentials` — 아카이빙 대상 사이트 로그인용 외부 자격증명 (사이트별,
   `kind` = http_basic/session/jwt, 라벨 UNIQUE). 비밀은 `WCCG_SECRET_KEY` 로 대칭
   암호화한 암호문(`secret`)만 저장 (`crypto.py` — 원칙 6 예외, replay 위해
@@ -353,7 +358,7 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
 
 ## 대시보드 디자인 방향
 
-- 화면 19개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
+- 화면 21개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
   사이트 상세(`/sites/{id}` — 소속 페이지·문서·크롤 회차·스케줄·사이트 삭제),
   사이트 로그인 자격증명(`/sites/{id}/credentials` — 관리자 전용),
   문서(`/documents` — 문서 파일 통합 목록),
@@ -361,12 +366,16 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   사이트 아카이브 진행(`/crawls/{id}` — 크롤 회차 상세), 스케줄(`/schedules`),
   타임라인, 스냅샷 뷰어, diff 뷰어, 아카이빙 로그(`/logs` — viewer 이상),
   시스템 로그(`/system/logs` — 관리자 전용), 시스템, 사용자, API 키,
+  개인 API Key(`/settings/api-keys` — 본인 확장 토큰 발급·폐기),
+  내 아카이브(`/settings/archives` — 본인이 요청한 아카이빙 이력),
   사람 확인 필요(`/archive/needs-human` — 관리자 전용, `WCCG_LIVE_CHALLENGE` 켜짐 시)·
   라이브 챌린지 처리(`/archive/jobs/{id}/live` — 관리자, 스크린샷 보고 직접 클릭/입력).
   권한이 없는 메뉴는 헤더에 표시하지 않는다 (`templating._auth_context` 의
-  노출 플래그). 로그(아카이빙·시스템)·관리자(사용자·시스템) 메뉴는 헤더에서
-  `<details>` 드롭다운으로 묶는다 (base.html — 넓은 화면은 겹침 패널, 좁은
-  화면은 햄버거 안 아코디언). 화면별 라우트·권한·세부 동작은 `docs/DASHBOARD.md` 참조.
+  노출 플래그). 로그(아카이빙·시스템)·관리자(사용자·시스템) 메뉴와 개인설정
+  (우측 이메일/표시이름 → 계정·개인 API Key·내 아카이브·로그아웃)은 헤더에서
+  같은 `<details>` 드롭다운(`.nav-group`)으로 묶는다 (base.html — 넓은 화면은
+  겹침 패널, 좁은 화면은 햄버거 안 아코디언). 화면별 라우트·권한·세부 동작은
+  `docs/DASHBOARD.md` 참조.
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
 - 다국어(ko/en): `web/i18n.py` — 한국어 원문이 메시지 키(gettext msgid 방식),

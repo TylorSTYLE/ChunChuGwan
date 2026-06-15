@@ -47,10 +47,11 @@ class ArchiveOutcome:
 class _RunLog:
     """단계별 소요시간/결과를 모아 archive_logs 한 행으로 기록하는 수집기."""
 
-    def __init__(self, url: str, source: str) -> None:
+    def __init__(self, url: str, source: str, requested_by: int | None = None) -> None:
         self.url = url          # normalize 성공 시 정규화 URL로 교체
         self.domain = ""
         self.source = source
+        self.requested_by = requested_by  # 요청한 사용자 (web/확장 토큰, 없으면 None)
         self.started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         self._t0 = time.monotonic()
         self._t_step = self._t0
@@ -80,7 +81,7 @@ class _RunLog:
             conn,
             url=self.url, domain=self.domain,
             page_id=page_id, snapshot_id=snapshot_id,
-            source=self.source, status=status,
+            source=self.source, requested_by=self.requested_by, status=status,
             started_at=self.started_at,
             duration_ms=int((time.monotonic() - self._t0) * 1000),
             http_status=http_status, content_hash=content_hash,
@@ -108,6 +109,7 @@ def archive_url(
     url: str,
     force: bool = False,
     source: str = "cli",
+    requested_by: int | None = None,
     link_rewriter: capture.LinkRewriter | None = None,
     browser_session: capture.BrowserSession | None = None,
     network_tag_id: str | None = None,
@@ -119,7 +121,9 @@ def archive_url(
     잘못된 URL은 ValueError, 캡처 실패는 capture.CaptureError 를 던진다.
     해시가 직전 스냅샷과 같으면 checks 기록만 남긴다 (force 시 예외).
     source 는 실행 주체('cli' | 'web' | 'schedule' | 'api' | 'crawl') —
-    archive_logs 에 기록된다. link_rewriter 는 사이트 전체 아카이브용
+    archive_logs 에 기록된다. requested_by 는 요청한 사용자(web/확장 토큰,
+    없으면 None) — 로그에 남아 '내 아카이브' 화면이 본인 요청을 추린다.
+    link_rewriter 는 사이트 전체 아카이브용
     page.html 앵커 재작성, browser_session 은 크롤러의 브라우저 재사용
     (둘 다 capture 참조).
 
@@ -127,7 +131,7 @@ def archive_url(
     network_tag_id(시스템 설정의 로컬 네트워크 태그) 또는 기존 페이지의
     태그가 있어야 한다 — 없으면 ValueError. 공인 주소면 태그는 무시된다.
     """
-    run = _RunLog(url, source)
+    run = _RunLog(url, source, requested_by)
     try:
         outcome = _archive_url(url, force, run, link_rewriter, browser_session,
                                network_tag_id, credential_id, live_session)

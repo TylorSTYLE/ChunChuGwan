@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS archive_jobs (
     url              TEXT NOT NULL,                 -- 정규화 URL
     force            INTEGER NOT NULL DEFAULT 0,
     source           TEXT NOT NULL DEFAULT 'web',   -- cli|web|api
+    requested_by     INTEGER REFERENCES users(id),  -- 요청한 사용자 (web/확장 토큰). 로그로 이어진다
     network_tag_id   TEXT REFERENCES network_tags(id),         -- 사설 대역의 로컬 네트워크 태그
     credential_id    INTEGER REFERENCES site_credentials(id),  -- 적용할 로그인 자격증명(선택)
     interval_seconds INTEGER,             -- 아카이빙 후 자동 재아카이빙 주기 등록용(선택)
@@ -246,6 +247,7 @@ CREATE TABLE IF NOT EXISTS archive_logs (
     page_id      INTEGER REFERENCES pages(id),      -- 페이지 생성 전 실패면 NULL
     snapshot_id  INTEGER REFERENCES snapshots(id),  -- 새 스냅샷을 만든 경우에만
     source       TEXT NOT NULL DEFAULT 'cli',       -- 'cli'|'web'|'schedule'|'api'|'crawl'
+    requested_by INTEGER REFERENCES users(id),       -- 요청한 사용자 (web/확장 토큰). 그 외(cli/schedule/crawl)는 NULL
     status       TEXT NOT NULL,          -- new|changed|unchanged|forced_same|error
     started_at   TEXT NOT NULL,          -- ISO 8601 UTC
     duration_ms  INTEGER NOT NULL DEFAULT 0,
@@ -476,6 +478,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             ("live_cancel", "INTEGER NOT NULL DEFAULT 0"),
             ("live_viewport_w", "INTEGER"),
             ("live_viewport_h", "INTEGER"),
+            # 요청한 사용자 — 작업이 로그가 될 때 archive_logs.requested_by 로 이어진다
+            ("requested_by", "INTEGER REFERENCES users(id)"),
         ):
             if col not in cols:
                 conn.execute(f"ALTER TABLE archive_jobs ADD COLUMN {col} {ddl}")
@@ -483,6 +487,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_archive_jobs_needs_human "
             "ON archive_jobs(needs_human_at) WHERE needs_human_at IS NOT NULL"
         )
+    # 아카이브 로그의 요청 사용자 — '내 아카이브' 화면의 필터 기준. 기존 로그는
+    # 주체를 알 수 없으므로 NULL 그대로(백필 없음 — 누구의 것도 아닌 과거 기록).
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(archive_logs)")}
+    if cols and "requested_by" not in cols:
+        conn.execute(
+            "ALTER TABLE archive_logs ADD COLUMN requested_by INTEGER REFERENCES users(id)"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_archive_logs_requester "
+        "ON archive_logs(requested_by, started_at)"
+    )
     _backfill_sites(conn)
 
 
@@ -1005,8 +1020,9 @@ def insert_check(conn: sqlite3.Connection, page_id: int, content_hash: str) -> N
 
 _ARCHIVE_LOG_COLUMNS = frozenset(
     {
-        "url", "domain", "page_id", "snapshot_id", "source", "status",
-        "started_at", "duration_ms", "http_status", "content_hash", "error", "steps",
+        "url", "domain", "page_id", "snapshot_id", "source", "requested_by",
+        "status", "started_at", "duration_ms", "http_status", "content_hash",
+        "error", "steps",
     }
 )
 
@@ -1038,6 +1054,7 @@ def _archive_log_where(
     page_id: int | None,
     snapshot_id: int | None,
     status: str | None,
+    requested_by: int | None,
     date_from: str | None,
     date_to: str | None,
 ) -> tuple[str, list[object]]:
@@ -1045,6 +1062,7 @@ def _archive_log_where(
 
     date_from/date_to 는 YYYY-MM-DD. started_at 이 ISO 8601 이므로 하한은
     문자열 비교로, 상한은 다음날 0시 미만으로 비교한다 (해당 날짜 포함).
+    requested_by 는 '내 아카이브' 화면이 본인 요청만 추리는 데 쓴다.
     """
     where: list[str] = []
     params: list[object] = []
@@ -1053,6 +1071,7 @@ def _archive_log_where(
         ("al.page_id = ?", page_id),
         ("al.snapshot_id = ?", snapshot_id),
         ("al.status = ?", status),
+        ("al.requested_by = ?", requested_by),
         ("al.started_at >= ?", date_from),
         ("al.started_at < DATE(?, '+1 day')", date_to),
     ):
@@ -1069,12 +1088,13 @@ def list_archive_logs(
     page_id: int | None = None,
     snapshot_id: int | None = None,
     status: str | None = None,
+    requested_by: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[sqlite3.Row]:
-    """아카이브 실행 로그 (최신 순). 도메인/페이지/스냅샷/상태/기간으로 필터.
+    """아카이브 실행 로그 (최신 순). 도메인/페이지/스냅샷/상태/요청자/기간으로 필터.
 
     스냅샷이 생긴 로그에는 디렉토리 위치(snap_domain, snap_slug, snap_dir_name)를
     함께 반환한다 — 대시보드가 저장된 파일 목록/용량을 조회하는 데 쓴다.
@@ -1082,7 +1102,8 @@ def list_archive_logs(
     """
     where_sql, params = _archive_log_where(
         domain=domain, page_id=page_id, snapshot_id=snapshot_id,
-        status=status, date_from=date_from, date_to=date_to,
+        status=status, requested_by=requested_by,
+        date_from=date_from, date_to=date_to,
     )
     sql = """
         SELECT al.*, s.dir_name AS snap_dir_name,
@@ -1109,13 +1130,15 @@ def count_archive_logs(
     page_id: int | None = None,
     snapshot_id: int | None = None,
     status: str | None = None,
+    requested_by: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> int:
     """필터 조건에 맞는 아카이브 로그 총 건수 (페이징용)."""
     where_sql, params = _archive_log_where(
         domain=domain, page_id=page_id, snapshot_id=snapshot_id,
-        status=status, date_from=date_from, date_to=date_to,
+        status=status, requested_by=requested_by,
+        date_from=date_from, date_to=date_to,
     )
     row = conn.execute(
         "SELECT COUNT(*) FROM archive_logs al" + where_sql, params
@@ -2128,6 +2151,7 @@ def enqueue_archive_job(
     *,
     force: bool = False,
     source: str = "web",
+    requested_by: int | None = None,
     network_tag_id: str | None = None,
     credential_id: int | None = None,
     interval_seconds: int | None = None,
@@ -2137,17 +2161,18 @@ def enqueue_archive_job(
 
     중복 차단은 부분 UNIQUE 인덱스(idx_archive_jobs_active)가 한다 — INSERT OR
     IGNORE 가 활성 중복이면 0행을 넣고 False 를 반환한다 (현재 _register_job 의
-    중복-방지 역할 대체).
+    중복-방지 역할 대체). requested_by 는 요청 사용자(web/확장 토큰) — 작업이
+    실행돼 archive_logs 한 행이 될 때 그대로 이어진다('내 아카이브' 귀속).
     """
     cur = conn.execute(
         """
         INSERT OR IGNORE INTO archive_jobs
-            (url, force, source, network_tag_id, credential_id,
+            (url, force, source, requested_by, network_tag_id, credential_id,
              interval_seconds, run_at, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
         """,
-        (url, 1 if force else 0, source, network_tag_id, credential_id,
-         interval_seconds, run_at, _utcnow()),
+        (url, 1 if force else 0, source, requested_by, network_tag_id,
+         credential_id, interval_seconds, run_at, _utcnow()),
     )
     return cur.rowcount == 1
 
@@ -3055,6 +3080,16 @@ def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
     # 끊으면 _may_view_authenticated 가 admin 전용으로 좁아져 접근이 넓어지지 않는다
     conn.execute(
         "UPDATE snapshots SET authenticated_by = NULL WHERE authenticated_by = ?",
+        (user_id,),
+    )
+    # 아카이브 실행 이력(로그)·대기 작업의 요청자 표기는 NULL 로 끊는다 — 기록은
+    # 보존하되 FK 만 해제한다 (지워진 사용자의 '내 아카이브'는 더는 의미 없음)
+    conn.execute(
+        "UPDATE archive_logs SET requested_by = NULL WHERE requested_by = ?",
+        (user_id,),
+    )
+    conn.execute(
+        "UPDATE archive_jobs SET requested_by = NULL WHERE requested_by = ?",
         (user_id,),
     )
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))

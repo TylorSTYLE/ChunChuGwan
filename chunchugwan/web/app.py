@@ -615,7 +615,7 @@ def site_failed_retry(
         log = db.get_site_failed_log(conn, site_id, log_id)
     if log is None:
         raise HTTPException(404, t(request, "실패 기록 없음"))
-    if _queue_archive(log["page_url"]):
+    if _queue_archive(log["page_url"], requested_by=_requester_id(request)):
         audit.log(request, "실패 작업 재시도: %s", log["page_url"])
         params = {"notice": t(request, "아카이빙이 백그라운드에서 시작되었습니다")}
     else:
@@ -1727,12 +1727,78 @@ def logs_view(
     )
 
 
+@app.get("/settings/archives", response_class=HTMLResponse)
+def my_archives(
+    request: Request,
+    status: str | None = None,
+    page: int = 1,
+    limit: int = _LOG_PAGE_SIZE_DEFAULT,
+):
+    """내 아카이브 — 본인이 직접 요청한(web·확장 토큰) 단발 아카이빙 실행 이력.
+
+    로그인 사용자라면 권한과 무관하게 본인 기록을 본다. 인증 off(loopback)에는
+    '본인'이 없으므로 빈 목록을 보여준다. 예약·크롤·CLI 실행은 requested_by 가
+    NULL 이라 포함되지 않는다.
+    """
+    requester = _requester_id(request)
+    if status not in _LOG_STATUSES:
+        status = None
+    if limit not in _LOG_PAGE_SIZES:
+        limit = _LOG_PAGE_SIZE_DEFAULT
+    page = max(1, page)
+    items: list[dict] = []
+    total = 0
+    total_pages = 1
+    if requester is not None:
+        with db.connect() as conn:
+            total = db.count_archive_logs(
+                conn, requested_by=requester, status=status
+            )
+            total_pages = max(1, -(-total // limit))  # ceil
+            page = max(1, min(page, total_pages))
+            logs = db.list_archive_logs(
+                conn, requested_by=requester, status=status,
+                limit=limit, offset=(page - 1) * limit,
+            )
+        items = [{"log": row} for row in logs]
+
+    # 페이징 링크 — 현재 필터(상태·줄 수)를 유지한 채 page 만 바꾼다
+    qs_base = [("status", status)] if status else []
+    if limit != _LOG_PAGE_SIZE_DEFAULT:
+        qs_base.append(("limit", limit))
+
+    def _page_url(n: int) -> str:
+        params = qs_base + ([("page", n)] if n > 1 else [])
+        return "/settings/archives" + ("?" + urlencode(params) if params else "")
+
+    return templates.TemplateResponse(
+        request, "my_archives.html",
+        {
+            "items": items, "status": status or "", "limit": limit,
+            "limits": _LOG_PAGE_SIZES, "statuses": _LOG_STATUSES,
+            "total": total, "total_pages": total_pages, "page_num": page,
+            "prev_url": _page_url(page - 1) if page > 1 else None,
+            "next_url": _page_url(page + 1) if page < total_pages else None,
+        },
+    )
+
+
+def _requester_id(request: Request) -> int | None:
+    """요청한 사용자의 id (인증 off 등으로 사용자가 없으면 None).
+
+    '내 아카이브' 귀속을 위해 archive_jobs/archive_logs.requested_by 에 싣는다.
+    """
+    user = getattr(request.state, "user", None)
+    return user["id"] if user is not None else None
+
+
 def _queue_archive(
     url: str,
     force: bool = False,
     interval_seconds: int | None = None,
     run_at: str | None = None,
     source: str = "web",
+    requested_by: int | None = None,
     network_tag_id: str | None = None,
     credential_id: int | None = None,
 ) -> bool:
@@ -1741,13 +1807,14 @@ def _queue_archive(
 
     실제 캡처는 worker(또는 serve 단일 프로세스)의 archive_worker 가 큐를
     소비해 실행한다 — 대시보드 프로세스에서 직접 캡처하지 않는다. interval 이
-    있으면 소비자가 아카이빙 후 자동 재아카이빙 주기를 등록한다. URL 정규화·
-    netcheck 게이트·자격증명 검증은 라우트 본문이 enqueue 전에 동기로 끝내므로
-    잘못된 입력은 여전히 폼에서 즉시 에러로 보인다.
+    있으면 소비자가 아카이빙 후 자동 재아카이빙 주기를 등록한다. requested_by 는
+    요청 사용자 — 큐를 거쳐 archive_logs 까지 이어져 '내 아카이브'에 귀속된다.
+    URL 정규화·netcheck 게이트·자격증명 검증은 라우트 본문이 enqueue 전에 동기로
+    끝내므로 잘못된 입력은 여전히 폼에서 즉시 에러로 보인다.
     """
     with db.connect() as conn:
         return db.enqueue_archive_job(
-            conn, url, force=force, source=source,
+            conn, url, force=force, source=source, requested_by=requested_by,
             network_tag_id=network_tag_id, credential_id=credential_id,
             interval_seconds=interval_seconds, run_at=run_at,
         )
@@ -2070,7 +2137,7 @@ def archive_new(
             network_tag_id=tag_id, credential_id=link_credential_id,
         )
     if _queue_archive(
-        norm,
+        norm, requested_by=_requester_id(request),
         interval_seconds=seconds or None, run_at=(run_at or None) if seconds else None,
         network_tag_id=tag_id, credential_id=link_credential_id,
     ):
@@ -2092,7 +2159,7 @@ def rearchive(
         page = db.get_page_by_id(conn, page_id)
     if page is None:
         raise HTTPException(404, t(request, "페이지 없음"))
-    if _queue_archive(page["url"], force=force):
+    if _queue_archive(page["url"], force=force, requested_by=_requester_id(request)):
         audit.log(
             request, "재아카이빙 등록: %s%s", page["url"],
             " (강제)" if force else "",
@@ -2119,7 +2186,7 @@ def log_retry(
         raise HTTPException(404, t(request, "로그 없음"))
     if log["status"] != "error":
         raise HTTPException(400, t(request, "실패한 로그만 재시도할 수 있습니다"))
-    queued = _queue_archive(log["url"])
+    queued = _queue_archive(log["url"], requested_by=_requester_id(request))
     if queued:
         audit.log(request, "실패 로그 재시도: %s", log["url"])
     # 필터를 유지한 채 로그 화면으로 복귀 — 내부 /logs 경로만 허용 (open redirect 방지)

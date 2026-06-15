@@ -46,6 +46,7 @@ _EN: dict[str, str] = {
     "시스템": "System",
     "검색": "Search",
     "계정": "Account",
+    "내 아카이브": "My archives",
     "로그아웃": "Log out",
     # 사람 보조 챌린지 해결 (라이브)
     "사람 확인": "Human check",
@@ -234,9 +235,9 @@ _EN: dict[str, str] = {
     "우측 상단 ‘개발자 모드’를 켭니다.": "Turn on “Developer mode” at the top right.",
     "‘압축해제된 확장 프로그램을 로드’를 눌러 압축 푼 폴더를 선택합니다.":
         "Click “Load unpacked” and select the unzipped folder.",
-    "확장 아이콘을 눌러 이 춘추관 주소와, 계정 설정에서 발급한 확장 토큰을 입력하면 연결됩니다.":
-        "Click the extension icon and enter this ChunChuGwan address and the extension "
-        "token issued in your account settings to connect.",
+    "확장 아이콘을 눌러 이 춘추관 주소와, 개인 API Key 화면에서 발급한 키를 입력하면 연결됩니다.":
+        "Click the extension icon and enter this ChunChuGwan address and a key issued "
+        "on the Personal API Key page to connect.",
     "확장 파일을 찾을 수 없습니다": "Extension files not found",
     # ---- 타임라인 (timeline) ----
     "타임라인": "Timeline",
@@ -573,12 +574,12 @@ _EN: dict[str, str] = {
     "외부 소프트웨어가 /api/v1 REST API 에 접근할 때 쓰는 키를 발급·폐기합니다. 키마다 보기/아카이브 권한과 만료를 설정합니다.":
         "Issue and revoke keys external software uses to access the /api/v1 REST "
         "API. Each key gets view/archive permissions and an expiry.",
-    "외부 소프트웨어가 Authorization: Bearer 또는 X-API-Key 헤더로 /api/v1 에 접근할 때 쓰는 시스템 키입니다. 보기=아카이브 데이터 조회, 아카이브=아카이빙 트리거. 키 원문은 발급 직후 한 번만 표시되며, 폐기하면 즉시 무효화됩니다. 모든 관리자가 공동으로 관리합니다. 개인용 크롬 확장 토큰은 각자 계정 설정에서 발급합니다.":
+    "외부 소프트웨어가 Authorization: Bearer 또는 X-API-Key 헤더로 /api/v1 에 접근할 때 쓰는 시스템 키입니다. 보기=아카이브 데이터 조회, 아카이브=아카이빙 트리거. 키 원문은 발급 직후 한 번만 표시되며, 폐기하면 즉시 무효화됩니다. 모든 관리자가 공동으로 관리합니다. 개인용 크롬 확장 키는 각자 개인 API Key 화면에서 발급합니다.":
         "System keys for external software accessing /api/v1 with an Authorization: "
         "Bearer or X-API-Key header. View = read archived data, Archive = trigger "
         "archiving. The key itself is shown only once right after issuing; revoking "
         "takes effect immediately. All admins manage these together. Personal Chrome "
-        "extension tokens are issued by each user in account settings.",
+        "extension keys are issued by each user on the Personal API Key page.",
     "복사": "Copy",
     "복사됨": "Copied",
     "키": "Key",
@@ -708,23 +709,33 @@ _EN: dict[str, str] = {
         "Not a session state JSON (a 'cookies' key is required).",
     # ---- 계정 설정 (account) ----
     "계정 설정": "Account settings",
-    # 확장 토큰
-    "확장 토큰": "Extension tokens",
-    "크롬 확장이 Authorization: Bearer 헤더로 /api/v1 에 접근할 때 쓰는 본인 전용 토큰입니다. 권한은 내 역할에서 자동으로 부여되며, 원문은 발급 직후 한 번만 표시됩니다. 폐기하면 그 토큰을 쓰는 확장의 접근이 즉시 차단됩니다.":
-        "Your personal token for the Chrome extension to access /api/v1 with an "
+    # 개인 API Key (확장 토큰)
+    "개인 API Key": "Personal API Key",
+    "크롬 확장 등 외부 도구가 쓰는 본인 전용 API Key 는 별도 화면에서 관리합니다.":
+        "Manage your personal API Key for the Chrome extension and other tools on its own page.",
+    "크롬 확장이 Authorization: Bearer 헤더로 /api/v1 에 접근할 때 쓰는 본인 전용 API Key 입니다. 권한은 내 역할에서 자동으로 부여되며, 원문은 발급 직후 한 번만 표시됩니다. 폐기하면 그 키를 쓰는 확장의 접근이 즉시 차단됩니다.":
+        "Your personal API Key for the Chrome extension to access /api/v1 with an "
         "Authorization: Bearer header. Permissions are granted automatically from your "
-        "role, and the token is shown only once right after issuing. Revoking it cuts "
+        "role, and the key is shown only once right after issuing. Revoking it cuts "
         "off the extension using it immediately.",
-    "발급한 토큰이 없습니다.": "No tokens issued yet.",
-    "토큰 이름 (예: chrome-ext)": "Token name (e.g. chrome-ext)",
-    "이 토큰에 부여될 권한:": "Permissions for this token:",
-    "현재 권한으로는 토큰을 발급할 수 없습니다.": "Your current role can't issue tokens.",
-    "{name} 토큰을 폐기할까요? 이 토큰을 쓰는 확장의 접근이 즉시 차단됩니다.":
-        "Revoke the token '{name}'? The extension using it loses access immediately.",
-    "확장 토큰을 발급했습니다 — 아래 토큰을 지금 복사하세요. 다시 표시되지 않습니다.":
-        "Issued an extension token — copy it below now. It will not be shown again.",
-    "확장 토큰을 폐기했습니다.": "Extension token revoked.",
-    "토큰 없음": "Token not found",
+    "발급한 API Key 가 없습니다.": "No API Keys issued yet.",
+    "이름 (예: chrome-ext)": "Name (e.g. chrome-ext)",
+    "이 키에 부여될 권한:": "Permissions for this key:",
+    "현재 권한으로는 API Key 를 발급할 수 없습니다.": "Your current role can't issue API Keys.",
+    "{name} 키를 폐기할까요? 이 키를 쓰는 확장의 접근이 즉시 차단됩니다.":
+        "Revoke the key '{name}'? The extension using it loses access immediately.",
+    "개인 API Key 를 발급했습니다 — 아래 키를 지금 복사하세요. 다시 표시되지 않습니다.":
+        "Issued a personal API Key — copy it below now. It will not be shown again.",
+    "개인 API Key 를 폐기했습니다.": "Personal API Key revoked.",
+    "API Key 없음": "API Key not found",
+    # 내 아카이브 (my_archives) — 본인이 요청한 단발 아카이빙 이력
+    "대시보드·크롬 확장에서 내가 직접 요청한 아카이빙 실행 기록입니다. 예약·사이트 전체 아카이브(크롤)·CLI 실행은 포함되지 않습니다.":
+        "Archiving runs you triggered yourself from the dashboard or the Chrome "
+        "extension. Scheduled runs, full-site archives (crawls), and CLI runs are "
+        "not included.",
+    "조건에 맞는 기록이 없습니다.": "No records match the filter.",
+    "아직 요청한 아카이브가 없습니다. 새 아카이빙을 실행하면 여기에 기록됩니다.":
+        "You haven't requested any archives yet. Run a new archive and it will show up here.",
     "사용자 이름": "Display name",
     "표시 이름 (비우면 이메일로 표시)": "Display name (leave empty to show your email)",
     "이름 변경": "Change name",

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% from "_network_tag.html" import network_tag_badge with context %}
+{% block title %}{{ _("내 아카이브") }} — {{ _("춘추관") }}{% endblock %}
+{% block head %}
+<style>
+td.url-cell { max-width: 460px; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; }
+</style>
+{% endblock %}
+{% block content %}
+{% set badge_class = {'new': 'new', 'changed': 'changed', 'unchanged': 'same',
+                      'forced_same': 'same', 'error': 'error'} %}
+{% set status_label = {'new': _('신규'), 'changed': _('변경'), 'unchanged': _('동일'),
+                       'forced_same': _('동일(강제)'), 'error': _('실패')} %}
+
+<div class="toolbar">
+  <h2 style="margin:0">{{ _("내 아카이브") }}</h2>
+  <span class="spacer"></span>
+  <form method="get" action="/settings/archives" class="toolbar" style="margin:0">
+    <select name="status">
+      <option value="">{{ _("모든 상태") }}</option>
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ status_label[s] }}</option>
+      {% endfor %}
+    </select>
+    <select name="limit" aria-label="{{ _('표시 줄 수') }}">
+      {% for n in limits %}
+      <option value="{{ n }}" {% if n == limit %}selected{% endif %}>{{ _("{n}줄", n=n) }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">{{ _("필터") }}</button>
+  </form>
+</div>
+
+<p class="muted" style="font-size:12px; max-width:680px; margin-top:-4px">
+  {{ _("대시보드·크롬 확장에서 내가 직접 요청한 아카이빙 실행 기록입니다. 예약·사이트 전체 아카이브(크롤)·CLI 실행은 포함되지 않습니다.") }}
+</p>
+
+{% if not items %}
+  {% if status %}
+<p class="muted">{{ _("조건에 맞는 기록이 없습니다.") }}</p>
+  {% else %}
+<p class="muted">{{ _("아직 요청한 아카이브가 없습니다. 새 아카이빙을 실행하면 여기에 기록됩니다.") }}</p>
+  {% endif %}
+{% else %}
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>{{ _("시각") }}</th><th>{{ _("상태") }}</th><th>URL</th><th>HTTP</th>
+      <th>{{ _("출처") }}</th><th>{{ _("스냅샷", ctx="one") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for it in items %}
+    {% set log = it.log %}
+    <tr>
+      <td class="mono">{{ log['started_at'] | ts }}</td>
+      <td><span class="badge {{ badge_class[log['status']] }}">{{ status_label[log['status']] }}</span></td>
+      <td class="url-cell">
+        {% if log['network_tag_name'] %}{{ network_tag_badge(log['network_tag_name'], log['network_tag_description'], log['network_tag_id']) }}{% endif %}
+        {% if log['page_id'] %}
+        <a href="/page/{{ log['page_id'] }}" title="{{ log['url'] }}">{{ log['url'] }}</a>
+        {% else %}
+        <span title="{{ log['url'] }}">{{ log['url'] }}</span>
+        {% endif %}
+      </td>
+      <td class="num">{{ log['http_status'] or '-' }}</td>
+      <td class="mono muted">{{ log['source'] }}</td>
+      <td>
+        {% if log['snapshot_id'] %}
+        <a href="/snapshot/{{ log['snapshot_id'] }}">{{ _("보기") }}</a>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<div class="pager">
+  <span class="muted">{{ _("총 {n}건", n=total) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
+  <span class="spacer"></span>
+  {% if prev_url %}<a href="{{ prev_url }}">&larr; {{ _("이전") }}</a>{% endif %}
+  {% if next_url %}<a href="{{ next_url }}">{{ _("다음") }} &rarr;</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -100,6 +100,17 @@ header nav .nav-menu a:hover { background: var(--bg-soft); text-decoration: none
 @media (max-width: 599px) {
   header .tagline { display: none; }
 }
+/* 개인설정 드롭다운 — 헤더 우측 이메일/표시이름을 누르면 계정·개인 API Key·
+   내 아카이브·로그아웃이 열린다. 로그·관리자 드롭다운(.nav-group)과 같은
+   <details> 패턴을 쓰되, 우측 끝이라 패널을 오른쪽 기준으로 정렬하고,
+   요약 라벨은 메뉴가 아니라 본인 식별이므로 muted 색을 유지한다. */
+header nav details.nav-group.user-menu > summary { color: var(--muted); }
+header nav .nav-menu.nav-menu-right { left: auto; right: 0; }
+header nav .nav-menu button { display: block; width: 100%; text-align: left;
+  padding: 6px 10px; border: none; border-radius: 4px; background: none;
+  color: var(--fg); font: inherit; cursor: pointer; }
+header nav .nav-menu button:hover { background: var(--bg-soft); }
+header nav .nav-menu form.inline { display: block; }
 main { padding: 16px; max-width: 1280px; margin: 0 auto; }
 /* 사람 확인(라이브 챌린지) — 헤더 메뉴 알림 색과 전역 상단 배너 */
 header nav a.nav-alert { color: var(--red-text); font-weight: 600; }
@@ -292,9 +303,15 @@ button.danger:hover { background: var(--red-hover); }
     <span class="spacer"></span>
     <button type="button" id="theme-toggle" title="{{ _('테마 전환 (자동 → 라이트 → 다크)') }}"></button>
     {% if user %}
-    <span class="mono muted nav-user">{{ user['display_name'] or user['email'] }}</span>
-    <a href="/settings/account">{{ _("계정") }}</a>
-    <form class="inline" method="post" action="/logout"><button>{{ _("로그아웃") }}</button></form>
+    <details class="nav-group user-menu">
+      <summary class="mono">{{ user['display_name'] or user['email'] }}</summary>
+      <div class="nav-menu nav-menu-right">
+        <a href="/settings/account">{{ _("계정") }}</a>
+        <a href="/settings/api-keys">{{ _("개인 API Key") }}</a>
+        <a href="/settings/archives">{{ _("내 아카이브") }}</a>
+        <form class="inline" method="post" action="/logout"><button>{{ _("로그아웃") }}</button></form>
+      </div>
+    </details>
     {% endif %}
   </nav>
 </header>
@@ -315,8 +332,8 @@ button.danger:hover { background: var(--red-hover); }
     btn.classList.toggle("active", open);
   });
 })();
-/* 헤더 드롭다운(로그·관리자) — 하나를 열면 다른 건 닫는다(양쪽 레이아웃 공통,
-   아코디언). 넓은 화면에서는 바깥을 클릭해도 닫힌다. */
+/* 헤더 드롭다운(로그·관리자·개인설정) — 하나를 열면 다른 건 닫고(양쪽 레이아웃
+   공통 아코디언), 넓은 화면에서는 바깥 클릭, 어느 화면에서나 Esc 로 닫는다. */
 (function () {
   var groups = document.querySelectorAll("header details.nav-group");
   if (!groups.length) return;
@@ -331,6 +348,10 @@ button.danger:hover { background: var(--red-hover); }
     groups.forEach(function (d) {
       if (d.open && !d.contains(e.target)) d.open = false;
     });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    groups.forEach(function (d) { if (d.open) d.open = false; });
   });
 })();
 /* 테마 토글 — 자동(시스템) → 라이트 → 다크 순환, localStorage 에 기억 */

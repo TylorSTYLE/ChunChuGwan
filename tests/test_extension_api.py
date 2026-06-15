@@ -152,7 +152,7 @@ def test_api_post_csrf_exempt_with_foreign_origin(client):
 def test_non_api_post_still_csrf_protected(client):
     _login_admin(client)
     r = client.post(
-        "/settings/account/extension-tokens",
+        "/settings/api-keys",
         data={"name": "x", "expiry": "permanent"},
         headers={"Origin": "https://evil.example"}, follow_redirects=False,
     )
