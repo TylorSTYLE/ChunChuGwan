@@ -140,6 +140,26 @@ def test_archive_active_needs_human_admin_only(client, monkeypatch):
     assert data["needs_human"] == [{"id": job_id, "url": url}]
 
 
+def test_archives_needs_human_badge_admin_only(client, monkeypatch):
+    """/archives 의 '사람 확인 대기' 상태 배지(라이브 화면 링크)는 관리자에게만
+    노출된다 — viewer 는 진행만 보이고('아카이빙 중') 챌린지 링크는 못 받는다."""
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    job_id = _seed_needs_human("https://sd.test/article")
+
+    _login(client, "viewer@test.co")
+    html = client.get("/archives").text
+    assert 'class="badge needs-human"' not in html
+    assert f"/archive/jobs/{job_id}/live" not in html
+    assert "아카이빙 중" in html  # 진행 자체는 viewer 도 본다
+
+    # 관리자는 라이브 화면으로 가는 배지 링크를 받는다 (배너 JS 주석이 아니라
+    # 실제 배지 앵커로 단언 — '사람 확인 대기' 문자열은 약한 검사)
+    _login(client, "boss@test.co", "bosspass1234")
+    html = client.get("/archives").text
+    assert 'class="badge needs-human"' in html
+    assert f"/archive/jobs/{job_id}/live" in html
+
+
 def test_viewer_cannot_manage_schedule(client):
     """주기적 재아카이빙 설정/해제도 아카이빙 트리거 — viewer 는 403."""
     _login(client, "viewer@test.co")

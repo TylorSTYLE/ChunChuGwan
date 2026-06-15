@@ -283,6 +283,22 @@ def _active_snapshot() -> dict[str, str]:
     return snap
 
 
+def _needs_human_urls(request: Request) -> dict[str, int]:
+    """사람 확인 대기 작업의 url→job_id 매핑 (상태 배지·배너 공용).
+
+    needs_human 은 진행 중 작업이 자동으로 못 푼 챌린지를 만나 사람을 기다리는
+    상태다 — 진행 목록에는 그대로 '활성'으로 남아 있으므로, 목록 화면이 이
+    매핑으로 '아카이빙 중' 대신 '사람 확인 대기'(라이브 화면 링크)를 보여준다.
+    진행 중 챌린지 URL 은 관리자 정보라, 기능 켜짐 + 관리자일 때만 채운다
+    (그 외 사용자에겐 빈 dict → 기존처럼 '아카이빙 중')."""
+    if not config.LIVE_CHALLENGE or not permissions.system_allowed(
+        getattr(request.state, "user", None)
+    ):
+        return {}
+    with db.connect() as conn:
+        return {j["url"]: j["id"] for j in db.list_needs_human_jobs(conn)}
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True}
@@ -401,6 +417,12 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
         site_snaps.setdefault(row["site_id"], []).append(row)
     titles = {sid: _site_title(rows) for sid, rows in site_snaps.items()}
     active_keys = {storage.site_key(u) for u in active}
+    # 사람 확인 대기 작업(url→job_id)을 사이트 키 단위로 모은다 — 해당 사이트
+    # 행은 '아카이빙 중' 대신 '사람 확인 대기' 링크 배지를 보여준다 (관리자 전용).
+    nh_urls = _needs_human_urls(request)
+    nh_by_key: dict[str, int] = {}
+    for u, jid in nh_urls.items():
+        nh_by_key.setdefault(storage.site_key(u), jid)
     items: list[dict] = [
         {
             "site_id": s["id"], "site_key": s["site_key"],
@@ -412,6 +434,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
             "activity_at": s["last_activity_at"] or None,
             "crawling": s["running_crawl_count"] > 0,
             "active": s["site_key"] in active_keys or s["running_crawl_count"] > 0,
+            "needs_human_job": nh_by_key.get(s["site_key"]),
         }
         for s in sites
     ]
@@ -425,6 +448,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
             "network_tags": [],
             "activity_at": t, "crawling": False,
             "active": True,
+            "needs_human_job": nh_by_key.get(key),
         }
         for u, t in sorted(active.items())
         if (key := storage.site_key(u)) not in known_keys
@@ -444,6 +468,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
         {
             "items": items, "queued": queued, "error": error, "notice": notice,
             "active_list": sorted(active), "running_crawls": running_crawls,
+            "needs_human_urls": sorted(nh_urls),
         },
     )
 
@@ -468,6 +493,7 @@ def site_view(
     돌았던 실행 기록이다 — 회차 상세(/crawls/{id})는 그대로 유지된다.
     """
     active = _active_snapshot()
+    nh_urls = _needs_human_urls(request)  # url→job_id (관리자+기능 켜짐일 때만)
     if per_page not in _SITE_PAGES_PER_PAGE_CHOICES:
         per_page = _SITE_PAGES_PER_PAGE
     with db.connect() as conn:
@@ -561,6 +587,7 @@ def site_view(
             "next_url": _page_url(page + 1) if page < total_pages else None,
             "certificates": cert_rows,
             "active": active, "running_crawls": running_crawls,
+            "needs_human": nh_urls, "needs_human_urls": sorted(nh_urls),
             "error": error, "notice": notice,
         },
     )
@@ -837,15 +864,19 @@ def archive_active(request: Request) -> dict:
     """진행 중 아카이빙 URL 목록 (목록 화면 자동 갱신 폴링용).
 
     라이브 챌린지가 켜진 관리자에게는 사람 확인 대기 작업(needs_human)도 함께
-    내려보낸다 — 사용자가 보고 있는 진행 화면에서 바로 '사람 확인 필요' 안내를
-    띄우기 위함 (전역 배너 폴링이 이 키를 읽는다)."""
+    내려보낸다 — 목록 화면 폴링이 이 키의 변화를 보고 새로고침해 상태 배지를
+    '사람 확인 대기'로 갱신하고, 전역 배너도 이 키를 읽는다."""
     data: dict = {"active": sorted(_active_snapshot())}
     if config.LIVE_CHALLENGE and permissions.system_allowed(
         getattr(request.state, "user", None)
     ):
-        with db.connect() as conn:
-            jobs = db.list_needs_human_jobs(conn)
-        data["needs_human"] = [{"id": j["id"], "url": j["url"]} for j in jobs]
+        # url 기준 정렬 — 초기 needs_human_urls(=sorted(nh_urls))와 같은 파이썬
+        # 코드포인트 순서로 내려보내, 폴링 JS 가 다시 정렬하지 않고 그대로 비교해
+        # 비-BMP(이모지 IDN 등) 문자에서 정렬 순서가 어긋나 무한 새로고침 되는 걸 막는다
+        # (active 경로와 동일한 방식).
+        data["needs_human"] = [
+            {"id": i, "url": u} for u, i in sorted(_needs_human_urls(request).items())
+        ]
     return data
 
 
