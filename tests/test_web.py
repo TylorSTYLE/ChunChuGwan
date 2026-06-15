@@ -820,6 +820,37 @@ def test_header_alert_badge_when_jobs_pending(client, monkeypatch):
     assert "사람 확인 (1)" in html
 
 
+def test_archives_status_badge_becomes_needs_human(client, monkeypatch):
+    # 진행 중 작업이 사람 확인 대기로 전환되면 상태 배지가 '아카이빙 중' 대신
+    # 라이브 화면 링크('사람 확인 대기')로 바뀐다
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    job_id = _enter_needs_human("https://example.com/post")  # 픽스처 사이트의 페이지
+    html = client.get("/archives").text
+    assert 'class="badge needs-human"' in html
+    assert "사람 확인 대기" in html
+    assert f"/archive/jobs/{job_id}/live" in html
+    assert "아카이빙 중" not in html  # 같은 행이 배지로 대체됨 (다른 활성 없음)
+
+
+def test_archives_status_badge_archiving_when_live_disabled(client):
+    # 기능 off(기본)면 needs_human 작업도 그대로 '아카이빙 중'
+    _enter_needs_human("https://example.com/post")
+    html = client.get("/archives").text
+    assert "사람 확인 대기" not in html
+    assert "아카이빙 중" in html
+
+
+def test_site_detail_status_badge_becomes_needs_human(client, monkeypatch):
+    monkeypatch.setattr(config, "LIVE_CHALLENGE", True)
+    job_id = _enter_needs_human("https://example.com/post")
+    with db.connect() as conn:
+        site_id = db.get_page(conn, "https://example.com/post")["site_id"]
+    html = client.get(f"/sites/{site_id}").text
+    assert 'class="badge needs-human"' in html
+    assert "사람 확인 대기" in html
+    assert f"/archive/jobs/{job_id}/live" in html
+
+
 def test_header_hides_human_check_when_live_disabled(client):
     # 기능 off(기본)면 메뉴·배너 요소 모두 렌더하지 않는다 (CSS 규칙은 무관)
     html = client.get("/").text

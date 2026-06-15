@@ -70,7 +70,9 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
         {% endif %}
       </td>
       <td>
-        {% if p['url'] in active %}
+        {% if needs_human.get(p['url']) %}
+        <a class="badge needs-human" href="/archive/jobs/{{ needs_human[p['url']] }}/live">{{ _("사람 확인 대기") }}</a>
+        {% elif p['url'] in active %}
         <span class="badge running">{{ _("아카이빙 중") }}</span>
         {% else %}
         {% if can_archive %}
@@ -172,7 +174,9 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
       <td class="mono muted">{{ f['source'] }}</td>
       <td class="error-cell mono" title="{{ f['error'] }}">{{ f['error'] or '-' }}</td>
       <td>
-        {% if f['page_url'] in active %}
+        {% if needs_human.get(f['page_url']) %}
+        <a class="badge needs-human" href="/archive/jobs/{{ needs_human[f['page_url']] }}/live">{{ _("사람 확인 대기") }}</a>
+        {% elif f['page_url'] in active %}
         <span class="badge running">{{ _("아카이빙 중") }}</span>
         {% elif can_archive %}
         <form class="inline" method="post" action="/sites/{{ site['id'] }}/failed/{{ f['id'] }}/retry">
@@ -304,16 +308,21 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
 {% endif %}
 
 <script>
-// 진행 중 작업이 있으면 폴링하다가 바뀌는 순간 새로고침
+// 진행 중 작업이 있으면 폴링하다가 바뀌는 순간 새로고침. 사람 처리 대기로의
+// 전환은 진행 목록(active)을 바꾸지 않으므로 needs_human 변화도 함께 본다.
 const active = {{ active.keys() | list | sort | tojson }};
-if (active.length) {
+const needsHuman = {{ needs_human_urls | tojson }};
+if (active.length || needsHuman.length) {
   setInterval(async () => {
     if (document.hidden) return;
     try {
       const res = await fetch('/archive/active');
       if (!res.ok) return;
-      const now = (await res.json()).active;
-      if (JSON.stringify(now) !== JSON.stringify(active)) location.reload();
+      const data = await res.json();
+      // 서버가 url 순으로 정렬해 보내므로 클라이언트에서 다시 정렬하지 않는다.
+      const nh = (data.needs_human || []).map((j) => j.url);
+      if (JSON.stringify(data.active) !== JSON.stringify(active)
+          || JSON.stringify(nh) !== JSON.stringify(needsHuman)) location.reload();
     } catch (e) { /* 일시적 오류 — 다음 폴링에서 재시도 */ }
   }, 2000);
 }

@@ -141,6 +141,12 @@ td.mono.muted { white-space: nowrap; }
 .badge.running { color: var(--blue);  background: var(--blue-bg);
                  animation: badge-pulse 1.4s ease-in-out infinite; }
 @keyframes badge-pulse { 50% { opacity: .45; } }
+/* 사람 처리 대기 배지 — 진행 중 작업이 사람 처리를 기다리는 상태. 클릭하면
+   라이브 처리 화면으로 간다. 파란 진행 배지와 구분되게 amber 알림 색 + 펄스. */
+a.badge.needs-human { color: var(--amber); background: var(--amber-bg);
+                      text-decoration: none; cursor: pointer;
+                      animation: badge-pulse 1.4s ease-in-out infinite; }
+a.badge.needs-human:hover { text-decoration: underline; }
 button, select, input[type=number], input[type=text], input[type=url],
 input[type=email], input[type=password], input[type=datetime-local] {
   font: inherit; font-size: 13px; padding: 3px 10px;
@@ -401,7 +407,7 @@ button.danger:hover { background: var(--red-hover); }
   });
 })();
 {% if system_allowed and live_challenge_enabled %}
-/* 사람 확인(라이브 챌린지) 전역 배너 — 어느 화면에 있든 사람 확인 대기 작업이
+/* 라이브 챌린지 전역 배너 — 어느 화면에 있든 사람 처리를 기다리는 작업이
    생기면 상단에 띄워 바로 처리 화면으로 보낸다. 진행 화면 폴링과 같은
    /archive/active 를 읽되(관리자+기능 켜짐일 때 needs_human 포함), 배너는
    전역이라 새 아카이빙 후 진행 화면을 보고 있어도 누락 없이 안내된다. */

@@ -199,6 +199,7 @@ _EN: dict[str, str] = {
     "자동": "Auto",
     "시작": "started",
     "아카이빙 중": "Archiving",
+    "사람 확인 대기": "Awaiting human check",
     "재아카이빙": "Re-archive",
     "스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
         "This deletes the entire archive including {n} snapshot(s). It cannot be undone.",
