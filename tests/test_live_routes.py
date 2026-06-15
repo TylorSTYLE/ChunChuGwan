@@ -58,12 +58,29 @@ def test_live_view_claims_session(client):
         assert db.get_archive_job(conn, jid)["live_owner_id"] is not None
 
 
-def test_live_view_404_for_non_needs_human(client):
+def test_live_view_redirects_when_not_needs_human(client):
+    # 통과·만료·취소·재시도 백오프로 더는 needs_human 이 아닌 작업을 클릭하면,
+    # 원시 404 JSON 대신 목록으로 안내 리다이렉트한다 (라이브 링크는 비동기로 낡는다).
     with db.connect() as conn:
         db.enqueue_archive_job(conn, "https://x.test/y", source="cli")
         j = db.claim_due_archive_job(conn, "2099-01-01T00:00:00+00:00")
     _login(client, "boss@test.co", "bosspass1234")
-    assert client.get(f"/archive/jobs/{j['id']}/live").status_code == 404
+    r = client.get(f"/archive/jobs/{j['id']}/live", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/archive/needs-human?notice=")
+    # 리다이렉트를 따라가면 목록 화면에 안내 문구가 표시된다
+    followed = client.get(f"/archive/jobs/{j['id']}/live")
+    assert followed.status_code == 200
+    assert "이미 처리되었거나 만료된 작업입니다" in followed.text
+
+
+def test_live_view_admin_check_precedes_redirect(client):
+    # needs_human 아님 + viewer → 안내 리다이렉트가 아니라 권한 거부(403)가 우선
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, "https://x.test/z", source="cli")
+        j = db.claim_due_archive_job(conn, "2099-01-01T00:00:00+00:00")
+    _login(client, "viewer@test.co", "password1234")
+    assert client.get(f"/archive/jobs/{j['id']}/live").status_code == 403
 
 
 def test_live_view_admin_only(client):
@@ -91,6 +108,43 @@ def test_input_blocked_for_non_owner_admin(client):
     _login(other, "boss2@test.co", "boss2pass1234")
     r = other.post(f"/archive/jobs/{jid}/live/click", data={"x": "1", "y": "2"})
     assert r.status_code == 403   # 소유자 아닌 admin 은 입력 불가
+
+
+def test_force_solve_sets_flag_for_owner(client):
+    jid = _make_needs_human()
+    _login(client, "boss@test.co", "bosspass1234")
+    client.get(f"/archive/jobs/{jid}/live")   # 클레임(소유자)
+    r = client.post(f"/archive/jobs/{jid}/live/solve")
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    with db.connect() as conn:
+        assert db.get_archive_job(conn, jid)["live_force_solve"] == 1
+
+
+def test_force_solve_blocked_for_non_owner_admin(client):
+    jid = _make_needs_human()
+    _login(client, "boss@test.co", "bosspass1234")
+    client.get(f"/archive/jobs/{jid}/live")   # boss 가 소유
+    other = TestClient(web_app.app)
+    _login(other, "boss2@test.co", "boss2pass1234")
+    assert other.post(f"/archive/jobs/{jid}/live/solve").status_code == 403
+    with db.connect() as conn:
+        assert db.get_archive_job(conn, jid)["live_force_solve"] == 0
+
+
+def test_force_solve_admin_only(client):
+    jid = _make_needs_human()
+    _login(client, "viewer@test.co", "password1234")
+    assert client.post(f"/archive/jobs/{jid}/live/solve").status_code == 403
+
+
+def test_force_solve_button_owner_only(client):
+    # '사람 확인 완료' 버튼은 세션 소유자(여는 admin)에게만 렌더된다
+    jid = _make_needs_human()
+    _login(client, "boss@test.co", "bosspass1234")
+    assert 'id="force-solve"' in client.get(f"/archive/jobs/{jid}/live").text  # 소유자
+    other = TestClient(web_app.app)
+    _login(other, "boss2@test.co", "boss2pass1234")
+    assert 'id="force-solve"' not in other.get(f"/archive/jobs/{jid}/live").text  # 비소유 admin
 
 
 def test_key_and_cancel(client):

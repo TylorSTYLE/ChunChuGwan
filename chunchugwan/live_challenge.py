@@ -83,6 +83,13 @@ class LiveChallengeSession:
                 if job is None or job["live_cancel"]:
                     logger.info("라이브 세션 취소: job %d", self.job_id)
                     return page.content(), reason
+                # 2-1) 사람이 '확인 완료' → 챌린지 판정과 무관하게 현재 페이지로 강제 진행.
+                #      잔여 위젯/마커로 자동 판정(challenge_reason)이 안 풀려도 사람이
+                #      실제로 통과시켰다고 보고 캡처를 이어간다.
+                if job["live_force_solve"]:
+                    logger.info("사람 확인 완료(강제 진행): job %d", self.job_id)
+                    self._write_shot(page, path)
+                    return page.content(), None
                 # 3) 화면 갱신 (간격마다)
                 now = time.monotonic()
                 if now - last_shot >= config.LIVE_SHOT_INTERVAL_MS / 1000:

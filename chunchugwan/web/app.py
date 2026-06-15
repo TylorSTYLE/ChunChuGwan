@@ -2087,13 +2087,14 @@ def _live_owner_or_403(request: Request, job) -> None:
 
 
 @app.get("/archive/needs-human")
-def needs_human_list(request: Request):
+def needs_human_list(request: Request, notice: str = ""):
     """사람 확인이 필요한 작업 목록 (관리자 전용)."""
     _require_admin(request)
     with db.connect() as conn:
         jobs = db.list_needs_human_jobs(conn)
     return templates.TemplateResponse(
-        request, "needs_human.html", {"jobs": jobs},
+        request, "needs_human.html",
+        {"jobs": jobs, "notice": notice, "needs_human_urls": sorted(j["url"] for j in jobs)},
     )
 
 
@@ -2104,7 +2105,16 @@ def live_view(request: Request, job_id: int):
     여는 관리자가 세션을 클레임(입력 권한자)한다. 이미 다른 관리자가
     클레임했으면 보기 전용으로 연다."""
     _require_admin(request)
-    job = _live_job_or_404(request, job_id)
+    with db.connect() as conn:
+        job = db.get_archive_job(conn, job_id)
+    if job is None or not job["needs_human_at"] or not job["live_token"]:
+        # 목록 표시와 클릭 사이에 라이브 세션이 끝났거나(통과·취소·타임아웃) 재시도
+        # 백오프 구간으로 내려간 경우 — 원시 404 JSON 대신 목록으로 돌려보내 상황을
+        # 안내한다 (라이브 세션은 비동기로 상태가 바뀌어 링크가 쉽게 낡는다).
+        notice = t(request, "이미 처리되었거나 만료된 작업입니다 — 목록에서 다시 확인하세요.")
+        return RedirectResponse(
+            f"/archive/needs-human?notice={quote(notice)}", status_code=303
+        )
     with db.connect() as conn:
         owned = db.claim_live_session(conn, job_id, request.state.user["id"])
         job = db.get_archive_job(conn, job_id)
@@ -2193,6 +2203,20 @@ def live_cancel(request: Request, job_id: int):
         db.set_live_cancel(conn, job_id)
     audit.log(request, "라이브 챌린지 취소: %s", job["url"])
     return RedirectResponse("/archive/needs-human", status_code=303)
+
+
+@app.post("/archive/jobs/{job_id}/live/solve")
+def live_force_solve(request: Request, job_id: int):
+    """사람 확인 완료 — 사람이 로봇 확인을 풀었으니 챌린지 자동 판정과 무관하게
+    현재 페이지로 진행하라고 worker 에 알린다 (잔여 위젯/마커로 자동 통과가 안 되는
+    경우의 강제 진행). worker 가 다음 폴링에 현재 DOM 으로 캡처를 이어간다."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    _live_owner_or_403(request, job)
+    with db.connect() as conn:
+        db.set_live_force_solve(conn, job_id)
+    audit.log(request, "사람 확인 완료(강제 진행): %s", job["url"])
+    return {"ok": True}
 
 
 _BUSY_MSG = "아카이빙이 진행 중인 페이지입니다 — 완료 후 다시 시도하세요"

@@ -256,11 +256,14 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   run` 이 소비한다. 진행 상태(`/archive/active` 폴링)의 데이터 소스.
   `WCCG_LIVE_CHALLENGE=on` 이면 자동으로 못 푼 인터랙티브 챌린지를 사람이
   대시보드에서 직접 푸는 라이브 세션 컬럼(`needs_human_at`·`live_token`·
-  `live_owner_id`·`live_cancel`·`live_viewport_w/h`)을 쓴다 — worker 가 살아있는
+  `live_owner_id`·`live_cancel`·`live_force_solve`·`live_viewport_w/h`)을 쓴다 —
+  worker 가 살아있는
   page 를 붙든 채(큐 진행 멈춤) 화면(스크린샷 파일 `cache/live/`)·입력
   (`live_commands` 테이블)으로 대시보드와 조율한다 (live_challenge.py, 원칙 7
-  의 사설/루프백 가드를 라이브 매 폴링에 적용). 데이터센터 IP 평판으로는
-  사람이 눌러도 통과가 보장되지 않는 최후 수단
+  의 사설/루프백 가드를 라이브 매 폴링에 적용). `live_force_solve` 는 사람이
+  로봇 확인을 풀었는데 잔여 마커로 자동 판정(challenge_reason)이 안 풀릴 때
+  '사람 확인 완료' 로 현재 페이지를 강제 채택하게 하는 플래그. 데이터센터 IP
+  평판으로는 사람이 눌러도 통과가 보장되지 않는 최후 수단
 - `live_commands` — 라이브 챌린지 세션의 사람 입력 명령 큐 (대시보드 INSERT →
   worker 가 seq 순으로 page.mouse/keyboard 재생, 타이밍·드래그 재현)
 - `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1개월, 다음 실행 시각,

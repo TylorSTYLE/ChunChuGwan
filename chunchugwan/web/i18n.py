@@ -50,11 +50,18 @@ _EN: dict[str, str] = {
     "사람 확인 처리": "Human-assisted solve",
     "자동으로 통과하지 못한 챌린지 — 직접 풀어서 통과시킵니다": "Challenges that auto-solve couldn't pass — solve them yourself",
     "사람 확인이 필요한 작업이 없습니다.": "No jobs need human check.",
+    "이미 처리되었거나 만료된 작업입니다 — 목록에서 다시 확인하세요.": "This job is already handled or has expired — check the list again.",
     "사람 확인 필요 — 클릭해서 지금 처리하세요": "Human check needed — click to solve now",
     "사람 처리 창(기본 5분)을 놓쳐 실패한 작업은": "Jobs that missed the human-solve window (5 min by default) can be retried from",
     "에서 다시 시도하면 라이브 세션이 다시 열립니다.": " — retrying reopens a live session.",
     "진입 시각": "Entered at",
     "처리": "Solve",
+    "사람 확인 완료": "Mark human check done",
+    "로봇 확인을 직접 통과시켰다면 현재 화면으로 캡처를 진행합니다. 계속할까요?":
+        "If you've passed the robot check yourself, capture proceeds with the current screen. Continue?",
+    "진행 요청됨 — 잠시만 기다리세요…": "Proceeding requested — please wait…",
+    "로봇 확인을 통과했는데도 자동으로 진행되지 않으면 '사람 확인 완료'를 눌러 현재 화면 그대로 캡처를 진행시킬 수 있습니다.":
+        "If you passed the robot check but capture doesn't proceed automatically, click \"Mark human check done\" to proceed with the current screen.",
     "처리되었습니다 — 캡처를 이어서 진행합니다. 잠시 후 결과는 로그에서 확인하세요.": "Solved — capture is continuing. Check the result in the logs shortly.",
     "다른 관리자가 처리 중입니다 — 보기 전용입니다.": "Another admin is handling this — view only.",
     "화면 갱신": "Refresh screen",

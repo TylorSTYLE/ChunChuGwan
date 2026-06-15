@@ -136,6 +136,7 @@ def test_connect_upgrades_legacy_archive_jobs(tmp_path, monkeypatch):
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(archive_jobs)")}
         assert "needs_human_at" in cols
         assert "live_token" in cols
+        assert "live_force_solve" in cols   # 신규 강제 진행 플래그도 ALTER 로 추가
         idx = {r["name"] for r in conn.execute("PRAGMA index_list(archive_jobs)")}
         assert "idx_archive_jobs_needs_human" in idx
 
