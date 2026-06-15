@@ -196,6 +196,7 @@ CREATE TABLE IF NOT EXISTS archive_jobs (
     live_token       TEXT,                -- 라이브 화면/명령 경로 키 (예측불가 난수)
     live_owner_id    INTEGER REFERENCES users(id),  -- 세션을 클레임한 admin (입력 권한자)
     live_cancel      INTEGER NOT NULL DEFAULT 0,     -- 1 이면 사람이 취소 → worker 가 중단
+    live_force_solve INTEGER NOT NULL DEFAULT 0,     -- 1 이면 사람이 '확인 완료' → 현재 페이지로 강제 진행
     live_viewport_w  INTEGER,             -- 라이브 뷰포트 (좌표 매핑용, worker 가 기록)
     live_viewport_h  INTEGER
 );
@@ -476,6 +477,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             ("live_token", "TEXT"),
             ("live_owner_id", "INTEGER REFERENCES users(id)"),
             ("live_cancel", "INTEGER NOT NULL DEFAULT 0"),
+            ("live_force_solve", "INTEGER NOT NULL DEFAULT 0"),
             ("live_viewport_w", "INTEGER"),
             ("live_viewport_h", "INTEGER"),
             # 요청한 사용자 — 작업이 로그가 될 때 archive_logs.requested_by 로 이어진다
@@ -2303,7 +2305,7 @@ def mark_needs_human(
     conn.execute(
         """
         UPDATE archive_jobs
-        SET needs_human_at = ?, live_token = ?, live_cancel = 0,
+        SET needs_human_at = ?, live_token = ?, live_cancel = 0, live_force_solve = 0,
             live_owner_id = NULL, live_viewport_w = ?, live_viewport_h = ?
         WHERE id = ?
         """,
@@ -2322,7 +2324,8 @@ def clear_needs_human(conn: sqlite3.Connection, job_id: int) -> None:
         """
         UPDATE archive_jobs
         SET needs_human_at = NULL, live_token = NULL, live_owner_id = NULL,
-            live_cancel = 0, live_viewport_w = NULL, live_viewport_h = NULL
+            live_cancel = 0, live_force_solve = 0,
+            live_viewport_w = NULL, live_viewport_h = NULL
         WHERE id = ?
         """,
         (job_id,),
@@ -2348,6 +2351,14 @@ def set_live_cancel(conn: sqlite3.Connection, job_id: int) -> None:
     """사람이 취소 — worker 폴링 루프가 다음 반복에 중단한다."""
     conn.execute(
         "UPDATE archive_jobs SET live_cancel = 1 WHERE id = ?", (job_id,)
+    )
+
+
+def set_live_force_solve(conn: sqlite3.Connection, job_id: int) -> None:
+    """사람이 '확인 완료' — worker 폴링 루프가 다음 반복에 챌린지 판정과 무관하게
+    현재 페이지로 강제 진행한다 (잔여 마커로 자동 판정이 안 풀리는 경우 대비)."""
+    conn.execute(
+        "UPDATE archive_jobs SET live_force_solve = 1 WHERE id = ?", (job_id,)
     )
 
 

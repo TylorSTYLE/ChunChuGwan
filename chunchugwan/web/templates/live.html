@@ -32,6 +32,7 @@
   <input type="text" id="textin" placeholder="{{ _('입력할 문자열…') }}" autocomplete="off" style="max-width:260px">
   <button type="button" class="btn" id="send-text">{{ _("문자 입력") }}</button>
   <button type="button" class="btn" id="send-enter">Enter</button>
+  <button type="button" class="btn primary" id="force-solve">{{ _("사람 확인 완료") }}</button>
   <form method="post" action="/archive/jobs/{{ job['id'] }}/live/cancel" style="display:inline"
         onsubmit="return confirm('{{ _('이 작업을 취소할까요?') }}')">
     <button type="submit" class="btn danger">{{ _("취소") }}</button>
@@ -47,6 +48,9 @@
 </div>
 
 <p class="muted">{{ _("화면 위를 클릭하면 서버 브라우저의 같은 위치를 누릅니다. 드래그도 그대로 전달됩니다. 챌린지(체크박스·그림 찾기 등)를 통과시키면 자동으로 캡처가 이어집니다.") }}</p>
+{% if owned %}
+<p class="muted">{{ _("로봇 확인을 통과했는데도 자동으로 진행되지 않으면 '사람 확인 완료'를 눌러 현재 화면 그대로 캡처를 진행시킬 수 있습니다.") }}</p>
+{% endif %}
 
 <script>
 (function () {
@@ -113,6 +117,16 @@
     document.getElementById('send-enter').addEventListener('click', () => {
       send('key', { kind: 'key', key: 'Enter', delay_ms: delay() });
       guide.textContent = `${MSG.text}: Enter`;
+    });
+    // 사람 확인 완료 — 잔여 위젯/마커로 자동 통과가 안 풀려도, 사람이 로봇 확인을
+    // 직접 통과시켰으면 현재 화면 그대로 캡처를 강제 진행시킨다.
+    const fs = document.getElementById('force-solve');
+    fs.addEventListener('click', async () => {
+      if (!confirm("{{ _('로봇 확인을 직접 통과시켰다면 현재 화면으로 캡처를 진행합니다. 계속할까요?') }}")) return;
+      fs.disabled = true;
+      guide.textContent = "{{ _('진행 요청됨 — 잠시만 기다리세요…') }}";
+      try { await fetch(`/archive/jobs/${JOB}/live/solve`, { method: 'POST' }); }
+      catch (e) { fs.disabled = false; }   // 다음 클릭에서 재시도 (상태 폴링이 완료 감지)
     });
   }
 

@@ -153,3 +153,30 @@ def test_solve_aborts_on_cancel(job):
     page = _MockPage(challenge_iters=10_000, on_wait=cancel_now)
     raw_html, reason = sess.solve(page, "사유")
     assert reason == "사유"                  # 사람이 취소 → 중단
+
+
+def test_solve_force_proceeds_despite_unresolved_challenge(job):
+    # 챌린지가 영영 안 풀려도(잔여 마커), 사람이 '확인 완료'를 누르면 현재 페이지로
+    # 강제 진행한다 — reason=None 으로 캡처가 이어진다.
+    sess = live_challenge.LiveChallengeSession(job)
+
+    def force_now():
+        with db.connect() as conn:
+            db.set_live_force_solve(conn, job)
+
+    page = _MockPage(challenge_iters=10_000, on_wait=force_now)  # 자동으론 안 풀림
+    raw_html, reason = sess.solve(page, "차단 사유")
+    assert reason is None                    # 강제 진행 → 통과로 처리(캡처 진행)
+    assert raw_html == _CHALLENGE            # 현재 화면(마커 있는 DOM) 그대로 캡처
+    with db.connect() as conn:
+        assert db.get_archive_job(conn, job)["needs_human_at"] is None  # 정리됨
+
+
+def test_clear_needs_human_resets_force_solve(job):
+    # 세션 종료 시 강제 진행 플래그가 초기화돼 다음 세션으로 새지 않는다
+    with db.connect() as conn:
+        db.mark_needs_human(conn, job, token="t", viewport_w=1280, viewport_h=800)
+        db.set_live_force_solve(conn, job)
+        assert db.get_archive_job(conn, job)["live_force_solve"] == 1
+        db.clear_needs_human(conn, job)
+        assert db.get_archive_job(conn, job)["live_force_solve"] == 0
