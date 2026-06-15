@@ -430,6 +430,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN search_indexed INTEGER NOT NULL DEFAULT 0"
         )
+    # 로그인 자격증명으로 캡처된(로그인 뒤 콘텐츠) 스냅샷 표식 — 소유자/관리자만
+    # 열람. authenticated_by 는 캡처에 쓰인 자격증명의 등록자(없으면 NULL=admin 전용).
+    if cols and "authenticated" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN authenticated INTEGER NOT NULL DEFAULT 0"
+        )
+    if cols and "authenticated_by" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN authenticated_by INTEGER REFERENCES users(id)"
+        )
     _ensure_search_index(conn)
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
@@ -851,7 +861,8 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed", "css_externalized", "search_indexed"}
+     "note", "resources_indexed", "css_externalized", "search_indexed",
+     "authenticated", "authenticated_by"}
 )
 
 
@@ -2976,6 +2987,12 @@ def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
     conn.execute("DELETE FROM api_keys WHERE owner_user_id = ?", (user_id,))
     conn.execute(
         "UPDATE api_keys SET created_by = NULL WHERE created_by = ?", (user_id,)
+    )
+    # 로그인 캡처 스냅샷의 소유자 표기는 NULL 로 끊는다 — 불변 기록은 보존하되
+    # 끊으면 _may_view_authenticated 가 admin 전용으로 좁아져 접근이 넓어지지 않는다
+    conn.execute(
+        "UPDATE snapshots SET authenticated_by = NULL WHERE authenticated_by = ?",
+        (user_id,),
     )
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
