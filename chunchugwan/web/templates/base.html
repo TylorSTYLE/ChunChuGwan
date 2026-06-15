@@ -60,6 +60,23 @@ header h1 svg.logo { vertical-align: -4px; margin-right: 3px; }
    좁은 화면(태블릿·모바일)에서는 햄버거 버튼으로 여닫는 세로 패널 */
 header nav { display: contents; }
 header .tagline, header nav a { font-size: 12px; }
+/* 드롭다운 메뉴 (로그·관리자) — <details> 기반. 넓은 화면에서는 요약 라벨을
+   다른 메뉴처럼 한 줄에 두고, 열리면 패널이 아래로 겹쳐 뜬다. JS 없이도
+   기본 펼침 동작으로 여닫힌다 (script 가 한 번에 하나만·바깥 클릭 닫기 보강). */
+header nav details.nav-group { position: relative; font-size: 12px; }
+header nav details.nav-group > summary {
+  cursor: pointer; color: var(--link); list-style: none; white-space: nowrap; }
+header nav details.nav-group > summary::-webkit-details-marker { display: none; }
+header nav details.nav-group > summary::after {
+  content: " \25be"; font-size: 9px; vertical-align: 1px; }
+header nav details.nav-group[open] > summary { text-decoration: underline; }
+header nav .nav-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 60;
+  display: flex; flex-direction: column; gap: 1px; min-width: 150px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .14); }
+header nav .nav-menu a { display: block; padding: 6px 10px; border-radius: 4px; }
+header nav .nav-menu a:hover { background: var(--bg-soft); text-decoration: none; }
 #nav-toggle { display: none; }
 @media (max-width: 1023px) {
   header { align-items: center; }
@@ -68,6 +85,12 @@ header .tagline, header nav a { font-size: 12px; }
                align-items: stretch; gap: 2px; padding: 8px 0 4px; }
   header nav.open { display: flex; }
   header nav a { font-size: 13px; padding: 7px 4px; }
+  /* 좁은 화면 — 드롭다운은 겹쳐 뜨지 않고 펼친 항목이 들여쓰기되어 쌓인다 */
+  header nav details.nav-group { font-size: 13px; }
+  header nav details.nav-group > summary { padding: 7px 4px; }
+  header nav .nav-menu { position: static; min-width: 0; padding: 0 0 2px 14px;
+                         background: none; border: none; box-shadow: none; }
+  header nav .nav-menu a { font-size: 13px; }
   header nav .spacer { flex: none; border-top: 1px solid var(--border);
                        margin: 6px 0; }
   header nav .nav-user { padding: 2px 4px 6px; }
@@ -230,8 +253,8 @@ button.danger:hover { background: var(--red-hover); }
           title="{{ _('메뉴') }}">☰</button>
   <nav id="site-nav">
     <a href="/dashboard">{{ _("현황") }}</a>
-    <a href="/archives">{{ _("목록") }}</a>
-    <a href="/documents">{{ _("문서") }}</a>
+    <a href="/archives">{{ _("아카이브 사이트 목록") }}</a>
+    <a href="/documents">{{ _("전체 문서(파일)") }}</a>
     {% if can_search %}
     <a href="/search">{{ _("검색") }}</a>
     {% endif %}
@@ -239,16 +262,26 @@ button.danger:hover { background: var(--red-hover); }
     <a href="/archive/new">{{ _("새 아카이빙") }}</a>
     {% endif %}
     <a href="/schedules">{{ _("스케줄") }}</a>
-    {% if can_view_logs %}
-    <a href="/logs">{{ _("아카이빙 로그") }}</a>
+    {% if can_view_logs or system_allowed %}
+    <details class="nav-group">
+      <summary>{{ _("로그") }}</summary>
+      <div class="nav-menu">
+        {% if can_view_logs %}<a href="/logs">{{ _("아카이빙 로그") }}</a>{% endif %}
+        {% if system_allowed %}<a href="/system/logs">{{ _("시스템 로그") }}</a>{% endif %}
+      </div>
+    </details>
     {% endif %}
     {% if system_allowed and live_challenge_enabled %}
     <a href="/archive/needs-human"{% if needs_human_count %} class="nav-alert"{% endif %}>{{ _("사람 확인") }}{% if needs_human_count %} ({{ needs_human_count }}){% endif %}</a>
     {% endif %}
     {% if system_allowed %}
-    <a href="/system/logs">{{ _("시스템 로그") }}</a>
-    <a href="/system/users">{{ _("사용자") }}</a>
-    <a href="/system">{{ _("시스템") }}</a>
+    <details class="nav-group">
+      <summary>{{ _("관리자") }}</summary>
+      <div class="nav-menu">
+        <a href="/system/users">{{ _("사용자") }}</a>
+        <a href="/system">{{ _("시스템") }}</a>
+      </div>
+    </details>
     {% endif %}
     <span class="spacer"></span>
     <button type="button" id="theme-toggle" title="{{ _('테마 전환 (자동 → 라이트 → 다크)') }}"></button>
@@ -274,6 +307,24 @@ button.danger:hover { background: var(--red-hover); }
     var open = nav.classList.toggle("open");
     btn.setAttribute("aria-expanded", open ? "true" : "false");
     btn.classList.toggle("active", open);
+  });
+})();
+/* 헤더 드롭다운(로그·관리자) — 하나를 열면 다른 건 닫는다(양쪽 레이아웃 공통,
+   아코디언). 넓은 화면에서는 바깥을 클릭해도 닫힌다. */
+(function () {
+  var groups = document.querySelectorAll("header details.nav-group");
+  if (!groups.length) return;
+  groups.forEach(function (d) {
+    d.addEventListener("toggle", function () {
+      if (!d.open) return;
+      groups.forEach(function (o) { if (o !== d) o.open = false; });
+    });
+  });
+  document.addEventListener("click", function (e) {
+    if (!window.matchMedia("(min-width: 1024px)").matches) return;
+    groups.forEach(function (d) {
+      if (d.open && !d.contains(e.target)) d.open = false;
+    });
   });
 })();
 /* 테마 토글 — 자동(시스템) → 라이트 → 다크 순환, localStorage 에 기억 */

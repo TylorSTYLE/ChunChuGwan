@@ -451,6 +451,8 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
 # 사이트 상세의 페이지 목록 페이징 단위 — 선택 가능한 표시 개수와 기본값
 _SITE_PAGES_PER_PAGE_CHOICES = (25, 50, 75, 100, 200)
 _SITE_PAGES_PER_PAGE = 25
+# 사이트 상세에 함께 보여줄 문서 목록 상한 — 넘으면 전체 문서 화면으로 안내
+_SITE_DOCUMENTS_CAP = 50
 
 
 @app.get("/sites/{site_id}", response_class=HTMLResponse)
@@ -495,6 +497,11 @@ def site_view(
             r for r in db.list_site_failed_crawl_pages(conn, site_id)
             if r["url"] not in failed_log_urls
         ]
+        # 이 사이트가 아카이빙한 문서 파일 (sha256 그룹). 상한 + 1 개를 받아
+        # 초과 여부를 판단하고, 넘으면 전체 문서 화면으로 안내한다.
+        site_documents = db.list_site_document_groups(
+            conn, site_id, limit=_SITE_DOCUMENTS_CAP + 1
+        )
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
         for s in schedules
@@ -548,6 +555,8 @@ def site_view(
             "network_tags": site_network_tags,
             "failed_logs": failed_logs,
             "failed_crawl_pages": failed_crawl_pages,
+            "site_documents": site_documents[:_SITE_DOCUMENTS_CAP],
+            "site_documents_more": len(site_documents) > _SITE_DOCUMENTS_CAP,
             "schedule_labels": schedule_labels,
             "crawl_schedules": crawl_schedule_labels,
             "page_count": totals["page_count"],

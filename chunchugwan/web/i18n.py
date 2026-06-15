@@ -35,8 +35,11 @@ _EN: dict[str, str] = {
     "개인 웹 아카이브": "Personal web archive",
     "현황": "Overview",
     "목록": "Archives",
+    "아카이브 사이트 목록": "Archived sites",
+    "전체 문서(파일)": "All documents (files)",
     "새 아카이빙": "New archive",
     "스케줄": "Schedules",
+    "로그": "Logs",
     "아카이빙 로그": "Archive logs",
     "시스템 로그": "System logs",
     "사용자": "Users",
@@ -338,6 +341,10 @@ _EN: dict[str, str] = {
     "마지막 저장": "Last saved",
     "외 {n}곳": "+{n} more",
     "아직 저장된 문서가 없습니다.": "No documents archived yet.",
+    "이 사이트의 페이지가 링크한 문서 파일(PDF·워드·한글 등)입니다. 같은 내용의 문서는 한 번만 저장됩니다.":
+        "Document files (PDF, Word, HWP, …) linked from this site's pages. "
+        "Identical documents are stored once.",
+    "문서가 더 있습니다 — 전체 목록 보기": "More documents — view the full list",
     # ---- diff 뷰어 ----
     "비교": "Compare",
     "두 스냅샷의 정규화 텍스트가 같습니다.": "The normalized text of both snapshots is identical.",

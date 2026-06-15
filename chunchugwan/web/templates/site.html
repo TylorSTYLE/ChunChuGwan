@@ -8,6 +8,10 @@
               white-space: nowrap; }
 td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
                 white-space: nowrap; }
+td.url-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; }
+td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; }
 </style>
 {% if error %}
 <div class="error">{{ error }}</div>
@@ -102,6 +106,52 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 </div>
 {% else %}
 <p class="muted">{{ _("아직 페이지가 없습니다 — 크롤이 진행되면 여기에 쌓입니다.") }}</p>
+{% endif %}
+
+{% if site_documents %}
+<h3>{{ _("문서") }}</h3>
+<p class="muted" style="font-size:13px">
+  {{ _("이 사이트의 페이지가 링크한 문서 파일(PDF·워드·한글 등)입니다. 같은 내용의 문서는 한 번만 저장됩니다.") }}
+</p>
+<div class="table-wrap wide cards">
+<table id="documents">
+  <thead>
+    <tr>
+      <th>{{ _("문서명") }}</th>
+      <th>{{ _("형식") }}</th>
+      <th style="text-align:right">{{ _("용량") }}</th>
+      <th>{{ _("출처 페이지") }}</th>
+      <th style="text-align:right">{{ _("참조 스냅샷") }}</th>
+      <th>{{ _("마지막 저장") }}</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for g in site_documents %}
+    <tr>
+      <td class="name-cell">
+        <a href="/document/{{ g['sha256'] }}/{{ g['file'] }}" download
+           title="{{ g['url'] }}">{{ g['file'] }}</a>
+      </td>
+      <td class="mono">{{ g['file'].rsplit('.', 1)[1] | upper if '.' in g['file'] else '-' }}</td>
+      <td class="mono" style="text-align:right">{{ g['bytes'] | filesize }}</td>
+      <td class="url-cell">
+        <a href="/page/{{ g['page_id'] }}" title="{{ g['page_url'] }}">{{ g['page_url'] }}</a>
+        {%- if g['page_count'] > 1 %}
+        <span class="muted">{{ _("외 {n}곳", n=g['page_count'] - 1) }}</span>
+        {%- endif %}
+      </td>
+      <td class="mono" style="text-align:right">
+        <a href="/snapshot/{{ g['snapshot_id'] }}">{{ g['snapshot_count'] }}</a>
+      </td>
+      <td>{{ g['last_seen'] | ts }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if site_documents_more %}
+<p class="muted" style="font-size:13px"><a href="/documents">{{ _("문서가 더 있습니다 — 전체 목록 보기") }}</a></p>
+{% endif %}
 {% endif %}
 
 {% if failed_logs or failed_crawl_pages %}
