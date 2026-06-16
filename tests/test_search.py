@@ -312,10 +312,47 @@ def test_compact_marks_legacy_document_stale_and_indexes_body(archive):
     assert searchindex.search("구형문서본문어").total == 1
 
 
-# ---- 시스템 메뉴 전체 다시 색인 버튼 ----
+# ---- 백그라운드 재색인 + 진행률 ----
 
 
-def test_system_reindex_button(archive, monkeypatch):
+def test_backfill_progress_callback(archive):
+    """backfill_all 이 진행률 콜백을 (시작 0/N, …, 완료 N/N) 으로 보고한다."""
+    _make_snapshot("https://a.com/1", "진행률본문1", index=False)
+    _make_snapshot("https://a.com/2", "진행률본문2", index=False)
+    calls: list[tuple[int, int]] = []
+    n = searchindex.backfill_all(progress=lambda d, t: calls.append((d, t)))
+    assert n == 2
+    assert calls[0] == (0, 2)    # 시작 시 총계 통지
+    assert calls[-1] == (2, 2)   # 완료
+    assert searchindex.pending_count() == 0
+
+
+def test_backfill_skips_concurrently_deleted_snapshot(archive, monkeypatch):
+    """처리 직전 삭제된 스냅샷은 건너뛰고 orphan FTS 행을 만들지 않는다."""
+    # 처리 시점엔 존재하지 않는 스냅샷 id 를 목록에 넣어 동시 삭제를 모사
+    fake = {"id": 99999, "dir_name": "x", "page_url": "u", "domain": "a.com", "slug": "s"}
+    monkeypatch.setattr(
+        db, "list_unindexed_search_snapshots", lambda conn, limit=None: [fake]
+    )
+    assert searchindex.backfill_all() == 1  # 처리(건너뜀)도 카운트
+    with db.connect() as conn:
+        assert db.count_fts_rows(conn) == 0          # orphan 미생성
+        assert db.list_orphan_fts_rowids(conn) == []
+
+
+def _wait_reindex_done(client, timeout: float = 15.0) -> dict:
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = client.get("/system/search/reindex/status").json()
+        if not state["running"]:
+            return state
+        time.sleep(0.05)
+    raise AssertionError("재색인이 시간 내에 끝나지 않음")
+
+
+def test_system_reindex_button_runs_in_background(archive, monkeypatch):
+    """시스템 버튼은 즉시 303 으로 응답하고(백그라운드), status 폴링으로 완료된다."""
     from fastapi.testclient import TestClient
     from chunchugwan.web import app as web_app
     monkeypatch.setattr(config, "AUTH_ENABLED", False)  # loopback — 관리자 허용
@@ -323,6 +360,18 @@ def test_system_reindex_button(archive, monkeypatch):
     assert searchindex.pending_count() == 1
     client = TestClient(web_app.app)
     res = client.post("/system/search/reindex", follow_redirects=False)
-    assert res.status_code == 303
+    assert res.status_code == 303  # 즉시 응답 (동기 대기 아님)
+    state = _wait_reindex_done(client)
+    assert state["error"] is None and state["result"] == 1
     assert searchindex.pending_count() == 0
     assert searchindex.search("버튼색인").total == 1
+
+
+def test_system_reindex_status_endpoint(archive, monkeypatch):
+    """status 엔드포인트가 진행 상태 JSON 을 돌려준다."""
+    from fastapi.testclient import TestClient
+    from chunchugwan.web import app as web_app
+    monkeypatch.setattr(config, "AUTH_ENABLED", False)
+    client = TestClient(web_app.app)
+    s = client.get("/system/search/reindex/status").json()
+    assert set(s) >= {"running", "done", "total", "result", "error", "finished_at"}

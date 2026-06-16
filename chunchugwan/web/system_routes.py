@@ -13,7 +13,8 @@ import shutil
 import smtplib
 import tarfile
 import tempfile
-from datetime import date
+import threading
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Callable
 from urllib.parse import quote, urlencode
@@ -120,6 +121,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "documents_bytes": usage["documents"],
             "optimize_pending": sum(optimize.pending_counts()),
             "search": searchindex.verify(),
+            "search_reindex": reindex_status(),
             "notice": notice, "error": error,
         },
     )
@@ -280,24 +282,78 @@ def system_compact(request: Request):
     )
 
 
+# 전체 다시 색인 진행 상태 — serve 단일 프로세스의 인메모리 (app._active_jobs 와 같은 패턴).
+# 백그라운드 스레드가 갱신하고, 시스템 화면이 /system/search/reindex/status 를 폴링한다.
+_reindex_lock = threading.Lock()
+_reindex_state: dict = {
+    "running": False, "done": 0, "total": 0,
+    "result": None, "error": None, "finished_at": None,
+}
+
+
+def reindex_status() -> dict:
+    """전체 다시 색인 진행 상태의 사본 (폴링/초기 렌더용)."""
+    with _reindex_lock:
+        return dict(_reindex_state)
+
+
+def _reindex_worker() -> None:
+    """백그라운드 재색인 — 진행률을 인메모리 상태에 갱신."""
+    def _progress(done: int, total: int) -> None:
+        with _reindex_lock:
+            _reindex_state["done"] = done
+            _reindex_state["total"] = total
+
+    try:
+        count = searchindex.reindex_all(progress=_progress)
+        with _reindex_lock:
+            _reindex_state["result"] = count
+            _reindex_state["error"] = None
+    except Exception as e:  # noqa: BLE001 — 실패해도 상태만 기록, 스레드는 정상 종료
+        logger.exception("검색 인덱스 전체 다시 색인 실패")
+        with _reindex_lock:
+            _reindex_state["error"] = str(e)
+    finally:
+        with _reindex_lock:
+            _reindex_state["running"] = False
+            _reindex_state["finished_at"] = datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            )
+
+
 @router.post("/search/reindex")
 def system_search_reindex(request: Request):
-    """검색 인덱스 전체 다시 색인 — 인덱스를 비우고 모든 스냅샷을 재색인.
+    """검색 인덱스 전체 다시 색인을 백그라운드로 시작 (즉시 응답).
 
-    CLI ``wccg search reindex --all`` 과 같은 진입점(searchindex.reindex_all).
-    과소 색인·orphan·stale(예: compact 이후 문서 본문 미반영)을 한 번에
-    바로잡는다. 동기로 실행되며 첨부 문서 본문 추출까지 다시 하므로 스냅샷이
-    아주 많으면 시간이 걸릴 수 있다. FTS5 미지원 환경에서는 비활성.
+    CLI ``wccg search reindex --all`` 과 같은 작업(searchindex.reindex_all)을
+    별도 스레드에서 돌린다 — 동기로 돌리면 첨부 문서 본문 추출까지 다시 하는
+    동안 요청이 멈춰 대시보드가 응답하지 않는다. 진행 상황은 시스템 화면이
+    /system/search/reindex/status 를 폴링해 보여준다. 과소 색인·orphan·stale
+    (예: compact 이후 문서 본문 미반영)을 한 번에 바로잡는다. FTS5 미지원이면 비활성.
     """
     if not searchindex.available():
         return _system_redirect(
             error=t(request, "검색 인덱스를 쓸 수 없습니다 — 이 SQLite 빌드에 FTS5 가 없습니다.")
         )
-    count = searchindex.reindex_all()
-    audit.log(request, "검색 인덱스 전체 다시 색인")
+    with _reindex_lock:
+        if _reindex_state["running"]:
+            return _system_redirect(
+                notice=t(request, "이미 전체 다시 색인이 진행 중입니다.")
+            )
+        _reindex_state.update(
+            running=True, done=0, total=0, result=None, error=None, finished_at=None
+        )
+    audit.log(request, "검색 인덱스 전체 다시 색인 시작")
+    threading.Thread(target=_reindex_worker, daemon=True).start()
     return _system_redirect(
-        notice=t(request, "검색 인덱스 전체 다시 색인 완료 — 스냅샷 {n}개", n=count)
+        notice=t(request, "검색 인덱스 전체 다시 색인을 시작했습니다 — 아래에 진행 상황이 표시됩니다.")
     )
+
+
+@router.get("/search/reindex/status")
+def system_search_reindex_status(request: Request) -> dict:
+    """전체 다시 색인 진행 상태(JSON) — 시스템 화면 폴링용 (관리자 전용 라우터)."""
+    return reindex_status()
 
 
 @router.post("/settings")
