@@ -1,8 +1,38 @@
 {% extends "base.html" %}
 {% from "_network_tag.html" import network_tag_badge with context %}
+{% from "_logo.html" import logo %}
 {% block title %}{{ _("현황") }} — {{ _("춘추관") }}{% endblock %}
 {% block head %}
 <style>
+/* 구글 검색 느낌의 히어로 — 현황 위에 로고 + 큰 둥근 검색창을 중앙 배치.
+   검색은 별도 결과 화면(/search)으로 GET 이동한다 (도메인·최신 필터는 거기서). */
+.search-hero { text-align: center; padding: 26px 0 30px; margin-bottom: 4px;
+               border-bottom: 1px solid var(--border); }
+.search-hero-brand { display: inline-flex; align-items: center; gap: 9px;
+                     color: var(--fg); margin-bottom: 18px; }
+.search-hero-brand .logo { width: 38px; height: 38px; }
+.search-hero-title { font-size: 26px; font-weight: 700; letter-spacing: .08em; }
+.search-hero-form { max-width: 600px; margin: 0 auto; }
+.search-hero-box { display: flex; align-items: center; gap: 6px;
+                   border: 1px solid var(--border); border-radius: 26px;
+                   background: var(--surface); padding: 4px 6px 4px 16px;
+                   box-shadow: 0 1px 6px rgba(0, 0, 0, .07);
+                   transition: box-shadow .15s, border-color .15s; }
+.search-hero-box:focus-within { box-shadow: 0 2px 14px rgba(0, 0, 0, .16);
+                                border-color: var(--link); }
+.search-hero-icon { flex: none; width: 19px; height: 19px; color: var(--muted); }
+.search-hero-box input[type=text] { flex: 1; min-width: 0; border: none; box-shadow: none;
+                                    background: none; padding: 9px 4px; font-size: 16px; }
+.search-hero-box input[type=text]:focus { outline: none; }
+.search-hero-box button { flex: none; border-radius: 20px; padding: 8px 22px; font-size: 14px;
+                          color: #fff; background: var(--link); border-color: var(--link); }
+.search-hero-box button:hover { background: var(--link); filter: brightness(1.08); }
+@media (max-width: 599px) {
+  .search-hero { padding: 14px 0 18px; }
+  .search-hero-brand { margin-bottom: 14px; }
+  .search-hero-title { font-size: 22px; }
+  .search-hero-box button { padding: 8px 16px; }
+}
 .trend-table { max-width: 680px; }
 .trend-bar { height: 12px; border-radius: 3px; background: var(--link); opacity: .35;
              min-width: 0; }
@@ -16,6 +46,24 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
                       'forced_same': 'same', 'error': 'error'} %}
 {% set status_label = {'new': _('신규'), 'changed': _('변경'), 'unchanged': _('동일'),
                        'forced_same': _('동일(강제)'), 'error': _('실패')} %}
+
+{% if can_search %}
+<section class="search-hero">
+  <div class="search-hero-brand">{{ logo(38) }}<span class="search-hero-title">{{ _("춘추관") }}</span></div>
+  <form class="search-hero-form" method="get" action="/search" role="search">
+    <div class="search-hero-box">
+      <svg class="search-hero-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="7"></circle><line x1="15.5" y1="15.5" x2="21" y2="21"></line>
+      </svg>
+      <input type="text" name="q" autocomplete="off" autofocus
+             aria-label="{{ _('검색') }}"
+             placeholder="{{ _('아카이브 본문·문서에서 검색…') }}">
+      <button type="submit">{{ _("검색") }}</button>
+    </div>
+  </form>
+</section>
+{% endif %}
 
 <h2>{{ _("현황") }}</h2>
 
