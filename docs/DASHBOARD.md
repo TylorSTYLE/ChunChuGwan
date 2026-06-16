@@ -199,7 +199,13 @@
   (`POST /system/document-settings` — 페이지가 링크한 문서를 받을 때의 한도:
   스냅샷당 문서 수·문서 1개 크기(MB)·다운로드 타임아웃(초). `settings` 테이블
   `document_max_count`/`document_max_mb`/`document_fetch_timeout_seconds`,
-  값 해석·클램핑은 `documents.limits`, 이후 저장되는 스냅샷에 적용)·로컬 네트워크 태그
+  값 해석·클램핑은 `documents.limits`, 이후 저장되는 스냅샷에 적용)·메일(SMTP)
+  설정(`POST /system/smtp-settings` — 초대 메일 발송 SMTP 호스트·포트·TLS·로그인
+  사용자/비밀번호·발신자. `settings` 테이블, `WCCG_SMTP_*` 환경변수보다 우선하고
+  없는 항목만 환경변수로 폴백. 비밀번호는 `WCCG_SECRET_KEY` 로 암호화한 암호문만
+  저장하고 화면엔 노출하지 않으며, 입력칸을 비우면 유지·'저장된 비밀번호 삭제'로
+  제거. `POST /system/smtp-test` 는 저장된 설정으로 관리자 본인에게 테스트 메일을
+  보낸다)·로컬 네트워크 태그
   (`POST /system/network-tags`, `POST /system/network-tags/{id}/delete`,
   `POST /system/network-tags/merge` — 사설 IP 대역 아카이빙을 허용하는 태그.
   id 는 GUID 자동 발급, 이름은 유일·60자, 설명 200자. 페이지·크롤·크롤

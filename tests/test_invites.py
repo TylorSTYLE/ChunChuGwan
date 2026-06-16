@@ -214,8 +214,9 @@ def test_invite_sends_mail_when_configured(client, monkeypatch):
     monkeypatch.setattr(config, "SMTP_HOST", "smtp.test")
     sent = {}
 
-    def fake_send(to_email, invite_url, inviter_email, role_label):
-        sent.update(to=to_email, url=invite_url, inviter=inviter_email, role=role_label)
+    def fake_send(cfg, to_email, invite_url, inviter_email, role_label):
+        sent.update(to=to_email, url=invite_url, inviter=inviter_email,
+                    role=role_label, host=cfg.host)
 
     monkeypatch.setattr(mailer, "send_invite", fake_send)
     _login(client, "boss@test.co", "bosspass1234")
@@ -224,6 +225,7 @@ def test_invite_sends_mail_when_configured(client, monkeypatch):
     assert "메일을 보냈습니다" in unquote(res.headers["location"])
     assert sent["to"] == "new@test.co" and sent["inviter"] == "boss@test.co"
     assert sent["role"] == "아카이브" and "/invite/" in sent["url"]
+    assert sent["host"] == "smtp.test"  # 환경변수 폴백으로 해석된 설정이 전달됨
 
 
 def test_invite_mail_failure_falls_back_to_link(client, monkeypatch):

@@ -97,7 +97,7 @@
 <p class="muted" style="font-size:12px; max-width:720px">
   {{ _("초대 링크는 {n}일 후 만료되며, 같은 이메일을 다시 초대하면 새 링크로 교체됩니다.", n=invite_ttl_days) }}
   {% if not mail_enabled %}
-  {{ _("메일 발송이 설정되지 않아(WCCG_SMTP_*) 초대 링크가 화면에 표시됩니다 — 직접 전달하세요.") }}
+  {{ _("메일 발송이 설정되지 않아 초대 링크가 화면에 표시됩니다 — 시스템 → 메일(SMTP) 설정에서 설정하거나 링크를 직접 전달하세요.") }}
   {% endif %}
 </p>
 <form class="inline" method="post" action="/system/users/invite">
