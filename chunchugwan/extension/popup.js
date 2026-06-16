@@ -101,7 +101,6 @@ function activateTab(name) {
   document.querySelectorAll(".tab").forEach((t) =>
     t.classList.toggle("active", t.id === "tab-" + name));
   if (name === "history") loadHistory();
-  if (name === "login") initLogin();
 }
 
 function initTabs() {
@@ -180,7 +179,6 @@ function initConnect() {
 
 function initArchive() {
   const kind = hostKind(currentUrl);
-  const warn = $("#archive-result");
   if (kind === "loopback") {
     $("#archive-page").disabled = true;
     $("#archive-site").disabled = true;
@@ -189,8 +187,20 @@ function initArchive() {
     showNote("#archive-result", msg("archive_private_warn"), "warn");
   }
 
+  initLoginOption();
+
+  // 로그인 세션을 포함하면 인증 경로(쿠키 수집 → auth-profiles/crawl)로 보낸다.
+  // host 권한은 제스처가 살아있는 팝업에서 먼저 받아야 한다(background 는 거부됨).
+  const wantsAuth = () => $("#with-login").checked && !$("#with-login").disabled;
+
   $("#archive-page").addEventListener("click", async () => {
-    const res = await send("archivePage", { url: currentUrl, force: $("#force").checked });
+    const auth = wantsAuth();
+    if (auth && !(await ensureHostPermission(currentUrl))) {
+      showNote("#archive-result", msg("err_permission"), "err");
+      return;
+    }
+    const res = await send(auth ? "archivePageAuth" : "archivePage",
+      { url: currentUrl, force: $("#force").checked });
     if (res.ok && res.data) {
       showNote("#archive-result",
         res.data.queued ? msg("msg_archived", res.data.url) : msg("msg_already"), "");
@@ -198,7 +208,12 @@ function initArchive() {
   });
 
   $("#archive-site").addEventListener("click", async () => {
-    const res = await send("archiveSite", {
+    const auth = wantsAuth();
+    if (auth && !(await ensureHostPermission(currentUrl))) {
+      showNote("#archive-result", msg("err_permission"), "err");
+      return;
+    }
+    const res = await send(auth ? "archiveSiteAuth" : "archiveSite", {
       url: currentUrl,
       max_pages: $("#max-pages").value, max_depth: $("#max-depth").value,
       delay: $("#delay").value,
@@ -211,27 +226,31 @@ function initArchive() {
   });
 }
 
-// ---- 로그인 페이지 (1회성 인증 캡처) ----
+// ---- 로그인 세션 포함 옵션 (인증 캡처는 서버 가드와 일치해 https 대상만) ----
 
-async function initLogin() {
-  let host = "";
-  try { host = new URL(currentUrl).host; } catch (e) {}
-  $("#login-domain").textContent = host;
-  const cc = await send("cookieCount", { url: currentUrl });
-  $("#login-cookie-count").textContent =
-    cc.count == null ? "" : msg("login_cookie_count", String(cc.count));
-  const consent = $("#consent");
-  const runBtn = $("#auth-run");
-  consent.addEventListener("change", () => { runBtn.disabled = !consent.checked; });
-  runBtn.addEventListener("click", async () => {
-    // 쿠키 수집에 필요한 host 권한도 제스처가 있는 팝업에서 먼저 받는다.
+// 체크하면 host 권한을 받아(제스처) 현재 도메인 쿠키 개수를 보여준다. ID/PW 는
+// 절대 수집하지 않고 이미 로그인된 세션 쿠키만 전송한다 (background.collectCapsule).
+function initLoginOption() {
+  const cb = $("#with-login");
+  const info = $("#login-info");
+  const hint = $("#login-hint");
+  if (!/^https:\/\//i.test(currentUrl) || hostKind(currentUrl) === "loopback") {
+    cb.disabled = true;
+    hint.textContent = msg("archive_login_https_only");
+    hint.style.display = "block";
+    return;
+  }
+  cb.addEventListener("change", async () => {
+    if (!cb.checked) { info.style.display = "none"; return; }
     if (!(await ensureHostPermission(currentUrl))) {
-      showNote("#login-result", msg("err_permission"), "err");
+      cb.checked = false;
+      showNote("#archive-result", msg("err_permission"), "err");
       return;
     }
-    const res = await send("authProfile", { url: currentUrl });
-    if (res.ok && res.data) showNote("#login-result", msg("msg_auth_queued"), "");
-    else showNote("#login-result", msg(apiError(res)), "err");
+    const cc = await send("cookieCount", { url: currentUrl });
+    $("#login-cookie-count").textContent =
+      cc.count == null ? "" : msg("login_cookie_count", String(cc.count));
+    info.style.display = "block";
   });
 }
 

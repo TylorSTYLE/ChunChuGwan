@@ -1,8 +1,10 @@
 """확장 토큰(사용자 귀속 API 키) — 권한 파생·매 요청 재평가·격리·계정 화면 발급/폐기."""
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import auth, config, db, storage
+from chunchugwan import auth, config, crawler, credentials, db, storage
 from chunchugwan.web import app as web_app
 from chunchugwan.web import permissions
 
@@ -356,3 +358,103 @@ def test_auth_profile_scopes_cookies_to_target(client, monkeypatch):
     token = _ext_token("arch@test.co")
     foreign = [{"name": "s", "value": "v", "domain": "evil.com", "path": "/"}]
     assert _auth_profile(client, token, cookies=foreign).status_code == 400
+
+
+# ---- 로그인 세션 포함 크롤 (POST /api/v1/crawl + storage_state → 인증 크롤) ----
+
+
+def _auth_crawl(client, token, url="https://example.com/docs/", cookies=None):
+    return client.post(
+        "/api/v1/crawl",
+        json={"url": url, "storage_state": {"cookies": cookies or _COOKIES, "origins": []}},
+        headers=_headers(token),
+    )
+
+
+def test_crawl_with_session_creates_credential(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret-passphrase")
+    token = _ext_token("arch@test.co")
+    r = _auth_crawl(client, token)
+    assert r.status_code == 202
+    with db.connect() as conn:
+        cred = conn.execute("SELECT * FROM site_credentials").fetchone()
+        # kind=session, 1회성(expires_at 설정), 소유자=발급 사용자
+        assert cred["kind"] == "session" and cred["expires_at"] is not None
+        assert cred["created_by"] == _uid("arch@test.co")
+        # 크롤이 그 credential_id 로 등록됐다 (크롤 전 페이지에 적용)
+        crawl = conn.execute(
+            "SELECT * FROM crawls WHERE credential_id = ?", (cred["id"],)
+        ).fetchone()
+        assert crawl is not None
+
+
+def test_crawl_without_session_has_no_credential(client):
+    token = _ext_token("arch@test.co")
+    r = client.post(
+        "/api/v1/crawl", json={"url": "https://example.com/docs/"}, headers=_headers(token)
+    )
+    assert r.status_code == 202
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM site_credentials").fetchone()["c"] == 0
+        assert conn.execute("SELECT credential_id FROM crawls").fetchone()["credential_id"] is None
+
+
+def test_crawl_session_requires_secret_key(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "")
+    assert _auth_crawl(client, _ext_token("arch@test.co")).status_code == 503
+
+
+def test_crawl_session_rejects_system_key(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    with db.connect() as conn:
+        sys_token = auth.issue_api_key(
+            conn, "sys", can_view=True, can_archive=True, created_by=1, ttl_seconds=None
+        )
+    assert _auth_crawl(client, sys_token).status_code == 403  # 사용자 토큰만
+
+
+def test_crawl_session_https_only(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    assert _auth_crawl(client, _ext_token("arch@test.co"), url="http://example.com/x/").status_code == 400
+
+
+def test_crawl_session_scopes_cookies_to_target(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    foreign = [{"name": "s", "value": "v", "domain": "evil.com", "path": "/"}]
+    assert _auth_crawl(client, _ext_token("arch@test.co"), cookies=foreign).status_code == 400
+
+
+def test_crawl_session_merged_discards_credential(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    token = _ext_token("arch@test.co")
+    crawler.start_crawl("https://example.com/docs/", source="api")  # 같은 URL 선행 크롤(진행 중)
+    r = _auth_crawl(client, token)  # 같은 시작 URL → 병합, 새 1회성 자격증명은 버려진다
+    assert r.status_code == 202 and r.json()["merged"] is True
+    with db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM site_credentials").fetchone()["c"] == 0
+
+
+def test_gc_keeps_credential_of_running_crawl(client, monkeypatch):
+    """만료된 1회성 자격증명이라도 진행 중 크롤이 참조하면 GC 가 건드리지 않는다."""
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    with db.connect() as conn:
+        site_id = db.get_or_create_site(conn, "example.com")
+        payload = credentials.build_payload(
+            credentials.KIND_SESSION,
+            {"storage_state": json.dumps({"cookies": _COOKIES, "origins": []})},
+        )
+        cred_id = credentials.add(
+            conn, site_id, "ext:gc", credentials.KIND_SESSION, payload,
+            created_by=_uid("arch@test.co"), ttl_seconds=-3600,  # 이미 만료
+        )
+    crawl, _ = crawler.start_crawl(
+        "https://example.com/docs/", source="api", credential_id=cred_id
+    )
+    with db.connect() as conn:
+        # 진행 중(running) 크롤이 참조 → 만료됐어도 보존
+        assert db.delete_expired_ext_credentials(conn) == 0
+        assert db.get_site_credential(conn, cred_id) is not None
+        # 크롤이 끝나면 다음 GC 가 정리한다
+        conn.execute("UPDATE crawls SET status = 'done' WHERE id = ?", (crawl["id"],))
+        assert db.delete_expired_ext_credentials(conn) == 1
+        assert db.get_site_credential(conn, cred_id) is None

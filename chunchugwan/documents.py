@@ -111,9 +111,19 @@ def _build_filename(stem: str, ext: str, url: str) -> str:
 
 
 def document_filename(url: str) -> str:
-    """URL 경로 기반 문서 저장 파일명 (페이지가 링크한 문서용)."""
-    path = PurePosixPath(unquote(urlsplit(url).path))
-    return _build_filename(path.stem, path.suffix.lower(), url)
+    """URL 경로 기반 문서 저장 파일명 (페이지가 링크한 문서용).
+
+    확장자 분리는 pathlib(.stem/.suffix) 대신 마지막 점 기준으로 직접 한다 —
+    '...pdf'(예: %2e%2e.pdf, 즉 traversal '..' + '.pdf')처럼 앞이 점뿐인 이름은
+    pathlib 이 확장자를 못 떼어 '..' 잔재가 stem 에 남고, _build_filename 의
+    정제(앞뒤 점 제거)가 'pdf' 만 남겨 'document-' 폴백을 건너뛴다. 직접
+    분리하면 확장자가 떨어지고 남은 '..' 는 정제로 비워져 'document-' 로 폴백한다.
+    """
+    name = PurePosixPath(unquote(urlsplit(url).path)).name
+    stem, dot, ext = name.rpartition(".")
+    if not dot or not ext:  # 점 없음 또는 끝점(빈 확장자) — 전체를 stem 으로
+        return _build_filename(name, "", url)
+    return _build_filename(stem, f".{ext.lower()}", url)
 
 
 def _repair_header_text(s: str) -> str:
