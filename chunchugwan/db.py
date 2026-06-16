@@ -457,6 +457,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN authenticated_by INTEGER REFERENCES users(id)"
         )
+    # 캡처 출처 — 'server'(서버 캡처, 기본) | 'extension'(브라우저 확장 클라이언트
+    # 캡처). 확장 캡처는 실브라우저 렌더라 해상도·dpr 가 달라 스크린샷 비교를
+    # 제공하지 않고 본문 diff 에 경고를 단다.
+    if cols and "origin" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN origin TEXT NOT NULL DEFAULT 'server'"
+        )
+    # 불완전 캡처 표식 — 일부 자원·프레임·스크린샷 수집이 실패해도 저장하되 표시한다
+    if cols and "incomplete" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0"
+        )
     _ensure_search_index(conn)
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
@@ -468,6 +480,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # site_id 인덱스는 컬럼 추가 후에만 만들 수 있다 (SCHEMA 주의 주석 참조)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id)")
+    # 확장(브라우저 클라이언트) 캡처 페이지 표식 — 1 이면 서버가 그 URL 을 다시
+    # 가져오지 않는다(스케줄·크롤·재시도·재아카이빙 차단). 갱신은 확장 재캡처로만.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(pages)")}
+    if cols and "client_captured" not in cols:
+        conn.execute(
+            "ALTER TABLE pages ADD COLUMN client_captured INTEGER NOT NULL DEFAULT 0"
+        )
     # API 키 소유자 — NULL=관리자 발급 시스템 키(공동관리), 값=그 사용자 귀속
     # 확장 토큰. 기존 키는 전부 시스템 키이므로 NULL 그대로가 정확한 의미(백필 없음).
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(api_keys)")}
@@ -901,6 +920,15 @@ def get_or_create_page(
     return cur.lastrowid
 
 
+def set_page_client_captured(conn: sqlite3.Connection, page_id: int) -> None:
+    """페이지를 확장(브라우저 클라이언트) 캡처로 표시 — 서버 재요청을 막는다.
+
+    한번 1 이 되면 스케줄·크롤·재시도·대시보드 재아카이빙이 그 URL 을 서버
+    캡처하지 않는다(불변식). 갱신은 확장 재캡처로만. 멱등.
+    """
+    conn.execute("UPDATE pages SET client_captured = 1 WHERE id = ?", (page_id,))
+
+
 def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
     """해당 페이지의 가장 최근 스냅샷 row (없으면 None)."""
     return conn.execute(
@@ -912,7 +940,7 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
      "note", "resources_indexed", "css_externalized", "search_indexed",
-     "authenticated", "authenticated_by"}
+     "authenticated", "authenticated_by", "origin", "incomplete"}
 )
 
 
@@ -2280,7 +2308,15 @@ def enqueue_archive_job(
     IGNORE 가 활성 중복이면 0행을 넣고 False 를 반환한다 (현재 _register_job 의
     중복-방지 역할 대체). requested_by 는 요청 사용자(web/확장 토큰) — 작업이
     실행돼 archive_logs 한 행이 될 때 그대로 이어진다('내 아카이브' 귀속).
+
+    확장(브라우저) 캡처 페이지(pages.client_captured=1)는 서버가 다시 가져오지
+    않는다(불변식) — 큐에 넣지 않고 False 를 반환한다. 갱신은 확장 재캡처로만.
     """
+    page = conn.execute(
+        "SELECT client_captured FROM pages WHERE url = ?", (url,)
+    ).fetchone()
+    if page is not None and page["client_captured"]:
+        return False
     cur = conn.execute(
         """
         INSERT OR IGNORE INTO archive_jobs

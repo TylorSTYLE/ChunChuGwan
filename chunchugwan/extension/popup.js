@@ -282,6 +282,97 @@ function initLoginOption() {
   });
 }
 
+// ---- 브라우저 캡처 (서버 무요청 — 지금 보는 화면을 그대로) ----
+
+const CAP_UNSUPPORTED = /^(chrome|edge|about|view-source|chrome-extension|moz-extension|devtools|file):/i;
+
+function capturablePopup(u) {
+  return !!u && /^https?:\/\//i.test(u) && !CAP_UNSUPPORTED.test(u);
+}
+
+// 자원 재요청에 광범위 host 권한 필요 — 제스처가 살아있는 팝업에서 받아야 한다.
+async function ensureAllUrls() {
+  if (await chrome.permissions.contains({ origins: ["*://*/*"] })) return true;
+  try { return await chrome.permissions.request({ origins: ["*://*/*"] }); }
+  catch (e) { return false; }
+}
+
+function captureError(res) {
+  if (res.error === "unsupported_page") return "err_unsupported_page";
+  if (res.status === 401) return "err_invalid_token";
+  if (res.status === 403) return "err_no_archive";
+  if (res.status === 413) return "err_too_large";
+  if (res.error === "capture_failed") return "err_capture_failed";
+  if (res.error === "network" || res.status === 0) return "err_network";
+  if (res.status === 400 && res.data && res.data.detail) return res.data.detail;
+  return "err_generic";
+}
+
+async function runBrowserCapture(networkTag) {
+  if (!(await ensureAllUrls())) {
+    showNote("#archive-result", msg("err_permission_all"), "err");
+    return;
+  }
+  const btn = $("#capture-browser");
+  btn.disabled = true;
+  showNote("#archive-result", msg("capture_running"), "");
+  try {
+    const res = await send("captureBrowser", {
+      url: currentUrl, tabId: currentTabId,
+      force: $("#force").checked, network_tag: networkTag || null,
+    });
+    if (res.ok && res.data) {
+      $("#tag-picker").style.display = "none";
+      const inc = res.data.incomplete ? " · " + msg("capture_incomplete") : "";
+      showNote("#archive-result", msg("msg_captured", [msg("status_" + res.data.status)]) + inc, "");
+    } else if (res.needs_network_tag) {
+      await showTagPicker();
+      showNote("#archive-result", msg("capture_needs_tag", [res.host || ""]), "warn");
+    } else {
+      showNote("#archive-result", msg(captureError(res)), "err");
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// 사설 호스트 — 등록된 네트워크 태그 목록을 채워 선택/추가하게 한다.
+async function showTagPicker() {
+  const res = await send("listNetworkTags", {});
+  const sel = $("#tag-select");
+  sel.innerHTML = "";
+  const tags = (res && res.data && res.data.tags) || [];
+  for (const t of tags) {
+    const o = document.createElement("option");
+    o.value = t.id;
+    o.textContent = t.name;
+    sel.appendChild(o);
+  }
+  $("#tag-use").disabled = tags.length === 0;
+  $("#tag-picker").style.display = "block";
+}
+
+function initBrowserCapture() {
+  const btn = $("#capture-browser");
+  if (!capturablePopup(currentUrl) || hostKind(currentUrl) === "loopback") {
+    btn.disabled = true;
+    if (!capturablePopup(currentUrl)) showNote("#archive-result", msg("err_unsupported_page"), "warn");
+  } else {
+    btn.addEventListener("click", () => runBrowserCapture(null));
+  }
+  $("#tag-use").addEventListener("click", () => {
+    const id = $("#tag-select").value;
+    if (id) runBrowserCapture(id);
+  });
+  $("#tag-add").addEventListener("click", async () => {
+    const name = $("#tag-new").value.trim();
+    if (!name) return;
+    const res = await send("createNetworkTag", { name });
+    if (res.ok && res.data) { $("#tag-new").value = ""; await showTagPicker(); }
+    else showNote("#archive-result", msg(res.status === 403 ? "err_tag_perm" : "err_generic"), "err");
+  });
+}
+
 // ---- 히스토리 ----
 
 // 서버의 ISO 8601(UTC 등) 시각을 브라우저(시스템)의 시간대로 표시. 파싱 실패 시 원문.
@@ -337,6 +428,7 @@ async function main() {
   $("#cur-url").textContent = displayUrl(currentUrl);
   await refreshStatus();
   initArchive();
+  initBrowserCapture();
   initNotifyToggle();
   $("#open-dashboard").addEventListener("click", () =>
     send("openDeepLink", { url: currentUrl }));

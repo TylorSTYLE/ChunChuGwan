@@ -17,10 +17,10 @@ import secrets
 import sqlite3
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
-from .. import auth, config, crawler, credentials, crypto, db, netcheck, storage
+from .. import auth, config, crawler, credentials, crypto, db, ingest, netcheck, storage
 from . import audit, permissions
 
 # 스냅샷 파일 응답에서 안내하는 논리 파일 이름 (서빙은 app.snapshot_file 공용)
@@ -85,6 +85,47 @@ def _require_archive(request: Request) -> None:
     key = request.state.api_key
     if key is not None and not key["can_archive"]:
         raise HTTPException(403, "이 키에는 아카이브 권한이 없습니다")
+
+
+def _require_user_token(request: Request) -> int | None:
+    """사용자 귀속 확장 토큰만 — 스냅샷 attribution. 인증 off(loopback)면 None 허용.
+
+    시스템 키(owner=NULL)로는 적재 주체를 정할 수 없어 403 (auth-profiles 와 동일).
+    """
+    key = request.state.api_key
+    if key is None:
+        return None
+    owner_id = key["owner_user_id"]
+    if owner_id is None:
+        raise HTTPException(403, "확장 캡처 적재는 사용자 확장 토큰으로만 가능합니다 (시스템 키 불가)")
+    return owner_id
+
+
+def _require_manage_system(request: Request) -> None:
+    """시스템 관리 권한 가드 — 토큰 소유자의 *현재* 실효 권한으로 판정. 인증 off 면 허용."""
+    key = request.state.api_key
+    if key is None:
+        return
+    owner_id = key["owner_user_id"]
+    if owner_id is None:
+        raise HTTPException(403, "이 작업은 사용자 확장 토큰으로만 가능합니다")
+    with db.connect() as conn:
+        owner = db.get_user_by_id(conn, owner_id)
+    if not permissions.can_manage_system(owner):
+        raise HTTPException(403, "시스템 관리 권한이 없습니다")
+
+
+def _check_ingest_size(request: Request) -> None:
+    """업로드 본문 상한(Content-Length) 가드 — DoS 방지 (config.INGEST_MAX_BYTES)."""
+    cl = request.headers.get("content-length")
+    if cl is None:
+        return
+    try:
+        n = int(cl)
+    except ValueError:
+        return
+    if n > config.INGEST_MAX_BYTES:
+        raise HTTPException(413, f"업로드가 너무 큽니다 — 한도 {config.INGEST_MAX_MB}MB")
 
 
 def _page_json(row: sqlite3.Row) -> dict:
@@ -525,3 +566,129 @@ def api_archive_status(
                 "counts": db.crawl_page_counts(conn, cid),
             })
     return {"jobs": job_out, "crawls": crawl_out}
+
+
+def _ingest_docs(files: list[UploadFile], raw_urls: str, fallback_url: str) -> list:
+    """업로드된 문서 파일들을 ingest.IngestDocument 목록으로 (URL 은 인덱스 정렬)."""
+    try:
+        urls = json.loads(raw_urls) if raw_urls else []
+    except ValueError:
+        urls = []
+    docs = []
+    for i, f in enumerate(files):
+        data = f.file.read()
+        durl = urls[i] if isinstance(urls, list) and i < len(urls) else fallback_url
+        docs.append(ingest.IngestDocument(
+            url=str(durl), filename=f.filename or "",
+            content_type=f.content_type or "application/octet-stream", data=data,
+        ))
+    return docs
+
+
+@router.post("/ingest", status_code=200)
+def api_ingest(
+    request: Request,
+    url: str = Form(...),
+    page_html: UploadFile | None = File(None),
+    raw_html: UploadFile | None = File(None),
+    screenshot: UploadFile | None = File(None),
+    documents: list[UploadFile] | None = File(None),
+    document_urls: str = Form("[]"),
+    final_url: str | None = Form(None),
+    title: str | None = Form(None),
+    http_status: int | None = Form(None),
+    force: bool = Form(False),
+    incomplete: bool = Form(False),
+    capture_env: str | None = Form(None),
+    network_tag: str | None = Form(None),
+    is_document: bool = Form(False),
+):
+    """확장이 브라우저에서 캡처해 올린 산출물을 코어로 적재한다 (동기 응답).
+
+    서버는 대상 URL 을 다시 가져오지 않는다(ingest.py — capture.py 미호출).
+    page_html 은 확장이 자원을 인라인 완성한 단일 파일, raw_html 은 추출·해시용
+    DOM. 문서는 documents(파일)+document_urls(JSON, 인덱스 정렬)로 받는다.
+    사설 호스트인데 태그가 없으면 422 {needs_network_tag, host} 로 응답해 확장이
+    태그를 고르게 한다. 루프백·잘못된 입력은 4xx.
+    """
+    _require_archive(request)
+    owner_id = _require_user_token(request)
+    _check_ingest_size(request)
+
+    env = None
+    if capture_env:
+        try:
+            env = json.loads(capture_env)
+        except ValueError:
+            raise HTTPException(400, "capture_env 가 올바른 JSON 이 아닙니다")
+
+    docs = _ingest_docs(documents or [], document_urls, final_url or url)
+    try:
+        if is_document:
+            if not docs:
+                raise HTTPException(400, "문서 모드에는 문서 파일이 필요합니다")
+            result = ingest.ingest_document(
+                url=url, document=docs[0], final_url=final_url,
+                http_status=http_status, incomplete=incomplete, force=force,
+                network_tag=network_tag, requested_by=owner_id,
+            )
+        else:
+            if page_html is None or raw_html is None:
+                raise HTTPException(400, "page_html 과 raw_html 이 필요합니다")
+            page_bytes = page_html.file.read()
+            raw_bytes = raw_html.file.read()
+            shot = screenshot.file.read() if screenshot is not None else None
+            result = ingest.ingest_capture(
+                url=url,
+                page_html=page_bytes.decode("utf-8", "replace"),
+                raw_html=raw_bytes.decode("utf-8", "replace"),
+                screenshot_png=shot or None,
+                final_url=final_url, title=title, http_status=http_status,
+                documents_in=docs or None, capture_env=env,
+                incomplete=incomplete, force=force,
+                network_tag=network_tag, requested_by=owner_id,
+            )
+    except ingest.NetworkTagRequired as e:
+        raise HTTPException(422, detail={"needs_network_tag": True, "host": e.host})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    audit.log(request, "확장 캡처 적재(API): %s [%s]", result.url, result.status)
+    return {
+        "status": result.status, "url": result.url,
+        "content_hash": result.content_hash, "page_id": result.page_id,
+        "snapshot_id": result.snapshot_id, "changed": result.changed,
+        "incomplete": result.incomplete,
+    }
+
+
+class NetworkTagRequest(BaseModel):
+    """POST /api/v1/network-tags — 로컬 네트워크 태그 생성."""
+
+    name: str
+    description: str = ""
+
+
+@router.get("/network-tags")
+def api_network_tags(request: Request):
+    """로컬 네트워크 태그 목록 — 확장이 사설 호스트 캡처 시 선택. 아카이브 권한."""
+    _require_archive(request)
+    with db.connect() as conn:
+        tags = db.list_network_tags(conn)
+    return {"tags": [
+        {"id": t["id"], "name": t["name"], "description": t["description"]} for t in tags
+    ]}
+
+
+@router.post("/network-tags", status_code=201)
+def api_create_network_tag(request: Request, payload: NetworkTagRequest):
+    """로컬 네트워크 태그 생성 — manage_system 권한 필요 (없으면 목록 선택만 가능)."""
+    _require_manage_system(request)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(400, "태그 이름이 필요합니다")
+    with db.connect() as conn:
+        if db.get_network_tag_by_name(conn, name) is not None:
+            raise HTTPException(409, "같은 이름의 로컬 네트워크 태그가 이미 있습니다")
+        tag = db.create_network_tag(conn, name, payload.description.strip())
+    audit.log(request, "로컬 네트워크 태그 생성(API): %s", name)
+    return {"id": tag["id"], "name": tag["name"], "description": tag["description"]}

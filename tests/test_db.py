@@ -50,6 +50,33 @@ def test_insert_snapshot_rejects_unknown_column(conn):
         db.insert_snapshot(conn, page_id, taken_at="t", bogus="x")
 
 
+def test_provenance_columns_default_server(conn):
+    """마이그레이션으로 추가된 origin/incomplete/client_captured 의 기본값."""
+    page_id = db.get_or_create_page(conn, "https://example.com/x", "example.com", "x-abcd1234")
+    page = conn.execute("SELECT client_captured FROM pages WHERE id = ?", (page_id,)).fetchone()
+    assert page["client_captured"] == 0
+    sid = db.insert_snapshot(
+        conn, page_id, taken_at="2026-06-10T00:00:00+00:00",
+        dir_name="2026-06-10T00-00-00", content_hash="h",
+        final_url="https://example.com/x", http_status=200, changed=1,
+    )
+    snap = conn.execute("SELECT origin, incomplete FROM snapshots WHERE id = ?", (sid,)).fetchone()
+    assert snap["origin"] == "server" and snap["incomplete"] == 0
+
+
+def test_insert_snapshot_accepts_extension_origin(conn):
+    """insert_snapshot 이 origin='extension'/incomplete 를 받는다."""
+    page_id = db.get_or_create_page(conn, "https://example.com/y", "example.com", "y-abcd1234")
+    sid = db.insert_snapshot(
+        conn, page_id, taken_at="2026-06-10T00:00:00+00:00",
+        dir_name="2026-06-10T00-00-00", content_hash="h",
+        final_url="https://example.com/y", http_status=200, changed=1,
+        origin="extension", incomplete=1,
+    )
+    snap = conn.execute("SELECT origin, incomplete FROM snapshots WHERE id = ?", (sid,)).fetchone()
+    assert snap["origin"] == "extension" and snap["incomplete"] == 1
+
+
 def test_list_pages_counts(conn):
     p1 = db.get_or_create_page(conn, "https://example.com/x", "example.com", "x-abcd1234")
     db.get_or_create_page(conn, "https://example.com/y", "example.com", "y-abcd1234")

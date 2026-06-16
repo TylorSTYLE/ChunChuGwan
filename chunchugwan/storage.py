@@ -29,6 +29,13 @@ class SnapshotMeta:
     # 함께 저장된 문서 파일 목록 [{url, file, bytes, sha256, content_type}].
     # files/ 하위 파일은 이 목록에 있는 이름만 서빙된다 (구형 meta 는 None).
     documents: list[dict] | None = None
+    # 캡처 출처 — 'server'(서버 캡처, 기본) | 'extension'(브라우저 확장 클라이언트).
+    origin: str = "server"
+    # 불완전 캡처 여부 (일부 자원·프레임·스크린샷 수집 실패).
+    incomplete: bool = False
+    # 확장 캡처의 브라우저 환경 {viewport_w, viewport_h, dpr, zoom, ua} — 뷰어가
+    # 해상도 차이를 라벨로 보여준다. 서버 캡처는 None.
+    capture_env: dict | None = None
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}

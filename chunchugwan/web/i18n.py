@@ -381,6 +381,21 @@ _EN: dict[str, str] = {
     "이전 스크린샷": "Before screenshot",
     "이후 스크린샷": "After screenshot",
     "픽셀 diff 하이라이트": "Pixel diff highlight",
+    # ---- 브라우저(확장) 클라이언트 캡처 ----
+    "브라우저 캡처": "Browser capture",
+    "불완전": "Incomplete",
+    "브라우저 확장으로 캡처": "Captured via browser extension",
+    "브라우저 확장으로 캡처된 스냅샷입니다. 로그인 상태로 캡처되어 민감 정보가 포함될 수 있으며 모든 사용자에게 보입니다.":
+        "Captured by the browser extension. It may have been captured while logged in, "
+        "so it can contain sensitive information and is visible to all users.",
+    "일부 자원·프레임·스크린샷 수집이 실패한 불완전 캡처입니다.":
+        "Incomplete capture — some resources, frames, or the screenshot failed to be collected.",
+    "로컬(브라우저) 캡처 스냅샷이 포함된 비교입니다 — 브라우저 렌더 환경(해상도·dpr·확대) 차이로 변경이 과장될 수 있습니다.":
+        "This comparison includes a local (browser) capture — differences may be exaggerated "
+        "due to browser rendering environment (resolution, dpr, zoom).",
+    "로컬(브라우저) 캡처 스냅샷은 해상도가 달라 스크린샷 비교를 제공하지 않습니다.":
+        "Screenshot comparison is not available for local (browser) captures because their "
+        "resolution differs.",
     # ---- 로그 (logs / system logs) ----
     "로그 열람 권한이 없습니다": "You do not have permission to view logs",
     # "action|재시도" 는 사이트 상세(실패한 작업) 절에 이미 있다

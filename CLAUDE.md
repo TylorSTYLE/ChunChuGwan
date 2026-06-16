@@ -163,7 +163,9 @@ archive/
                 ├── files/          # (구형 스냅샷만) 문서 파일 — wccg compact 가
                 │                   #   문서 CAS 로 이전한다. 신규 스냅샷은 없음
                 └── meta.json       # url, final_url, 시각, 해시, http 정보,
-                                    #   documents 목록(문서 서빙 화이트리스트)
+                                    #   documents 목록(문서 서빙 화이트리스트),
+                                    #   origin(server|extension)·incomplete·
+                                    #   capture_env(확장 캡처의 viewport·dpr·ua)
 ```
 
 `wccg compact` 이전의 구형 스냅샷(page.html / raw.html / screenshot.png)도
@@ -201,7 +203,11 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   기존 http 페이지는 히스토리 유지를 위해 그대로 둔다). 캡처 폴백 사슬은
   https(검증) → 인증서 오류면 https(검증 무시 — 자체 서명 NAS 등, 실행
   로그에 기록, 문서 다운로드도 verify 해제) → http (스킴 생략 입력 또는
-  연결 실패에 한해)
+  연결 실패에 한해). `client_captured` 는 확장(브라우저) 클라이언트 캡처로
+  적재된 페이지 표식(`ingest.py` 가 1 로 설정) — 1 이면 서버가 그 URL 을 다시
+  가져오지 않는다(스케줄·크롤·재시도·재아카이빙·enqueue 모두 차단:
+  `pipeline._archive_url` 캡처 전 백스톱 + `db.enqueue_archive_job` 가드). 갱신은
+  확장 재캡처(ingest)로만
 - `network_tags` — 로컬 네트워크 태그 (id 는 GUID 자동 발급, 이름 유일,
   설명). 사설 IP 대역 아카이빙은 태그 지정이 필수, 루프백은 항상 금지
   (아키텍처 원칙 7 · netcheck.py). 참조 중인 태그는 삭제 거부. 같은 사설
@@ -216,7 +222,12 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   콘텐츠 동일(unchanged) 실행에서도 기록된다. 사이트 삭제·prune 시 함께 정리
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관.
   `search_indexed` 는 텍스트 검색 인덱스(snapshot_fts) 반영 여부 — 0 이면
-  `wccg search reindex` 백필 대상 (resources_indexed 와 같은 패턴)
+  `wccg search reindex` 백필 대상 (resources_indexed 와 같은 패턴). `origin`
+  은 캡처 출처 `server`(기본) | `extension`(브라우저 클라이언트 캡처), `incomplete`
+  은 일부 자원·프레임·스크린샷 수집이 실패한 불완전 캡처 표식 — 둘 다 뷰어·
+  타임라인 뱃지("브라우저 캡처"·"불완전")로 표시되고, 한쪽이라도 extension 이면
+  diff 의 스크린샷 비교를 숨기고(해상도 의존) 본문 diff 에 경고를 단다. 캡처 환경
+  (viewport·dpr·ua)은 meta.json `capture_env` 에 기록
 - `checks` — 중복으로 저장 생략된 확인 기록
 - `snapshot_resources` — 스냅샷이 /resource/ CAS 로 참조하는 공유 자원
   인덱스 (CAS 이름 = sha256+확장자, 원본 url — 모를 수 있음). 캡처가
@@ -354,7 +365,12 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   저장 (원문은 발급 시 1회 표시). `owner_user_id` NULL=관리자 발급 시스템
   키(공동 관리, `/system/api-keys`), 값=그 사용자 귀속 개인 API Key(확장
   토큰, 본인이 `/settings/api-keys` 에서 발급, 권한은 _api_auth 가 소유자
-  현재 역할로 매 요청 재평가)
+  현재 역할로 매 요청 재평가). REST 쓰기 엔드포인트: `/archive`·`/crawl`·
+  `/auth-profiles`(모두 URL 만 받아 서버가 캡처)와 **`/ingest`**(확장이 브라우저에서
+  직접 캡처한 멀티파트 산출물을 받아 `ingest.py` 가 서버 무요청으로 적재 — 사용자
+  귀속 토큰 전용, 동기 응답, 사설 호스트 무태그면 422 `needs_network_tag`),
+  `/network-tags`(GET 목록 / POST 생성=`manage_system`). 상세는 `docs/API.md`·
+  `docs/EXTENSION_CLIENT_CAPTURE_PLAN.md`
 - `site_credentials` — 아카이빙 대상 사이트 로그인용 외부 자격증명 (사이트별,
   `kind` = http_basic/session/jwt, 라벨 UNIQUE). 비밀은 `WCCG_SECRET_KEY` 로 대칭
   암호화한 암호문(`secret`)만 저장 (`crypto.py` — 원칙 6 예외, replay 위해
@@ -433,7 +449,14 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   선택, `POST /lang`) → Accept-Language → ko. 템플릿은 `_("…")`, 라우트는
   `i18n.t(request, "…")`. 새 UI 문자열 추가 시 en 카탈로그도 채울 것 —
   템플릿 리터럴 키 누락은 `tests/test_i18n.py` 가 검사한다. CLI 는 한국어 유지.
-- diff 뷰: 텍스트 side-by-side + 스크린샷 비교(슬라이더 또는 토글)
+- diff 뷰: 텍스트 side-by-side + 스크린샷 비교(슬라이더 또는 토글). 단, 비교
+  대상 중 하나라도 확장(브라우저) 캡처(`origin=extension`)면 스크린샷 비교를
+  숨기고(로컬 해상도·dpr 의존이라 무의미) 본문 diff 에 렌더 환경 차이 경고를 단다.
+- 브라우저 클라이언트 캡처: 크롬 확장이 현재 페이지를 CDP 로 직접 캡처해
+  `POST /api/v1/ingest` 로 올리면 서버가 코어를 재사용해 적재한다(서버 무요청).
+  스냅샷에 "브라우저 캡처"·"불완전" 뱃지, 로그인 상태 캡처라 민감 정보가 모든
+  사용자에게 보일 수 있음을 캡처 시 고지. 서버측 구현은 `ingest.py`, 설계는
+  `docs/EXTENSION_CLIENT_CAPTURE_PLAN.md` (확장은 `chunchugwan/extension/`)
 
 ## 구현 로드맵
 

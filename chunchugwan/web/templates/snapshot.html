@@ -14,6 +14,12 @@
   {% if snap['authenticated'] %}
   <span class="badge" title="{{ _('로그인 자격증명으로 캡처된 스냅샷입니다 — 소유자/관리자만 볼 수 있습니다.') }}">{{ _("인증됨") }}</span>
   {% endif %}
+  {% if snap['origin'] == 'extension' %}
+  <span class="badge local" title="{{ _('브라우저 확장으로 캡처된 스냅샷입니다. 로그인 상태로 캡처되어 민감 정보가 포함될 수 있으며 모든 사용자에게 보입니다.') }}">{{ _("브라우저 캡처") }}</span>
+  {% endif %}
+  {% if snap['incomplete'] %}
+  <span class="badge incomplete" title="{{ _('일부 자원·프레임·스크린샷 수집이 실패한 불완전 캡처입니다.') }}">{{ _("불완전") }}</span>
+  {% endif %}
   <span class="spacer"></span>
   <a href="/logs?snapshot_id={{ snap['id'] }}">{{ _("아카이빙 로그") }}</a>
   <a href="/page/{{ snap['page_id'] }}">{{ _("타임라인으로") }}</a>

@@ -1747,13 +1747,19 @@ def diff_view(
 
     d = differ.diff_text(texts[0], texts[1])
 
+    # 로컬(브라우저 확장) 캡처가 한쪽이라도 끼면 스크린샷 비교를 제공하지 않는다 —
+    # 실브라우저 렌더라 해상도·dpr·확대가 달라 픽셀 비교가 무의미하다. 본문 diff 는
+    # 제공하되 렌더 환경 차이 경고를 단다.
+    local_capture = old_snap["origin"] == "extension" or new_snap["origin"] == "extension"
+
     shot_ratio = None
-    old_shot_path, new_shot_path = _screenshot_paths(page, old_snap, new_snap)
-    if old_shot_path is not None and new_shot_path is not None:
-        shot_ratio, _ = differ.cached_screenshot_diff(
-            old_shot_path, new_shot_path,
-            f"shotdiff-{old_snap['id']}-{new_snap['id']}",
-        )
+    if not local_capture:
+        old_shot_path, new_shot_path = _screenshot_paths(page, old_snap, new_snap)
+        if old_shot_path is not None and new_shot_path is not None:
+            shot_ratio, _ = differ.cached_screenshot_diff(
+                old_shot_path, new_shot_path,
+                f"shotdiff-{old_snap['id']}-{new_snap['id']}",
+            )
 
     return templates.TemplateResponse(
         request, "diff.html",
@@ -1763,6 +1769,7 @@ def diff_view(
             "rows": _collapse_equal(request, d.rows),
             "from_idx": from_idx, "to_idx": to_idx, "total": len(snaps),
             "old_snap": old_snap, "new_snap": new_snap,
+            "local_capture": local_capture,
             "old_shot": f"/snapshot/{old_snap['id']}/file/screenshot",
             "new_shot": f"/snapshot/{new_snap['id']}/file/screenshot",
             "shot_ratio": shot_ratio,

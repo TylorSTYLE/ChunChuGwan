@@ -12,6 +12,8 @@ tr.d-skip td { text-align: center; color: var(--muted); background: var(--bg-sof
   font-size: 12px; }
 .shots img { max-width: 100%; border: 1px solid var(--border); display: none; }
 .shots img.show { display: block; }
+.diff-warn { background: var(--amber-bg); color: var(--amber); padding: 8px 12px;
+  border-radius: 6px; font-size: 13px; margin: 8px 0; }
 /* 좁은 화면 — side-by-side 를 위(이전)/아래(이후)로 쌓은 unified 형태로 전환.
    동일·삽입·삭제 행은 비어 있거나 중복인 쪽 셀을 숨긴다 (배경색이 이전/이후 구분) */
 @media (max-width: 719px) {
@@ -41,6 +43,10 @@ tr.d-skip td { text-align: center; color: var(--muted); background: var(--bg-sof
   </span>
 </form>
 
+{% if local_capture %}
+<p class="diff-warn">{{ _("로컬(브라우저) 캡처 스냅샷이 포함된 비교입니다 — 브라우저 렌더 환경(해상도·dpr·확대) 차이로 변경이 과장될 수 있습니다.") }}</p>
+{% endif %}
+
 {% if d.identical %}
 <p><span class="badge same">{{ _("동일") }}</span> {{ _("두 스냅샷의 정규화 텍스트가 같습니다.") }}</p>
 {% else %}
@@ -66,6 +72,9 @@ tr.d-skip td { text-align: center; color: var(--muted); background: var(--bg-sof
 {% endif %}
 
 <h3>{{ _("스크린샷 비교") }}</h3>
+{% if local_capture %}
+<p class="muted">{{ _("로컬(브라우저) 캡처 스냅샷은 해상도가 달라 스크린샷 비교를 제공하지 않습니다.") }}</p>
+{% else %}
 {% if shot_ratio is not none %}
 <p class="mono muted">{{ _("변경 픽셀") }} {{ '%.2f%%'|format(shot_ratio * 100) }}</p>
 {% endif %}
@@ -100,4 +109,5 @@ for (const [key, v] of Object.entries(views)) {
   });
 }
 </script>
+{% endif %}
 {% endblock %}

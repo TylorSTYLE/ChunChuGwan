@@ -25,7 +25,9 @@ archive/
     ├── screenshot-mobile.webp  # (선택) 모바일 해상도(390×844) 스크린샷 — 시스템
     │                       #   설정 '캡처 설정'이 켜졌을 때 찍힌 스냅샷에만 있다
     └── meta.json           # url, final_url, 시각, 해시, http 정보,
-                            #   documents 목록 (문서 CAS 참조 — 출처 URL·해시)
+                            #   documents 목록 (문서 CAS 참조 — 출처 URL·해시),
+                            #   origin(server|extension)·incomplete·capture_env
+                            #   (확장 클라이언트 캡처의 viewport·dpr·ua)
 ```
 
 문서 파일은 페이지당 최대 20개·개당 50MB 까지 저장하며(기본값 — 대시보드
