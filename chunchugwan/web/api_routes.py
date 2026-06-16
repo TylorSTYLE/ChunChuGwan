@@ -63,9 +63,7 @@ def _api_auth(request: Request) -> None:
                     401, "토큰 소유자의 권한이 없습니다",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            can_view, can_archive = permissions.token_permissions_for_role(
-                owner["role"]
-            )
+            can_view, can_archive = permissions.token_permissions_for_user(owner)
             key = dict(key)
             key["can_view"] = int(can_view)
             key["can_archive"] = int(can_archive)

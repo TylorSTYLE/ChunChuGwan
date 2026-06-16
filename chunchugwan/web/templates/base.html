@@ -149,6 +149,11 @@ td.mono.muted { white-space: nowrap; }
 .badge.role-pending  { color: var(--amber); background: var(--amber-bg); }
 .badge.role-blocked  { color: var(--red-text); background: var(--red-bg); }
 .badge.role-withdrawn{ color: var(--gray);  background: var(--gray-bg); }
+.perm-overrides { margin-top: 6px; font-size: 12px; }
+.perm-overrides > summary { cursor: pointer; color: var(--muted); }
+.perm-overrides .perm-row { display: block; white-space: nowrap; margin: 3px 0; }
+.perm-overrides .perm-row input { margin-right: 4px; }
+.perm-overrides button { margin-top: 4px; }
 .badge.running { color: var(--blue);  background: var(--blue-bg);
                  animation: badge-pulse 1.4s ease-in-out infinite; }
 @keyframes badge-pulse { 50% { opacity: .45; } }
@@ -284,24 +289,24 @@ button.primary:hover { background: #15803d; }
     <a href="/archive/new">{{ _("새 아카이빙") }}</a>
     {% endif %}
     <a href="/schedules">{{ _("스케줄") }}</a>
-    {% if can_view_logs or system_allowed %}
+    {% if can_view_logs or can_manage_system %}
     <details class="nav-group">
       <summary>{{ _("로그") }}</summary>
       <div class="nav-menu">
         {% if can_view_logs %}<a href="/logs">{{ _("아카이빙 로그") }}</a>{% endif %}
-        {% if system_allowed %}<a href="/system/logs">{{ _("시스템 로그") }}</a>{% endif %}
+        {% if can_manage_system %}<a href="/system/logs">{{ _("시스템 로그") }}</a>{% endif %}
       </div>
     </details>
     {% endif %}
-    {% if system_allowed and needs_human_count %}
+    {% if can_manage_system and needs_human_count %}
     <a href="/archive/needs-human" class="nav-alert">{{ _("사람 확인") }} ({{ needs_human_count }})</a>
     {% endif %}
     {% if system_allowed %}
     <details class="nav-group">
       <summary>{{ _("관리자") }}</summary>
       <div class="nav-menu">
-        <a href="/system/users">{{ _("사용자") }}</a>
-        <a href="/system">{{ _("시스템") }}</a>
+        {% if can_manage_users %}<a href="/system/users">{{ _("사용자") }}</a>{% endif %}
+        {% if can_manage_system %}<a href="/system">{{ _("시스템") }}</a>{% endif %}
       </div>
     </details>
     {% endif %}
@@ -321,7 +326,7 @@ button.primary:hover { background: #15803d; }
   </nav>
 </header>
 {% endblock %}
-{% if system_allowed and needs_human_count %}
+{% if can_manage_system and needs_human_count %}
 <a id="needs-human-banner" class="needs-human-banner"
    href="{% if needs_human_count == 1 %}/archive/jobs/{{ needs_human_jobs[0]['id'] }}/live{% else %}/archive/needs-human{% endif %}">{{ _("사람 확인 필요 — 클릭해서 지금 처리하세요") }}{% if needs_human_count > 1 %} ({{ needs_human_count }}){% endif %}</a>
 {% endif %}
@@ -433,7 +438,7 @@ button.primary:hover { background: #15803d; }
     });
   });
 })();
-{% if system_allowed and needs_human_count %}
+{% if can_manage_system and needs_human_count %}
 /* 라이브 챌린지 전역 배너 — 대기 작업이 있으면 서버가 위에서 바로 렌더한다
    (JS·브라우저 설정과 무관하게 보인다). 여기 폴러는 대기 집합이 바뀌면(다 풀려
    사라지거나 건수가 변하면) 새로고침해 배너를 최신 상태로 유지한다. */

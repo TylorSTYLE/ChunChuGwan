@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 import shutil
@@ -34,9 +35,20 @@ logger = logging.getLogger(__name__)
 
 
 def _require_admin(request: Request) -> None:
-    """관리자 게이트. 로그인 자체는 미들웨어가 보장한다."""
-    if not permissions.system_allowed(request.state.user):
-        raise HTTPException(403, t(request, "관리자만 접근할 수 있습니다"))
+    """/system 영역 게이트 — 경로에 따라 사용자 관리(manage_users) 또는
+    시스템 관리(manage_system) 권한을 요구한다. 로그인 자체는 미들웨어가 보장.
+
+    /system/users·/system/api-keys 는 사용자 관리, 그 외 시스템 설정·백업·복원·
+    네트워크·로그 등은 시스템 관리 권한이다. 두 권한은 세분 권한 오버라이드로
+    분리 부여할 수 있어 한 관리자에게만 사용자 관리를 맡기는 식이 가능하다.
+    """
+    path = request.url.path
+    if path.startswith("/system/users") or path.startswith("/system/api-keys"):
+        if not permissions.can_manage_users(request.state.user):
+            raise HTTPException(403, t(request, "사용자 관리 권한이 없습니다"))
+    else:
+        if not permissions.can_manage_system(request.state.user):
+            raise HTTPException(403, t(request, "시스템 관리 권한이 없습니다"))
 
 
 router = APIRouter(prefix="/system", dependencies=[Depends(_require_admin)])
@@ -714,6 +726,18 @@ def users_view(request: Request, notice: str = "", error: str = ""):
         users = db.list_users(conn)
         invites = db.list_invites(conn)
         mail_on = mailer.mail_enabled(conn)
+    # 세분 권한 편집기용 — 사용자별 실효 권한 + 프리셋과 다른(오버라이드된) 항목
+    user_perms = {
+        u["id"]: {
+            "effective": sorted(
+                db.effective_permissions(u["role"], u["permission_overrides"])
+            ),
+            "overridden": sorted(
+                db.parse_permission_overrides(u["permission_overrides"])
+            ),
+        }
+        for u in users
+    }
     return templates.TemplateResponse(
         request, "users.html",
         {
@@ -723,6 +747,10 @@ def users_view(request: Request, notice: str = "", error: str = ""):
             "roles": db.ASSIGNABLE_ROLES,
             "invitable_roles": db.INVITABLE_ROLES,
             "role_labels": db.ROLE_LABELS,
+            "permission_roles": db.PERMISSION_ROLES,
+            "permissions_catalog": db.PERMISSIONS,
+            "permission_labels": db.PERMISSION_LABELS,
+            "user_perms": user_perms,
             "mail_enabled": mail_on,
             "invite_ttl_days": config.INVITE_TTL_DAYS,
             "notice": notice, "error": error,
@@ -757,7 +785,20 @@ def users_set_role(request: Request, user_id: int, role: str = Form(...)):
                 error=t(request,
                         "탈퇴한 계정의 권한은 변경할 수 없습니다 — 계정 정보를 삭제하세요.")
             )
+        # 라스트-관리자 잠김 방지: 새 역할 프리셋에 manage_users 가 없고, 이 권한을
+        # 가진 다른 활성 사용자가 없으면 거부 (역할 변경은 오버라이드를 초기화한다)
+        if "manage_users" not in db.ROLE_PRESETS.get(role, frozenset()):
+            others = db.count_active_users_with_permission(
+                conn, "manage_users", exclude_user_id=user_id
+            )
+            if others == 0:
+                return _users_redirect(
+                    error=t(request,
+                            "사용자 관리 권한을 가진 마지막 계정입니다 — 역할을 바꿀 수 없습니다.")
+                )
         db.set_role(conn, user_id, role)
+        # 역할 변경 = 새 역할 프리셋으로 초기화 (이전 세분 권한 오버라이드는 비운다)
+        db.set_permission_overrides(conn, user_id, {})
         if role == "blocked":
             db.delete_user_sessions(conn, user_id)
     audit.log(
@@ -767,6 +808,53 @@ def users_set_role(request: Request, user_id: int, role: str = Form(...)):
     return _users_redirect(
         notice=t(request, "{email} 권한을 '{label}'(으)로 변경했습니다.",
                  email=target["email"], label=t(request, db.ROLE_LABELS[role]))
+    )
+
+
+@router.post("/users/{user_id}/permissions")
+async def users_set_permissions(request: Request, user_id: int):
+    """사용자 세분 권한 오버라이드 저장 — 역할 프리셋과 다른 항목만 저장한다.
+
+    폼은 권한별 체크박스(perm_<키>)로, 체크 상태와 프리셋이 다른 권한만
+    오버라이드로 남긴다. 최초 관리자·비활성(탈퇴/차단/대기) 계정은 조정 불가.
+    """
+    form = await request.form()
+    with db.connect() as conn:
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, t(request, "사용자 없음"))
+        if target["is_founder"]:
+            return _users_redirect(
+                error=t(request, "최초 관리자의 권한은 변경할 수 없습니다.")
+            )
+        if target["role"] not in db.PERMISSION_ROLES:
+            return _users_redirect(
+                error=t(request,
+                        "이 계정 상태에서는 세분 권한을 조정할 수 없습니다 — 먼저 역할을 부여하세요.")
+            )
+        preset = db.ROLE_PRESETS.get(target["role"], frozenset())
+        overrides = {}
+        for perm in db.PERMISSIONS:
+            granted = form.get(f"perm_{perm}") is not None
+            if granted != (perm in preset):
+                overrides[perm] = granted
+        # 라스트-관리자 잠김 방지: manage_users 를 마지막 보유자에게서 떼면 거부
+        new_eff = db.effective_permissions(
+            target["role"], json.dumps(overrides)
+        )
+        if "manage_users" not in new_eff:
+            others = db.count_active_users_with_permission(
+                conn, "manage_users", exclude_user_id=user_id
+            )
+            if others == 0:
+                return _users_redirect(
+                    error=t(request,
+                            "사용자 관리 권한을 가진 마지막 계정입니다 — 이 권한은 뗄 수 없습니다.")
+                )
+        db.set_permission_overrides(conn, user_id, overrides)
+    audit.log(request, "사용자 세분 권한 변경: %s", target["email"])
+    return _users_redirect(
+        notice=t(request, "{email} 의 세분 권한을 저장했습니다.", email=target["email"])
     )
 
 

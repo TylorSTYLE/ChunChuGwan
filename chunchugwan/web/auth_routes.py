@@ -535,7 +535,7 @@ def _api_keys_ctx(
     new_token: str = "",
 ) -> dict:
     """개인 API Key(확장 토큰) 화면 컨텍스트 — 본인 토큰 목록, 1회 노출, 파생 권한."""
-    can_view, can_archive = permissions.token_permissions_for_role(user["role"])
+    can_view, can_archive = permissions.token_permissions_for_user(user)
     with db.connect() as conn:
         tokens = db.list_api_keys_for_owner(conn, user["id"])
     return {
@@ -671,7 +671,7 @@ def create_extension_token(
     세션 인증 + 같은 출처 폼 POST 라 CSRF Origin 검사를 정상 통과한다.
     """
     user = request.state.user
-    allowed_view, allowed_archive = permissions.token_permissions_for_role(user["role"])
+    allowed_view, allowed_archive = permissions.token_permissions_for_user(user)
     if not (allowed_view or allowed_archive):
         ctx = _api_keys_ctx(
             user, error=t(request, "현재 권한으로는 API Key 를 발급할 수 없습니다.")

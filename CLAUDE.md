@@ -312,7 +312,17 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   신규 가입·SSO 자동 생성의 초기 권한은 `settings` 의
   `signup_default_role` (pending/viewer/archiver, 기본 pending — 관리자가
   사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
-  관리자로 권한 변경 불가
+  관리자로 권한 변경 불가. **권한은 세분 권한(`db.PERMISSIONS` — view·archive·
+  delete·manage_credentials·manage_system·manage_users·view_authenticated_all)을
+  1차 단위로, 역할은 그 묶음의 프리셋(`db.ROLE_PRESETS`)으로** 둔다. 역할만
+  쓰면 동작은 종전과 동일하고, `users.permission_overrides`(JSON {권한:bool},
+  프리셋과 다른 항목만) 로 사용자별 가감한다. 실효 권한 = 프리셋 ± 오버라이드
+  (`db.effective_permissions`), 모든 라우트·메뉴 가드는 `web.permissions.
+  has_permission`(실효 권한)으로 판정해 한 곳의 변경이 전 경로에 반영된다.
+  역할을 바꾸면 오버라이드는 새 프리셋으로 초기화되고, `manage_users` 마지막
+  활성 보유자에게서는 그 권한을 떼거나 역할을 낮출 수 없다(잠김 방지 —
+  `db.count_active_users_with_permission`). 개인 API Key 권한도 실효 권한에서
+  파생된다. CLI 는 권한 체계 밖(로컬 신뢰), 큐·스케줄·크롤은 등록 시점에만 검사
 - `settings` — 대시보드에서 변경하는 key-value 런타임 설정. 가입 설정
   (`signup_enabled` on/off 기본 on — off 면 `/signup` 차단 + 로그인 화면
   가입 링크 숨김(초대 가입은 허용), `signup_default_role`)과 사이트 아카이브

@@ -299,7 +299,7 @@ def _needs_human_urls(request: Request) -> dict[str, int]:
     serve 의 env 가 다르거나 serve 에 그 플래그가 없어도 대기 작업이 누락 없이
     보이게, 대기 작업의 존재(DB)만으로 안내한다. 진행 중 챌린지 URL 은 관리자
     정보라 관리자일 때만 채운다 (그 외 사용자에겐 빈 dict → 기존처럼 '아카이빙 중')."""
-    if not permissions.system_allowed(getattr(request.state, "user", None)):
+    if not permissions.can_manage_system(getattr(request.state, "user", None)):
         return {}
     with db.connect() as conn:
         return {j["url"]: j["id"] for j in db.list_needs_human_jobs(conn)}
@@ -931,7 +931,7 @@ def site_credentials_view(
 
     비밀은 표시하지 않는다 (라벨·종류·등록 정보만). 캡처 연동은 다음 단계.
     """
-    _require_admin(request)
+    _require_credentials(request)
     with db.connect() as conn:
         site = db.get_site(conn, site_id)
         if site is None:
@@ -974,7 +974,7 @@ def site_credentials_create(
     아니라 검증 메시지(리다이렉트)로 처리한다. 세션 종류는 storage_state JSON
     대신 로그인 흐름을 기록한 HAR 파일을 올려 쿠키를 자동 추출할 수도 있다.
     """
-    _require_admin(request)
+    _require_credentials(request)
     if not crypto.is_configured():
         return _credentials_redirect(
             site_id,
@@ -1026,7 +1026,7 @@ def site_credentials_create(
 @app.post("/sites/{site_id}/credentials/{cred_id}/delete")
 def site_credentials_delete(request: Request, site_id: int, cred_id: int):
     """로그인 자격증명 삭제. 관리자 전용."""
-    _require_admin(request)
+    _require_credentials(request)
     with db.connect() as conn:
         cred = db.get_site_credential(conn, cred_id)
         if cred is None or cred["site_id"] != site_id:
@@ -1048,7 +1048,7 @@ def archive_active(request: Request) -> dict:
     폴링이 이 키의 변화를 보고 새로고침해 상태 배지를 '사람 확인 대기'로 갱신하고,
     전역 배너도 이 키를 읽는다. (serve 의 LIVE_CHALLENGE 설정과 무관 — DB 사실 기준.)"""
     data: dict = {"active": sorted(_active_snapshot())}
-    if permissions.system_allowed(getattr(request.state, "user", None)):
+    if permissions.can_manage_system(getattr(request.state, "user", None)):
         # url 기준 정렬 — 초기 needs_human_urls(=sorted(nh_urls))와 같은 파이썬
         # 코드포인트 순서로 내려보내, 폴링 JS 가 다시 정렬하지 않고 그대로 비교해
         # 비-BMP(이모지 IDN 등) 문자에서 정렬 순서가 어긋나 무한 새로고침 되는 걸 막는다
@@ -1379,7 +1379,7 @@ def _may_view_authenticated(request: Request, snap) -> bool:
         return True
     owner_id = snap["authenticated_by"]
     user = request.state.user
-    if user is not None and user["role"] == "admin":
+    if permissions.can_view_authenticated_all(user):
         return True
     if owner_id is not None:
         if user is not None and user["id"] == owner_id:
@@ -1400,7 +1400,7 @@ def _snapshot_viewer(request: Request) -> "tuple[int | None, bool] | None":
         return None
     user = request.state.user
     if user is not None:
-        return (user["id"], user["role"] == "admin")
+        return (user["id"], permissions.can_view_authenticated_all(user))
     key = getattr(request.state, "api_key", None)
     if key is not None:
         return (key["owner_user_id"], False)
@@ -2006,10 +2006,16 @@ def _require_deleter(request: Request) -> None:
         raise HTTPException(403, t(request, "삭제 권한이 없습니다"))
 
 
+def _require_credentials(request: Request) -> None:
+    """자격증명 관리 가드 (manage_credentials). 사이트 로그인 자격증명 CRUD·연결용."""
+    if not permissions.can_manage_credentials(request.state.user):
+        raise HTTPException(403, t(request, "자격증명 관리 권한이 없습니다"))
+
+
 def _require_admin(request: Request) -> None:
-    """관리자 가드 — 시스템 관리 동작(로그인 자격증명 등). 그 외 계정은 403."""
-    if not permissions.system_allowed(request.state.user):
-        raise HTTPException(403, t(request, "관리자만 접근할 수 있습니다"))
+    """시스템 관리 가드 (manage_system) — 라이브 챌린지 등 시스템 운영 동작."""
+    if not permissions.can_manage_system(request.state.user):
+        raise HTTPException(403, t(request, "시스템 관리 권한이 없습니다"))
 
 
 @app.get("/archive/new", response_class=HTMLResponse)
@@ -2194,7 +2200,7 @@ def _resolve_archive_credential(
     - "__new__" : 새 자격증명을 만들어 그 id 를 연결
     - 숫자       : 그 기존 자격증명을 연결 (URL 도메인 소속인지 검증)
     """
-    if not permissions.system_allowed(request.state.user):
+    if not permissions.can_manage_credentials(request.state.user):
         return None, None
     existing_id = existing_id.strip()
     if not existing_id:
@@ -2228,7 +2234,7 @@ def archive_credentials(request: Request, url: str = "") -> dict:
     내려보내지 않는다 — id·라벨·종류만. URL 이 비었거나 잘못됐거나 사이트가
     없으면 빈 목록.
     """
-    _require_admin(request)
+    _require_credentials(request)
     try:
         site_key = storage.site_key(storage.normalize_url(url)) if url.strip() else ""
     except ValueError:
