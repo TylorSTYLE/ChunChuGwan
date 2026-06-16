@@ -186,7 +186,10 @@
   버전 `chunchugwan.__version__`)·백업/복원·내보내기/가져오기·저장공간 최적화
   (`POST /system/compact`, `wccg compact` 와 동일 — 압축 변환 + 인라인
   스타일 추출 + 자원 참조 백필 + 고아 공유 자원 정리. 대상이 없으면 버튼
-  비활성화)·가입 설정(회원
+  비활성화)·검색 인덱스(`searchindex.verify` 상태 — 색인됨·미색인·과소 색인·
+  orphan 표시 + `POST /system/search/reindex` "전체 다시 색인" 버튼 =
+  `searchindex.reindex_all`, `wccg search reindex --all` 과 동일. FTS5
+  미지원이면 비활성)·가입 설정(회원
   가입 허용 여부 + 가입 초기 권한
   권한없음/보기 전용/아카이브, 기본 권한없음 — `settings` 테이블)·사이트
   아카이브 설정(`POST /system/crawl-settings` — 크롤 기본 옵션 3종 + 실패

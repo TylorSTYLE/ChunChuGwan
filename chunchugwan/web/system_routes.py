@@ -23,7 +23,8 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from starlette.background import BackgroundTask
 
 from .. import __version__, auth, backup as backup_mod
-from .. import config, crawler, crypto, db, documents, mailer, optimize, resources, storage
+from .. import config, crawler, crypto, db, documents, mailer, optimize, resources
+from .. import searchindex, storage
 from . import audit, permissions
 from .i18n import t
 from .templating import filesize, templates
@@ -118,6 +119,7 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "resources_bytes": usage["resources"],
             "documents_bytes": usage["documents"],
             "optimize_pending": sum(optimize.pending_counts()),
+            "search": searchindex.verify(),
             "notice": notice, "error": error,
         },
     )
@@ -275,6 +277,26 @@ def system_compact(request: Request):
                 c.saved_bytes + result.styles_saved_bytes + result.swept_bytes
             ),
         )
+    )
+
+
+@router.post("/search/reindex")
+def system_search_reindex(request: Request):
+    """검색 인덱스 전체 다시 색인 — 인덱스를 비우고 모든 스냅샷을 재색인.
+
+    CLI ``wccg search reindex --all`` 과 같은 진입점(searchindex.reindex_all).
+    과소 색인·orphan·stale(예: compact 이후 문서 본문 미반영)을 한 번에
+    바로잡는다. 동기로 실행되며 첨부 문서 본문 추출까지 다시 하므로 스냅샷이
+    아주 많으면 시간이 걸릴 수 있다. FTS5 미지원 환경에서는 비활성.
+    """
+    if not searchindex.available():
+        return _system_redirect(
+            error=t(request, "검색 인덱스를 쓸 수 없습니다 — 이 SQLite 빌드에 FTS5 가 없습니다.")
+        )
+    count = searchindex.reindex_all()
+    audit.log(request, "검색 인덱스 전체 다시 색인")
+    return _system_redirect(
+        notice=t(request, "검색 인덱스 전체 다시 색인 완료 — 스냅샷 {n}개", n=count)
     )
 
 

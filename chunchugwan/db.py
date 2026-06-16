@@ -1556,6 +1556,73 @@ def reset_search_indexed(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE snapshots SET search_indexed = 0")
 
 
+def mark_snapshot_search_stale(conn: sqlite3.Connection, snapshot_id: int) -> None:
+    """스냅샷을 다시 색인 필요(search_indexed=0)로 되돌린다.
+
+    compact 가 구형 files/ 문서를 CAS 로 이전해 첨부 문서가 새로 생긴 스냅샷,
+    또는 정합성 교정이 색인 누락을 발견한 스냅샷을 백필 대상으로 표시한다.
+    """
+    conn.execute(
+        "UPDATE snapshots SET search_indexed = 0 WHERE id = ?", (snapshot_id,)
+    )
+
+
+# ---- 검색 인덱스 정합성 점검 (searchindex.verify / repair) ----
+# search_indexed 플래그와 실제 FTS 행이 어긋나는 경우를 찾는다 — 플래그가
+# 1 인데 FTS 행이 없거나(백필 실패 등 '거짓말 플래그'), FTS 행이 있는데
+# 스냅샷이 없는(외부 조작·손상) orphan. 정상 경로로는 생기지 않지만,
+# 플래그만으로는 감지할 수 없는 부류라 별도 점검을 둔다.
+
+
+def count_search_indexed(conn: sqlite3.Connection) -> int:
+    """검색 인덱스에 반영됐다고 표시된(search_indexed=1) 스냅샷 수."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots WHERE search_indexed = 1"
+    ).fetchone()["c"]
+
+
+def count_fts_rows(conn: sqlite3.Connection) -> int:
+    """실제 FTS 인덱스 행 수 (테이블 없으면 0)."""
+    if not _table_exists(conn, "snapshot_fts"):
+        return 0
+    return conn.execute("SELECT COUNT(*) AS c FROM snapshot_fts").fetchone()["c"]
+
+
+def list_missing_fts_snapshot_ids(conn: sqlite3.Connection) -> list[int]:
+    """search_indexed=1 인데 FTS 행이 없는 스냅샷 id (과소 색인 — '거짓말 플래그')."""
+    if not _table_exists(conn, "snapshot_fts"):
+        return []
+    return [
+        r["id"]
+        for r in conn.execute(
+            "SELECT s.id FROM snapshots s WHERE s.search_indexed = 1 "
+            "AND NOT EXISTS (SELECT 1 FROM snapshot_fts f WHERE f.rowid = s.id)"
+        )
+    ]
+
+
+def list_orphan_fts_rowids(conn: sqlite3.Connection) -> list[int]:
+    """대응하는 스냅샷이 없는 FTS 행의 rowid (orphan — 정상 경로로는 안 생김)."""
+    if not _table_exists(conn, "snapshot_fts"):
+        return []
+    return [
+        r["rowid"]
+        for r in conn.execute(
+            "SELECT f.rowid AS rowid FROM snapshot_fts f "
+            "WHERE NOT EXISTS (SELECT 1 FROM snapshots s WHERE s.id = f.rowid)"
+        )
+    ]
+
+
+def delete_fts_rows(conn: sqlite3.Connection, rowids: list[int]) -> None:
+    """지정한 rowid 의 FTS 행 삭제 (정합성 교정의 orphan 정리)."""
+    if not rowids or not _table_exists(conn, "snapshot_fts"):
+        return
+    conn.executemany(
+        "DELETE FROM snapshot_fts WHERE rowid = ?", [(r,) for r in rowids]
+    )
+
+
 # 검색 결과 행의 공통 투영 — FTS/LIKE 양쪽이 같은 형태를 돌려준다.
 # (url 은 pages.url 과 snapshot_fts.url 이 겹치므로 반드시 테이블로 한정한다.)
 _SEARCH_SELECT = """

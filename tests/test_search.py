@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from chunchugwan import config, db, deletion, doctext, searchindex, storage
+from chunchugwan import config, db, deletion, doctext, documents, searchindex, storage
 
 
 @pytest.fixture
@@ -231,3 +231,98 @@ def test_document_body_is_searchable(archive):
         }])
         searchindex.index_snapshot(conn, sid)
     assert searchindex.search("첨부문서고유어").total == 1
+
+
+# ---- 정합성 점검 / 교정 (verify / repair) ----
+
+
+def test_verify_clean(archive):
+    _make_snapshot("https://a.com/1", "정상 본문")
+    r = searchindex.verify()
+    assert r.available and r.consistent
+    assert r.indexed == 1 and r.fts_rows == 1 and r.missing == 0 and r.orphan == 0
+
+
+def test_verify_detects_missing(archive):
+    """search_indexed=1 인데 FTS 행이 없는 '거짓말 플래그' 를 잡는다."""
+    sid = _make_snapshot("https://a.com/1", "본문", index=False)
+    with db.connect() as conn:
+        db.mark_snapshot_search_indexed(conn, sid)  # 플래그만 1, FTS 행 없음
+    r = searchindex.verify()
+    assert r.missing == 1 and not r.consistent
+
+
+def test_verify_detects_orphan(archive):
+    """대응 스냅샷이 없는 FTS 행(orphan)을 잡는다."""
+    _make_snapshot("https://a.com/1", "본문")
+    with db.connect() as conn:
+        db.upsert_snapshot_fts(conn, 9999, "고아 본문", None, "u")
+    r = searchindex.verify()
+    assert r.orphan == 1 and not r.consistent
+
+
+def test_repair_fixes_missing_and_orphan(archive):
+    sid = _make_snapshot("https://a.com/1", "재색인대상 본문", index=False)
+    with db.connect() as conn:
+        db.mark_snapshot_search_indexed(conn, sid)        # missing
+        db.upsert_snapshot_fts(conn, 9999, "고아", None, "u")  # orphan
+    result = searchindex.repair()
+    assert result.orphans_removed == 1 and result.reindexed >= 1
+    r = searchindex.verify()
+    assert r.consistent
+    assert searchindex.search("재색인대상").total == 1
+
+
+# ---- compact ↔ 인덱스 정합 (구형 files/ 문서 self-heal) ----
+
+
+def test_compact_marks_legacy_document_stale_and_indexes_body(archive):
+    """구형 files/ 문서를 가진 스냅샷은 compact 후 다시 색인 대상이 되고,
+    재색인하면 문서 본문이 검색된다 (compact ↔ 인덱스 정합)."""
+    blob = _make_docx_bytes("구형문서본문어 내용")
+    norm = storage.normalize_url("https://a.com/legacy")
+    domain, slug, dir_name = "a.com", storage.url_to_slug(norm), "2026-06-01T00-00-00"
+    snap_dir = storage.page_dir(domain, slug) / dir_name
+    (snap_dir / "files").mkdir(parents=True, exist_ok=True)
+    (snap_dir / "content.md").write_text("페이지 본문만", encoding="utf-8")
+    (snap_dir / "files" / "old.docx").write_bytes(blob)
+    storage.write_meta(snap_dir, storage.SnapshotMeta(
+        url=norm, final_url=norm, taken_at="2026-06-01T00:00:00+00:00",
+        content_hash="0" * 64, http_status=200, title=None,
+        documents=[{"url": "https://a.com/old.docx", "file": "old.docx",
+                    "bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest(),
+                    "content_type": "application/octet-stream"}]))
+    with db.connect() as conn:
+        page_id = db.get_or_create_page(conn, norm, domain, slug)
+        sid = db.insert_snapshot(
+            conn, page_id, taken_at="2026-06-01T00:00:00+00:00", dir_name=dir_name,
+            content_hash="0" * 64, final_url=norm, http_status=200, changed=1)
+        searchindex.index_snapshot(conn, sid)  # 색인됨 (문서 본문은 아직 files/ 라 없음)
+    # 색인됐지만 문서 본문은 안 잡힌다
+    assert searchindex.search("구형문서본문어").total == 0
+    with db.connect() as conn:
+        assert db.get_snapshot(conn, sid)["search_indexed"] == 1
+    # compact: files/ → CAS 이전 + snapshot_documents 행 + search_indexed=0 표시
+    documents.compact_legacy_documents()
+    with db.connect() as conn:
+        assert db.get_snapshot(conn, sid)["search_indexed"] == 0  # self-heal 표시
+    assert searchindex.pending_count() == 1
+    # 재색인하면 문서 본문이 검색된다
+    searchindex.backfill_all()
+    assert searchindex.search("구형문서본문어").total == 1
+
+
+# ---- 시스템 메뉴 전체 다시 색인 버튼 ----
+
+
+def test_system_reindex_button(archive, monkeypatch):
+    from fastapi.testclient import TestClient
+    from chunchugwan.web import app as web_app
+    monkeypatch.setattr(config, "AUTH_ENABLED", False)  # loopback — 관리자 허용
+    _make_snapshot("https://a.com/1", "버튼색인 본문", index=False)
+    assert searchindex.pending_count() == 1
+    client = TestClient(web_app.app)
+    res = client.post("/system/search/reindex", follow_redirects=False)
+    assert res.status_code == 303
+    assert searchindex.pending_count() == 0
+    assert searchindex.search("버튼색인").total == 1

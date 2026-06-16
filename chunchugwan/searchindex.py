@@ -141,13 +141,82 @@ def backfill_all() -> int:
 
 
 def reindex_all() -> int:
-    """인덱스를 비우고 전체 스냅샷을 다시 색인 (정규화 규칙 변경 후 등)."""
+    """인덱스를 비우고 전체 스냅샷을 다시 색인 (정규화 규칙 변경·정합성 교정 등).
+
+    FTS 행을 통째로 지우고 모든 스냅샷을 미색인으로 되돌린 뒤 백필하므로,
+    과소 색인·orphan·stale 을 한 번에 모두 바로잡는 완전 교정 수단이다.
+    """
     if not available():
         return 0
     with db.connect() as conn:
         db.clear_search_index(conn)
         db.reset_search_indexed(conn)
     return backfill_all()
+
+
+# ---- 정합성 점검 / 교정 ----
+
+
+@dataclass
+class VerifyReport:
+    """검색 인덱스 정합성 점검 결과."""
+
+    available: bool
+    indexed: int = 0   # search_indexed=1 로 표시된 스냅샷 수
+    pending: int = 0   # search_indexed=0 (미색인 — 정상적인 백필 대상)
+    fts_rows: int = 0  # 실제 FTS 인덱스 행 수
+    missing: int = 0   # 플래그=1 인데 FTS 행이 없음 (과소 색인 — '거짓말 플래그')
+    orphan: int = 0    # FTS 행이 있는데 스냅샷이 없음 (정상 경로로는 안 생김)
+
+    @property
+    def consistent(self) -> bool:
+        """어긋남(과소 색인·orphan)이 없는지. pending 은 정상 상태라 제외."""
+        return self.missing == 0 and self.orphan == 0
+
+
+def verify() -> VerifyReport:
+    """플래그와 실제 FTS 행이 어긋나는지 점검 (순수 카운트 — 디스크 안 읽음)."""
+    with db.connect() as conn:
+        if not db.search_index_available(conn):
+            return VerifyReport(available=False)
+        return VerifyReport(
+            available=True,
+            indexed=db.count_search_indexed(conn),
+            pending=db.count_unindexed_search_snapshots(conn),
+            fts_rows=db.count_fts_rows(conn),
+            missing=len(db.list_missing_fts_snapshot_ids(conn)),
+            orphan=len(db.list_orphan_fts_rowids(conn)),
+        )
+
+
+@dataclass
+class RepairResult:
+    """정합성 교정 결과."""
+
+    available: bool
+    orphans_removed: int = 0  # 삭제한 orphan FTS 행 수
+    reindexed: int = 0        # 다시 색인한 스냅샷 수 (과소 색인 + 기존 pending)
+
+
+def repair() -> RepairResult:
+    """발견한 불일치를 교정 — orphan FTS 행 삭제 + 과소 색인 스냅샷 재색인.
+
+    orphan(스냅샷 없는 FTS 행)을 지우고, 과소 색인(플래그=1·FTS 행 없음)
+    스냅샷을 미색인으로 되돌린 뒤 백필한다. 백필은 기존 pending 도 함께
+    처리하므로, 끝나면 인덱스가 데이터와 일치한다. (전체 비우고 다시 만드는
+    reindex_all 보다 가벼움 — 어긋난 것만 손본다.)
+    """
+    if not available():
+        return RepairResult(available=False)
+    with db.connect() as conn:
+        orphans = db.list_orphan_fts_rowids(conn)
+        db.delete_fts_rows(conn, orphans)
+        for sid in db.list_missing_fts_snapshot_ids(conn):
+            db.mark_snapshot_search_stale(conn, sid)
+    reindexed = backfill_all()
+    return RepairResult(
+        available=True, orphans_removed=len(orphans), reindexed=reindexed
+    )
 
 
 # ---- 검색 (조회) ----
