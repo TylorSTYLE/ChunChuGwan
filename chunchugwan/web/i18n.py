@@ -194,6 +194,14 @@ _EN: dict[str, str] = {
     "권한없음": "No access",
     "차단됨": "Blocked",
     "탈퇴": "Withdrawn",
+    # ---- 세분 권한 라벨 (db.PERMISSION_LABELS, ctx=perm) ----
+    "perm|보기·검색": "View & search",
+    "perm|아카이빙": "Archiving",
+    "perm|삭제": "Delete",
+    "perm|자격증명 관리": "Manage credentials",
+    "perm|시스템 관리": "Manage system",
+    "perm|사용자 관리": "Manage users",
+    "perm|인증 스냅샷 전체 열람": "View all authenticated snapshots",
     # ---- 목록 (index) ----
     "아카이브 목록": "Archived pages",
     "아카이빙이 백그라운드에서 시작되었습니다": "Archiving started in the background",
@@ -529,6 +537,24 @@ _EN: dict[str, str] = {
         "Withdrawn = the user closed their own account (cannot log in) — the role "
         "cannot be restored; deleting the account record frees the email for "
         "sign-up or invites again.",
+    "역할은 권한 묶음(프리셋)입니다 — 아래 '세분 권한'에서 사용자별로 개별 권한을 더하거나 뺄 수 있습니다 (별표 = 프리셋과 다름). 역할을 바꾸면 세분 권한은 프리셋으로 초기화됩니다.":
+        "A role is a preset bundle of permissions — under 'Permissions' below you "
+        "can add or remove individual permissions per user (asterisk = differs from "
+        "the preset). Changing the role resets permissions to that preset.",
+    "세분 권한": "Permissions",
+    "프리셋과 다름": "Differs from preset",
+    "{email} 의 세분 권한을 저장했습니다.": "Saved permissions for {email}.",
+    "이 계정 상태에서는 세분 권한을 조정할 수 없습니다 — 먼저 역할을 부여하세요.":
+        "Permissions cannot be adjusted in this account state — assign a role first.",
+    "사용자 관리 권한을 가진 마지막 계정입니다 — 역할을 바꿀 수 없습니다.":
+        "This is the last account with user-management permission — its role "
+        "cannot be changed.",
+    "사용자 관리 권한을 가진 마지막 계정입니다 — 이 권한은 뗄 수 없습니다.":
+        "This is the last account with user-management permission — that "
+        "permission cannot be removed.",
+    "사용자 관리 권한이 없습니다": "You do not have user-management permission",
+    "시스템 관리 권한이 없습니다": "You do not have system-management permission",
+    "자격증명 관리 권한이 없습니다": "You do not have credential-management permission",
     "활성 세션": "Active sessions",
     "가입일": "Joined",
     "권한 변경": "Change role",

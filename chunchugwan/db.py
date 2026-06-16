@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import threading
@@ -278,7 +279,8 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret         TEXT,               -- NULL = 2FA 미설정
     totp_pending_secret TEXT,               -- 등록 확인 전 임시 시크릿
     totp_last_used_at   TEXT,               -- 마지막으로 사용된 코드의 시간창 (재사용 방지)
-    role                TEXT NOT NULL DEFAULT 'viewer',  -- admin|archiver|viewer|pending|blocked
+    role                TEXT NOT NULL DEFAULT 'viewer',  -- admin|archiver|viewer|pending|blocked (권한 프리셋)
+    permission_overrides TEXT NOT NULL DEFAULT '{}',  -- 프리셋과 다른 세분 권한 가감 (JSON {권한: bool})
     is_founder          INTEGER NOT NULL DEFAULT 0,  -- 최초 등록 관리자 (권한 변경 불가)
     display_name        TEXT,               -- 표시용 이름 (NULL = 이메일로 표시)
     created_at          TEXT NOT NULL
@@ -390,6 +392,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
             UPDATE users SET is_founder = 1
             WHERE id = (SELECT MIN(id) FROM users WHERE role = 'admin')
             """
+        )
+    if cols and "permission_overrides" not in cols:
+        # 역할 프리셋과 다른 세분 권한 가감 — 기본은 빈 dict(프리셋 그대로)
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN permission_overrides TEXT NOT NULL DEFAULT '{}'"
         )
     if cols and "timezone" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'")
@@ -3063,6 +3070,98 @@ ROLE_LABELS = {
     "blocked": "차단됨",
     "withdrawn": "탈퇴",
 }
+
+# 세분 권한 — 역할(role)은 아래 권한들의 묶음(프리셋)이고, 사용자별
+# permission_overrides 로 개별 가감한다. 실효 권한 = 프리셋 ± 오버라이드.
+# 모든 라우트 가드는 web.permissions.has_permission(=실효 권한)으로 판정하므로,
+# 오버라이드가 한 곳에서 전 경로에 반영된다.
+PERMISSIONS = (
+    "view",                    # 아카이브 열람 + 전문 검색 + 아카이빙 로그 (viewer 이상)
+    "archive",                 # 아카이빙 추가·재아카이브·스케줄·크롤·재시도
+    "delete",                  # 스냅샷·페이지·사이트 삭제
+    "manage_credentials",      # 사이트 로그인 자격증명 관리 + 자격증명 연결 아카이빙
+    "manage_system",           # 시스템 설정·백업·복원·네트워크 태그·시스템 로그
+    "manage_users",            # 사용자·초대·시스템 API 키 관리
+    "view_authenticated_all",  # 다른 사용자가 로그인 캡처한 인증 스냅샷 열람
+)
+PERMISSION_LABELS = {
+    "view": "보기·검색",
+    "archive": "아카이빙",
+    "delete": "삭제",
+    "manage_credentials": "자격증명 관리",
+    "manage_system": "시스템 관리",
+    "manage_users": "사용자 관리",
+    "view_authenticated_all": "인증 스냅샷 전체 열람",
+}
+# 역할 프리셋 — 기존 역할 체계의 권한을 그대로 재현한다 (프리셋만으로는
+# 동작이 종전과 동일, 오버라이드를 줄 때만 달라진다).
+ROLE_PRESETS: dict[str, frozenset[str]] = {
+    "admin": frozenset(PERMISSIONS),
+    "archiver": frozenset({"view", "archive", "delete"}),
+    "viewer": frozenset({"view"}),
+    "pending": frozenset(),
+    "blocked": frozenset(),
+    "withdrawn": frozenset(),
+}
+# 오버라이드(가감) 조정을 허용하는 역할 — 로그인해 서비스를 쓸 수 있는 활성
+# 역할만. pending/blocked/withdrawn 은 미들웨어가 접근 자체를 막으므로 제외.
+PERMISSION_ROLES = ("admin", "archiver", "viewer")
+
+
+def parse_permission_overrides(raw: str | None) -> dict[str, bool]:
+    """permission_overrides JSON 을 {권한: 허용여부} dict 로 파싱 (오염·미지정 권한은 무시)."""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: bool(v) for k, v in data.items() if k in PERMISSIONS}
+
+
+def effective_permissions(role: str, overrides_raw: str | None = None) -> frozenset[str]:
+    """역할 프리셋에 사용자 오버라이드를 적용한 실효 권한 집합."""
+    perms = set(ROLE_PRESETS.get(role, frozenset()))
+    for perm, granted in parse_permission_overrides(overrides_raw).items():
+        if granted:
+            perms.add(perm)
+        else:
+            perms.discard(perm)
+    return frozenset(perms)
+
+
+def set_permission_overrides(
+    conn: sqlite3.Connection, user_id: int, overrides: dict[str, bool]
+) -> None:
+    """사용자 세분 권한 오버라이드 저장 (프리셋과 다른 항목만). 최초 관리자는 변경 불가."""
+    clean = {k: bool(v) for k, v in overrides.items() if k in PERMISSIONS}
+    conn.execute(
+        "UPDATE users SET permission_overrides = ? WHERE id = ? AND is_founder = 0",
+        (json.dumps(clean, sort_keys=True), user_id),
+    )
+
+
+def count_active_users_with_permission(
+    conn: sqlite3.Connection, permission: str, *, exclude_user_id: int | None = None
+) -> int:
+    """해당 권한을 실효로 가진 활성 사용자 수 — 라스트-관리자 잠김 방지용.
+
+    활성 = 로그인해 쓸 수 있는 역할(PERMISSION_ROLES). pending/blocked/withdrawn 은
+    오버라이드가 있어도 접근이 막혀 있으므로 세지 않는다.
+    """
+    n = 0
+    for u in conn.execute(
+        "SELECT id, role, permission_overrides FROM users"
+    ).fetchall():
+        if exclude_user_id is not None and u["id"] == exclude_user_id:
+            continue
+        if u["role"] not in PERMISSION_ROLES:
+            continue
+        if permission in effective_permissions(u["role"], u["permission_overrides"]):
+            n += 1
+    return n
 
 
 def _later(seconds: int) -> str:

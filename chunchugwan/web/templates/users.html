@@ -8,6 +8,7 @@
 <p class="muted" style="font-size:12px; max-width:720px">
   {{ _("관리자=전체 관리, 아카이브=아카이빙 가능, 보기 전용=열람만, 권한없음=가입 승인 대기(안내 페이지 외 접근 불가), 차단됨=접근 불가. 권한없음 사용자는 권한을 부여해 승인합니다. 차단하면 해당 사용자의 모든 세션이 즉시 로그아웃됩니다. 최초 등록된 관리자의 권한은 변경할 수 없습니다.") }}
   {{ _("탈퇴=본인이 탈퇴한 계정(로그인 불가) — 권한을 되돌릴 수 없고, 계정 정보를 삭제하면 같은 이메일로 다시 가입하거나 초대할 수 있습니다.") }}
+  {{ _("역할은 권한 묶음(프리셋)입니다 — 아래 '세분 권한'에서 사용자별로 개별 권한을 더하거나 뺄 수 있습니다 (별표 = 프리셋과 다름). 역할을 바꾸면 세분 권한은 프리셋으로 초기화됩니다.") }}
 </p>
 
 <div class="table-wrap wide cards">
@@ -72,6 +73,21 @@
           </select>
           <button type="submit">{{ _("변경", ctx="action") }}</button>
         </form>
+        {% if u['role'] in permission_roles %}
+        <details class="perm-overrides">
+          <summary>{{ _("세분 권한") }}</summary>
+          <form method="post" action="/system/users/{{ u['id'] }}/permissions">
+            {% for perm in permissions_catalog %}
+            <label class="perm-row">
+              <input type="checkbox" name="perm_{{ perm }}"
+                     {% if perm in user_perms[u['id']]['effective'] %}checked{% endif %}>
+              {{ _(permission_labels[perm], ctx="perm") }}{% if perm in user_perms[u['id']]['overridden'] %} <span class="muted" title="{{ _('프리셋과 다름') }}">*</span>{% endif %}
+            </label>
+            {% endfor %}
+            <button type="submit">{{ _("저장") }}</button>
+          </form>
+        </details>
+        {% endif %}
         {% endif %}
       </td>
       <td>

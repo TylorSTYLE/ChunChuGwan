@@ -17,13 +17,15 @@ def _auth_context(request: Request) -> dict:
 
     user = getattr(request.state, "user", None)
     admin = permissions.system_allowed(user)
+    can_manage_system = permissions.can_manage_system(user)
     # 사람 확인 대기 작업은 워커가 기록하는 DB 사실이다 — 대시보드(serve)의
-    # WCCG_LIVE_CHALLENGE 설정과 무관하게, 관리자에겐 대기 작업이 있으면 헤더
-    # 메뉴·배너로 안내한다 (워커와 serve 의 env 가 달라도 누락되지 않게). 대기
-    # 건수는 작은 인덱스 조회(idx_archive_jobs_needs_human) — 평소엔 0 건이라 즉시
-    # 반환된다. 단건 링크용으로 작업 목록(id·url)도 함께 넘긴다.
+    # WCCG_LIVE_CHALLENGE 설정과 무관하게, 시스템 관리자에겐 대기 작업이 있으면
+    # 헤더 메뉴·배너로 안내한다 (워커와 serve 의 env 가 달라도 누락되지 않게).
+    # 대기 건수는 작은 인덱스 조회(idx_archive_jobs_needs_human) — 평소엔 0 건이라
+    # 즉시 반환된다. 단건 링크용으로 작업 목록(id·url)도 함께 넘긴다. 라이브
+    # 챌린지 처리는 manage_system 권한이라, 그 권한자에게만 채운다.
     needs_human_jobs: list = []
-    if admin:
+    if can_manage_system:
         from .. import db
 
         try:
@@ -37,6 +39,9 @@ def _auth_context(request: Request) -> dict:
     return {
         "user": user,
         "system_allowed": admin,
+        "can_manage_system": can_manage_system,
+        "can_manage_users": permissions.can_manage_users(user),
+        "can_manage_credentials": permissions.can_manage_credentials(user),
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
         "can_view_logs": permissions.can_view_logs(user),
