@@ -661,21 +661,33 @@ def change_password(
 def create_extension_token(
     request: Request,
     name: str = Form(...),
+    can_view: bool = Form(False),
+    can_archive: bool = Form(False),
     expiry: str = Form("permanent"),
     custom_days: int = Form(0),
 ):
-    """본인 귀속 개인 API Key(확장 토큰) 발급 — 권한은 현재 역할에서 파생, 원문은 1회만 노출.
+    """본인 귀속 개인 API Key(확장 토큰) 발급 — 권한은 역할 범위 안에서 선택, 원문은 1회만 노출.
 
     세션 인증 + 같은 출처 폼 POST 라 CSRF Origin 검사를 정상 통과한다.
     """
     user = request.state.user
-    can_view, can_archive = permissions.token_permissions_for_role(user["role"])
-    if not (can_view or can_archive):
+    allowed_view, allowed_archive = permissions.token_permissions_for_role(user["role"])
+    if not (allowed_view or allowed_archive):
         ctx = _api_keys_ctx(
             user, error=t(request, "현재 권한으로는 API Key 를 발급할 수 없습니다.")
         )
         return templates.TemplateResponse(
             request, "personal_api_keys.html", ctx, status_code=403
+        )
+    # 선택한 권한을 역할이 허용하는 범위로 클램프 — 권한 상승 방지
+    can_view = can_view and allowed_view
+    can_archive = can_archive and allowed_archive
+    if not (can_view or can_archive):
+        ctx = _api_keys_ctx(
+            user, error=t(request, "권한을 하나 이상 선택하세요.")
+        )
+        return templates.TemplateResponse(
+            request, "personal_api_keys.html", ctx, status_code=400
         )
     name = name.strip()
     name_error = auth.validate_api_key_name(name)

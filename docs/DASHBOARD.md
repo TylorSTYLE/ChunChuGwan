@@ -241,7 +241,8 @@
 - **개인 API Key** (personal_api_keys) — `/settings/api-keys`, 로그인 사용자
   본인용 (개인설정 드롭다운에서 진입). 크롬 확장 등이 `Authorization: Bearer`
   로 `/api/v1` 에 접근할 때 쓰는 본인 귀속 토큰(owner_user_id=본인)을 발급·폐기.
-  권한은 내 역할에서 자동 파생(보기=viewer↑, 아카이브=archiver↑), 발급
+  권한(보기/아카이브)은 발급 시 선택하되 내 역할 범위로 클램프(보기=viewer↑,
+  아카이브=archiver↑ 만 부여, 그 이상은 무시), 발급
   (`POST /settings/api-keys`)·폐기(`POST /settings/api-keys/{id}/delete`)는
   본인 토큰만(IDOR 방어, 타인·시스템 키는 404). 원문은 발급 직후 1회만 표시.
   발급 폼 앵커 `#ext-token-form` — 확장이 미연결 시 이 화면을 연다.
