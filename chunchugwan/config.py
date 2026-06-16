@@ -208,8 +208,10 @@ WEBAUTHN_RP_NAME = "ChunChuGwan"
 WEBAUTHN_ORIGINS = [PUBLIC_URL] if PUBLIC_URL else [f"http://localhost:{DASHBOARD_PORT}"]
 
 # ---- 메일 (초대 발송) ----
-# WCCG_SMTP_HOST 가 설정되면 초대 메일을 발송한다. 미설정 시 초대 링크를
-# 화면에 표시해 관리자가 직접 전달한다.
+# SMTP 설정은 시스템 메뉴(DB settings)에서 등록·변경하거나 아래 환경변수로
+# 둔다. 둘 다 있으면 DB 값이 우선하고, 없는 항목만 환경변수로 폴백한다
+# (mailer.resolve_config). 발송 가능 여부는 mailer.mail_enabled(conn) — 여기
+# 값은 호스트가 어디에도 없을 때의 기본값(빈 문자열)이다.
 SMTP_HOST = os.environ.get("WCCG_SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("WCCG_SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("WCCG_SMTP_USER", "")
@@ -218,11 +220,6 @@ SMTP_FROM = os.environ.get("WCCG_SMTP_FROM", "") or SMTP_USER
 SMTP_TLS = os.environ.get("WCCG_SMTP_TLS", "starttls")  # starttls | ssl | off
 SMTP_TIMEOUT_SECONDS = 10
 INVITE_TTL_DAYS = int(os.environ.get("WCCG_INVITE_TTL_DAYS", "7"))
-
-
-def mail_enabled() -> bool:
-    """메일 발송 설정이 채워졌는지 (테스트에서 monkeypatch 가능하도록 함수)."""
-    return bool(SMTP_HOST)
 
 
 # ---- OIDC (Authentik) ----

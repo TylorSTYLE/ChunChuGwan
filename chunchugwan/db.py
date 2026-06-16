@@ -3365,6 +3365,17 @@ DOCUMENT_MAX_COUNT_KEY = "document_max_count"
 DOCUMENT_MAX_MB_KEY = "document_max_mb"
 DOCUMENT_FETCH_TIMEOUT_KEY = "document_fetch_timeout_seconds"
 
+# 초대 메일 발송 SMTP 설정. 값 해석·환경변수 폴백·비밀번호 복호화는
+# mailer.resolve_config 가 맡는다 (여기 저장된 값이 WCCG_SMTP_* 환경변수보다
+# 우선). 비밀번호는 대칭 암호화한 암호문만 저장한다 (CLAUDE.md 원칙 6 예외 —
+# 외부 SMTP 서버에 replay 해야 하므로 복원 가능, crypto.encrypt).
+SMTP_HOST_KEY = "smtp_host"
+SMTP_PORT_KEY = "smtp_port"
+SMTP_USER_KEY = "smtp_user"
+SMTP_PASSWORD_KEY = "smtp_password"  # crypto.encrypt 암호문 (평문·해시 금지)
+SMTP_FROM_KEY = "smtp_from"
+SMTP_TLS_KEY = "smtp_tls"  # 'starttls' | 'ssl' | 'off'
+
 # 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한.
 # 기본은 권한없음(pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.
 SIGNUP_ROLES = ("pending", "viewer", "archiver")
@@ -3386,6 +3397,11 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
         """,
         (key, value, _utcnow()),
     )
+
+
+def delete_setting(conn: sqlite3.Connection, key: str) -> None:
+    """설정 값 삭제 (없으면 무시) — 기본값/환경변수 폴백으로 되돌린다."""
+    conn.execute("DELETE FROM settings WHERE key = ?", (key,))
 
 
 def signup_enabled(conn: sqlite3.Connection) -> bool:

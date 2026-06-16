@@ -44,8 +44,17 @@
 같은 이메일을 다시 초대하면 새 링크로 교체된다 (이전 링크 무효화).
 토큰은 세션과 동일하게 SHA-256 해시만 DB 에 저장된다.
 
-`WCCG_SMTP_HOST` 가 설정되어 있으면 초대 메일을 발송하고, 없으면 초대
-링크가 화면에 표시되므로 관리자가 직접 전달하면 된다.
+SMTP 서버가 설정되어 있으면 초대 메일을 발송하고, 없으면 초대 링크가
+화면에 표시되므로 관리자가 직접 전달하면 된다. SMTP 설정은 **시스템 메뉴의
+메일(SMTP) 설정**(`/system`, 관리자 전용)에서 등록·변경하거나 아래
+`WCCG_SMTP_*` 환경변수로 둘 수 있다. 둘 다 있으면 **시스템 메뉴에서 저장한
+값이 우선**하고, 없는 항목만 환경변수로 폴백한다. 로그인 비밀번호는 외부
+SMTP 서버에 그대로 보내야(replay) 하므로, 사이트 로그인 자격증명과 같이
+`WCCG_SECRET_KEY` 로 대칭 암호화한 암호문으로만 저장된다 (평문·해시 금지 —
+아키텍처 원칙 6 예외). 키가 없으면 시스템 메뉴에서 비밀번호를 저장할 수
+없지만 호스트 등 다른 값은 저장되고, `WCCG_SMTP_PASSWORD` 환경변수는 그대로
+쓸 수 있다. '테스트 메일 보내기'로 저장된 설정을 관리자 본인 주소로
+확인할 수 있다.
 
 ## 가입 / 2FA
 
@@ -81,10 +90,10 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 2단계를 건너뛴다.
 | `WCCG_OIDC_ISSUER` | (없음) | Authentik issuer URL (예: `https://auth.example.com/application/o/chunchugwan`) |
 | `WCCG_OIDC_CLIENT_ID` | (없음) | OIDC 클라이언트 ID |
 | `WCCG_OIDC_CLIENT_SECRET` | (없음) | OIDC 클라이언트 시크릿 |
-| `WCCG_SMTP_HOST` | (없음) | 초대 메일 발송 SMTP 호스트 — 미설정 시 초대 링크를 화면에 표시 |
+| `WCCG_SMTP_HOST` | (없음) | 초대 메일 발송 SMTP 호스트 — 미설정 시 초대 링크를 화면에 표시. 시스템 메뉴 설정이 우선 |
 | `WCCG_SMTP_PORT` | `587` | SMTP 포트 |
 | `WCCG_SMTP_USER` | (없음) | SMTP 로그인 사용자 (없으면 인증 생략) |
-| `WCCG_SMTP_PASSWORD` | (없음) | SMTP 로그인 패스워드 |
+| `WCCG_SMTP_PASSWORD` | (없음) | SMTP 로그인 패스워드 (시스템 메뉴 저장 시 `WCCG_SECRET_KEY` 로 암호화 보관) |
 | `WCCG_SMTP_FROM` | `WCCG_SMTP_USER` | 발신자 주소 |
 | `WCCG_SMTP_TLS` | `starttls` | `starttls` \| `ssl` \| `off` |
 | `WCCG_INVITE_TTL_DAYS` | `7` | 초대 링크 수명 (일) |
