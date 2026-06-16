@@ -16,7 +16,7 @@
   </form>
   {% if oidc_enabled %}
   <div class="alt">
-    <a href="/auth/oidc/login?next={{ next | urlencode }}">{{ _("Authentik으로 로그인 →") }}</a>
+    <a href="/auth/oidc/login?next={{ next | urlencode }}">{{ _("SSO 로그인 →") }}</a>
   </div>
   {% endif %}
   {% if signup_enabled %}
