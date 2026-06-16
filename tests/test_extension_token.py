@@ -157,7 +157,8 @@ def test_account_issues_owner_token(client):
     _login(client, "viewer@test.co")
     r = client.post(
         "/settings/api-keys",
-        data={"name": "chrome-ext", "expiry": "permanent"}, follow_redirects=False,
+        data={"name": "chrome-ext", "can_view": "on", "expiry": "permanent"},
+        follow_redirects=False,
     )
     assert r.status_code == 303
     assert "new_token=wccg_" in r.headers["location"]
@@ -165,27 +166,81 @@ def test_account_issues_owner_token(client):
     with db.connect() as conn:
         owned = db.list_api_keys_for_owner(conn, uid)
     assert len(owned) == 1 and owned[0]["name"] == "chrome-ext"
-    # viewer 역할 → 보기만 파생
+    # 보기만 선택 → 보기 권한만
     assert owned[0]["can_view"] == 1 and owned[0]["can_archive"] == 0
 
 
-def test_account_archiver_token_gets_archive_perm(client):
+def test_account_archiver_can_select_archive_perm(client):
     _login(client, "arch@test.co")
     client.post(
         "/settings/api-keys",
-        data={"name": "ext", "expiry": "1d"}, follow_redirects=False,
+        data={"name": "ext", "can_archive": "on", "expiry": "1d"},
+        follow_redirects=False,
     )
     with db.connect() as conn:
         owned = db.list_api_keys_for_owner(conn, _uid("arch@test.co"))
-    assert owned[0]["can_archive"] == 1
+    assert owned[0]["can_view"] == 0 and owned[0]["can_archive"] == 1
     assert owned[0]["expires_at"] is not None
+
+
+def test_account_archiver_can_select_both_perms(client):
+    _login(client, "arch@test.co")
+    client.post(
+        "/settings/api-keys",
+        data={"name": "ext", "can_view": "on", "can_archive": "on",
+              "expiry": "permanent"},
+        follow_redirects=False,
+    )
+    with db.connect() as conn:
+        owned = db.list_api_keys_for_owner(conn, _uid("arch@test.co"))
+    assert owned[0]["can_view"] == 1 and owned[0]["can_archive"] == 1
+
+
+def test_account_requires_one_permission(client):
+    _login(client, "arch@test.co")
+    r = client.post(
+        "/settings/api-keys",
+        data={"name": "ext", "expiry": "permanent"}, follow_redirects=False,
+    )
+    assert r.status_code == 400
+    with db.connect() as conn:
+        assert db.list_api_keys_for_owner(conn, _uid("arch@test.co")) == []
+
+
+def test_account_viewer_cannot_escalate_to_archive(client):
+    # viewer 가 아카이브를 골라도 역할 범위로 클램프되어 보기만 부여
+    _login(client, "viewer@test.co")
+    r = client.post(
+        "/settings/api-keys",
+        data={"name": "ext", "can_view": "on", "can_archive": "on",
+              "expiry": "permanent"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    with db.connect() as conn:
+        owned = db.list_api_keys_for_owner(conn, _uid("viewer@test.co"))
+    assert owned[0]["can_view"] == 1 and owned[0]["can_archive"] == 0
+
+
+def test_account_viewer_archive_only_rejected(client):
+    # viewer 가 아카이브만 고르면 클램프 후 권한이 없어 발급 거부
+    _login(client, "viewer@test.co")
+    r = client.post(
+        "/settings/api-keys",
+        data={"name": "ext", "can_archive": "on", "expiry": "permanent"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 400
+    with db.connect() as conn:
+        assert db.list_api_keys_for_owner(conn, _uid("viewer@test.co")) == []
 
 
 def test_account_revokes_own_token(client):
     _login(client, "viewer@test.co")
     client.post(
         "/settings/api-keys",
-        data={"name": "ext", "expiry": "permanent"}, follow_redirects=False,
+        data={"name": "ext", "can_view": "on", "expiry": "permanent"},
+        follow_redirects=False,
     )
     uid = _uid("viewer@test.co")
     with db.connect() as conn:

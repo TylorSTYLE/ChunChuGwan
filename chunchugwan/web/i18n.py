@@ -780,14 +780,13 @@ _EN: dict[str, str] = {
     "개인 API Key": "Personal API Key",
     "크롬 확장 등 외부 도구가 쓰는 본인 전용 API Key 는 별도 화면에서 관리합니다.":
         "Manage your personal API Key for the Chrome extension and other tools on its own page.",
-    "크롬 확장이 Authorization: Bearer 헤더로 /api/v1 에 접근할 때 쓰는 본인 전용 API Key 입니다. 권한은 내 역할에서 자동으로 부여되며, 원문은 발급 직후 한 번만 표시됩니다. 폐기하면 그 키를 쓰는 확장의 접근이 즉시 차단됩니다.":
+    "크롬 확장이 Authorization: Bearer 헤더로 /api/v1 에 접근할 때 쓰는 본인 전용 API Key 입니다. 권한(보기·아카이브)은 발급 시 내 역할 범위 안에서 선택하며, 원문은 발급 직후 한 번만 표시됩니다. 폐기하면 그 키를 쓰는 확장의 접근이 즉시 차단됩니다.":
         "Your personal API Key for the Chrome extension to access /api/v1 with an "
-        "Authorization: Bearer header. Permissions are granted automatically from your "
-        "role, and the key is shown only once right after issuing. Revoking it cuts "
-        "off the extension using it immediately.",
+        "Authorization: Bearer header. Pick its permissions (view/archive) when issuing, "
+        "within your role's limits; the key is shown only once right after issuing. "
+        "Revoking it cuts off the extension using it immediately.",
     "발급한 API Key 가 없습니다.": "No API Keys issued yet.",
     "이름 (예: chrome-ext)": "Name (e.g. chrome-ext)",
-    "이 키에 부여될 권한:": "Permissions for this key:",
     "현재 권한으로는 API Key 를 발급할 수 없습니다.": "Your current role can't issue API Keys.",
     "{name} 키를 폐기할까요? 이 키를 쓰는 확장의 접근이 즉시 차단됩니다.":
         "Revoke the key '{name}'? The extension using it loses access immediately.",

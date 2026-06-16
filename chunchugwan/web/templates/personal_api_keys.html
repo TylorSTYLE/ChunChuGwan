@@ -7,7 +7,7 @@
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
   <p class="muted" style="font-size:12px; max-width:680px">
-    {{ _("크롬 확장이 Authorization: Bearer 헤더로 /api/v1 에 접근할 때 쓰는 본인 전용 API Key 입니다. 권한은 내 역할에서 자동으로 부여되며, 원문은 발급 직후 한 번만 표시됩니다. 폐기하면 그 키를 쓰는 확장의 접근이 즉시 차단됩니다.") }}
+    {{ _("크롬 확장이 Authorization: Bearer 헤더로 /api/v1 에 접근할 때 쓰는 본인 전용 API Key 입니다. 권한(보기·아카이브)은 발급 시 내 역할 범위 안에서 선택하며, 원문은 발급 직후 한 번만 표시됩니다. 폐기하면 그 키를 쓰는 확장의 접근이 즉시 차단됩니다.") }}
   </p>
 
   {% if new_token %}
@@ -64,6 +64,8 @@
         id="ext-token-form" style="margin-top:8px">
     <input type="text" name="name" placeholder="{{ _('이름 (예: chrome-ext)') }}"
            size="20" maxlength="50" required>
+    <label><input type="checkbox" name="can_view" checked> {{ _("보기") }}</label>
+    {% if ext_can_archive %}<label><input type="checkbox" name="can_archive"> {{ _("아카이브", ctx="perm") }}</label>{% endif %}
     <select name="expiry" id="ext-token-expiry">
       {% for value, label in ext_expiry_options %}
       <option value="{{ value }}">{{ _(label) }}</option>
@@ -74,11 +76,6 @@
            title="{{ _('만료까지 일 수') }}">
     <button type="submit">{{ _("발급") }}</button>
   </form>
-  <p class="muted" style="font-size:12px; margin:4px 0">
-    {{ _("이 키에 부여될 권한:") }}
-    <span class="badge role-viewer">{{ _("보기") }}</span>
-    {% if ext_can_archive %}<span class="badge role-archiver">{{ _("아카이브", ctx="perm") }}</span>{% endif %}
-  </p>
   <script>
   /* 만료 '사용자 지정' 선택 시에만 일 수 입력을 노출 */
   (function () {
