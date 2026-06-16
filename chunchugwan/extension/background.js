@@ -235,6 +235,292 @@ async function collectAuth(pageUrl, tabId) {
   return { kind: "session", storage_state: capsule };
 }
 
+// ---- 브라우저 클라이언트 캡처 (CDP 풀페이지 + 자원/문서 재요청 + ingest 업로드) ----
+//
+// 서버를 통하지 않고 브라우저 내부에서 현재 페이지를 캡처해 POST /api/v1/ingest 로
+// 올린다. 자원은 background fetch(host 권한 → CORS 우회, cache:'force-cache' 로 이미
+// 로드된 캐시 우선)로 받아 page 컨텍스트에서 인라인하고, 스크린샷은 chrome.debugger
+// (CDP captureBeyondViewport 풀페이지)로 찍는다. 서버는 대상 URL 을 다시 가져오지 않는다.
+
+const MAX_RESOURCE_BYTES = 5 * 1024 * 1024;        // 자원 1개 상한
+const MAX_TOTAL_RESOURCE_BYTES = 30 * 1024 * 1024; // 인라인 합계 상한 (업로드 캡 여유)
+const MAX_DOC_BYTES = 50 * 1024 * 1024;            // 문서 1개 상한
+const DOC_LIMIT = 20;                              // 페이지당 문서 수 상한
+
+// 캡처할 수 없는 페이지 (debugger 부착 불가 — chrome://, 웹스토어, 확장 페이지 등)
+const UNSUPPORTED_RE =
+  /^(chrome|edge|about|view-source|chrome-extension|moz-extension|devtools|file):/i;
+
+function isCapturable(url) {
+  if (!url || !/^https?:\/\//i.test(url)) return false;
+  if (UNSUPPORTED_RE.test(url)) return false;
+  if (/^https?:\/\/(chrome\.google\.com\/webstore|chromewebstore\.google\.com)/i.test(url))
+    return false;
+  return true;
+}
+
+function bufToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function b64ToBlob(b64, type) {
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type });
+}
+
+// CSS url()/@import 의 상대 참조를 css 파일 URL 기준 절대 URL 로 (resources._absolutize_css_refs 와 동일 정책)
+function absolutizeCss(css, baseUrl) {
+  const SAFE = /^(data:|https?:|\/\/|#|\/resource\/)/i;
+  return css
+    .replace(/url\(\s*(['"]?)([^)'"]+)\1\s*\)/gi, (mm, q, ref) => {
+      const r = ref.trim();
+      if (SAFE.test(r)) return mm;
+      try { return `url(${q}${new URL(r, baseUrl).href}${q})`; } catch (e) { return mm; }
+    })
+    .replace(/@import\s+(['"])([^'"]+)\1/gi, (mm, q, ref) => {
+      if (SAFE.test(ref)) return mm;
+      try { return `@import ${q}${new URL(ref, baseUrl).href}${q}`; } catch (e) { return mm; }
+    });
+}
+
+// 페이지 컨텍스트에서 실행 — DOM 직렬화 + 자원/문서 URL 수집 + 뷰포트. 자체 완결 함수.
+function grabPageInfo() {
+  const abs = (u) => { try { return new URL(u, location.href).href; } catch (e) { return null; } };
+  const http = (u) => u && /^https?:\/\//i.test(u);
+  const res = new Set();
+  document.querySelectorAll("img[src]").forEach((el) => {
+    const u = abs(el.getAttribute("src")); if (http(u)) res.add(u);
+  });
+  document.querySelectorAll("img[srcset], source[srcset]").forEach((el) => {
+    (el.getAttribute("srcset") || "").split(",").forEach((p) => {
+      const u = abs((p.trim().split(/\s+/)[0]) || ""); if (http(u)) res.add(u);
+    });
+  });
+  document.querySelectorAll('link[rel~="stylesheet"][href]').forEach((el) => {
+    const u = abs(el.getAttribute("href")); if (http(u)) res.add(u);
+  });
+  document.querySelectorAll("video[poster]").forEach((el) => {
+    const u = abs(el.getAttribute("poster")); if (http(u)) res.add(u);
+  });
+  const DOC_EXT = /\.(pdf|docx?|pptx?|xlsx?|hwpx?|odt|odp|ods|rtf|epub)(\?|#|$)/i;
+  const docs = new Set();
+  document.querySelectorAll("a[href]").forEach((el) => {
+    const u = abs(el.getAttribute("href")); if (http(u) && DOC_EXT.test(u)) docs.add(u);
+  });
+  // 교차출처 iframe 은 페이지 컨텍스트에서 DOM 직렬화 불가 — 있으면 불완전 표시
+  // (CDP 풀페이지 스크린샷은 시각적으로 담는다). 동일출처 iframe 은 outerHTML 에 포함.
+  let crossFrames = 0;
+  document.querySelectorAll("iframe").forEach((f) => {
+    try { void f.contentDocument; if (!f.contentDocument && f.src) crossFrames++; }
+    catch (e) { crossFrames++; }
+  });
+  const doctype = document.doctype ? "<!DOCTYPE " + document.doctype.name + ">" : "";
+  return {
+    raw_html: doctype + document.documentElement.outerHTML,
+    final_url: location.href,
+    title: document.title || "",
+    resources: [...res],
+    doc_links: [...docs],
+    cross_frames: crossFrames,
+    viewport_w: window.innerWidth,
+    viewport_h: window.innerHeight,
+    dpr: window.devicePixelRatio || 1,
+  };
+}
+
+// 페이지 컨텍스트에서 실행 — 자원 맵으로 단일 파일 HTML 생성 (실 DOM 기준). 자체 완결.
+// map: { absUrl: {data:"data:…"} | {css:"<absolutized css text>"} }
+function inlinePageWithMap(map) {
+  const abs = (u) => { try { return new URL(u, location.href).href; } catch (e) { return null; } };
+  const root = document.documentElement.cloneNode(true);
+  root.querySelectorAll("script").forEach((el) => el.remove()); // 샌드박스서 미실행 — 용량·노이즈 제거
+  root.querySelectorAll("img[src]").forEach((el) => {
+    const e = map[abs(el.getAttribute("src"))];
+    if (e && e.data) el.setAttribute("src", e.data);
+    el.removeAttribute("srcset"); el.removeAttribute("loading");
+  });
+  root.querySelectorAll("source[srcset]").forEach((el) => el.removeAttribute("srcset"));
+  root.querySelectorAll("video[poster]").forEach((el) => {
+    const e = map[abs(el.getAttribute("poster"))]; if (e && e.data) el.setAttribute("poster", e.data);
+  });
+  root.querySelectorAll('link[rel~="stylesheet"][href]').forEach((el) => {
+    const e = map[abs(el.getAttribute("href"))];
+    if (e && e.css != null) {
+      const style = document.createElement("style");
+      style.textContent = e.css;
+      el.replaceWith(style);
+    }
+  });
+  const doctype = document.doctype ? "<!DOCTYPE " + document.doctype.name + ">" : "";
+  return doctype + root.outerHTML;
+}
+
+// 자원 재요청 — host 권한으로 CORS 우회, 캐시 우선. CSS 는 url() 절대화한 텍스트로.
+async function fetchResources(urls) {
+  const map = {};
+  let total = 0;
+  let incomplete = false;
+  for (const url of urls) {
+    if (total >= MAX_TOTAL_RESOURCE_BYTES) { incomplete = true; break; }
+    try {
+      const resp = await fetch(url, { credentials: "include", cache: "force-cache" });
+      if (!resp.ok) { incomplete = true; continue; }
+      const ct = (resp.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+      const buf = await resp.arrayBuffer();
+      if (buf.byteLength > MAX_RESOURCE_BYTES) { incomplete = true; continue; }
+      total += buf.byteLength;
+      if (ct === "text/css" || /\.css(\?|#|$)/i.test(url)) {
+        map[url] = { css: absolutizeCss(new TextDecoder("utf-8").decode(buf), url) };
+      } else {
+        map[url] = { data: "data:" + (ct || "application/octet-stream") + ";base64," + bufToBase64(buf) };
+      }
+    } catch (e) { incomplete = true; }
+  }
+  return { map, incomplete };
+}
+
+// 페이지가 링크한 문서 재요청 (한도 내). 반환: [{url, filename, content_type, blob}]
+async function fetchDocuments(urls) {
+  const out = [];
+  for (const url of (urls || []).slice(0, DOC_LIMIT)) {
+    try {
+      const resp = await fetch(url, { credentials: "include", cache: "force-cache" });
+      if (!resp.ok) continue;
+      const ct = (resp.headers.get("content-type") || "application/octet-stream").split(";")[0].trim();
+      const buf = await resp.arrayBuffer();
+      if (buf.byteLength > MAX_DOC_BYTES) continue;
+      let name = "document";
+      try { name = decodeURIComponent(new URL(url).pathname.split("/").pop() || "") || "document"; }
+      catch (e) { /* keep default */ }
+      out.push({ url, filename: name, content_type: ct, blob: new Blob([buf], { type: ct }) });
+    } catch (e) { /* 개별 문서 실패는 건너뛴다 */ }
+  }
+  return out;
+}
+
+// CDP 풀페이지 스크린샷 (captureBeyondViewport) — base64 PNG 또는 null.
+async function captureFullPage(tabId) {
+  const target = { tabId };
+  try {
+    await chrome.debugger.attach(target, "1.3");
+  } catch (e) {
+    return null; // 부착 실패 (제약 페이지·이미 부착됨)
+  }
+  try {
+    let clip = null;
+    try {
+      const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+      const cs = metrics && (metrics.cssContentSize || metrics.contentSize);
+      if (cs) clip = { x: 0, y: 0, width: Math.ceil(cs.width), height: Math.ceil(cs.height), scale: 1 };
+    } catch (e) { /* 메트릭 실패 — clip 없이 시도 */ }
+    const params = { format: "png", captureBeyondViewport: true, fromSurface: true };
+    if (clip) params.clip = clip;
+    const shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", params);
+    return shot && shot.data ? shot.data : null;
+  } catch (e) {
+    return null;
+  } finally {
+    try { await chrome.debugger.detach(target); } catch (e) { /* 무시 */ }
+  }
+}
+
+// 멀티파트 ingest 업로드 — 토큰은 헤더로만 (apiFetch 는 JSON 전용이라 별도).
+async function uploadIngest(form) {
+  const { base_url, token } = await getConfig();
+  if (!base_url) return { ok: false, status: 0, error: "not_connected" };
+  const headers = { Accept: "application/json" };
+  if (token) headers["Authorization"] = "Bearer " + token;
+  let resp;
+  try {
+    resp = await fetch(base_url + "/api/v1/ingest", { method: "POST", headers, body: form });
+  } catch (e) {
+    return { ok: false, status: 0, error: "network" };
+  }
+  let data = null;
+  try { data = await resp.json(); } catch (e) { /* 비 JSON */ }
+  return { ok: resp.ok, status: resp.status, data };
+}
+
+// 현재 페이지를 브라우저에서 캡처해 ingest 로 올린다.
+async function captureAndIngest(payload) {
+  const { url, tabId, force, network_tag } = payload || {};
+  if (tabId == null || !isCapturable(url)) {
+    return { ok: false, status: 0, error: "unsupported_page" };
+  }
+  let grab;
+  try {
+    const r = await chrome.scripting.executeScript({ target: { tabId }, func: grabPageInfo });
+    grab = r && r[0] && r[0].result;
+  } catch (e) {
+    return { ok: false, status: 0, error: "capture_failed" };
+  }
+  if (!grab) return { ok: false, status: 0, error: "capture_failed" };
+
+  const { map, incomplete: resIncomplete } = await fetchResources(grab.resources || []);
+
+  let pageHtml = grab.raw_html;
+  let inlineFailed = false;
+  try {
+    const r = await chrome.scripting.executeScript({
+      target: { tabId }, func: inlinePageWithMap, args: [map],
+    });
+    if (r && r[0] && typeof r[0].result === "string") pageHtml = r[0].result;
+    else inlineFailed = true;
+  } catch (e) { inlineFailed = true; /* 인라인 실패 — raw_html 그대로 */ }
+
+  const shotB64 = await captureFullPage(tabId);
+  const docs = await fetchDocuments(grab.doc_links);
+  const incomplete =
+    !!resIncomplete || inlineFailed || !shotB64 || (grab.cross_frames || 0) > 0;
+
+  const form = new FormData();
+  form.set("url", url);
+  form.set("final_url", grab.final_url || url);
+  form.set("title", grab.title || "");
+  form.set("force", force ? "true" : "false");
+  form.set("incomplete", incomplete ? "true" : "false");
+  form.set("capture_env", JSON.stringify({
+    viewport_w: grab.viewport_w, viewport_h: grab.viewport_h,
+    dpr: grab.dpr, ua: navigator.userAgent,
+  }));
+  if (network_tag) form.set("network_tag", network_tag);
+  form.set("page_html", new Blob([pageHtml], { type: "text/html" }), "page.html");
+  form.set("raw_html", new Blob([grab.raw_html], { type: "text/html" }), "raw.html");
+  if (shotB64) form.set("screenshot", b64ToBlob(shotB64, "image/png"), "screenshot.png");
+  const docUrls = [];
+  for (const d of docs) { form.append("documents", d.blob, d.filename); docUrls.push(d.url); }
+  form.set("document_urls", JSON.stringify(docUrls));
+
+  const res = await uploadIngest(form);
+  if (res.status === 422 && res.data && res.data.detail && res.data.detail.needs_network_tag) {
+    return { ok: false, status: 422, needs_network_tag: true, host: res.data.detail.host };
+  }
+  if (res.data) res.incomplete = incomplete;
+  await trackIngestResult(res, url);
+  return res;
+}
+
+// ingest 는 동기 응답이라 폴링이 불필요하나, 결과를 즉시 데스크톱 알림으로 알린다(옵션 on).
+async function trackIngestResult(res, url) {
+  if (!(await notifyEnabled())) return;
+  if (!res || !res.ok || !res.data) return;
+  const { base_url } = await getConfig();
+  if (!base_url) return;
+  const st = res.data;
+  const notifId = `wccg:ingest:${st.snapshot_id || Date.now()}`;
+  await setTarget(notifId, st.page_id ? `${base_url}/page/${st.page_id}` : base_url);
+  await showNotification(notifId, msg("notif_capture_done"),
+    msg(OUTCOME_KEY[st.status] || "notif_outcome_done") + " — " + shortUrl(st.url || url));
+}
+
 // ---- 메시지 라우터 ----
 
 const HANDLERS = {
@@ -250,6 +536,18 @@ const HANDLERS = {
     await trackJob(res, m.payload.url);
     return res;
   },
+
+  // 브라우저에서 직접 캡처해 ingest 로 업로드 (서버 무요청). 사설 호스트 무태그면
+  // {needs_network_tag, host} 로 응답해 팝업이 태그를 고르게 한다.
+  captureBrowser: (m) => captureAndIngest(m.payload),
+
+  // 로컬 네트워크 태그 목록·생성 (사설 호스트 캡처 시 팝업이 사용).
+  listNetworkTags: () => apiFetch("/api/v1/network-tags"),
+  createNetworkTag: (m) =>
+    apiFetch("/api/v1/network-tags", {
+      method: "POST",
+      body: { name: m.payload.name, description: m.payload.description || "" },
+    }),
 
   archiveSite: async (m) => {
     const body = { url: m.payload.url };
