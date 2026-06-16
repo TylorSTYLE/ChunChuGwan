@@ -102,8 +102,8 @@
   `GET /document/{sha256}/{file}` — snapshot_documents 에 기록된 조합만
   문서 CAS 에서 항상 첨부파일로 서빙. compact 전 스냅샷(files/)의 문서가
   남아 있으면 압축 실행 안내를 띄운다 (압축하면 목록에 포함 + 중복 제거).
-- **검색** (search) — `/search`, 헤더 메뉴 "검색"·현황 화면 상단의 검색
-  박스에서 진입, viewer 이상
+- **검색** (search) — `/search`, 현황 화면 상단의 검색 박스에서 진입
+  (헤더 메뉴에는 두지 않는다 — 현황 검색 박스가 단일 진입점), viewer 이상
   (`permissions.can_search` — 전문 검색은 모든 아카이브 본문 열람이라 로그와
   같은 하한). 검색어(`q`)·도메인 필터(`domain`)·"URL당 최신만"(`latest`)
   GET 파라미터. 색인 본문은 스냅샷 content.md + 첨부 문서 본문(searchindex.py),
