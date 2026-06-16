@@ -6,11 +6,40 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from chunchugwan import config, db, documents, storage
+from chunchugwan import archive_worker, config, crawler, db, documents, storage
 from chunchugwan.web import app as web_app
 
 GUIDE_BODY = b"%PDF-1.4 cas fixture"
 GUIDE_SHA = hashlib.sha256(GUIDE_BODY).hexdigest()
+
+
+class _Outcome:
+    """process_next 가 읽는 최소 ArchiveOutcome 대체 (status 만 필요)."""
+
+    status = "new"
+    snapshot_id = 1
+    page_links: list = []
+
+
+def _stub_capture(monkeypatch, fake):
+    """단발 아카이빙은 이제 archive_worker 가 큐를 소비해 실행한다 — 그 캡처
+    함수(pipeline.archive_url)를 fake 로 교체한다. POST 후 _drain_archive_jobs()
+    로 큐를 비워야 fake 가 호출된다."""
+    monkeypatch.setattr(archive_worker.pipeline, "archive_url", fake)
+
+
+def _drain_archive_jobs():
+    """큐에 쌓인 단발 아카이빙 작업을 동기로 모두 처리 (테스트 전용)."""
+    while archive_worker.process_next() is not None:
+        pass
+
+
+def _archive_jobs():
+    """현재 큐에 있는 단발 아카이빙 작업 행 목록 (검증용)."""
+    with db.connect() as conn:
+        return conn.execute(
+            "SELECT url, force, source, interval_seconds FROM archive_jobs ORDER BY id"
+        ).fetchall()
 
 
 @pytest.fixture
@@ -138,7 +167,9 @@ def test_site_pages_pagination(client, monkeypatch):
     assert "https://example.com/post" in page1.text
     assert url2 not in page1.text
     assert url2 in page2.text
-    assert "https://example.com/post</a>" not in page2.text
+    # post 행은 1페이지에만 — 페이지 표 링크 형태(/page/N">URL)로 확인한다.
+    # (문서 섹션의 출처 링크는 title 속성이 붙어 형태가 달라 안 걸린다)
+    assert '/page/1">https://example.com/post</a>' not in page2.text
     # 범위를 넘는 페이지 번호는 마지막 페이지로 보정
     assert url2 in client.get(f"/sites/{site['id']}?page=99").text
 
@@ -189,12 +220,7 @@ def test_site_failed_jobs_cleared_after_success(client):
     assert "boom" not in res.text
 
 
-def test_site_failed_retry_queues_archive(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
+def test_site_failed_retry_queues_archive(client):
     log_id = _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
     with db.connect() as conn:
         site = db.get_site_by_key(conn, "example.com")
@@ -203,7 +229,8 @@ def test_site_failed_retry_queues_archive(client, monkeypatch):
     )
     assert res.status_code == 303
     assert res.headers["location"].startswith(f"/sites/{site['id']}?notice=")
-    assert calls == ["https://example.com/post"]
+    # 재시도는 단발 아카이빙 큐에 작업을 넣는다 (worker 가 소비)
+    assert [j["url"] for j in _archive_jobs()] == ["https://example.com/post"]
 
 
 def _insert_failed_crawl_page(
@@ -338,6 +365,133 @@ def test_site_pages_per_page_choices(client):
     assert "1/3 페이지" in client.get(f"/sites/{site['id']}?per_page=33").text
 
 
+def test_site_documents_pagination(client):
+    """문서 표도 페이지 목록처럼 독립 페이징된다 (dpage/dper)."""
+    with db.connect() as conn:
+        entries = [
+            {
+                "url": f"https://example.com/files/doc-{i:02d}.pdf",
+                "file": f"doc-{i:02d}.pdf", "bytes": 100 + i,
+                "sha256": hashlib.sha256(f"doc-{i}".encode()).hexdigest(),
+                "content_type": "application/pdf",
+            }
+            for i in range(30)
+        ]
+        db.insert_snapshot_documents(conn, 1, entries)
+        site = db.get_site_by_key(conn, "example.com")
+    # guide(픽스처) + 30 = 31개 문서 → 25개씩 2페이지, 줄 수는 dper 로 독립 선택
+    res1 = client.get(f"/sites/{site['id']}")
+    assert "총 31건" in res1.text
+    assert 'name="dper"' in res1.text
+    assert f"/sites/{site['id']}?dpage=2" in res1.text
+    assert "2/2 페이지" in client.get(f"/sites/{site['id']}?dpage=2").text
+
+
+def _seed_failed_pages(n: int) -> None:
+    """서로 다른 URL 의 실패 로그 n개 삽입 (실패 목록 페이징 테스트용)."""
+    with db.connect() as conn:
+        for i in range(n):
+            u = f"https://example.com/fail-{i:02d}"
+            pid = db.get_or_create_page(conn, u, "example.com", storage.url_to_slug(u))
+            db.insert_archive_log(
+                conn, url=u, domain="example.com", page_id=pid, source="web",
+                status="error", started_at=f"2026-06-03T00:00:{i:02d}+00:00",
+                duration_ms=100, error=f"boom-{i}",
+            )
+
+
+def test_site_failed_pagination(client):
+    """실패한 작업 표도 독립 페이징된다 (fpage/fper) — 다른 섹션과 무관."""
+    _seed_failed_pages(30)
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res1 = client.get(f"/sites/{site['id']}")
+    assert "총 30건" in res1.text  # 실패 30건 (페이지 표는 총 31건)
+    assert 'name="fper"' in res1.text
+    assert f"/sites/{site['id']}?fpage=2" in res1.text
+    assert "2/2 페이지" in client.get(f"/sites/{site['id']}?fpage=2").text
+
+
+def test_site_failed_retry_all(client):
+    """'모두 재시도' — 직접 실패는 큐에 넣고, 크롤 실패 페이지는 다시 연다."""
+    _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
+    crawl_id, cp_id = _insert_failed_crawl_page("https://example.com/broken")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+        assert db.get_crawl(conn, crawl_id)["status"] == "done"
+    res = client.post(
+        f"/sites/{site['id']}/failed/retry-all", follow_redirects=False
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith(f"/sites/{site['id']}?notice=")
+    assert [j["url"] for j in _archive_jobs()] == ["https://example.com/post"]
+    with db.connect() as conn:
+        cp = conn.execute("SELECT * FROM crawl_pages WHERE id = ?", (cp_id,)).fetchone()
+        crawl = db.get_crawl(conn, crawl_id)
+    assert cp["status"] == "pending" and cp["attempts"] == 0 and cp["error"] is None
+    assert crawl["status"] == "running" and crawl["finished_at"] is None
+
+
+def test_site_failed_retry_all_button_shown(client):
+    """실패 작업이 있으면 '모두 재시도' 버튼이 보인다 (없으면 섹션 자체가 없다)."""
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert f"/sites/{site['id']}/failed/retry-all" not in client.get(
+        f"/sites/{site['id']}"
+    ).text
+    _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
+    assert f"/sites/{site['id']}/failed/retry-all" in client.get(
+        f"/sites/{site['id']}"
+    ).text
+
+
+def _insert_done_crawl(start_url: str = "https://example.com/docs/") -> int:
+    """유효 옵션의 완료된 크롤 1개 삽입 (다시 아카이빙 테스트용)."""
+    with db.connect() as conn:
+        crawl_id = db.insert_crawl(
+            conn, start_url=start_url, scope_host="example.com",
+            scope_path="/docs/", max_pages=10, max_depth=2, delay_seconds=10,
+            source="web",
+        )
+        conn.execute("UPDATE crawls SET status = 'done' WHERE id = ?", (crawl_id,))
+    return crawl_id
+
+
+def test_site_crawl_rerun(client):
+    """크롤 회차 '다시 아카이빙' — 같은 옵션의 새 크롤을 만들고 진행 화면으로 보낸다."""
+    crawl_id = _insert_done_crawl()
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+        before = conn.execute("SELECT COUNT(*) FROM crawls").fetchone()[0]
+    # 회차 목록에 '다시 아카이빙' 버튼이 보인다
+    assert f"/sites/{site['id']}/crawls/{crawl_id}/rerun" in client.get(
+        f"/sites/{site['id']}"
+    ).text
+    res = client.post(
+        f"/sites/{site['id']}/crawls/{crawl_id}/rerun", follow_redirects=False
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith("/crawls/")
+    with db.connect() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM crawls").fetchone()[0]
+    assert after == before + 1  # 끝난 크롤이라 새 크롤 생성 (진행 중이면 병합)
+
+
+def test_site_crawl_rerun_unknown(client):
+    """없는 크롤·다른 사이트의 크롤은 404."""
+    crawl_id, _ = _insert_failed_crawl_page("https://example.com/broken")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert client.post(f"/sites/{site['id']}/crawls/999/rerun").status_code == 404
+    assert client.post(f"/sites/999/crawls/{crawl_id}/rerun").status_code == 404
+
+
+def test_card_mode_unwraps_truncated_cells(client):
+    """모바일 카드 모드 CSS — 말줄임 셀(*-cell)을 펼치는 규칙이 base.html 에 있다."""
+    res = client.get("/archives")
+    assert 'td[class*="-cell"]' in res.text
+
+
 def test_site_failed_retry_unknown_log(client):
     """없는 로그·실패가 아닌 로그·다른 사이트의 로그는 404."""
     ok_id = _insert_log("changed", started_at="2026-06-04T00:00:00+00:00")
@@ -355,6 +509,22 @@ def test_root_serves_dashboard(client):
     assert res.status_code == 200
     assert "현황" in res.text
     assert 'href="/archives"' in res.text  # 헤더 메뉴의 목록 링크
+
+
+def test_dashboard_has_search_hero(client):
+    """현황 상단에 구글 느낌의 검색 박스 — 제출하면 별도 결과 화면(/search)으로 간다.
+
+    검색 폼은 GET·action=/search·name=q 라 새 페이지에서 결과를 보여준다.
+    현황 본문은 그 아래에 그대로 유지된다.
+    """
+    html = client.get("/").text
+    assert 'class="search-hero"' in html
+    assert 'action="/search"' in html        # 결과는 별도 검색 화면에서
+    assert 'method="get"' in html
+    assert 'name="q"' in html
+    assert "아카이브 본문·문서에서 검색…" in html  # placeholder
+    # 검색 박스가 현황 통계보다 위에 온다 (상단 검색 + 하단 현황)
+    assert html.index('class="search-hero"') < html.index('class="stat-grid"')
 
 
 def test_timeline(client):
@@ -400,6 +570,30 @@ def test_snapshot_view_sandboxed_iframe(client):
     assert tokens == {"allow-top-navigation-by-user-activation", ""}
 
 
+def test_snapshot_view_mobile_screenshot_tab(client):
+    """모바일 스크린샷이 있는 스냅샷만 뷰어에 모바일 탭을 노출하고 파일을 서빙한다."""
+    # 기본 fixture 스냅샷에는 모바일 스크린샷이 없다 → 데스크탑 탭만, 모바일 탭 미노출
+    res = client.get("/snapshot/1")
+    assert "데스크탑 스크린샷" in res.text
+    assert "모바일 스크린샷" not in res.text
+    assert client.get("/snapshot/1/file/screenshot-mobile").status_code == 404
+
+    # 스냅샷 2 에 모바일 스크린샷을 추가하면 탭과 서빙 경로가 나타난다
+    snap_dir = storage.page_dir(
+        "example.com", storage.url_to_slug("https://example.com/post")
+    ) / "2026-06-02T00-00-00"
+    Image.new("RGB", (390, 60), (0, 120, 240)).save(snap_dir / "screenshot-mobile.png")
+
+    res = client.get("/snapshot/2")
+    assert "데스크탑 스크린샷" in res.text
+    assert "모바일 스크린샷" in res.text
+    assert "/snapshot/2/file/screenshot-mobile" in res.text
+
+    served = client.get("/snapshot/2/file/screenshot-mobile")
+    assert served.status_code == 200
+    assert served.headers["content-type"] == "image/png"
+
+
 def test_theme_toggle_present(client):
     """모든 화면(base.html)에 테마 변수·토글·기억(localStorage) 스크립트가 있다."""
     res = client.get("/")
@@ -411,13 +605,17 @@ def test_theme_toggle_present(client):
 
 
 def test_responsive_layout_present(client):
-    """반응형 레이아웃 — 헤더 메뉴 토글·뷰포트 메타·테이블 가로 스크롤 래퍼."""
+    """반응형 레이아웃 — 헤더 메뉴 토글·뷰포트 메타·테이블 래퍼(좁은 화면 카드 전환)."""
     res = client.get("/archives")
     assert res.status_code == 200
     assert 'name="viewport"' in res.text  # 모바일 뷰포트 메타
     assert 'id="nav-toggle"' in res.text  # 좁은 화면용 메뉴 토글 버튼
     assert 'id="site-nav"' in res.text  # 토글로 여닫는 메뉴 패널
-    assert '<div class="table-wrap">' in res.text  # 데이터 테이블 가로 스크롤 래퍼
+    # 데이터 표 래퍼 — 넓은 화면 가로 스크롤, 좁은 화면(≤599px) 행마다 카드 전환
+    assert '<div class="table-wrap cards">' in res.text
+    # 카드 메커니즘은 base.html 에 있어 모든 화면에 실린다 — CSS 와 헤더명 자동 라벨러 JS
+    assert ".table-wrap.cards > table > tbody > tr.cardrow" in res.text
+    assert 'setAttribute("data-label"' in res.text
 
 
 def test_responsive_diff_stacks_on_mobile(client):
@@ -536,6 +734,16 @@ def test_documents_list_page(client):
     assert 'href="/documents"' in client.get("/").text
 
 
+def test_site_detail_lists_documents(client):
+    """사이트 상세 — 해당 사이트가 아카이빙한 문서가 다운로드 링크와 함께 보인다."""
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res = client.get(f"/sites/{site['id']}")
+    assert res.status_code == 200
+    assert "guide-aabbccdd.pdf" in res.text
+    assert f"/document/{GUIDE_SHA}/guide-aabbccdd.pdf" in res.text
+
+
 def test_document_download_route(client):
     """/document/{sha}/{file} — DB 에 기록된 조합만 CAS 에서 내려준다."""
     ok = client.get(f"/document/{GUIDE_SHA}/guide-aabbccdd.pdf")
@@ -570,41 +778,29 @@ def test_diff_bad_range(client):
     assert client.get("/diff/1?from=2&to=1").status_code == 400
 
 
-def test_rearchive_triggers_pipeline(client, monkeypatch):
-    calls: list[tuple[str, bool]] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append((url, force)),
-    )
+def test_rearchive_triggers_pipeline(client):
     res = client.post("/page/1/rearchive", follow_redirects=False)
     assert res.status_code == 303
     assert res.headers["location"] == "/page/1?queued=1"
-    assert calls == [("https://example.com/post", False)]
+    # 재아카이빙은 큐에 작업을 넣는다 (worker 가 캡처)
+    jobs = _archive_jobs()
+    assert [(j["url"], j["force"]) for j in jobs] == [("https://example.com/post", 0)]
 
 
-def test_rearchive_force(client, monkeypatch):
-    calls: list[tuple[str, bool]] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append((url, force)),
-    )
+def test_rearchive_force(client):
     res = client.post(
         "/page/1/rearchive", data={"force": "1"}, follow_redirects=False
     )
     assert res.status_code == 303
-    assert calls == [("https://example.com/post", True)]
+    jobs = _archive_jobs()
+    assert [(j["url"], j["force"]) for j in jobs] == [("https://example.com/post", 1)]
 
 
 def test_rearchive_unknown_page(client):
     assert client.post("/page/999/rearchive").status_code == 404
 
 
-def test_archive_new_url_triggers_pipeline(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
+def test_archive_new_url_triggers_pipeline(client):
     res = client.post(
         "/archive",
         data={"url": "https://example.com/new?utm_source=x"},
@@ -612,22 +808,17 @@ def test_archive_new_url_triggers_pipeline(client, monkeypatch):
     )
     assert res.status_code == 303
     assert res.headers["location"].startswith("/archives?queued=")
-    # 정규화된 URL(트래킹 파라미터 제거)로 파이프라인 호출
-    assert calls == ["https://example.com/new"]
+    # 정규화된 URL(트래킹 파라미터 제거)로 큐에 등록된다
+    assert [j["url"] for j in _archive_jobs()] == ["https://example.com/new"]
 
 
-def test_archive_invalid_url_rejected(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
+def test_archive_invalid_url_rejected(client):
     res = client.post("/archive", data={"url": "ftp://example.com/x"}, follow_redirects=False)
     assert res.status_code == 303
-    # 에러는 새 아카이빙 폼으로 돌아가 입력값을 유지한 채 보여준다
+    # 에러는 새 아카이빙 폼으로 돌아가 입력값을 유지한 채 보여준다 (큐 등록 전 동기 검증)
     assert res.headers["location"].startswith("/archive/new?error=")
     assert "url=ftp" in res.headers["location"]
-    assert calls == []
+    assert _archive_jobs() == []
 
 
 def test_archive_new_form_page(client):
@@ -642,11 +833,8 @@ def test_archive_new_form_page(client):
 
 
 def test_archive_with_interval_sets_schedule(client, monkeypatch):
-    """주기를 함께 등록하면 아카이빙 완료 후 스케줄이 생성된다."""
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": None,
-    )
+    """주기를 함께 등록하면 아카이빙 완료 후(큐 소비 시) 스케줄이 생성된다."""
+    _stub_capture(monkeypatch, lambda url, **kw: _Outcome())
     res = client.post(
         "/archive",
         data={"url": "https://example.com/post", "interval": "3600"},
@@ -654,6 +842,7 @@ def test_archive_with_interval_sets_schedule(client, monkeypatch):
     )
     assert res.status_code == 303
     assert res.headers["location"].startswith("/archives?queued=")
+    _drain_archive_jobs()  # worker 가 캡처 후 주기를 등록
     with db.connect() as conn:
         sched = db.get_schedule(conn, 1)
     assert sched is not None and sched["interval_seconds"] == 3600
@@ -661,10 +850,7 @@ def test_archive_with_interval_sets_schedule(client, monkeypatch):
 
 def test_archive_with_custom_interval_and_run_at(client, monkeypatch):
     """직접 입력 주기(2일) + 실행 시각이 스케줄에 반영된다."""
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": None,
-    )
+    _stub_capture(monkeypatch, lambda url, **kw: _Outcome())
     res = client.post(
         "/archive",
         data={
@@ -674,18 +860,14 @@ def test_archive_with_custom_interval_and_run_at(client, monkeypatch):
         follow_redirects=False,
     )
     assert res.status_code == 303
+    _drain_archive_jobs()  # worker 가 캡처 후 주기를 등록
     with db.connect() as conn:
         sched = db.get_schedule(conn, 1)
     assert sched["interval_seconds"] == 2 * 86400
     assert sched["run_at_time"] == "09:00"
 
 
-def test_archive_rejects_run_at_for_hourly_interval(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
+def test_archive_rejects_run_at_for_hourly_interval(client):
     res = client.post(
         "/archive",
         data={"url": "https://example.com/post", "interval": "3600", "run_at": "09:00"},
@@ -693,27 +875,20 @@ def test_archive_rejects_run_at_for_hourly_interval(client, monkeypatch):
     )
     assert res.status_code == 303
     assert res.headers["location"].startswith("/archive/new?error=")
-    assert calls == []
+    assert _archive_jobs() == []  # 검증 실패 시 큐에 등록하지 않는다
 
 
 def test_archive_without_interval_no_schedule(client, monkeypatch):
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": None,
-    )
+    _stub_capture(monkeypatch, lambda url, **kw: _Outcome())
     client.post(
         "/archive", data={"url": "https://example.com/post"}, follow_redirects=False
     )
+    _drain_archive_jobs()
     with db.connect() as conn:
         assert db.get_schedule(conn, 1) is None
 
 
-def test_archive_rejects_out_of_range_interval(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
+def test_archive_rejects_out_of_range_interval(client):
     res = client.post(
         "/archive",
         data={"url": "https://example.com/post", "interval": "60"},
@@ -721,24 +896,27 @@ def test_archive_rejects_out_of_range_interval(client, monkeypatch):
     )
     assert res.status_code == 303
     assert res.headers["location"].startswith("/archive/new?error=")
-    assert calls == []
+    assert _archive_jobs() == []  # 검증 실패 시 큐에 등록하지 않는다
     with db.connect() as conn:
         assert db.get_schedule(conn, 1) is None
 
 
 def test_archive_interval_skipped_when_page_missing(client, monkeypatch):
     """신규 URL 아카이빙이 실패하면 pages 행이 없어 주기 등록도 건너뛴다."""
-    def boom(url, force=False, source="cli"):
+    def boom(url, **kw):
         raise RuntimeError("캡처 실패")
 
-    monkeypatch.setattr(web_app.pipeline, "archive_url", boom)
+    _stub_capture(monkeypatch, boom)
+    # 재시도 없이 1회 실패로 종결 → 작업이 큐에서 제거되게 백오프를 비운다
+    monkeypatch.setattr(crawler, "retry_backoff", lambda conn: ())
     res = client.post(
         "/archive",
         data={"url": "https://example.com/brand-new", "interval": "3600"},
         follow_redirects=False,
     )
-    assert res.status_code == 303  # 백그라운드 실패가 응답을 깨지 않는다
-    assert client.get("/archive/active").json() == {"active": []}
+    assert res.status_code == 303
+    _drain_archive_jobs()  # 캡처 실패 → 주기 등록 안 됨
+    assert client.get("/archive/active").json()["active"] == []
     with db.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM schedules").fetchone()[0] == 0
 
@@ -751,28 +929,116 @@ def test_index_shows_queued_banner(client):
 
 def test_archive_registers_active_job_and_clears_on_finish(client, monkeypatch):
     seen: list[list[str]] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": seen.append(
-            sorted(web_app._active_snapshot())
-        ),
+    _stub_capture(
+        monkeypatch,
+        lambda url, **kw: seen.append(sorted(web_app._active_snapshot())) or _Outcome(),
     )
     res = client.post(
         "/archive", data={"url": "https://example.com/new"}, follow_redirects=False
     )
     assert res.status_code == 303
-    # 파이프라인 실행 중에는 진행 목록에 있고, 끝나면 비워진다
+    # enqueue 직후엔 대기(pending) 작업이 진행 목록에 보인다
+    assert client.get("/archive/active").json()["active"] == ["https://example.com/new"]
+    _drain_archive_jobs()
+    # 캡처 실행 중에도 진행 목록에 있었고(in_progress), 끝나면 비워진다
     assert seen == [["https://example.com/new"]]
-    assert client.get("/archive/active").json() == {"active": []}
+    assert client.get("/archive/active").json()["active"] == []
+
+
+def _enter_needs_human(url: str) -> int:
+    """needs_human(라이브 진입) 상태의 작업 1건을 만든다 — 테스트용."""
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, url, source="web")
+        job = db.claim_due_archive_job(conn, "2099-01-01T00:00:00+00:00")
+        db.mark_needs_human(conn, job["id"], token="tok", viewport_w=1280, viewport_h=800)
+    return job["id"]
+
+
+# needs_human 표시는 워커가 DB 에 기록하는 사실에만 의존한다 — serve 프로세스의
+# WCCG_LIVE_CHALLENGE 설정과 무관하다 (워커·serve env 가 달라도 누락 안 되게).
+# 아래 테스트는 모두 serve LIVE_CHALLENGE 를 켜지 않은 기본 off 상태로 검증한다.
+
+def test_archive_active_needs_human_key_present_for_admin(client):
+    # 관리자(인증 off=관리자)면 대기 0건이어도 needs_human 키가 빈 배열로 온다
+    assert client.get("/archive/active").json()["needs_human"] == []
+
+
+def test_archive_active_surfaces_needs_human(client):
+    # serve LIVE_CHALLENGE off 여도 DB 에 대기 작업이 있으면 내려보낸다
+    job_id = _enter_needs_human("https://sd.test/a")
+    data = client.get("/archive/active").json()
+    assert data["needs_human"] == [{"id": job_id, "url": "https://sd.test/a"}]
+
+
+def test_header_and_banner_absent_when_no_jobs(client):
+    # 대기 0건이면 헤더 '사람 확인' 메뉴도 전역 배너도 렌더하지 않는다
+    html = client.get("/").text
+    assert "/archive/needs-human" not in html
+    assert 'id="needs-human-banner"' not in html
+
+
+def test_header_and_banner_present_when_jobs_pending(client):
+    # 대기 건이 있으면(LIVE off 여도) 헤더 알림 메뉴 + 라이브로 가는 전역 배너가 뜬다
+    job_id = _enter_needs_human("https://sd.test/a")
+    html = client.get("/").text
+    assert 'class="nav-alert"' in html
+    assert "사람 확인 (1)" in html
+    assert 'id="needs-human-banner"' in html
+    assert f"/archive/jobs/{job_id}/live" in html  # 단건이면 라이브 화면 직행
+
+
+def test_banner_poller_order_matches_endpoint(client):
+    # 배너 폴러 초기값(initial) 순서는 /archive/active 의 needs_human url 순서와
+    # 정확히 같아야 폴러가 매번 새로고침을 유발하지 않는다. 경로 대소문자만 다른
+    # 두 작업으로, Jinja sort(기본 대소문자 무시) vs 파이썬 sorted(코드포인트)
+    # 비대칭에 의한 무한 새로고침을 회귀 방지한다.
+    import json
+    import re
+
+    _enter_needs_human("https://example.com/Zebra")
+    _enter_needs_human("https://example.com/apple")
+    html = client.get("/").text
+    m = re.search(r"var initial = (\[[^\]]*\]);", html)
+    assert m, "배너 폴러 initial 배열을 찾지 못함"
+    initial = json.loads(m.group(1))
+    endpoint = [j["url"] for j in client.get("/archive/active").json()["needs_human"]]
+    assert initial == endpoint  # 동일 순서 → 폴러가 스스로 새로고침을 유발하지 않음
+    # 코드포인트 순서라 대문자 경로가 앞선다 (대소문자 무시였다면 apple 이 앞)
+    assert initial == [
+        "https://example.com/Zebra", "https://example.com/apple"
+    ]
+
+
+def test_archives_status_badge_becomes_needs_human(client):
+    # 진행 중 작업이 사람 확인 대기로 전환되면(serve LIVE off 여도) 상태 배지가
+    # '아카이빙 중' 대신 라이브 화면 링크('사람 확인 대기')로 바뀐다
+    job_id = _enter_needs_human("https://example.com/post")  # 픽스처 사이트의 페이지
+    html = client.get("/archives").text
+    assert 'class="badge needs-human"' in html
+    assert "사람 확인 대기" in html
+    assert f"/archive/jobs/{job_id}/live" in html
+    assert "아카이빙 중" not in html  # 같은 행이 배지로 대체됨 (다른 활성 없음)
+
+
+def test_site_detail_status_badge_becomes_needs_human(client):
+    job_id = _enter_needs_human("https://example.com/post")
+    with db.connect() as conn:
+        site_id = db.get_page(conn, "https://example.com/post")["site_id"]
+    html = client.get(f"/sites/{site_id}").text
+    assert 'class="badge needs-human"' in html
+    assert "사람 확인 대기" in html
+    assert f"/archive/jobs/{job_id}/live" in html
 
 
 def test_active_job_cleared_even_on_failure(client, monkeypatch):
-    def boom(url, force=False, source="cli"):
+    def boom(url, **kw):
         raise RuntimeError("캡처 실패")
 
-    monkeypatch.setattr(web_app.pipeline, "archive_url", boom)
+    _stub_capture(monkeypatch, boom)
+    monkeypatch.setattr(crawler, "retry_backoff", lambda conn: ())  # 재시도 없이 종결
     client.post("/archive", data={"url": "https://example.com/new"}, follow_redirects=False)
-    assert client.get("/archive/active").json() == {"active": []}
+    _drain_archive_jobs()
+    assert client.get("/archive/active").json()["active"] == []
 
 
 def test_index_shows_active_jobs(client):
@@ -792,23 +1058,20 @@ def test_index_shows_active_jobs(client):
 def test_archive_active_endpoint_sorted(client):
     web_app._register_job("https://b.example.com/x")
     web_app._register_job("https://a.example.com/x")
-    assert client.get("/archive/active").json() == {
-        "active": ["https://a.example.com/x", "https://b.example.com/x"]
-    }
+    assert client.get("/archive/active").json()["active"] == [
+        "https://a.example.com/x", "https://b.example.com/x"
+    ]
 
 
-def test_archive_duplicate_url_not_requeued(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
-    web_app._register_job("https://example.com/new")  # 이미 진행 중인 상태
+def test_archive_duplicate_url_not_requeued(client):
+    # 이미 큐에 있는 작업을 시드 — 같은 URL 은 중복 등록되지 않는다 (부분 UNIQUE)
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, "https://example.com/new", source="web")
     res = client.post(
         "/archive", data={"url": "https://example.com/new"}, follow_redirects=False
     )
     assert res.status_code == 303
-    assert calls == []
+    assert len(_archive_jobs()) == 1  # 큐에 여전히 1건
 
 
 def test_period_starts_boundaries():
@@ -876,16 +1139,13 @@ def test_dashboard_total_bytes_is_actual_storage(client):
     assert f'id="stat-bytes">{web_app.templates.env.filters["filesize"](expected)}</div>' in res.text
 
 
-def test_rearchive_duplicate_not_requeued(client, monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(
-        web_app.pipeline, "archive_url",
-        lambda url, force=False, source="cli": calls.append(url),
-    )
-    web_app._register_job("https://example.com/post")
+def test_rearchive_duplicate_not_requeued(client):
+    # 같은 URL 이 이미 큐에 있으면 재아카이빙은 중복 등록하지 않는다
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, "https://example.com/post", source="web")
     res = client.post("/page/1/rearchive", follow_redirects=False)
     assert res.status_code == 303
-    assert calls == []
+    assert len(_archive_jobs()) == 1
 
 
 def test_schedule_set_and_shown(client):

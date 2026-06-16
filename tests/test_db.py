@@ -97,6 +97,97 @@ def test_schema_ensured_once_per_process(tmp_path, monkeypatch):
     assert len(calls) == 2
 
 
+def test_connect_upgrades_legacy_archive_jobs(tmp_path, monkeypatch):
+    """라이브 챌린지 컬럼이 없는 구형 archive_jobs DB 도 connect 가 마이그레이션한다.
+
+    needs_human_at 등 라이브 챌린지 컬럼은 _migrate 가 ALTER 로 추가한다. 그
+    컬럼에 대한 인덱스가 SCHEMA 에 있으면 executescript(SCHEMA)가 컬럼 추가
+    전에 인덱스를 만들려다 'no such column: needs_human_at' 으로 실패한다.
+    """
+    db_path = tmp_path / "index.db"
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+
+    # 라이브 챌린지 도입 이전 모양의 archive_jobs 테이블만 미리 만든다
+    legacy = sqlite3.connect(db_path)
+    legacy.executescript(
+        """
+        CREATE TABLE archive_jobs (
+            id              INTEGER PRIMARY KEY,
+            url             TEXT NOT NULL,
+            force           INTEGER NOT NULL DEFAULT 0,
+            source          TEXT NOT NULL DEFAULT 'web',
+            status          TEXT NOT NULL DEFAULT 'pending',
+            attempts        INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT,
+            claimed_at      TEXT,
+            error           TEXT,
+            created_at      TEXT NOT NULL
+        );
+        """
+    )
+    legacy.commit()
+    legacy.close()
+    db.invalidate_schema_cache()
+
+    # connect 가 'no such column' 없이 컬럼·인덱스를 추가해야 한다
+    with db.connect() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(archive_jobs)")}
+        assert "needs_human_at" in cols
+        assert "live_token" in cols
+        assert "live_force_solve" in cols   # 신규 강제 진행 플래그도 ALTER 로 추가
+        idx = {r["name"] for r in conn.execute("PRAGMA index_list(archive_jobs)")}
+        assert "idx_archive_jobs_needs_human" in idx
+
+
+def test_connect_upgrades_legacy_archive_logs(tmp_path, monkeypatch):
+    """job_id 컬럼이 없는 구형 archive_logs DB 도 connect 가 마이그레이션한다.
+
+    requested_by·job_id 는 _migrate 가 ALTER 로 추가한다. 그 컬럼에 대한
+    인덱스가 SCHEMA 에 있으면 executescript(SCHEMA)가 컬럼 추가 전에 인덱스를
+    만들려다 'no such column: job_id' 로 실패한다 (archive_jobs 와 같은 회귀).
+    """
+    db_path = tmp_path / "index.db"
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+
+    # requested_by·job_id 도입 이전 모양의 archive_logs 테이블만 미리 만든다
+    legacy = sqlite3.connect(db_path)
+    legacy.executescript(
+        """
+        CREATE TABLE archive_logs (
+            id           INTEGER PRIMARY KEY,
+            url          TEXT NOT NULL,
+            domain       TEXT NOT NULL DEFAULT '',
+            page_id      INTEGER,
+            snapshot_id  INTEGER,
+            source       TEXT NOT NULL DEFAULT 'cli',
+            status       TEXT NOT NULL,
+            started_at   TEXT NOT NULL,
+            duration_ms  INTEGER NOT NULL DEFAULT 0,
+            http_status  INTEGER,
+            content_hash TEXT,
+            error        TEXT,
+            steps        TEXT
+        );
+        """
+    )
+    legacy.commit()
+    legacy.close()
+    db.invalidate_schema_cache()
+
+    # connect 가 'no such column' 없이 컬럼·인덱스를 추가해야 한다
+    with db.connect() as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(archive_logs)")}
+        assert "requested_by" in cols
+        assert "job_id" in cols
+        idx = {r["name"] for r in conn.execute("PRAGMA index_list(archive_logs)")}
+        assert "idx_archive_logs_job" in idx
+        assert "idx_archive_logs_requester" in idx
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root 는 권한 검사를 우회한다")
 def test_connect_unwritable_dir_friendly_error(tmp_path, monkeypatch):
     """아카이브 디렉토리에 쓰기 권한이 없으면 원인을 알려주는 메시지로 실패한다."""

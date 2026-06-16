@@ -6,6 +6,7 @@ import logging
 import secrets
 import sqlite3
 import zoneinfo
+from urllib.parse import quote
 
 import httpx
 import jwt
@@ -18,7 +19,7 @@ from fastapi.responses import (
 )
 
 from .. import auth, config, db, oidc
-from . import i18n
+from . import audit, i18n, permissions
 from .i18n import t
 from .templating import templates
 
@@ -472,9 +473,42 @@ def passkey_delete(request: Request, passkey_id: int, password: str = Form(...))
 
 # ---- 계정 설정 (이름/패스워드 변경) ----
 
+# 확장 토큰 만료 옵션 — system_routes 의 API 키 만료 정책과 동일하게 유지한다
+# (라우터 간 결합을 피하려 값만 복제, 변경 시 양쪽 같이). 값은 ttl 초, None=영구.
+EXTENSION_TOKEN_EXPIRY_OPTIONS = [
+    ("permanent", "영구"),
+    ("1d", "1일"),
+    ("1m", "1개월 (30일)"),
+    ("1y", "1년 (365일)"),
+    ("custom", "사용자 지정 (일)"),
+]
+_EXTENSION_TOKEN_TTL_SECONDS: dict[str, int | None] = {
+    "permanent": None,
+    "1d": 86400,
+    "1m": 30 * 86400,
+    "1y": 365 * 86400,
+}
+MAX_EXTENSION_TOKEN_CUSTOM_DAYS = 3650  # 10년 — 그 이상은 영구를 쓴다
+
+
+def _extension_token_ttl(
+    request: Request, expiry: str, custom_days: int
+) -> int | None:
+    """확장 토큰 만료 선택지를 ttl 초로 변환 (None=영구). 잘못된 입력은 ValueError."""
+    if expiry in _EXTENSION_TOKEN_TTL_SECONDS:
+        return _EXTENSION_TOKEN_TTL_SECONDS[expiry]
+    if expiry == "custom":
+        if not (1 <= custom_days <= MAX_EXTENSION_TOKEN_CUSTOM_DAYS):
+            raise ValueError(t(
+                request, "사용자 지정 만료는 1 ~ {n}일 사이여야 합니다.",
+                n=MAX_EXTENSION_TOKEN_CUSTOM_DAYS,
+            ))
+        return custom_days * 86400
+    raise ValueError(t(request, "알 수 없는 만료 선택: {expiry}", expiry=repr(expiry)))
+
 
 def _account_ctx(
-    user, *, error: str | None = None, notice: str | None = None
+    user, *, error: str | None = None, notice: str | None = None,
 ) -> dict:
     with db.connect() as conn:
         passkey_count = db.count_passkeys(conn, user["id"])
@@ -496,6 +530,26 @@ def _account_ctx(
     }
 
 
+def _api_keys_ctx(
+    user, *, error: str | None = None, notice: str | None = None,
+    new_token: str = "",
+) -> dict:
+    """개인 API Key(확장 토큰) 화면 컨텍스트 — 본인 토큰 목록, 1회 노출, 파생 권한."""
+    can_view, can_archive = permissions.token_permissions_for_role(user["role"])
+    with db.connect() as conn:
+        tokens = db.list_api_keys_for_owner(conn, user["id"])
+    return {
+        "ext_tokens": tokens,
+        "new_token": new_token,
+        "ext_can_view": can_view,
+        "ext_can_archive": can_archive,
+        "ext_expiry_options": EXTENSION_TOKEN_EXPIRY_OPTIONS,
+        "ext_max_custom_days": MAX_EXTENSION_TOKEN_CUSTOM_DAYS,
+        "error": error,
+        "notice": notice,
+    }
+
+
 @router.get("/settings/account", response_class=HTMLResponse)
 def account_page(request: Request, ok: str | None = None):
     user = request.state.user
@@ -508,7 +562,23 @@ def account_page(request: Request, ok: str | None = None):
     if notice:
         notice = t(request, notice)
     return templates.TemplateResponse(
-        request, "account.html", _account_ctx(user, notice=notice)
+        request, "account.html", _account_ctx(user, notice=notice),
+    )
+
+
+@router.get("/settings/api-keys", response_class=HTMLResponse)
+def api_keys_page(request: Request, ok: str | None = None, new_token: str = ""):
+    """개인 API Key(확장 토큰) 관리 화면 — 발급/폐기. 본인 토큰만 노출."""
+    user = request.state.user
+    notice = {
+        "token_issued": "개인 API Key 를 발급했습니다 — 아래 키를 지금 복사하세요. 다시 표시되지 않습니다.",
+        "token_revoked": "개인 API Key 를 폐기했습니다.",
+    }.get(ok or "")
+    if notice:
+        notice = t(request, notice)
+    return templates.TemplateResponse(
+        request, "personal_api_keys.html",
+        _api_keys_ctx(user, notice=notice, new_token=new_token),
     )
 
 
@@ -585,6 +655,87 @@ def change_password(
             conn, user["id"], request.state.session["token_hash"]
         )
     return RedirectResponse(url="/settings/account?ok=password", status_code=303)
+
+
+@router.post("/settings/api-keys", response_class=HTMLResponse)
+def create_extension_token(
+    request: Request,
+    name: str = Form(...),
+    can_view: bool = Form(False),
+    can_archive: bool = Form(False),
+    expiry: str = Form("permanent"),
+    custom_days: int = Form(0),
+):
+    """본인 귀속 개인 API Key(확장 토큰) 발급 — 권한은 역할 범위 안에서 선택, 원문은 1회만 노출.
+
+    세션 인증 + 같은 출처 폼 POST 라 CSRF Origin 검사를 정상 통과한다.
+    """
+    user = request.state.user
+    allowed_view, allowed_archive = permissions.token_permissions_for_role(user["role"])
+    if not (allowed_view or allowed_archive):
+        ctx = _api_keys_ctx(
+            user, error=t(request, "현재 권한으로는 API Key 를 발급할 수 없습니다.")
+        )
+        return templates.TemplateResponse(
+            request, "personal_api_keys.html", ctx, status_code=403
+        )
+    # 선택한 권한을 역할이 허용하는 범위로 클램프 — 권한 상승 방지
+    can_view = can_view and allowed_view
+    can_archive = can_archive and allowed_archive
+    if not (can_view or can_archive):
+        ctx = _api_keys_ctx(
+            user, error=t(request, "권한을 하나 이상 선택하세요.")
+        )
+        return templates.TemplateResponse(
+            request, "personal_api_keys.html", ctx, status_code=400
+        )
+    name = name.strip()
+    name_error = auth.validate_api_key_name(name)
+    if name_error is not None:
+        ctx = _api_keys_ctx(user, error=t(request, name_error))
+        return templates.TemplateResponse(
+            request, "personal_api_keys.html", ctx, status_code=400
+        )
+    try:
+        ttl_seconds = _extension_token_ttl(request, expiry, custom_days)
+    except ValueError as e:
+        ctx = _api_keys_ctx(user, error=str(e))
+        return templates.TemplateResponse(
+            request, "personal_api_keys.html", ctx, status_code=400
+        )
+    with db.connect() as conn:
+        token = auth.issue_api_key(
+            conn, name,
+            can_view=can_view, can_archive=can_archive,
+            created_by=user["id"], owner_user_id=user["id"],
+            ttl_seconds=ttl_seconds,
+        )
+    perms = ", ".join(
+        label for flag, label in ((can_view, "보기"), (can_archive, "아카이브"))
+        if flag
+    )
+    audit.log(request, "개인 API Key 발급: '%s' (권한: %s)", name, perms)
+    return RedirectResponse(
+        url=f"/settings/api-keys?ok=token_issued&new_token={quote(token, safe='')}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/settings/api-keys/{token_id}/delete",
+    response_class=HTMLResponse,
+)
+def delete_extension_token(request: Request, token_id: int):
+    """본인 귀속 개인 API Key(확장 토큰) 폐기 — 즉시 무효화. 본인 토큰만(IDOR 방어)."""
+    user = request.state.user
+    with db.connect() as conn:
+        key = db.get_api_key(conn, token_id)
+        # 본인 소유 토큰만 — 타인 토큰·시스템 키(owner=NULL)는 404 로 은폐
+        if key is None or key["owner_user_id"] != user["id"]:
+            raise HTTPException(404, t(request, "API Key 없음"))
+        db.delete_api_key(conn, token_id)
+    audit.log(request, "개인 API Key 폐기: '%s'", key["name"])
+    return RedirectResponse(url="/settings/api-keys?ok=token_revoked", status_code=303)
 
 
 @router.post("/settings/account/withdraw", response_class=HTMLResponse)

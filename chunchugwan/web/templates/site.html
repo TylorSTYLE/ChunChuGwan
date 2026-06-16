@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_network_tag.html" import network_tag_badge with context %}
+{% from "_pager.html" import section_pager with context %}
 {% block title %}{{ site['site_key'] }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <style>
@@ -8,6 +9,10 @@
               white-space: nowrap; }
 td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
                 white-space: nowrap; }
+td.url-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; }
+td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; }
 </style>
 {% if error %}
 <div class="error">{{ error }}</div>
@@ -29,9 +34,12 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
     <button type="submit" title="{{ _('소속 페이지·스냅샷을 아카이브 내보내기 파일(tar.gz)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.') }}">{{ _("사이트 내보내기") }}</button>
   </form>
   {% endif %}
+  {% if system_allowed %}
+  <a href="/sites/{{ site['id'] }}/credentials" title="{{ _('이 사이트 로그인이 필요한 경우 쓸 자격증명을 관리합니다 (관리자 전용).') }}">{{ _("로그인 자격증명") }}</a>
+  {% endif %}
   {% if can_delete %}
   <form class="inline" method="post" action="/sites/{{ site['id'] }}/delete"
-        onsubmit="return confirm({{ (site['site_key'] ~ '\n\n' ~ _('페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', p=page_count, c=crawls|length))|tojson }})">
+        onsubmit='return confirm({{ (site['site_key'] ~ '\n\n' ~ _('페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', p=page_count, c=crawls|length))|tojson }})'>
     <button type="submit" class="danger">{{ _("사이트 삭제") }}</button>
   </form>
   {% endif %}
@@ -42,7 +50,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 
 <h3>{{ _("페이지") }}</h3>
 {% if pages %}
-<div class="table-wrap">
+<div class="table-wrap cards">
 <table id="pages">
   <thead>
     <tr><th>URL</th><th class="num">{{ _("스냅샷") }}</th><th class="num">{{ _("용량") }}</th><th>{{ _("마지막 활동") }}</th><th>{{ _("자동") }}</th><th></th></tr>
@@ -63,7 +71,9 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
         {% endif %}
       </td>
       <td>
-        {% if p['url'] in active %}
+        {% if needs_human.get(p['url']) %}
+        <a class="badge needs-human" href="/archive/jobs/{{ needs_human[p['url']] }}/live">{{ _("사람 확인 대기") }}</a>
+        {% elif p['url'] in active %}
         <span class="badge running">{{ _("아카이빙 중") }}</span>
         {% else %}
         {% if can_archive %}
@@ -73,7 +83,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
         {% endif %}
         {% if can_delete %}
         <form class="inline" method="post" action="/page/{{ p['id'] }}/delete"
-              onsubmit="return confirm({{ (p['url'] ~ '\n\n' ~ _('스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', n=p['snapshot_count']))|tojson }})">
+              onsubmit='return confirm({{ (p['url'] ~ '\n\n' ~ _('스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', n=p['snapshot_count']))|tojson }})'>
           <button type="submit" class="danger">{{ _("삭제") }}</button>
         </form>
         {% endif %}
@@ -84,77 +94,120 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
   </tbody>
 </table>
 </div>
-<div class="pager">
-  <span class="muted">{{ _("총 {n}건", n=page_count) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
-  <form class="inline" method="get" action="/sites/{{ site['id'] }}">
-    <select name="per_page" aria-label="{{ _('표시 줄 수') }}" onchange="this.form.submit()">
-      {% for n in per_page_choices %}
-      <option value="{{ n }}" {% if n == per_page %}selected{% endif %}>{{ _("{n}줄", n=n) }}</option>
-      {% endfor %}
-    </select>
-  </form>
-  <span class="spacer"></span>
-  {% if prev_url %}<a href="{{ prev_url }}">&larr; {{ _("이전") }}</a>{% endif %}
-  {% if next_url %}<a href="{{ next_url }}">{{ _("다음") }} &rarr;</a>{% endif %}
-</div>
+{{ section_pager(pages_pager, site['id'], per_page_choices) }}
 {% else %}
 <p class="muted">{{ _("아직 페이지가 없습니다 — 크롤이 진행되면 여기에 쌓입니다.") }}</p>
 {% endif %}
 
-{% if failed_logs or failed_crawl_pages %}
-<h3>{{ _("실패한 작업") }}</h3>
+{% if doc_total %}
+<h3>{{ _("문서") }}</h3>
 <p class="muted" style="font-size:13px">
-  {{ _("최근 실행이 실패로 끝난 페이지입니다. 크롤 중 실패한 페이지도 포함되며, 재시도가 성공하면 목록에서 사라집니다.") }}
+  {{ _("이 사이트의 페이지가 링크한 문서 파일(PDF·워드·한글 등)입니다. 같은 내용의 문서는 한 번만 저장됩니다.") }}
 </p>
-<div class="table-wrap">
-<table id="failed">
+<div class="table-wrap wide cards">
+<table id="documents">
   <thead>
-    <tr><th>URL</th><th>{{ _("시각") }}</th><th>{{ _("출처") }}</th><th>{{ _("오류") }}</th><th></th></tr>
+    <tr>
+      <th>{{ _("문서명") }}</th>
+      <th>{{ _("형식") }}</th>
+      <th style="text-align:right">{{ _("용량") }}</th>
+      <th>{{ _("출처 페이지") }}</th>
+      <th style="text-align:right">{{ _("참조 스냅샷") }}</th>
+      <th>{{ _("마지막 저장") }}</th>
+    </tr>
   </thead>
   <tbody>
-  {% for f in failed_logs %}
+  {% for g in site_documents %}
     <tr>
-      <td><a href="/page/{{ f['page_id'] }}" title="{{ f['url'] }}">{{ f['page_url'] }}</a></td>
-      <td class="mono">{{ f['started_at'] | ts }}</td>
-      <td class="mono muted">{{ f['source'] }}</td>
-      <td class="error-cell mono" title="{{ f['error'] }}">{{ f['error'] or '-' }}</td>
-      <td>
-        {% if f['page_url'] in active %}
-        <span class="badge running">{{ _("아카이빙 중") }}</span>
-        {% elif can_archive %}
-        <form class="inline" method="post" action="/sites/{{ site['id'] }}/failed/{{ f['id'] }}/retry">
-          <button type="submit">{{ _("재시도", ctx="action") }}</button>
-        </form>
-        {% endif %}
+      <td class="name-cell">
+        <a href="/document/{{ g['sha256'] }}/{{ g['file'] }}" download
+           title="{{ g['url'] }}">{{ g['file'] }}</a>
       </td>
-    </tr>
-  {% endfor %}
-  {% for f in failed_crawl_pages %}
-    <tr>
-      <td class="mono" title="{{ f['url'] }}">{{ f['url'] }}</td>
-      <td class="mono">{% if f['failed_at'] %}{{ f['failed_at'] | ts }}{% else %}-{% endif %}</td>
-      <td class="mono muted"><a href="/crawls/{{ f['crawl_id'] }}">crawl</a></td>
-      <td class="error-cell mono" title="{{ f['error'] }}">{{ f['error'] or '-' }}</td>
-      <td>
-        {% if can_archive %}
-        <form class="inline" method="post" action="/sites/{{ site['id'] }}/crawl-failed/{{ f['id'] }}/retry">
-          <button type="submit">{{ _("재시도", ctx="action") }}</button>
-        </form>
-        {% endif %}
+      <td class="mono">{{ g['file'].rsplit('.', 1)[1] | upper if '.' in g['file'] else '-' }}</td>
+      <td class="mono" style="text-align:right">{{ g['bytes'] | filesize }}</td>
+      <td class="url-cell">
+        <a href="/page/{{ g['page_id'] }}" title="{{ g['page_url'] }}">{{ g['page_url'] }}</a>
+        {%- if g['page_count'] > 1 %}
+        <span class="muted">{{ _("외 {n}곳", n=g['page_count'] - 1) }}</span>
+        {%- endif %}
       </td>
+      <td class="mono" style="text-align:right">
+        <a href="/snapshot/{{ g['snapshot_id'] }}">{{ g['snapshot_count'] }}</a>
+      </td>
+      <td>{{ g['last_seen'] | ts }}</td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+{{ section_pager(docs_pager, site['id'], per_page_choices) }}
+{% endif %}
+
+{% if failed_pager.total %}
+<div class="toolbar">
+  <h3 style="margin:0">{{ _("실패한 작업") }}</h3>
+  <span class="spacer"></span>
+  {% if can_archive %}
+  <form class="inline" method="post" action="/sites/{{ site['id'] }}/failed/retry-all"
+        onsubmit='return confirm({{ _("실패한 작업을 모두 재시도할까요?")|tojson }})'>
+    <button type="submit">{{ _("모두 재시도") }}</button>
+  </form>
+  {% endif %}
+</div>
+<p class="muted" style="font-size:13px">
+  {{ _("최근 실행이 실패로 끝난 페이지입니다. 크롤 중 실패한 페이지도 포함되며, 재시도가 성공하면 목록에서 사라집니다.") }}
+</p>
+<div class="table-wrap cards">
+<table id="failed">
+  <thead>
+    <tr><th>URL</th><th>{{ _("시각") }}</th><th>{{ _("출처") }}</th><th>{{ _("오류") }}</th><th></th></tr>
+  </thead>
+  <tbody>
+  {% for f in failed_items %}
+    <tr>
+      {% if f.kind == 'log' %}
+      <td><a href="/page/{{ f.page_id }}" title="{{ f.url }}">{{ f.page_url }}</a></td>
+      <td class="mono">{{ f.at | ts }}</td>
+      <td class="mono muted">{{ f.source }}</td>
+      <td class="error-cell mono" title="{{ f.error }}">{{ f.error or '-' }}</td>
+      <td>
+        {% if needs_human.get(f.page_url) %}
+        <a class="badge needs-human" href="/archive/jobs/{{ needs_human[f.page_url] }}/live">{{ _("사람 확인 대기") }}</a>
+        {% elif f.page_url in active %}
+        <span class="badge running">{{ _("아카이빙 중") }}</span>
+        {% elif can_archive %}
+        <form class="inline" method="post" action="{{ f.retry_action }}">
+          <button type="submit">{{ _("재시도", ctx="action") }}</button>
+        </form>
+        {% endif %}
+      </td>
+      {% else %}
+      <td class="mono" title="{{ f.url }}">{{ f.url }}</td>
+      <td class="mono">{% if f.at %}{{ f.at | ts }}{% else %}-{% endif %}</td>
+      <td class="mono muted"><a href="/crawls/{{ f.crawl_id }}">crawl</a></td>
+      <td class="error-cell mono" title="{{ f.error }}">{{ f.error or '-' }}</td>
+      <td>
+        {% if can_archive %}
+        <form class="inline" method="post" action="{{ f.retry_action }}">
+          <button type="submit">{{ _("재시도", ctx="action") }}</button>
+        </form>
+        {% endif %}
+      </td>
+      {% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{{ section_pager(failed_pager, site['id'], per_page_choices) }}
 {% endif %}
 
 <h3>{{ _("크롤 회차") }}</h3>
 {% if crawls %}
-<div class="table-wrap">
+<div class="table-wrap cards">
 <table id="crawls">
   <thead>
-    <tr><th>{{ _("시작 URL") }}</th><th>{{ _("범위") }}</th><th class="num">{{ _("페이지") }}</th><th>{{ _("시작") }}</th><th>{{ _("상태") }}</th></tr>
+    <tr><th>{{ _("시작 URL") }}</th><th>{{ _("범위") }}</th><th class="num">{{ _("페이지") }}</th><th>{{ _("시작") }}</th><th>{{ _("상태") }}</th><th></th></tr>
   </thead>
   <tbody>
   {% for c in crawls %}
@@ -175,6 +228,19 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
         {% endif %}
         {% if c['failed_count'] %}<span class="badge error">{{ _("실패") }} {{ c['failed_count'] }}</span>{% endif %}
       </td>
+      <td>
+        {% if can_archive %}
+        {% if c['failed_count'] %}
+        <form class="inline" method="post" action="/crawls/{{ c['id'] }}/retry">
+          <button type="submit" title="{{ _('실패한 페이지만 큐로 되돌려 다시 시도합니다 (성공한 페이지는 그대로).') }}">{{ _("실패 일괄 재시도") }}</button>
+        </form>
+        {% endif %}
+        <form class="inline" method="post" action="/sites/{{ site['id'] }}/crawls/{{ c['id'] }}/rerun"
+              onsubmit='return confirm({{ (c['start_url'] ~ '\n\n' ~ _('같은 범위·옵션으로 사이트 전체를 다시 아카이빙합니다. 계속할까요?'))|tojson }})'>
+          <button type="submit" title="{{ _('같은 시작 URL·범위·옵션으로 사이트 아카이브를 다시 실행합니다.') }}">{{ _("다시 아카이빙") }}</button>
+        </form>
+        {% endif %}
+      </td>
     </tr>
   {% endfor %}
   </tbody>
@@ -189,7 +255,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 <p class="muted" style="font-size:13px">
   {{ _("https 아카이빙 때 받은 서버 인증서의 버전 이력입니다. 인증서가 갱신되면 새 버전으로 기록되고 이전 버전은 남습니다.") }}
 </p>
-<div class="table-wrap wide">
+<div class="table-wrap wide cards">
 <table id="certificates">
   <thead>
     <tr>
@@ -231,7 +297,7 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 
 {% if crawl_schedules %}
 <h3>{{ _("크롤 스케줄") }}</h3>
-<div class="table-wrap">
+<div class="table-wrap cards">
 <table>
   <thead>
     <tr><th>{{ _("시작 URL") }}</th><th>{{ _("주기") }}</th><th>{{ _("다음 실행") }}</th></tr>
@@ -251,16 +317,21 @@ td.error-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis;
 {% endif %}
 
 <script>
-// 진행 중 작업이 있으면 폴링하다가 바뀌는 순간 새로고침
+// 진행 중 작업이 있으면 폴링하다가 바뀌는 순간 새로고침. 사람 처리 대기로의
+// 전환은 진행 목록(active)을 바꾸지 않으므로 needs_human 변화도 함께 본다.
 const active = {{ active.keys() | list | sort | tojson }};
-if (active.length) {
+const needsHuman = {{ needs_human_urls | tojson }};
+if (active.length || needsHuman.length) {
   setInterval(async () => {
     if (document.hidden) return;
     try {
       const res = await fetch('/archive/active');
       if (!res.ok) return;
-      const now = (await res.json()).active;
-      if (JSON.stringify(now) !== JSON.stringify(active)) location.reload();
+      const data = await res.json();
+      // 서버가 url 순으로 정렬해 보내므로 클라이언트에서 다시 정렬하지 않는다.
+      const nh = (data.needs_human || []).map((j) => j.url);
+      if (JSON.stringify(data.active) !== JSON.stringify(active)
+          || JSON.stringify(nh) !== JSON.stringify(needsHuman)) location.reload();
     } catch (e) { /* 일시적 오류 — 다음 폴링에서 재시도 */ }
   }, 2000);
 }

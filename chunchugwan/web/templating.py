@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
-from markupsafe import Markup
+from markupsafe import Markup, escape
 
 
 def _auth_context(request: Request) -> dict:
@@ -15,12 +16,33 @@ def _auth_context(request: Request) -> dict:
     from . import permissions
 
     user = getattr(request.state, "user", None)
+    admin = permissions.system_allowed(user)
+    # 사람 확인 대기 작업은 워커가 기록하는 DB 사실이다 — 대시보드(serve)의
+    # WCCG_LIVE_CHALLENGE 설정과 무관하게, 관리자에겐 대기 작업이 있으면 헤더
+    # 메뉴·배너로 안내한다 (워커와 serve 의 env 가 달라도 누락되지 않게). 대기
+    # 건수는 작은 인덱스 조회(idx_archive_jobs_needs_human) — 평소엔 0 건이라 즉시
+    # 반환된다. 단건 링크용으로 작업 목록(id·url)도 함께 넘긴다.
+    needs_human_jobs: list = []
+    if admin:
+        from .. import db
+
+        try:
+            with db.connect() as conn:
+                needs_human_jobs = [
+                    {"id": j["id"], "url": j["url"]}
+                    for j in db.list_needs_human_jobs(conn)
+                ]
+        except Exception:
+            needs_human_jobs = []
     return {
         "user": user,
-        "system_allowed": permissions.system_allowed(user),
+        "system_allowed": admin,
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
         "can_view_logs": permissions.can_view_logs(user),
+        "can_search": permissions.can_search(user),
+        "needs_human_jobs": needs_human_jobs,
+        "needs_human_count": len(needs_human_jobs),
     }
 
 
@@ -80,9 +102,32 @@ def ts(value: str | None, fmt: str = "datetime") -> Markup | str:
     )
 
 
+def highlight(text: str | None, terms) -> Markup | str:
+    """검색 스니펫에서 매치어를 <mark> 로 강조 (HTML 이스케이프 후 삽입).
+
+    텍스트는 모두 escape 해 주입을 막고, 매치 구간만 <mark> 로 감싼다.
+    terms 는 검색 토큰 목록 — 대소문자 무시로 부분일치를 강조한다.
+    """
+    if not text:
+        return ""
+    tokens = [t for t in (terms or []) if t]
+    if not tokens:
+        return escape(text)
+    pattern = re.compile("|".join(re.escape(t) for t in tokens), re.IGNORECASE)
+    out: list = []
+    last = 0
+    for m in pattern.finditer(text):
+        out.append(escape(text[last:m.start()]))
+        out.append(Markup("<mark>") + escape(m.group(0)) + Markup("</mark>"))
+        last = m.end()
+    out.append(escape(text[last:]))
+    return Markup("").join(out)
+
+
 templates = Jinja2Templates(
     directory=Path(__file__).parent / "templates",
     context_processors=[_auth_context, _i18n_context, _tz_context],
 )
 templates.env.filters["filesize"] = filesize
 templates.env.filters["ts"] = ts
+templates.env.filters["highlight"] = highlight

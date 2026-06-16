@@ -85,6 +85,115 @@ def test_capture_artifacts_and_inlining(site_url, tmp_path):
     assert result.document_links == [f"{base}/report.pdf"]
 
 
+def test_capture_no_mobile_screenshot_by_default(site_url, tmp_path):
+    """mobile_screenshot 기본값(False)에선 모바일 스크린샷을 만들지 않는다."""
+    out = tmp_path / "out"
+    out.mkdir()
+    capture.capture(site_url, out)
+    assert (out / "screenshot.png").is_file()
+    assert not (out / "screenshot-mobile.png").is_file()
+
+
+def test_capture_mobile_screenshot(tmp_path):
+    """mobile_screenshot=True 면 안드로이드 크롬 모바일 컨텍스트로 같은 URL 을
+    한 번 더 열어 데스크탑·모바일 두 스크린샷을 저장한다.
+
+    - 모바일 요청은 안드로이드 크롬 UA 로 나간다(서버가 확인).
+    - 반응형 페이지(viewport meta)는 모바일에서 device-width(390)로 렌더된다.
+    """
+    from http.server import BaseHTTPRequestHandler
+
+    from chunchugwan import config
+
+    seen_uas: list[str] = []
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>resp</title></head><body><h1>모바일</h1><p>본문</p></body></html>"
+    ).encode("utf-8")
+
+    class _UAHandler(BaseHTTPRequestHandler):
+        def log_message(self, *args):  # 테스트 출력 오염 방지
+            pass
+
+        def do_GET(self):  # noqa: N802 (http.server 규약)
+            seen_uas.append(self.headers.get("User-Agent", ""))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _UAHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    out = tmp_path / "out"
+    out.mkdir()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/"
+        capture.capture(url, out, mobile_screenshot=True)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert (out / "screenshot.png").is_file()
+    mobile = out / "screenshot-mobile.png"
+    assert mobile.is_file()
+
+    # 모바일 요청은 안드로이드 크롬 UA, 데스크탑 요청은 'Mobile' 없는 UA 로 나간다
+    assert config.MOBILE_SCREENSHOT_USER_AGENT in seen_uas
+    assert any("Mobile" not in ua for ua in seen_uas)
+
+    # 반응형 페이지는 모바일 뷰포트에서 device-width(390)로 렌더된다
+    with Image.open(mobile) as im:
+        assert im.width == config.MOBILE_SCREENSHOT_WIDTH
+
+
+def test_mobile_screenshot_skipped_on_loopback_redirect(tmp_path):
+    """모바일 UA 로만 다른 호스트(localhost)의 루프백으로 리다이렉트되면 모바일
+    스크린샷을 저장하지 않는다 — 대시보드 누수 방지(아키텍처 원칙 7).
+    데스크탑 캡처는 리다이렉트되지 않으므로 정상 저장된다."""
+    from http.server import BaseHTTPRequestHandler
+
+    info: dict[str, int] = {}
+    html = b"<!doctype html><html><body>landed</body></html>"
+
+    class _Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):  # noqa: 출력 오염 방지
+            pass
+
+        def do_GET(self):  # noqa: N802
+            ua = self.headers.get("User-Agent", "")
+            if self.path == "/" and "Mobile" in ua:
+                # 모바일 UA 만 다른 호스트(localhost)의 루프백으로 리다이렉트
+                self.send_response(302)
+                self.send_header("Location", f"http://localhost:{info['port']}/landed")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    info["port"] = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    out = tmp_path / "out"
+    out.mkdir()
+    try:
+        capture.capture(
+            f"http://127.0.0.1:{info['port']}/", out, mobile_screenshot=True
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert (out / "screenshot.png").is_file()             # 데스크탑은 정상 저장
+    assert not (out / "screenshot-mobile.png").is_file()  # 루프백 리다이렉트 → 생략
+
+
 def test_capture_records_resource_url_mapping(site_url, tmp_path):
     """인라인 성공 자원의 sha256 → 원본 URL 매핑이 기록된다 (보안 컨텍스트)."""
     out = tmp_path / "out"
@@ -200,7 +309,8 @@ def test_capture_retries_with_http2_disabled(monkeypatch, tmp_path):
 
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
                   browser_args=(), session=None, resource_fallback=None,
-                  insecure_tls=False):
+                  insecure_tls=False, credential=None, live_session=None,
+                  mobile_screenshot=False):
         calls.append(browser_args)
         if not browser_args:
             raise capture.CaptureError(
@@ -219,7 +329,8 @@ def test_capture_does_not_retry_other_errors(monkeypatch, tmp_path):
 
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
                   browser_args=(), session=None, resource_fallback=None,
-                  insecure_tls=False):
+                  insecure_tls=False, credential=None, live_session=None,
+                  mobile_screenshot=False):
         calls.append(browser_args)
         raise capture.CaptureError(f"{url} 캡처 실패: net::ERR_NAME_NOT_RESOLVED")
 

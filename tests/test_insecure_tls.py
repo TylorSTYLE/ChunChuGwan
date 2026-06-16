@@ -38,7 +38,7 @@ def test_cert_error_retries_with_insecure_tls(archive_env, monkeypatch):
     calls: list[tuple[str, bool]] = []
 
     def fake(url, out_dir, remove_selectors=(), link_rewriter=None, session=None,
-             resource_fallback=None, insecure_tls=False):
+             resource_fallback=None, insecure_tls=False, **kwargs):
         calls.append((url, insecure_tls))
         if not insecure_tls:
             raise capture.CaptureConnectError(f"{url} {CERT_ERROR}")
@@ -68,7 +68,7 @@ def test_cert_error_falls_back_to_http_when_insecure_also_fails(
     calls: list[tuple[str, bool]] = []
 
     def fake(url, out_dir, remove_selectors=(), link_rewriter=None, session=None,
-             resource_fallback=None, insecure_tls=False):
+             resource_fallback=None, insecure_tls=False, **kwargs):
         calls.append((url, insecure_tls))
         if url.startswith("https://"):
             raise capture.CaptureConnectError(f"{url} {CERT_ERROR}")
@@ -89,7 +89,7 @@ def test_non_cert_error_skips_insecure_retry(archive_env, monkeypatch):
     calls: list[tuple[str, bool]] = []
 
     def fake(url, out_dir, remove_selectors=(), link_rewriter=None, session=None,
-             resource_fallback=None, insecure_tls=False):
+             resource_fallback=None, insecure_tls=False, **kwargs):
         calls.append((url, insecure_tls))
         if url.startswith("https://"):
             raise capture.CaptureConnectError(
@@ -111,14 +111,14 @@ def test_insecure_capture_downloads_documents_without_verify(
 ):
     """검증 무시로 캡처한 사이트의 문서 다운로드도 인증서 검증을 끈다."""
     def fake(url, out_dir, remove_selectors=(), link_rewriter=None, session=None,
-             resource_fallback=None, insecure_tls=False):
+             resource_fallback=None, insecure_tls=False, **kwargs):
         if not insecure_tls:
             raise capture.CaptureConnectError(f"{url} {CERT_ERROR}")
         return _result(url, document_links=[f"{url}report.pdf"])
 
     seen_verify: list[bool] = []
 
-    def fake_download(links, dest_dir, referer=None, verify=True):
+    def fake_download(links, dest_dir, referer=None, verify=True, **kwargs):
         seen_verify.append(verify)
         return [], []
 

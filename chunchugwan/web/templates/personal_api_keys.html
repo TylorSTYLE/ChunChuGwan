@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ _("개인 API Key") }} — {{ _("춘추관") }}{% endblock %}
+{% block content %}
+<div class="auth-card">
+  <h2>{{ _("개인 API Key") }}</h2>
+  {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <p class="muted" style="font-size:12px; max-width:680px">
+    {{ _("크롬 확장이 Authorization: Bearer 헤더로 /api/v1 에 접근할 때 쓰는 본인 전용 API Key 입니다. 권한(보기·아카이브)은 발급 시 내 역할 범위 안에서 선택하며, 원문은 발급 직후 한 번만 표시됩니다. 폐기하면 그 키를 쓰는 확장의 접근이 즉시 차단됩니다.") }}
+  </p>
+
+  {% if new_token %}
+  <div class="notice" style="word-break: break-all">
+    <strong class="mono" style="font-size:13px">{{ new_token }}</strong>
+    <button type="button" onclick='navigator.clipboard.writeText({{ new_token|tojson }})
+            .then(() => this.textContent = {{ _("복사됨")|tojson }})'>{{ _("복사") }}</button>
+  </div>
+  {% endif %}
+
+  <div class="table-wrap wide">
+  <table>
+    <thead>
+      <tr><th>{{ _("이름") }}</th><th>{{ _("키") }}</th><th>{{ _("권한") }}</th>
+          <th>{{ _("등록", ctx="th") }}</th><th>{{ _("만료") }}</th>
+          <th>{{ _("마지막 사용") }}</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for tk in ext_tokens %}
+      <tr>
+        <td>{{ tk['name'] }}</td>
+        <td class="mono muted">{{ tk['prefix'] }}…</td>
+        <td>
+          {% if tk['can_view'] %}<span class="badge role-viewer">{{ _("보기") }}</span>{% endif %}
+          {% if tk['can_archive'] %}<span class="badge role-archiver">{{ _("아카이브", ctx="perm") }}</span>{% endif %}
+        </td>
+        <td class="mono">{{ tk['created_at'] | ts('date') }}</td>
+        <td class="mono">
+          {% if tk['expires_at'] %}
+            {{ tk['expires_at'] | ts('date') }}
+            {% if tk['expired'] %}<span class="badge error">{{ _("만료됨") }}</span>{% endif %}
+          {% else %}
+            <span class="muted">{{ _("영구") }}</span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ tk['last_used_at'] | ts if tk['last_used_at'] else '-' }}</td>
+        <td>
+          <form class="inline" method="post"
+                action="/settings/api-keys/{{ tk['id'] }}/delete"
+                onsubmit='return confirm({{ _('{name} 키를 폐기할까요? 이 키를 쓰는 확장의 접근이 즉시 차단됩니다.', name=tk['name'])|tojson }})'>
+            <button type="submit" class="danger">{{ _("폐기") }}</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">{{ _("발급한 API Key 가 없습니다.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  {% if ext_can_view or ext_can_archive %}
+  <form class="inline" method="post" action="/settings/api-keys"
+        id="ext-token-form" style="margin-top:8px">
+    <input type="text" name="name" placeholder="{{ _('이름 (예: chrome-ext)') }}"
+           size="20" maxlength="50" required>
+    <label><input type="checkbox" name="can_view" checked> {{ _("보기") }}</label>
+    {% if ext_can_archive %}<label><input type="checkbox" name="can_archive"> {{ _("아카이브", ctx="perm") }}</label>{% endif %}
+    <select name="expiry" id="ext-token-expiry">
+      {% for value, label in ext_expiry_options %}
+      <option value="{{ value }}">{{ _(label) }}</option>
+      {% endfor %}
+    </select>
+    <input type="number" name="custom_days" id="ext-token-custom-days" value="30"
+           min="1" max="{{ ext_max_custom_days }}" style="width:80px; display:none"
+           title="{{ _('만료까지 일 수') }}">
+    <button type="submit">{{ _("발급") }}</button>
+  </form>
+  <script>
+  /* 만료 '사용자 지정' 선택 시에만 일 수 입력을 노출 */
+  (function () {
+    var select = document.getElementById("ext-token-expiry");
+    var days = document.getElementById("ext-token-custom-days");
+    function apply() { days.style.display = select.value === "custom" ? "" : "none"; }
+    select.addEventListener("change", apply);
+    apply();
+  })();
+  </script>
+  {% else %}
+  <p class="muted" style="font-size:12px">{{ _("현재 권한으로는 API Key 를 발급할 수 없습니다.") }}</p>
+  {% endif %}
+</div>
+{% endblock %}

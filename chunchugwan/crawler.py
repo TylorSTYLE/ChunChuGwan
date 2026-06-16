@@ -205,7 +205,9 @@ def start_crawl(
     max_depth: int | None = None,
     delay_seconds: int | None = None,
     source: str = "web",
+    requested_by: int | None = None,
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> tuple[sqlite3.Row, bool]:
     """크롤을 등록하고(시작 URL 을 큐에 넣고) (크롤 row, 병합 여부)를 반환.
 
@@ -241,8 +243,8 @@ def start_crawl(
             conn,
             start_url=norm, scope_host=scope_host, scope_path=scope_path,
             max_pages=max_pages, max_depth=max_depth,
-            delay_seconds=delay_seconds, source=source,
-            network_tag_id=network_tag_id,
+            delay_seconds=delay_seconds, source=source, requested_by=requested_by,
+            network_tag_id=network_tag_id, credential_id=credential_id,
         )
         db.insert_crawl_page(conn, crawl_id, norm, 0)
         return db.get_crawl(conn, crawl_id), False
@@ -392,6 +394,8 @@ def process_next(
             extra = {"browser_session": browser_session} if browser_session else {}
             if item["network_tag_id"]:
                 extra["network_tag_id"] = item["network_tag_id"]
+            if item["credential_id"]:
+                extra["credential_id"] = item["credential_id"]
             outcome = archive_fn(
                 url, source="crawl", link_rewriter=link_rewriter(item["crawl_id"]),
                 **extra,
@@ -425,6 +429,7 @@ def set_crawl_schedule(
     max_depth: int | None = None,
     delay_seconds: int | None = None,
     network_tag_id: str | None = None,
+    credential_id: int | None = None,
 ) -> sqlite3.Row:
     """시작 URL 에 주기적 사이트 아카이브를 등록/변경하고 스케줄 row 반환.
 
@@ -456,6 +461,7 @@ def set_crawl_schedule(
             max_pages=max_pages, max_depth=max_depth, delay_seconds=delay_seconds,
             interval_seconds=interval_seconds, next_run_at=next_run,
             run_at_time=run_at, network_tag_id=network_tag_id,
+            credential_id=credential_id,
         )
         return db.get_crawl_schedule(conn, norm)
 
@@ -531,6 +537,7 @@ def run_due_schedules(*, source: str = "schedule") -> list[ScheduleStep]:
                 max_pages=sched["max_pages"], max_depth=sched["max_depth"],
                 delay_seconds=sched["delay_seconds"], source=source,
                 network_tag_id=sched["network_tag_id"],
+                credential_id=sched["credential_id"],
             )
             if merged:
                 # 미루기 검사 직후 다른 경로가 같은 크롤을 등록한 드문 경우 —

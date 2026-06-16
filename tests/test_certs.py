@@ -196,7 +196,7 @@ def test_upsert_versions(archive_env):
 
 def _fake_capture(monkeypatch):
     def fake(url, out_dir, remove_selectors=(), link_rewriter=None, session=None,
-             resource_fallback=None, insecure_tls=False):
+             resource_fallback=None, insecure_tls=False, **kwargs):
         return capture.CaptureResult(
             final_url=url, http_status=200, title="제목",
             raw_html="<html><body>내용</body></html>",

@@ -75,6 +75,29 @@ def test_all_template_msgids_have_english():
     assert not missing, "en 카탈로그 누락:\n" + "\n".join(missing)
 
 
+def test_no_tojson_in_double_quoted_attribute():
+    """tojson 값을 큰따옴표 속성 안에 두면 안 된다.
+
+    Jinja `tojson` 은 `<`·`>`·`&`·`'` 만 이스케이프하고 `"` 는 그대로 둔다.
+    그래서 `onclick="f({{ x|tojson }})"` 처럼 큰따옴표 속성 안에 넣으면
+    JSON 의 `"` 가 속성을 일찍 끊어 핸들러가 깨진다(복사 버튼·confirm 이
+    조용히 무력화됨). 작은따옴표 속성(`onclick='f({{ x|tojson }})'`)을 써야
+    한다. tojson 호출이 괄호로 닫힌 뒤 큰따옴표가 오는 패턴을 잡는다.
+    """
+    broken_re = re.compile(r"tojson\s*\}\}\s*\)+\s*\"")
+    offenders = []
+    tpl_dir = Path(i18n.__file__).parent / "templates"
+    for tpl in sorted(tpl_dir.glob("*.html")):
+        text = tpl.read_text(encoding="utf-8")
+        for ln, line in enumerate(text.splitlines(), 1):
+            if broken_re.search(line):
+                offenders.append(f"{tpl.name}:{ln}: {line.strip()}")
+    assert not offenders, (
+        "tojson 값이 큰따옴표 속성 안에 있음 (작은따옴표 속성으로 바꿀 것):\n"
+        + "\n".join(offenders)
+    )
+
+
 def test_format_interval():
     assert i18n.format_interval("ko", 3600) == "1시간"
     assert i18n.format_interval("en", 3600) == "1h"

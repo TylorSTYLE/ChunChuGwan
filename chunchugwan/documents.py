@@ -40,6 +40,55 @@ _UNSAFE_RE = re.compile(r"[^\w.-]+", re.UNICODE)
 _HTML_TYPES = ("text/html", "application/xhtml+xml")
 
 
+@dataclass(frozen=True)
+class DocumentLimits:
+    """문서 아카이브 한도 — 스냅샷당 수·문서 1개 크기(bytes)·다운로드 타임아웃(초)."""
+
+    max_count: int
+    max_bytes: int
+    timeout_seconds: int
+
+
+# 시스템 설정이 없거나 오염됐을 때의 기본 한도 (config 기본값에서 파생)
+DEFAULT_LIMITS = DocumentLimits(
+    max_count=config.DOCUMENT_MAX_COUNT_DEFAULT,
+    max_bytes=config.DOCUMENT_MAX_MB_DEFAULT * 1024 * 1024,
+    timeout_seconds=config.DOCUMENT_FETCH_TIMEOUT_DEFAULT,
+)
+
+
+def _clamped_int(raw: str | None, default: int, lo: int, hi: int) -> int:
+    """설정 문자열을 정수로 해석해 [lo, hi] 로 클램핑 (오염 시 default)."""
+    try:
+        value = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, value))
+
+
+def limits(conn: sqlite3.Connection) -> DocumentLimits:
+    """시스템 설정의 문서 아카이브 한도 (기본·범위 밖이면 config 기본값).
+
+    크기 한도는 MB 단위 정수로 저장하고 bytes 로 환산해 돌려준다.
+    """
+    max_count = _clamped_int(
+        db.get_setting(conn, db.DOCUMENT_MAX_COUNT_KEY),
+        config.DOCUMENT_MAX_COUNT_DEFAULT,
+        config.DOCUMENT_MAX_COUNT_MIN, config.DOCUMENT_MAX_COUNT_MAX,
+    )
+    max_mb = _clamped_int(
+        db.get_setting(conn, db.DOCUMENT_MAX_MB_KEY),
+        config.DOCUMENT_MAX_MB_DEFAULT,
+        config.DOCUMENT_MAX_MB_MIN, config.DOCUMENT_MAX_MB_MAX,
+    )
+    timeout = _clamped_int(
+        db.get_setting(conn, db.DOCUMENT_FETCH_TIMEOUT_KEY),
+        config.DOCUMENT_FETCH_TIMEOUT_DEFAULT,
+        config.DOCUMENT_FETCH_TIMEOUT_MIN, config.DOCUMENT_FETCH_TIMEOUT_MAX,
+    )
+    return DocumentLimits(max_count, max_mb * 1024 * 1024, timeout)
+
+
 def is_document_url(url: str) -> bool:
     """URL 경로의 확장자가 문서 화이트리스트에 있는 http(s) URL 인지."""
     parts = urlsplit(url)
@@ -62,9 +111,19 @@ def _build_filename(stem: str, ext: str, url: str) -> str:
 
 
 def document_filename(url: str) -> str:
-    """URL 경로 기반 문서 저장 파일명 (페이지가 링크한 문서용)."""
-    path = PurePosixPath(unquote(urlsplit(url).path))
-    return _build_filename(path.stem, path.suffix.lower(), url)
+    """URL 경로 기반 문서 저장 파일명 (페이지가 링크한 문서용).
+
+    확장자 분리는 pathlib(.stem/.suffix) 대신 마지막 점 기준으로 직접 한다 —
+    '...pdf'(예: %2e%2e.pdf, 즉 traversal '..' + '.pdf')처럼 앞이 점뿐인 이름은
+    pathlib 이 확장자를 못 떼어 '..' 잔재가 stem 에 남고, _build_filename 의
+    정제(앞뒤 점 제거)가 'pdf' 만 남겨 'document-' 폴백을 건너뛴다. 직접
+    분리하면 확장자가 떨어지고 남은 '..' 는 정제로 비워져 'document-' 로 폴백한다.
+    """
+    name = PurePosixPath(unquote(urlsplit(url).path)).name
+    stem, dot, ext = name.rpartition(".")
+    if not dot or not ext:  # 점 없음 또는 끝점(빈 확장자) — 전체를 stem 으로
+        return _build_filename(name, "", url)
+    return _build_filename(stem, f".{ext.lower()}", url)
 
 
 def _repair_header_text(s: str) -> str:
@@ -149,35 +208,71 @@ def direct_filename(
     return None
 
 
+def _auth_to_httpx(auth: dict | None):
+    """credentials.httpx_auth 스펙을 httpx 호출 인자로 변환.
+
+    반환: (추가 헤더 dict, 도메인 스코프 Cookies jar 또는 None).
+    """
+    if not auth:
+        return {}, None
+    extra_headers = dict(auth.get("headers") or {})
+    cookies = None
+    cookie_dicts = auth.get("cookies") or []
+    if cookie_dicts:
+        cookies = httpx.Cookies()
+        for c in cookie_dicts:
+            name = c.get("name")
+            if not name:
+                continue
+            domain = (c.get("domain") or "").lstrip(".")
+            cookies.set(
+                name, c.get("value", ""), domain=domain, path=c.get("path") or "/"
+            )
+    return extra_headers, cookies
+
+
 def download_documents(
     links: list[str], dest_dir: Path, referer: str | None = None,
-    verify: bool = True,
+    verify: bool = True, auth: dict | None = None, auth_origin: str | None = None,
+    limits: DocumentLimits | None = None,
 ) -> tuple[list[dict[str, object]], list[str]]:
     """문서 링크들을 dest_dir 에 내려받아 (성공 manifest, 실패 URL) 반환.
 
     manifest 항목: {url, file, bytes, sha256, content_type}.
-    개수(config.DOCUMENT_MAX_COUNT)·크기(config.DOCUMENT_MAX_BYTES) 한도를
-    넘거나 응답이 HTML 인 항목은 건너뛴다. 실패가 아카이빙을 막지 않는다.
-    verify=False 는 TLS 인증서 검증을 끈다 — 자체 서명 사이트를 검증 무시로
-    캡처한 경우(pipeline insecure_tls)에만 쓴다.
+    개수(limits.max_count)·크기(limits.max_bytes) 한도를 넘거나 응답이 HTML
+    인 항목은 건너뛴다 (limits 미지정 시 DEFAULT_LIMITS). 실패가 아카이빙을
+    막지 않는다. verify=False 는 TLS 인증서 검증을 끈다 — 자체 서명 사이트를
+    검증 무시로 캡처한 경우(pipeline insecure_tls)에만 쓴다.
+    auth(credentials.httpx_auth)는 auth_origin 과 같은 origin 의 문서에만 실어
+    보낸다 — 서드파티 CDN 문서로 자격증명이 새지 않게 한다.
     """
+    limits = limits or DEFAULT_LIMITS
     links = list(dict.fromkeys(links))
-    if len(links) > config.DOCUMENT_MAX_COUNT:
+    if len(links) > limits.max_count:
         logger.warning(
             "문서 링크 %d개 중 앞 %d개만 저장 (개수 한도)",
-            len(links), config.DOCUMENT_MAX_COUNT,
+            len(links), limits.max_count,
         )
-        links = links[: config.DOCUMENT_MAX_COUNT]
+        links = links[: limits.max_count]
 
-    headers = {"User-Agent": config.USER_AGENT}
+    base_headers = {"User-Agent": config.USER_AGENT}
     if referer:
-        headers["Referer"] = referer
+        base_headers["Referer"] = referer
 
     manifest: list[dict[str, object]] = []
     failed: list[str] = []
     for url in links:
+        # 자격증명은 같은 origin 의 문서에만 (서드파티로 누수 방지)
+        if auth and auth_origin and storage.url_origin(url) == auth_origin:
+            extra_headers, cookies = _auth_to_httpx(auth)
+            headers = {**base_headers, **extra_headers}
+        else:
+            headers, cookies = base_headers, None
         try:
-            manifest.append(_download_one(url, dest_dir, headers, verify))
+            manifest.append(_download_one(
+                url, dest_dir, headers, verify, cookies,
+                max_bytes=limits.max_bytes, timeout=limits.timeout_seconds,
+            ))
         except Exception as e:
             logger.warning("문서 다운로드 실패(건너뜀): %s — %s", url, e)
             failed.append(url)
@@ -194,11 +289,11 @@ def _response_content_type(resp) -> str:
     return content_type
 
 
-def _save_stream(resp, path: Path) -> tuple[int, str]:
+def _save_stream(resp, path: Path, max_bytes: int) -> tuple[int, str]:
     """응답 본문을 path 에 스트리밍 저장 — (크기, sha256) 반환.
 
-    크기 한도(config.DOCUMENT_MAX_BYTES)를 넘으면 ValueError. 실패 시
-    부분 다운로드 잔재를 남기지 않는다.
+    크기가 max_bytes 를 넘으면 ValueError. 실패 시 부분 다운로드 잔재를
+    남기지 않는다.
     """
     hasher = hashlib.sha256()
     size = 0
@@ -206,9 +301,9 @@ def _save_stream(resp, path: Path) -> tuple[int, str]:
         with path.open("wb") as f:
             for chunk in resp.iter_bytes():
                 size += len(chunk)
-                if size > config.DOCUMENT_MAX_BYTES:
+                if size > max_bytes:
                     raise ValueError(
-                        f"크기 한도 초과 (> {config.DOCUMENT_MAX_BYTES} bytes)"
+                        f"크기 한도 초과 (> {max_bytes} bytes)"
                     )
                 hasher.update(chunk)
                 f.write(chunk)
@@ -219,19 +314,20 @@ def _save_stream(resp, path: Path) -> tuple[int, str]:
 
 
 def _download_one(
-    url: str, dest_dir: Path, headers: dict[str, str], verify: bool = True
+    url: str, dest_dir: Path, headers: dict[str, str], verify: bool = True,
+    cookies=None, *, max_bytes: int, timeout: int,
 ) -> dict[str, object]:
     """문서 1개를 스트리밍 다운로드 (크기 한도 검사 + sha256 계산)."""
     name = document_filename(url)
     dest_dir.mkdir(parents=True, exist_ok=True)
     path = dest_dir / name
     with httpx.stream(
-        "GET", url, headers=headers, follow_redirects=True,
-        timeout=config.DOCUMENT_FETCH_TIMEOUT_SECONDS, verify=verify,
+        "GET", url, headers=headers, cookies=cookies, follow_redirects=True,
+        timeout=timeout, verify=verify,
     ) as resp:
         resp.raise_for_status()
         content_type = _response_content_type(resp)
-        size, sha256 = _save_stream(resp, path)
+        size, sha256 = _save_stream(resp, path, max_bytes)
     return {
         "url": url,
         "file": name,
@@ -250,20 +346,27 @@ class DirectDownload:
     http_status: int
 
 
-def download_direct(url: str, dest_dir: Path, verify: bool = True) -> DirectDownload:
+def download_direct(
+    url: str, dest_dir: Path, verify: bool = True, auth: dict | None = None,
+    limits: DocumentLimits | None = None,
+) -> DirectDownload:
     """탐색이 다운로드로 전환된 URL(파일 직접 링크)을 문서로 내려받는다.
 
     페이지가 링크한 문서(download_documents)와 달리 URL 경로 확장자를
     신뢰할 수 없으므로(download.php 등) 파일명은 direct_filename 으로
     결정하고, 문서 화이트리스트 확장자를 못 정하면 ValueError. HTML 응답
-    거부·크기 한도는 링크 문서 다운로드와 동일하다. 네트워크 실패는
-    httpx.HTTPError 로 전파된다.
+    거부·크기 한도(limits.max_bytes, 미지정 시 DEFAULT_LIMITS)는 링크 문서
+    다운로드와 동일하다. 네트워크 실패는 httpx.HTTPError 로 전파된다.
+    auth(credentials.httpx_auth)는 대상 자체가 로그인 보호된 다운로드 URL 일
+    때 인증을 싣는다 (대상 origin 과 동일).
     """
+    limits = limits or DEFAULT_LIMITS
+    extra_headers, cookies = _auth_to_httpx(auth)
     dest_dir.mkdir(parents=True, exist_ok=True)
     with httpx.stream(
-        "GET", url, headers={"User-Agent": config.USER_AGENT},
-        follow_redirects=True,
-        timeout=config.DOCUMENT_FETCH_TIMEOUT_SECONDS, verify=verify,
+        "GET", url, headers={"User-Agent": config.USER_AGENT, **extra_headers},
+        cookies=cookies, follow_redirects=True,
+        timeout=limits.timeout_seconds, verify=verify,
     ) as resp:
         resp.raise_for_status()
         content_type = _response_content_type(resp)
@@ -276,7 +379,7 @@ def download_direct(url: str, dest_dir: Path, verify: bool = True) -> DirectDown
                 "문서 화이트리스트 확장자를 결정할 수 없습니다 "
                 f"(content-type {content_type or '-'})"
             )
-        size, sha256 = _save_stream(resp, dest_dir / name)
+        size, sha256 = _save_stream(resp, dest_dir / name, limits.max_bytes)
     return DirectDownload(
         entry={
             "url": url,
@@ -456,6 +559,11 @@ def _compact_snapshot_documents(
         })
     if manifest:
         db.insert_snapshot_documents(conn, snapshot_id, manifest)
+        # 첨부 문서가 새로 생겼으므로 검색 인덱스를 다시 만들어야 한다 —
+        # 이 스냅샷이 이미 색인됐다면 문서 본문이 빠진 상태이기 때문이다.
+        # 다시 색인 필요로 표시만 하고(코어 경유), 실제 색인은 'wccg search
+        # reindex'/시스템 메뉴 버튼이 백필한다 (compact ↔ 인덱스 정합).
+        db.mark_snapshot_search_stale(conn, snapshot_id)
     try:
         (snap_dir / "files").rmdir()
     except OSError:

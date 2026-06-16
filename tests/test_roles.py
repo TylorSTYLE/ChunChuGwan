@@ -112,6 +112,54 @@ def test_archiver_sees_retry_button(client):
     assert f"/logs/{log_id}/retry" in page
 
 
+def _seed_needs_human(url: str = "https://sd.test/article") -> int:
+    """사람 확인(라이브 진입) 상태의 작업 1건을 만든다."""
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, url, source="web")
+        job = db.claim_due_archive_job(conn, "2099-01-01T00:00:00+00:00")
+        db.mark_needs_human(conn, job["id"], token="tok", viewport_w=1280, viewport_h=800)
+    return job["id"]
+
+
+def test_archive_active_needs_human_admin_only(client):
+    """AUTH on 에서 /archive/active 의 needs_human(진행 중 챌린지 URL 목록)은
+    관리자에게만 노출된다 — viewer/archiver 로 새지 않게 하는 게이트 회귀 방지.
+    serve 의 WCCG_LIVE_CHALLENGE 는 켜지 않는다 (DB 사실만으로 노출돼야 한다)."""
+    url = "https://sd.test/article"
+    job_id = _seed_needs_human(url)
+
+    # 비관리자(viewer·archiver)는 active 목록만 받고 needs_human 키는 없다
+    for email in ("viewer@test.co", "archiver@test.co"):
+        _login(client, email)
+        data = client.get("/archive/active").json()
+        assert "needs_human" not in data, email
+
+    # 관리자(boss)는 serve LIVE_CHALLENGE off 여도 seed 한 작업을 받는다
+    _login(client, "boss@test.co", "bosspass1234")
+    data = client.get("/archive/active").json()
+    assert data["needs_human"] == [{"id": job_id, "url": url}]
+
+
+def test_archives_needs_human_badge_admin_only(client):
+    """/archives 의 '사람 확인 대기' 상태 배지(라이브 화면 링크)는 관리자에게만
+    노출된다 — viewer 는 진행만 보이고('아카이빙 중') 챌린지 링크는 못 받는다.
+    serve 의 WCCG_LIVE_CHALLENGE 는 켜지 않는다 (워커가 DB 에 기록만 했으면 보임)."""
+    job_id = _seed_needs_human("https://sd.test/article")
+
+    _login(client, "viewer@test.co")
+    html = client.get("/archives").text
+    assert 'class="badge needs-human"' not in html
+    assert f"/archive/jobs/{job_id}/live" not in html
+    assert "아카이빙 중" in html  # 진행 자체는 viewer 도 본다
+
+    # 관리자는 라이브 화면으로 가는 배지 링크를 받는다 (배너 JS 주석이 아니라
+    # 실제 배지 앵커로 단언 — '사람 확인 대기' 문자열은 약한 검사)
+    _login(client, "boss@test.co", "bosspass1234")
+    html = client.get("/archives").text
+    assert 'class="badge needs-human"' in html
+    assert f"/archive/jobs/{job_id}/live" in html
+
+
 def test_viewer_cannot_manage_schedule(client):
     """주기적 재아카이빙 설정/해제도 아카이빙 트리거 — viewer 는 403."""
     _login(client, "viewer@test.co")

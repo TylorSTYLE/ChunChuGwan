@@ -41,6 +41,10 @@
 .sys-card.danger-card { border-color: var(--red); }
 .sys-card.danger-card h4 { color: var(--red); }
 h3.danger-heading { color: var(--red); }
+.reindex-progress { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
+.reindex-progress[hidden] { display: none; }
+.reindex-progress progress { flex: 1; height: 12px; }
+.reindex-progress span { font-size: 12px; white-space: nowrap; }
 </style>
 {% endblock %}
 {% block content %}
@@ -106,7 +110,7 @@ h3.danger-heading { color: var(--red); }
     <div class="actions">
       {% if optimize_pending %}
       <form method="post" action="/system/compact"
-            onsubmit="return confirm({{ _('기존 스냅샷을 압축·인덱스하고 참조 없는 공유 자원을 정리합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')|tojson }})">
+            onsubmit='return confirm({{ _('기존 스냅샷을 압축·인덱스하고 참조 없는 공유 자원을 정리합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')|tojson }})'>
         <button type="submit">{{ _("최적화 실행") }}</button>
       </form>
       {% else %}
@@ -117,55 +121,44 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
-    <h4>{{ _("전체 백업") }}</h4>
+    <h4>{{ _("검색 인덱스") }}
+      {% if search_reindex.running %}<span class="badge running" id="reindex-badge">{{ _("재색인 중") }}</span>
+      {% elif not search.available %}<span class="badge same">{{ _("비활성") }}</span>
+      {% elif not search.consistent %}<span class="badge changed">{{ _("불일치 {n}개", n=search.missing + search.orphan) }}</span>
+      {% elif search.pending %}<span class="badge changed">{{ _("미색인 {n}개", n=search.pending) }}</span>
+      {% else %}<span class="badge same">{{ _("정상") }}</span>{% endif %}
+    </h4>
     <p>
-      {{ _("DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.") }}
+      {{ _("아카이브 본문과 첨부 문서 본문의 전문 검색 인덱스(FTS5)입니다. 새 스냅샷은 저장 시 자동 색인됩니다. 가져오기·구형 스냅샷, compact 로 첨부 문서가 새로 생긴 스냅샷은 다시 색인이 필요할 수 있습니다. 아래 버튼은 인덱스를 비우고 전체 스냅샷을 다시 색인합니다(첨부 문서 본문 포함) — 스냅샷이 많으면 시간이 걸릴 수 있습니다.") }}
     </p>
+    {% if search.available %}
+    <p class="muted mono" style="font-size:12px">
+      {{ _("색인됨") }} {{ search.indexed }} · {{ _("미색인") }} {{ search.pending }} · {{ _("FTS 행") }} {{ search.fts_rows }}{% if not search.consistent %} · {{ _("과소 색인") }} {{ search.missing }} · orphan {{ search.orphan }}{% endif %}
+    </p>
+    {% endif %}
+    {% if search_reindex.error and not search_reindex.running %}
+    <p class="error" style="font-size:12px">{{ _("마지막 전체 다시 색인이 실패했습니다 — 시스템 로그를 확인하세요.") }}</p>
+    {% endif %}
+    <div id="reindex-progress" class="reindex-progress"{% if not search_reindex.running %} hidden{% endif %}>
+      <progress id="reindex-bar"{% if search_reindex.total %} max="{{ search_reindex.total }}" value="{{ search_reindex.done }}"{% endif %}></progress>
+      <span class="mono muted" id="reindex-text">{{ search_reindex.done }} / {{ search_reindex.total }}</span>
+    </div>
     <div class="actions">
-      <form method="post" action="/system/backup">
-        <button type="submit">{{ _("전체 백업 다운로드") }}</button>
+      {% if search.available %}
+      <form method="post" action="/system/search/reindex"
+            onsubmit='return confirm({{ _('검색 인덱스를 비우고 전체 스냅샷을 다시 색인합니다(첨부 문서 본문 포함). 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')|tojson }})'>
+        <button type="submit" id="reindex-btn"{% if search_reindex.running %} disabled{% endif %}>{{ _("전체 다시 색인") }}</button>
       </form>
+      {% else %}
+      <button type="button" disabled>{{ _("전체 다시 색인") }}</button>
+      <span class="muted" style="font-size:12px">{{ _("이 환경의 SQLite 빌드에 FTS5 가 없어 검색을 쓸 수 없습니다. 기존 아카이빙은 영향받지 않습니다.") }}</span>
+      {% endif %}
     </div>
   </div>
+</div>
 
-  <div class="sys-card">
-    <h4>{{ _("아카이브 내보내기") }}</h4>
-    <p>
-      {{ _("페이지·스냅샷·확인 기록·크롤 회차·인증서·아카이브 로그와 스냅샷 파일을 담습니다 (인증 데이터 제외). 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.") }}
-    </p>
-    <div class="actions">
-      <form method="post" action="/system/export">
-        <button type="submit">{{ _("내보내기 다운로드") }}</button>
-      </form>
-    </div>
-  </div>
-
-  <div class="sys-card">
-    <h4>{{ _("가입 설정") }}</h4>
-    <form method="post" action="/system/settings"
-          style="display:flex; flex-direction:column; gap:10px; flex:1">
-      <p>
-        {{ _("로그인 화면의 회원 가입 기능과 가입 계정의 초기 권한을 설정합니다 (SSO 자동 생성 계정에도 적용). '권한없음'으로 가입한 사용자는 관리자가 사용자 관리에서 권한을 부여할 때까지 서비스를 이용할 수 없습니다.") }}
-      </p>
-      <label class="mode">
-        <input type="checkbox" name="signup_enabled" value="on"
-               {% if signup_enabled %}checked{% endif %}>
-        {{ _("로그인 화면에서 회원 가입 허용") }}
-      </label>
-      <label class="mode">
-        {{ _("가입 초기 권한") }}
-        <select name="signup_default_role" style="margin-left:6px">
-          {% for r in signup_roles %}
-          <option value="{{ r }}" {% if r == signup_default_role %}selected{% endif %}>{{ _(role_labels[r]) }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <div class="actions">
-        <button type="submit">{{ _("저장") }}</button>
-      </div>
-    </form>
-  </div>
-
+<h3>{{ _("아카이브 설정") }}</h3>
+<div class="sys-grid">
   <div class="sys-card">
     <h4>{{ _("사이트 아카이브 설정") }}</h4>
     <form method="post" action="/system/crawl-settings"
@@ -202,11 +195,84 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
+    <h4>{{ _("캡처 설정") }}</h4>
+    <form method="post" action="/system/capture-settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1">
+      <p>
+        {{ _("아카이빙할 때 데스크탑 스크린샷 외에 모바일 해상도(화면비율) 스크린샷도 함께 저장합니다. 같은 URL 을 안드로이드 크롬 모바일 브라우저로 한 번 더 열어 찍으며, 이후 새로 만들어지는 스냅샷에만 적용됩니다(기존 스냅샷은 그대로).") }}
+      </p>
+      <label class="mode">
+        <input type="checkbox" name="mobile_screenshot_enabled" value="on"
+               {% if mobile_screenshot_enabled %}checked{% endif %}>
+        {{ _("모바일 해상도 스크린샷도 함께 저장") }}
+        <span class="mono" style="color:var(--muted); margin-left:6px">{{ mobile_screenshot_size }}</span>
+      </label>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="sys-card">
+    <h4>{{ _("확장 자격증명 설정") }}</h4>
+    <form method="post" action="/system/credential-settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1">
+      <p>
+        {{ _("크롬 확장의 ‘로그인 페이지 아카이브’가 보낸 1회성 세션 자격증명을 자동 폐기하기까지의 최대 보관 시간입니다. 정상 흐름에선 캡처 직후 삭제되며, 이 값은 오류·재기동으로 삭제가 누락된 자격증명을 정리하는 안전망입니다.") }}
+      </p>
+      <label class="mode">
+        {{ _("자격증명 보관 시간(시간)") }}
+        <input type="number" name="ext_credential_ttl_hours" required
+               style="width:6em; margin-left:6px" value="{{ ext_credential_ttl_hours }}"
+               min="{{ ext_credential_ttl_limits['min'] }}" max="{{ ext_credential_ttl_limits['max'] }}">
+      </label>
+      {% if not credential_key_set %}
+      <p class="muted">{{ _("WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.") }}</p>
+      {% endif %}
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="sys-card">
+    <h4>{{ _("문서 아카이브 설정") }}</h4>
+    <form method="post" action="/system/document-settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1">
+      <p>
+        {{ _("아카이빙하는 페이지가 링크한 문서 파일(PDF·워드·한글 등)을 받을 때의 한도입니다. 한 스냅샷에서 받는 문서 수, 문서 1개의 최대 크기, 다운로드 타임아웃을 정합니다. 이후 새로 저장되는 스냅샷에 적용됩니다(기존 스냅샷은 그대로).") }}
+      </p>
+      <label class="mode">
+        {{ _("스냅샷당 문서 수") }}
+        <input type="number" name="document_max_count" required
+               style="width:6em; margin-left:6px" value="{{ document_limits['max_count'] }}"
+               min="{{ document_limit_ranges['count_min'] }}" max="{{ document_limit_ranges['count_max'] }}">
+      </label>
+      <label class="mode">
+        {{ _("문서 1개 크기 한도(MB)") }}
+        <input type="number" name="document_max_mb" required
+               style="width:6em; margin-left:6px" value="{{ document_limits['max_mb'] }}"
+               min="{{ document_limit_ranges['mb_min'] }}" max="{{ document_limit_ranges['mb_max'] }}">
+      </label>
+      <label class="mode">
+        {{ _("다운로드 타임아웃(초)") }}
+        <input type="number" name="document_fetch_timeout" required
+               style="width:6em; margin-left:6px" value="{{ document_limits['timeout_seconds'] }}"
+               min="{{ document_limit_ranges['timeout_min'] }}" max="{{ document_limit_ranges['timeout_max'] }}">
+      </label>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="sys-card">
     <h4>{{ _("로컬 네트워크 태그") }}</h4>
     <p>
       {{ _("사설 IP 대역(로컬 네트워크)의 웹서버를 아카이빙할 때 어느 네트워크인지 구분하는 태그입니다. 사설 대역 주소는 태그를 지정해야 아카이빙할 수 있고, 루프백 주소는 항상 아카이빙할 수 없습니다. ID(GUID)는 자동 발급됩니다.") }}
     </p>
     {% if network_tags %}
+    <div class="table-wrap cards">
     <table style="font-size:12px; border-collapse:collapse; width:100%">
       <thead>
         <tr style="text-align:left; color:var(--muted)">
@@ -224,7 +290,7 @@ h3.danger-heading { color: var(--red); }
           <td style="padding:2px 8px 2px 0" class="mono">{{ tag.page_count + tag.crawl_count }}</td>
           <td style="padding:2px 0; text-align:right">
             <form method="post" action="/system/network-tags/{{ tag.id }}/delete"
-                  onsubmit="return confirm({{ _('태그를 삭제할까요? 페이지·크롤이 사용 중이면 삭제되지 않습니다.')|tojson }})">
+                  onsubmit='return confirm({{ _('태그를 삭제할까요? 페이지·크롤이 사용 중이면 삭제되지 않습니다.')|tojson }})'>
               <button type="submit" class="danger" style="font-size:11px; padding:1px 8px">{{ _("삭제") }}</button>
             </form>
           </td>
@@ -232,6 +298,7 @@ h3.danger-heading { color: var(--red); }
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
     <p class="muted" style="font-size:12px">{{ _("등록된 태그가 없습니다 — 사설 IP 대역 아카이빙이 모두 거부됩니다.") }}</p>
     {% endif %}
@@ -242,6 +309,119 @@ h3.danger-heading { color: var(--red); }
              placeholder="{{ _('설명 (선택)') }}">
       <button type="submit">{{ _("추가") }}</button>
     </form>
+    {% if network_tags and network_tags|length >= 2 %}
+    <p class="muted" style="font-size:11px; margin:8px 0 4px">
+      {{ _("같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.") }}
+    </p>
+    <form method="post" action="/system/network-tags/merge" class="actions"
+          onsubmit='return confirm({{ _('출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 같은 IP·포트를 가리킬 때만 병합됩니다.')|tojson }})'>
+      <select name="source" aria-label="{{ _('출처 태그(삭제됨)') }}" style="font-size:11px">
+        {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
+      </select>
+      <span style="font-size:11px; color:var(--muted)">&rarr;</span>
+      <select name="target" aria-label="{{ _('대상 태그(유지)') }}" style="font-size:11px">
+        {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
+      </select>
+      <button type="submit" style="font-size:11px; padding:1px 8px">{{ _("병합") }}</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<h3>{{ _("사용자 설정") }}</h3>
+<div class="sys-grid">
+  <div class="sys-card">
+    <h4>{{ _("가입 설정") }}</h4>
+    <form method="post" action="/system/settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1">
+      <p>
+        {{ _("로그인 화면의 회원 가입 기능과 가입 계정의 초기 권한을 설정합니다 (SSO 자동 생성 계정에도 적용). '권한없음'으로 가입한 사용자는 관리자가 사용자 관리에서 권한을 부여할 때까지 서비스를 이용할 수 없습니다.") }}
+      </p>
+      <label class="mode">
+        <input type="checkbox" name="signup_enabled" value="on"
+               {% if signup_enabled %}checked{% endif %}>
+        {{ _("로그인 화면에서 회원 가입 허용") }}
+      </label>
+      <label class="mode">
+        {{ _("가입 초기 권한") }}
+        <select name="signup_default_role" style="margin-left:6px">
+          {% for r in signup_roles %}
+          <option value="{{ r }}" {% if r == signup_default_role %}selected{% endif %}>{{ _(role_labels[r]) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<h3>{{ _("서버 환경설정") }}</h3>
+<div class="sys-grid">
+  <div class="sys-card">
+    <h4>{{ _("메일(SMTP) 설정") }}</h4>
+    <form method="post" action="/system/smtp-settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1"
+          autocomplete="off">
+      <p>
+        {{ _("사용자 초대 메일을 보낼 SMTP 서버입니다. 호스트를 비우면 메일 발송이 꺼지고 초대 링크가 화면에 표시됩니다. 환경변수(WCCG_SMTP_*)로도 설정할 수 있으며, 여기서 저장한 값이 우선합니다.") }}
+      </p>
+      <label class="mode">
+        {{ _("SMTP 호스트") }}
+        <input type="text" name="smtp_host" style="margin-left:6px; min-width:12em"
+               value="{{ smtp_config['host'] }}" placeholder="smtp.example.com">
+      </label>
+      <label class="mode">
+        {{ _("포트") }}
+        <input type="number" name="smtp_port" required style="width:6em; margin-left:6px"
+               value="{{ smtp_config['port'] }}" min="1" max="65535">
+      </label>
+      <label class="mode">
+        {{ _("TLS 모드") }}
+        <select name="smtp_tls" style="margin-left:6px">
+          {% for m in smtp_tls_modes %}
+          <option value="{{ m }}" {% if m == smtp_config['tls'] %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="mode">
+        {{ _("로그인 사용자") }}
+        <input type="text" name="smtp_user" style="margin-left:6px; min-width:12em"
+               value="{{ smtp_config['user'] }}" placeholder="{{ _('비우면 인증 생략') }}"
+               autocomplete="off">
+      </label>
+      <label class="mode">
+        {{ _("로그인 비밀번호") }}
+        <input type="password" name="smtp_password" style="margin-left:6px; min-width:12em"
+               placeholder="{{ _('변경하려면 입력 (비우면 유지)') }}" autocomplete="new-password"
+               {% if not credential_key_set %}disabled{% endif %}>
+      </label>
+      {% if smtp_config['has_password'] %}
+      <label class="mode">
+        <input type="checkbox" name="smtp_clear_password" value="on">
+        {{ _("저장된 비밀번호 삭제") }}
+      </label>
+      {% endif %}
+      {% if not credential_key_set %}
+      <p class="muted" style="font-size:12px">{{ _("WCCG_SECRET_KEY 가 설정되지 않아 비밀번호를 저장할 수 없습니다 (환경변수 WCCG_SMTP_PASSWORD 는 그대로 쓸 수 있습니다).") }}</p>
+      {% endif %}
+      <label class="mode">
+        {{ _("발신자 주소") }}
+        <input type="text" name="smtp_from" style="margin-left:6px; min-width:12em"
+               value="{{ smtp_config['sender'] }}" placeholder="{{ _('비우면 로그인 사용자') }}">
+      </label>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+    {% if smtp_config['enabled'] and smtp_test_to %}
+    <form method="post" action="/system/smtp-test" class="actions"
+          style="border-top:1px solid var(--border); padding-top:10px">
+      <button type="submit">{{ _("테스트 메일 보내기") }}</button>
+      <span class="mono" style="font-size:11px; color:var(--muted)">&rarr; {{ smtp_test_to }}</span>
+    </form>
+    {% endif %}
   </div>
 
   <div class="sys-card">
@@ -253,13 +433,40 @@ h3.danger-heading { color: var(--red); }
       <a href="/system/api-keys">{{ _("API 키 관리") }} &rarr;</a>
     </div>
   </div>
+</div>
+
+<h3>{{ _("데이터 관리") }}</h3>
+<div class="sys-grid">
+  <div class="sys-card">
+    <h4>{{ _("전체 백업") }}</h4>
+    <p>
+      {{ _("DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.") }}
+    </p>
+    <div class="actions">
+      <form method="post" action="/system/backup">
+        <button type="submit">{{ _("전체 백업 다운로드") }}</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="sys-card">
+    <h4>{{ _("전체 아카이브 내보내기") }}</h4>
+    <p>
+      {{ _("페이지·스냅샷·확인 기록·크롤 회차·인증서·아카이브 로그와 스냅샷 파일을 담습니다 (인증 데이터 제외). 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.") }}
+    </p>
+    <div class="actions">
+      <form method="post" action="/system/export">
+        <button type="submit">{{ _("내보내기 다운로드") }}</button>
+      </form>
+    </div>
+  </div>
 
   <div class="sys-card">
     <h4>{{ _("아카이브 가져오기") }}</h4>
     <form method="post" action="/system/import" enctype="multipart/form-data"
           style="display:flex; flex-direction:column; gap:10px; flex:1"
-          onsubmit="return this.mode.value !== 'overwrite'
-                    || confirm({{ _('overwrite 모드: 기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. 계속할까요?')|tojson }})">
+          onsubmit='return this.mode.value !== "overwrite"
+                    || confirm({{ _('overwrite 모드: 기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. 계속할까요?')|tojson }})'>
       <div style="flex:1">
         <label class="mode">
           <input type="radio" name="mode" value="merge" checked>
@@ -287,10 +494,34 @@ h3.danger-heading { color: var(--red); }
     </p>
     <form method="post" action="/system/restore" enctype="multipart/form-data"
           class="actions"
-          onsubmit="return confirm({{ _('정말 복원할까요? 현재 데이터가 모두 백업 시점으로 교체됩니다.')|tojson }})">
+          onsubmit='return confirm({{ _('정말 복원할까요? 현재 데이터가 모두 백업 시점으로 교체됩니다.')|tojson }})'>
       <input type="file" name="file" accept=".tar.gz,.tgz,application/gzip" required>
       <button type="submit" class="danger">{{ _("복원") }}</button>
     </form>
   </div>
 </div>
+
+<script>
+// 전체 다시 색인 진행률 폴링 — running 이면 status 를 주기적으로 읽어 막대·
+// 카운트를 갱신하고, 끝나면 새로고침해 정합성 카운트와 결과를 반영한다.
+(function () {
+  if (!{{ 'true' if search_reindex.running else 'false' }}) return;
+  const box = document.getElementById('reindex-progress');
+  const bar = document.getElementById('reindex-bar');
+  const text = document.getElementById('reindex-text');
+  if (!box) return;
+  const poll = setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      const res = await fetch('/system/search/reindex/status');
+      if (!res.ok) return;
+      const s = await res.json();
+      if (s.total) { bar.max = s.total; bar.value = s.done; }
+      else { bar.removeAttribute('value'); }  // total 미정 — 불확정 막대
+      text.textContent = s.done + ' / ' + s.total;
+      if (!s.running) { clearInterval(poll); location.reload(); }
+    } catch (e) { /* 일시 오류 — 다음 폴링에서 재시도 */ }
+  }, 1500);
+})();
+</script>
 {% endblock %}

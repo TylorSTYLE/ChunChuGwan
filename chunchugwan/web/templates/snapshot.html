@@ -11,6 +11,9 @@
 {% block content %}
 <div class="toolbar">
   <h2 style="margin:0">{{ title or snap['page_url'] }}</h2>
+  {% if snap['authenticated'] %}
+  <span class="badge" title="{{ _('로그인 자격증명으로 캡처된 스냅샷입니다 — 소유자/관리자만 볼 수 있습니다.') }}">{{ _("인증됨") }}</span>
+  {% endif %}
   <span class="spacer"></span>
   <a href="/logs?snapshot_id={{ snap['id'] }}">{{ _("아카이빙 로그") }}</a>
   <a href="/page/{{ snap['page_id'] }}">{{ _("타임라인으로") }}</a>
@@ -58,7 +61,10 @@
 <div class="toolbar">
   <button type="button" class="tab active" data-target="view-render">{{ _("렌더링") }}</button>
   {% if has_screenshot %}
-  <button type="button" class="tab" data-target="view-shot">{{ _("스크린샷") }}</button>
+  <button type="button" class="tab" data-target="view-shot">{{ _("데스크탑 스크린샷") }}</button>
+  {% endif %}
+  {% if has_mobile_screenshot %}
+  <button type="button" class="tab" data-target="view-shot-mobile">{{ _("모바일 스크린샷") }}</button>
   {% endif %}
   <button type="button" class="tab" data-target="view-text">{{ _("텍스트") }}</button>
 </div>
@@ -73,8 +79,15 @@
 </div>
 {% if has_screenshot %}
 <div id="view-shot" style="display:none">
-  <img src="{{ screenshot_url }}" alt="{{ _('전체 페이지 스크린샷') }}"
+  <img src="{{ screenshot_url }}" alt="{{ _('전체 페이지 데스크탑 스크린샷') }}"
        style="max-width:100%; border:1px solid var(--border);">
+</div>
+{% endif %}
+{% if has_mobile_screenshot %}
+<div id="view-shot-mobile" style="display:none">
+  <!-- 모바일 뷰포트(390px) 너비로 찍은 전체 페이지 — 자연 너비(폰 비율)로 표시 -->
+  <img src="{{ mobile_screenshot_url }}" alt="{{ _('전체 페이지 모바일 스크린샷') }}"
+       style="max-width:100%; width:390px; border:1px solid var(--border);">
 </div>
 {% endif %}
 <div id="view-text" style="display:none">
@@ -85,8 +98,8 @@
 document.querySelectorAll('button.tab').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('button.tab').forEach((b) => b.classList.toggle('active', b === btn));
-    ['view-render', 'view-shot', 'view-text'].forEach((id) => {
-      const el = document.getElementById(id);  // view-shot 은 스크린샷 없으면 미렌더
+    ['view-render', 'view-shot', 'view-shot-mobile', 'view-text'].forEach((id) => {
+      const el = document.getElementById(id);  // 스크린샷 탭은 해당 파일 없으면 미렌더
       if (el) el.style.display = id === btn.dataset.target ? '' : 'none';
     });
   });

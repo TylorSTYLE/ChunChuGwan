@@ -1,0 +1,21 @@
+{# 사이트 상세 섹션 페이저 — 총 건수·현재/전체 페이지·줄 수 선택·이전/다음.
+   pg 는 app._site_pager 가 만든 dict (total·page_num·total_pages·per_page·
+   page_key·per_key·prev_url·next_url·hidden). import 는 with context (_ 필요).
+   줄 수 폼은 다른 섹션 파라미터를 hidden 으로 실어 위치를 보존하고, 이 섹션의
+   page 는 빼므로 줄 수를 바꾸면 1페이지로 돌아간다. #}
+{% macro section_pager(pg, site_id, per_page_choices) -%}
+<div class="pager">
+  <span class="muted">{{ _("총 {n}건", n=pg.total) }}{% if pg.total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=pg.page_num, t=pg.total_pages) }}{% endif %}</span>
+  <form class="inline" method="get" action="/sites/{{ site_id }}">
+    {% for k, v in pg.hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <select name="{{ pg.per_key }}" aria-label="{{ _('표시 줄 수') }}" onchange="this.form.submit()">
+      {% for n in per_page_choices %}
+      <option value="{{ n }}" {% if n == pg.per_page %}selected{% endif %}>{{ _("{n}줄", n=n) }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  <span class="spacer"></span>
+  {% if pg.prev_url %}<a href="{{ pg.prev_url }}">&larr; {{ _("이전") }}</a>{% endif %}
+  {% if pg.next_url %}<a href="{{ pg.next_url }}">{{ _("다음") }} &rarr;</a>{% endif %}
+</div>
+{%- endmacro %}

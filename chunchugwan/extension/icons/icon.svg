@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="128" height="128">
+  <!-- 춘추관 툴바 아이콘 — 어두운 솔잎색 타일 위에 종이빛 史庫 글리프 + 주칠 낙관.
+       favicon.svg(_logo.html)의 도형을 자체 배경 타일에 올려 라이트/다크 툴바
+       모두에서 또렷하게 보이도록 색을 고정했다(테마 무관). -->
+  <rect width="64" height="64" rx="13" fill="#1d3a30"/>
+  <g transform="translate(4,4) scale(0.875)" fill="#f4f2ec">
+    <path d="M32 6Q16 20 2 24L7 29Q20 25 32 15Q44 25 57 29L62 24Q48 20 32 6Z"/>
+    <rect x="14" y="34" width="36" height="6" rx="1.5"/>
+    <rect x="14" y="43" width="36" height="6" rx="1.5"/>
+    <rect x="14" y="52" width="26" height="6" rx="1.5"/>
+    <rect x="44" y="52" width="6" height="6" rx="1" fill="#e0651f"/>
+  </g>
+</svg>

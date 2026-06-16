@@ -140,6 +140,23 @@ def site_key(normalized_url: str) -> str:
     return netloc_site_key(urlsplit(normalized_url).netloc)
 
 
+def url_origin(url: str) -> str:
+    """URL 의 origin (`scheme://host[:비기본포트]`) — 소문자, 기본 포트 생략.
+
+    로그인 자격증명을 대상 origin 으로만 스코프할 때 쓴다 (캡처 연동) —
+    Basic 인증·Bearer 토큰이 페이지의 서드파티 하위 자원으로 새지 않게
+    한다. 같은 origin 판정은 scheme·host·유효 포트가 모두 같을 때다.
+    """
+    parts = urlsplit(url)
+    scheme = (parts.scheme or "").lower()
+    host = (parts.hostname or "").lower()
+    port = parts.port
+    default_port = {"https": 443, "http": 80}.get(scheme)
+    if port is not None and port != default_port:
+        return f"{scheme}://{host}:{port}"
+    return f"{scheme}://{host}"
+
+
 def scheme_inferred(raw: str) -> bool:
     """입력에 스킴이 없어 normalize_url 이 https:// 를 추정 보완하는지.
 
@@ -198,24 +215,41 @@ def content_sha256(text: str) -> str:
 # resources._screenshot_to_webp 가 남기고, needs_compaction(압축 대상 카운트)이
 # 이 마커가 있는 PNG 를 변환 대상에서 제외한다.
 WEBP_SKIP_MARKER = "screenshot.png.keep"
+# 모바일 해상도 스크린샷(capture._capture_mobile_screenshot)의 WebP 변환 생략 마커.
+# 데스크탑과 같은 규칙(한도 초과·용량 역효과)을 모바일 PNG 에 따로 적용한다.
+MOBILE_WEBP_SKIP_MARKER = "screenshot-mobile.png.keep"
 
 # 캡처 산출물 — 압축 변환(resources.compact_snapshot_dir) 전/후 이름 모두 포함.
 # 변환이 일부 실패해도 (예: WebP 한도 초과로 PNG 유지) 산출물이 유실되지 않는다.
 CAPTURE_ARTIFACTS = (
     "raw.html", "raw.html.gz", "page.html", "page.html.gz",
     "screenshot.png", "screenshot.webp", WEBP_SKIP_MARKER,
+    "screenshot-mobile.png", "screenshot-mobile.webp", MOBILE_WEBP_SKIP_MARKER,
 )
 
 # 스냅샷 디렉토리를 구성하는 파일 전체 (표시 순서 고정)
 SNAPSHOT_FILES = (
     "page.html", "page.html.gz", "raw.html", "raw.html.gz",
-    "content.md", "screenshot.webp", "screenshot.png", "meta.json",
+    "content.md", "screenshot.webp", "screenshot.png",
+    "screenshot-mobile.webp", "screenshot-mobile.png", "meta.json",
 )
 
 
 def find_screenshot(snapshot_dir: Path) -> Path | None:
-    """스냅샷의 스크린샷 경로 — WebP(신규) 우선, PNG(구형) 폴백. 없으면 None."""
+    """스냅샷의 데스크탑 스크린샷 경로 — WebP(신규) 우선, PNG(구형) 폴백. 없으면 None."""
     for name in ("screenshot.webp", "screenshot.png"):
+        path = snapshot_dir / name
+        if path.is_file():
+            return path
+    return None
+
+
+def find_mobile_screenshot(snapshot_dir: Path) -> Path | None:
+    """스냅샷의 모바일 해상도 스크린샷 경로 — WebP 우선, PNG 폴백. 없으면 None.
+
+    모바일 스크린샷은 시스템 설정이 켜져 있을 때만 생성되므로, 없을 수 있다.
+    """
+    for name in ("screenshot-mobile.webp", "screenshot-mobile.png"):
         path = snapshot_dir / name
         if path.is_file():
             return path

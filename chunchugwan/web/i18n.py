@@ -17,6 +17,7 @@ from fastapi import Request
 
 from .. import config
 from ..auth import MAX_API_KEY_NAME_LENGTH, MAX_DISPLAY_NAME_LENGTH
+from ..credentials import MAX_JWT_LENGTH, MAX_PASSWORD_LENGTH, MAX_USERNAME_LENGTH
 
 DEFAULT_LOCALE = "ko"
 SUPPORTED_LOCALES = ("ko", "en")
@@ -34,14 +35,50 @@ _EN: dict[str, str] = {
     "개인 웹 아카이브": "Personal web archive",
     "현황": "Overview",
     "목록": "Archives",
+    "아카이브 사이트 목록": "Archived sites",
+    "전체 문서(파일)": "All documents (files)",
     "새 아카이빙": "New archive",
     "스케줄": "Schedules",
+    "로그": "Logs",
     "아카이빙 로그": "Archive logs",
     "시스템 로그": "System logs",
     "사용자": "Users",
     "시스템": "System",
+    "검색": "Search",
     "계정": "Account",
+    "내 아카이브": "My archives",
     "로그아웃": "Log out",
+    # 사람 보조 챌린지 해결 (라이브)
+    "사람 확인": "Human check",
+    "사람 확인 필요": "Human check needed",
+    "사람 확인 처리": "Human-assisted solve",
+    "자동으로 통과하지 못한 챌린지 — 직접 풀어서 통과시킵니다": "Challenges that auto-solve couldn't pass — solve them yourself",
+    "사람 확인이 필요한 작업이 없습니다.": "No jobs need human check.",
+    "이미 처리되었거나 만료된 작업입니다 — 목록에서 다시 확인하세요.": "This job is already handled or has expired — check the list again.",
+    "사람 확인 필요 — 클릭해서 지금 처리하세요": "Human check needed — click to solve now",
+    "사람 처리 창(기본 5분)을 놓쳐 실패한 작업은": "Jobs that missed the human-solve window (5 min by default) can be retried from",
+    "에서 다시 시도하면 라이브 세션이 다시 열립니다.": " — retrying reopens a live session.",
+    "진입 시각": "Entered at",
+    "처리": "Solve",
+    "사람 확인 완료": "Mark human check done",
+    "로봇 확인을 직접 통과시켰다면 현재 화면으로 캡처를 진행합니다. 계속할까요?":
+        "If you've passed the robot check yourself, capture proceeds with the current screen. Continue?",
+    "진행 요청됨 — 잠시만 기다리세요…": "Proceeding requested — please wait…",
+    "로봇 확인을 통과했는데도 자동으로 진행되지 않으면 '사람 확인 완료'를 눌러 현재 화면 그대로 캡처를 진행시킬 수 있습니다.":
+        "If you passed the robot check but capture doesn't proceed automatically, click \"Mark human check done\" to proceed with the current screen.",
+    "처리되었습니다 — 캡처를 이어서 진행합니다. 잠시 후 결과는 로그에서 확인하세요.": "Solved — capture is continuing. Check the result in the logs shortly.",
+    "다른 관리자가 처리 중입니다 — 보기 전용입니다.": "Another admin is handling this — view only.",
+    "화면 갱신": "Refresh screen",
+    "입력할 문자열…": "Text to type…",
+    "문자 입력": "Send text",
+    "이 작업을 취소할까요?": "Cancel this job?",
+    "화면 위를 클릭하면 서버 브라우저의 같은 위치를 누릅니다. 드래그도 그대로 전달됩니다. 챌린지(체크박스·그림 찾기 등)를 통과시키면 자동으로 캡처가 이어집니다.": "Clicking on the screen clicks the same spot in the server browser. Drags are relayed too. Once you pass the challenge (checkbox, image-select, etc.) capture continues automatically.",
+    "클릭": "click",
+    "누름": "down",
+    "뗌": "up",
+    "드래그": "drag",
+    "입력": "type",
+    "처리됨": "solved",
     "메뉴": "Menu",
     "테마 전환 (자동 → 라이트 → 다크)": "Switch theme (auto → light → dark)",
     "테마: 자동": "Theme: auto",
@@ -170,6 +207,7 @@ _EN: dict[str, str] = {
     "자동": "Auto",
     "시작": "started",
     "아카이빙 중": "Archiving",
+    "사람 확인 대기": "Awaiting human check",
     "재아카이빙": "Re-archive",
     "스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
         "This deletes the entire archive including {n} snapshot(s). It cannot be undone.",
@@ -191,6 +229,23 @@ _EN: dict[str, str] = {
     "로그가 없습니다. 아카이빙을 실행하면 결과가 여기에 기록됩니다.":
         "No logs yet. Archive runs are recorded here.",
     "전체 로그 →": "All logs →",
+    # 현황 — 크롬 확장 안내 카드
+    "더 빠르고 편리하게 아카이브 하세요!": "Archive faster and easier!",
+    "크롬 확장을 설치하면 보고 있는 페이지를 클릭 한 번으로 아카이브하고, 아카이브 히스토리도 바로 확인할 수 있습니다.":
+        "Install the Chrome extension to archive the page you're viewing in one click "
+        "and check its archive history right away.",
+    "크롬 확장 내려받기": "Download Chrome extension",
+    "설치 방법": "How to install",
+    "내려받은 ZIP 파일의 압축을 풉니다.": "Unzip the downloaded file.",
+    "크롬 주소창에": "Open",
+    "를 엽니다.": "in Chrome's address bar.",
+    "우측 상단 ‘개발자 모드’를 켭니다.": "Turn on “Developer mode” at the top right.",
+    "‘압축해제된 확장 프로그램을 로드’를 눌러 압축 푼 폴더를 선택합니다.":
+        "Click “Load unpacked” and select the unzipped folder.",
+    "확장 아이콘을 눌러 이 춘추관 주소와, 개인 API Key 화면에서 발급한 키를 입력하면 연결됩니다.":
+        "Click the extension icon and enter this ChunChuGwan address and a key issued "
+        "on the Personal API Key page to connect.",
+    "확장 파일을 찾을 수 없습니다": "Extension files not found",
     # ---- 타임라인 (timeline) ----
     "타임라인": "Timeline",
     "재아카이빙이 백그라운드에서 시작되었습니다. 잠시 후 새로고침하세요.":
@@ -265,11 +320,18 @@ _EN: dict[str, str] = {
     "30일": "30 days",
     # ---- 스냅샷 뷰어 (snapshot) ----
     "타임라인으로": "Back to timeline",
+    "인증됨": "Authenticated",
+    "로그인 자격증명으로 캡처된 스냅샷입니다 — 소유자/관리자만 볼 수 있습니다.":
+        "Captured with login credentials — visible only to the owner and admins.",
     "최종 URL": "Final URL",
     "렌더링": "Rendered",
     "스크린샷": "Screenshot",
+    "데스크탑 스크린샷": "Desktop screenshot",
+    "모바일 스크린샷": "Mobile screenshot",
     "텍스트": "Text",
     "전체 페이지 스크린샷": "Full-page screenshot",
+    "전체 페이지 데스크탑 스크린샷": "Full-page desktop screenshot",
+    "전체 페이지 모바일 스크린샷": "Full-page mobile screenshot",
     "첨부 문서 ({n})": "Attached documents ({n})",
     "순번": "No.",
     "문서명": "Document name",
@@ -292,6 +354,10 @@ _EN: dict[str, str] = {
     "마지막 저장": "Last saved",
     "외 {n}곳": "+{n} more",
     "아직 저장된 문서가 없습니다.": "No documents archived yet.",
+    "이 사이트의 페이지가 링크한 문서 파일(PDF·워드·한글 등)입니다. 같은 내용의 문서는 한 번만 저장됩니다.":
+        "Document files (PDF, Word, HWP, …) linked from this site's pages. "
+        "Identical documents are stored once.",
+    "문서가 더 있습니다 — 전체 목록 보기": "More documents — view the full list",
     # ---- diff 뷰어 ----
     "비교": "Compare",
     "두 스냅샷의 정규화 텍스트가 같습니다.": "The normalized text of both snapshots is identical.",
@@ -357,6 +423,10 @@ _EN: dict[str, str] = {
     "공유 자원": "Shared resources",
     "합계": "Total",
     "유지 관리": "Maintenance",
+    "아카이브 설정": "Archive settings",
+    "사용자 설정": "User settings",
+    "서버 환경설정": "Server settings",
+    "데이터 관리": "Data management",
     "저장공간 최적화": "Storage optimization",
     "대상 {n}개": "{n} pending",
     "대상 없음": "None pending",
@@ -388,6 +458,7 @@ _EN: dict[str, str] = {
     "복원": "Restore",
     "위험 구역": "Danger zone",
     "아카이브 내보내기": "Archive export",
+    "전체 아카이브 내보내기": "Full archive export",
     "페이지·스냅샷·확인 기록·크롤 회차·인증서·아카이브 로그와 스냅샷 파일을 담습니다 (인증 데이터 제외). 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.":
         "Contains pages, snapshots, checks, crawl runs, certificates, archive "
         "logs, and snapshot files (no auth data). Use this to move or merge "
@@ -481,9 +552,39 @@ _EN: dict[str, str] = {
     "초대 링크는 {n}일 후 만료되며, 같은 이메일을 다시 초대하면 새 링크로 교체됩니다.":
         "Invite links expire after {n} day(s); re-inviting the same email replaces "
         "the link.",
-    "메일 발송이 설정되지 않아(WCCG_SMTP_*) 초대 링크가 화면에 표시됩니다 — 직접 전달하세요.":
-        "Mail is not configured (WCCG_SMTP_*), so invite links are shown on screen — "
-        "share them directly.",
+    "메일 발송이 설정되지 않아 초대 링크가 화면에 표시됩니다 — 시스템 → 메일(SMTP) 설정에서 설정하거나 링크를 직접 전달하세요.":
+        "Mail is not configured, so invite links are shown on screen — configure it in "
+        "System → Mail (SMTP) settings, or share the link directly.",
+    # ---- 메일(SMTP) 설정 (시스템 화면) ----
+    "메일(SMTP) 설정": "Mail (SMTP) settings",
+    "사용자 초대 메일을 보낼 SMTP 서버입니다. 호스트를 비우면 메일 발송이 꺼지고 초대 링크가 화면에 표시됩니다. 환경변수(WCCG_SMTP_*)로도 설정할 수 있으며, 여기서 저장한 값이 우선합니다.":
+        "SMTP server used to send user invite emails. Leave the host blank to disable "
+        "mail (invite links are then shown on screen). It can also be set via "
+        "environment variables (WCCG_SMTP_*); values saved here take precedence.",
+    "SMTP 호스트": "SMTP host",
+    "포트": "Port",
+    "TLS 모드": "TLS mode",
+    "로그인 사용자": "Login user",
+    "비우면 인증 생략": "Blank = no auth",
+    "로그인 비밀번호": "Login password",
+    "변경하려면 입력 (비우면 유지)": "Enter to change (blank = keep)",
+    "저장된 비밀번호 삭제": "Delete saved password",
+    "WCCG_SECRET_KEY 가 설정되지 않아 비밀번호를 저장할 수 없습니다 (환경변수 WCCG_SMTP_PASSWORD 는 그대로 쓸 수 있습니다).":
+        "WCCG_SECRET_KEY is not set, so the password cannot be saved (the "
+        "WCCG_SMTP_PASSWORD environment variable still works).",
+    "발신자 주소": "Sender address",
+    "비우면 로그인 사용자": "Blank = login user",
+    "테스트 메일 보내기": "Send test email",
+    "메일(SMTP) 설정을 저장했습니다.": "Saved mail (SMTP) settings.",
+    "TLS 모드가 올바르지 않습니다.": "Invalid TLS mode.",
+    "SMTP 포트는 1 ~ 65535 사이여야 합니다.": "SMTP port must be between 1 and 65535.",
+    "WCCG_SECRET_KEY 가 설정되지 않아 SMTP 비밀번호를 저장할 수 없습니다.":
+        "WCCG_SECRET_KEY is not set, so the SMTP password cannot be saved.",
+    "테스트 메일을 받을 이메일 주소가 없습니다.":
+        "No email address available to receive the test mail.",
+    "SMTP 호스트가 설정되지 않았습니다.": "SMTP host is not configured.",
+    "테스트 메일 발송에 실패했습니다: {e}": "Failed to send test email: {e}",
+    "{email} 로 테스트 메일을 보냈습니다.": "Sent a test email to {email}.",
     "초대": "Invite",
     "초대한 사람": "Invited by",
     "만료": "Expires",
@@ -519,11 +620,12 @@ _EN: dict[str, str] = {
     "외부 소프트웨어가 /api/v1 REST API 에 접근할 때 쓰는 키를 발급·폐기합니다. 키마다 보기/아카이브 권한과 만료를 설정합니다.":
         "Issue and revoke keys external software uses to access the /api/v1 REST "
         "API. Each key gets view/archive permissions and an expiry.",
-    "외부 소프트웨어가 Authorization: Bearer 또는 X-API-Key 헤더로 /api/v1 에 접근할 때 쓰는 키입니다. 보기=아카이브 데이터 조회, 아카이브=아카이빙 트리거. 키 원문은 발급 직후 한 번만 표시되며, 폐기하면 즉시 무효화됩니다. 모든 관리자가 공동으로 관리합니다.":
-        "Keys for external software accessing /api/v1 with an Authorization: Bearer "
-        "or X-API-Key header. View = read archived data, Archive = trigger archiving. "
-        "The key itself is shown only once right after issuing; revoking takes effect "
-        "immediately. All admins manage keys together.",
+    "외부 소프트웨어가 Authorization: Bearer 또는 X-API-Key 헤더로 /api/v1 에 접근할 때 쓰는 시스템 키입니다. 보기=아카이브 데이터 조회, 아카이브=아카이빙 트리거. 키 원문은 발급 직후 한 번만 표시되며, 폐기하면 즉시 무효화됩니다. 모든 관리자가 공동으로 관리합니다. 개인용 크롬 확장 키는 각자 개인 API Key 화면에서 발급합니다.":
+        "System keys for external software accessing /api/v1 with an Authorization: "
+        "Bearer or X-API-Key header. View = read archived data, Archive = trigger "
+        "archiving. The key itself is shown only once right after issuing; revoking "
+        "takes effect immediately. All admins manage these together. Personal Chrome "
+        "extension keys are issued by each user on the Personal API Key page.",
     "복사": "Copy",
     "복사됨": "Copied",
     "키": "Key",
@@ -553,8 +655,158 @@ _EN: dict[str, str] = {
     "키를 폐기했습니다.": "Key revoked.",
     "키 이름을 입력하세요.": "Enter a key name.",
     "키 이름에 제어 문자를 쓸 수 없습니다.": "The key name cannot contain control characters.",
+    # ---- 딥링크 안내 (go_missing) ----
+    "아카이브 없음": "Not archived",
+    "아카이브된 스냅샷이 없습니다": "No archived snapshot",
+    "이 URL 은 아직 아카이브되지 않았습니다.": "This URL has not been archived yet.",
+    # ---- 확장 1회성 세션 자격증명 (시스템 설정) ----
+    "확장 자격증명 설정": "Extension credentials",
+    "크롬 확장의 ‘로그인 페이지 아카이브’가 보낸 1회성 세션 자격증명을 자동 폐기하기까지의 최대 보관 시간입니다. 정상 흐름에선 캡처 직후 삭제되며, 이 값은 오류·재기동으로 삭제가 누락된 자격증명을 정리하는 안전망입니다.":
+        "Maximum time to keep a one-shot session credential sent by the Chrome "
+        "extension's “archive logged-in page” before discarding it. Normally it is "
+        "deleted right after capture; this value is a safety net that cleans up "
+        "credentials left behind by errors or restarts.",
+    "자격증명 보관 시간(시간)": "Credential retention (hours)",
+    "자격증명 보관 시간은 {lo} ~ {hi}시간 사이여야 합니다.":
+        "Credential retention must be between {lo} and {hi} hours.",
+    "확장 자격증명 설정을 저장했습니다.": "Extension credential settings saved.",
+    # ---- 캡처 설정 (system) ----
+    "캡처 설정": "Capture settings",
+    "아카이빙할 때 데스크탑 스크린샷 외에 모바일 해상도(화면비율) 스크린샷도 함께 저장합니다. 같은 URL 을 안드로이드 크롬 모바일 브라우저로 한 번 더 열어 찍으며, 이후 새로 만들어지는 스냅샷에만 적용됩니다(기존 스냅샷은 그대로).":
+        "When archiving, also save a mobile-resolution (aspect-ratio) screenshot "
+        "in addition to the desktop one. The same URL is reopened once more as an "
+        "Android Chrome mobile browser for the extra shot; this applies only to "
+        "snapshots created afterward (existing snapshots are unchanged).",
+    "모바일 해상도 스크린샷도 함께 저장": "Also save a mobile-resolution screenshot",
+    "캡처 설정을 저장했습니다.": "Capture settings saved.",
+    # ---- 문서 아카이브 설정 (system) ----
+    "문서 아카이브 설정": "Document archive settings",
+    "아카이빙하는 페이지가 링크한 문서 파일(PDF·워드·한글 등)을 받을 때의 한도입니다. 한 스냅샷에서 받는 문서 수, 문서 1개의 최대 크기, 다운로드 타임아웃을 정합니다. 이후 새로 저장되는 스냅샷에 적용됩니다(기존 스냅샷은 그대로).":
+        "Limits for downloading document files (PDF, Word, HWP, etc.) linked from the "
+        "page being archived. Sets how many documents are saved per snapshot, the "
+        "maximum size of a single document, and the download timeout. Applies to "
+        "snapshots saved afterward (existing snapshots are unchanged).",
+    "스냅샷당 문서 수": "Documents per snapshot",
+    "문서 1개 크기 한도(MB)": "Per-document size limit (MB)",
+    "다운로드 타임아웃(초)": "Download timeout (seconds)",
+    "문서 수 한도는 {lo} ~ {hi}개 사이여야 합니다.":
+        "Document count limit must be between {lo} and {hi}.",
+    "문서 크기 한도는 {lo} ~ {hi}MB 사이여야 합니다.":
+        "Document size limit must be between {lo} and {hi} MB.",
+    "문서 다운로드 타임아웃은 {lo} ~ {hi}초 사이여야 합니다.":
+        "Document download timeout must be between {lo} and {hi} seconds.",
+    "문서 아카이브 설정을 저장했습니다.": "Document archive settings saved.",
+    # ---- 사이트 로그인 자격증명 (site_credentials) ----
+    "로그인 자격증명": "Login credentials",
+    "이 사이트를 아카이빙할 때 춘추관이 로그인하는 데 쓸 자격증명입니다. 비밀은 WCCG_SECRET_KEY 로 대칭 암호화해 저장하며, 화면에는 다시 표시되지 않습니다.":
+        "Credentials ChunChuGwan uses to log in when archiving this site. Secrets are "
+        "stored symmetrically encrypted with WCCG_SECRET_KEY and are never shown again.",
+    "이 사이트 로그인이 필요한 경우 쓸 자격증명을 관리합니다 (관리자 전용).":
+        "Manage credentials to use when this site requires login (admin only).",
+    "WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.":
+        "WCCG_SECRET_KEY is not set, so credentials cannot be stored.",
+    "환경변수 WCCG_SECRET_KEY 에 임의의 비밀 문자열을 설정하고 대시보드를 다시 시작하면 등록할 수 있습니다.":
+        "Set any secret string in the WCCG_SECRET_KEY environment variable and "
+        "restart the dashboard to register credentials.",
+    "종류": "Type",
+    "만든 사람": "Created by",
+    "이 자격증명을 삭제합니다. 되돌릴 수 없습니다.":
+        "Delete this credential. This cannot be undone.",
+    "등록된 자격증명이 없습니다.": "No credentials registered yet.",
+    "새 자격증명 등록": "Add a credential",
+    "예: 관리자 계정": "e.g. admin account",
+    "사용자명": "Username",
+    "비밀번호": "Password",
+    "세션 상태 (storage_state JSON)": "Session state (storage_state JSON)",
+    "브라우저에서 로그인한 뒤 Playwright 의 storage_state() 등으로 추출한 JSON 을 붙여넣으세요. 쿠키·localStorage 가 포함됩니다.":
+        "Log in in your browser, then paste the JSON exported via Playwright's "
+        "storage_state() or similar. It includes cookies and localStorage.",
+    "또는 HAR 파일 업로드": "Or upload a HAR file",
+    "로그인한 상태로 기록한 HAR 파일(브라우저 개발자도구 네트워크 탭 → 내보내기)을 올리면 쿠키를 자동 추출해 세션 상태로 저장합니다. 이 사이트 도메인의 쿠키만 가져오며, HAR 을 올리면 위 JSON 입력은 무시되고 localStorage 는 포함되지 않습니다.":
+        "Upload a HAR file recorded while logged in (browser DevTools Network tab "
+        "→ export) to automatically extract its cookies into the session state. "
+        "Only cookies for this site's domain are imported; when a HAR is uploaded "
+        "the JSON field above is ignored and localStorage is not included.",
+    "로그인한 상태로 기록한 HAR 파일을 올리면 쿠키를 자동 추출해 세션 상태로 저장합니다. HAR 을 올리면 위 JSON 입력은 무시됩니다.":
+        "Upload a HAR file recorded while logged in to automatically extract its "
+        "cookies into the session state. When a HAR is uploaded the JSON field "
+        "above is ignored.",
+    # HAR 파싱 오류 (credentials.storage_state_from_har)
+    "HAR 파일이 너무 큽니다.": "The HAR file is too large.",
+    "HAR 파일을 UTF-8 로 읽을 수 없습니다.": "The HAR file could not be read as UTF-8.",
+    "HAR 파일이 올바른 JSON 이 아닙니다.": "The HAR file is not valid JSON.",
+    "올바른 HAR 파일이 아닙니다 (log.entries 가 없습니다).":
+        "Not a valid HAR file (missing log.entries).",
+    "HAR 파일에서 쿠키를 찾지 못했습니다.": "No cookies were found in the HAR file.",
+    # 종류 라벨 (credentials.KIND_LABELS)
+    "HTTP 기본 인증": "HTTP basic auth",
+    "세션 쿠키": "Session cookie",
+    "JWT (Bearer 토큰)": "JWT (Bearer token)",
+    "Bearer 토큰": "Bearer token",
+    "캡처 시 Authorization: Bearer 헤더로 주입됩니다. 'Bearer ' 접두사 없이 토큰 값만 넣으세요.":
+        "Injected as an Authorization: Bearer header during capture. "
+        "Enter only the token value, without the 'Bearer ' prefix.",
+    "토큰을 입력하세요.": "Enter a token.",
+    "토큰에 공백·줄바꿈을 넣을 수 없습니다.":
+        "The token cannot contain spaces or line breaks.",
+    # 라우트·검증 메시지
+    "자격증명 없음": "Credential not found",
+    "잘못된 자격증명 종류입니다.": "Invalid credential type.",
+    "로그인 자격증명 추가": "Add login credentials",
+    "이 사이트에 로그인이 필요하면 자격증명을 등록합니다. 비밀은 WCCG_SECRET_KEY 로 암호화 저장되며, 사이트 상세에서도 관리할 수 있습니다.":
+        "Register credentials if this site requires login. Secrets are stored "
+        "encrypted with WCCG_SECRET_KEY and can also be managed from the site detail page.",
+    "비우면 자동 지정": "Auto-named if left blank",
+    "이 사이트에 이미 같은 이름의 자격증명이 있습니다: {name}":
+        "This site already has a credential with that name: {name}",
+    "연결 안 함": "Don't connect",
+    "새 자격증명 추가…": "Add new credential…",
+    "이 도메인에 등록된 자격증명이 있으면 골라서 연결하고, 없으면 새로 추가할 수 있습니다. 아카이빙 시 로그인에 사용됩니다 (사이트 상세에서도 관리).":
+        "If this domain has registered credentials you can pick one to connect; "
+        "otherwise add a new one. Used to log in during archiving "
+        "(also managed from the site detail page).",
+    "잘못된 자격증명 선택입니다.": "Invalid credential selection.",
+    "이 도메인에 등록된 자격증명이 아닙니다.": "Not a credential registered for this domain.",
+    "이미 있는 이름입니다: {name}": "Name already exists: {name}",
+    "자격증명을 등록했습니다.": "Credential added.",
+    "자격증명을 삭제했습니다.": "Credential deleted.",
+    "이름을 입력하세요.": "Enter a name.",
+    "사용자명을 입력하세요.": "Enter a username.",
+    "비밀번호를 입력하세요.": "Enter a password.",
+    "세션 상태(storage_state) JSON 을 입력하세요.":
+        "Enter the session state (storage_state) JSON.",
+    "세션 상태 JSON 이 너무 큽니다.": "The session state JSON is too large.",
+    "세션 상태가 올바른 JSON 이 아닙니다.": "The session state is not valid JSON.",
+    "세션 상태 JSON 형식이 아닙니다 (cookies 키가 필요합니다).":
+        "Not a session state JSON (a 'cookies' key is required).",
     # ---- 계정 설정 (account) ----
     "계정 설정": "Account settings",
+    # 개인 API Key (확장 토큰)
+    "개인 API Key": "Personal API Key",
+    "크롬 확장 등 외부 도구가 쓰는 본인 전용 API Key 는 별도 화면에서 관리합니다.":
+        "Manage your personal API Key for the Chrome extension and other tools on its own page.",
+    "크롬 확장이 Authorization: Bearer 헤더로 /api/v1 에 접근할 때 쓰는 본인 전용 API Key 입니다. 권한(보기·아카이브)은 발급 시 내 역할 범위 안에서 선택하며, 원문은 발급 직후 한 번만 표시됩니다. 폐기하면 그 키를 쓰는 확장의 접근이 즉시 차단됩니다.":
+        "Your personal API Key for the Chrome extension to access /api/v1 with an "
+        "Authorization: Bearer header. Pick its permissions (view/archive) when issuing, "
+        "within your role's limits; the key is shown only once right after issuing. "
+        "Revoking it cuts off the extension using it immediately.",
+    "발급한 API Key 가 없습니다.": "No API Keys issued yet.",
+    "이름 (예: chrome-ext)": "Name (e.g. chrome-ext)",
+    "현재 권한으로는 API Key 를 발급할 수 없습니다.": "Your current role can't issue API Keys.",
+    "{name} 키를 폐기할까요? 이 키를 쓰는 확장의 접근이 즉시 차단됩니다.":
+        "Revoke the key '{name}'? The extension using it loses access immediately.",
+    "개인 API Key 를 발급했습니다 — 아래 키를 지금 복사하세요. 다시 표시되지 않습니다.":
+        "Issued a personal API Key — copy it below now. It will not be shown again.",
+    "개인 API Key 를 폐기했습니다.": "Personal API Key revoked.",
+    "API Key 없음": "API Key not found",
+    # 내 아카이브 (my_archives) — 본인이 요청한 단발 아카이빙 이력
+    "대시보드·크롬 확장에서 내가 직접 요청한 아카이빙 실행 기록입니다. 예약·사이트 전체 아카이브(크롤)·CLI 실행은 포함되지 않습니다.":
+        "Archiving runs you triggered yourself from the dashboard or the Chrome "
+        "extension. Scheduled runs, full-site archives (crawls), and CLI runs are "
+        "not included.",
+    "조건에 맞는 기록이 없습니다.": "No records match the filter.",
+    "아직 요청한 아카이브가 없습니다. 새 아카이빙을 실행하면 여기에 기록됩니다.":
+        "You haven't requested any archives yet. Run a new archive and it will show up here.",
     "사용자 이름": "Display name",
     "표시 이름 (비우면 이메일로 표시)": "Display name (leave empty to show your email)",
     "이름 변경": "Change name",
@@ -600,7 +852,7 @@ _EN: dict[str, str] = {
     # ---- 로그인 / 가입 / 초대 (auth) ----
     "로그인": "Log in",
     "이메일 또는 패스워드가 올바르지 않습니다.": "Incorrect email or password.",
-    "Authentik으로 로그인 →": "Log in with Authentik →",
+    "SSO 로그인 →": "SSO login →",
     "계정이 없나요?": "No account?",
     "가입하기": "Sign up",
     "가입": "Sign up",
@@ -751,6 +1003,30 @@ _EN: dict[str, str] = {
         "The tag '{name}' is in use and cannot be deleted ({n} reference(s)).",
     "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.":
         "Deleted local network tag '{name}'.",
+    # 로컬 네트워크 태그 병합 (같은 IP:포트의 중복 태그 정리)
+    "같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 "
+    "페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.":
+        "Merges two tags that point to the same private IP and port into one. "
+        "The source tag's pages and crawls move to the target tag, and the "
+        "source tag is deleted.",
+    "출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 "
+    "같은 IP·포트를 가리킬 때만 병합됩니다.":
+        "Merge the source tag into the target tag? The source tag is deleted, "
+        "and the merge only proceeds when both tags point to the same IP and port.",
+    "출처 태그(삭제됨)": "Source tag (deleted)",
+    "대상 태그(유지)": "Target tag (kept)",
+    "병합": "Merge",
+    "같은 태그끼리는 병합할 수 없습니다.": "A tag cannot be merged with itself.",
+    "참조가 없는 태그는 병합할 수 없습니다 — 삭제를 사용하세요.":
+        "A tag with no references cannot be merged — use delete instead.",
+    "두 태그가 같은 사설 네트워크(같은 IP·포트)를 가리킬 때만 "
+    "병합할 수 있습니다.":
+        "Tags can only be merged when they point to the same private network "
+        "(same IP and port).",
+    "'{src}' 태그를 '{tgt}'(으)로 병합했습니다 "
+    "(페이지 {p}개·크롤 {c}개·스케줄 {s}개 이전).":
+        "Merged tag '{src}' into '{tgt}' "
+        "({p} page(s), {c} crawl(s), {s} schedule(s) moved).",
     # 사이트(서브도메인) 단위 아카이브 — 목록·사이트 상세
     "사이트 {n}개": "{n} site(s)",
     "사이트 필터…": "Filter sites…",
@@ -769,6 +1045,18 @@ _EN: dict[str, str] = {
     "실패 기록 없음": "Failed run not found",
     "재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.":
         "Retry queued — the crawler will try again shortly.",
+    "모두 재시도": "Retry all",
+    "실패한 작업을 모두 재시도할까요?": "Retry all failed runs?",
+    "실패한 작업을 모두 재시도합니다 — 백그라운드에서 진행됩니다.":
+        "Retrying all failed runs — this proceeds in the background.",
+    "재시도할 실패 작업이 없습니다.": "No failed runs to retry.",
+    "다시 아카이빙": "Re-archive",
+    "같은 범위·옵션으로 사이트 전체를 다시 아카이빙합니다. 계속할까요?":
+        "Re-archive the entire site with the same scope and options. Continue?",
+    "같은 시작 URL·범위·옵션으로 사이트 아카이브를 다시 실행합니다.":
+        "Re-run the site archive with the same start URL, scope, and options.",
+    "실패한 페이지만 큐로 되돌려 다시 시도합니다 (성공한 페이지는 그대로).":
+        "Re-queue and retry only the failed pages (successful ones are left as is).",
     "사이트 내보내기": "Export site",
     "소속 페이지·스냅샷을 아카이브 내보내기 파일(tar.gz)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.":
         "Download this site's pages and snapshots as an archive export file "
@@ -811,6 +1099,52 @@ _EN: dict[str, str] = {
         "it finishes",
     "사이트 삭제됨: {key} (페이지 {p}개, 스냅샷 {s}개, 크롤 {c}개)":
         "Site deleted: {key} ({p} page(s), {s} snapshot(s), {c} crawl(s))",
+    # ---- 검색 (/search) ----
+    "아카이브 본문·문서에서 검색…": "Search archived text and documents…",
+    "도메인 (선택)": "Domain (optional)",
+    "URL당 최신만": "Latest per URL",
+    "한국어는 3글자 이상이 정확합니다 — 1~2글자 검색어는 부분일치로 처리되어 결과가 많거나 느릴 수 있습니다. 검색 대상은 페이지 본문과 첨부 문서(PDF·워드·한글 등) 본문입니다.":
+        "Korean queries of 3+ characters are most accurate — 1–2 character queries "
+        "fall back to substring matching, which can be slow or return many results. "
+        "Search covers page text and attached document bodies (PDF, Word, HWP, etc.).",
+    "이 환경의 SQLite 빌드에 FTS5 가 없어 검색을 쓸 수 없습니다. 기존 아카이빙은 영향받지 않습니다.":
+        "Search is unavailable because this SQLite build lacks FTS5. Existing "
+        "archiving is unaffected.",
+    "검색어를 입력하세요.": "Enter a search query.",
+    "일치하는 결과가 없습니다.": "No matching results.",
+    "짧은 검색어라 부분일치로 찾았습니다.": "Short query — matched by substring.",
+    "검색 권한이 없습니다": "You do not have permission to search",
+    # ---- 검색 인덱스 (시스템 메뉴 카드 / 정합성) ----
+    "검색 인덱스": "Search index",
+    "비활성": "Disabled",
+    "정상": "OK",
+    "불일치 {n}개": "{n} inconsistent",
+    "미색인 {n}개": "{n} unindexed",
+    "색인됨": "Indexed",
+    "미색인": "Unindexed",
+    "FTS 행": "FTS rows",
+    "과소 색인": "Under-indexed",
+    "전체 다시 색인": "Reindex all",
+    "재색인 중": "Reindexing",
+    "이미 전체 다시 색인이 진행 중입니다.": "A full reindex is already in progress.",
+    "검색 인덱스 전체 다시 색인을 시작했습니다 — 아래에 진행 상황이 표시됩니다.":
+        "Started a full reindex of the search index — progress is shown below.",
+    "마지막 전체 다시 색인이 실패했습니다 — 시스템 로그를 확인하세요.":
+        "The last full reindex failed — check the system logs.",
+    "아카이브 본문과 첨부 문서 본문의 전문 검색 인덱스(FTS5)입니다. 새 스냅샷은 저장 시 자동 색인됩니다. 가져오기·구형 스냅샷, compact 로 첨부 문서가 새로 생긴 스냅샷은 다시 색인이 필요할 수 있습니다. 아래 버튼은 인덱스를 비우고 전체 스냅샷을 다시 색인합니다(첨부 문서 본문 포함) — 스냅샷이 많으면 시간이 걸릴 수 있습니다.":
+        "Full-text search index (FTS5) over archived page text and attached "
+        "document bodies. New snapshots are indexed automatically on save. "
+        "Imported and legacy snapshots, and snapshots whose attached documents "
+        "were newly migrated by compact, may need re-indexing. The button below "
+        "clears the index and re-indexes every snapshot (including document "
+        "bodies) — this can take a while with many snapshots.",
+    "검색 인덱스를 비우고 전체 스냅샷을 다시 색인합니다(첨부 문서 본문 포함). 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?":
+        "Clear the search index and re-index every snapshot (including document "
+        "bodies)? This can take a while with many snapshots.",
+    "검색 인덱스를 쓸 수 없습니다 — 이 SQLite 빌드에 FTS5 가 없습니다.":
+        "Search index is unavailable — this SQLite build lacks FTS5.",
+    "검색 인덱스 전체 다시 색인 완료 — 스냅샷 {n}개":
+        "Search index rebuilt — {n} snapshot(s)",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다
@@ -825,6 +1159,16 @@ _EN[f"이름은 {MAX_DISPLAY_NAME_LENGTH}자 이하여야 합니다."] = (
 )
 _EN[f"키 이름은 {MAX_API_KEY_NAME_LENGTH}자 이하여야 합니다."] = (
     f"The key name must be at most {MAX_API_KEY_NAME_LENGTH} characters."
+)
+# 자격증명 길이 제한 (이름은 MAX_DISPLAY_NAME_LENGTH 과 같은 50자라 위에서 이미 등록됨)
+_EN[f"사용자명은 {MAX_USERNAME_LENGTH}자 이하여야 합니다."] = (
+    f"The username must be at most {MAX_USERNAME_LENGTH} characters."
+)
+_EN[f"비밀번호는 {MAX_PASSWORD_LENGTH}자 이하여야 합니다."] = (
+    f"The password must be at most {MAX_PASSWORD_LENGTH} characters."
+)
+_EN[f"토큰은 {MAX_JWT_LENGTH}자 이하여야 합니다."] = (
+    f"The token must be at most {MAX_JWT_LENGTH} characters."
 )
 
 CATALOGS: dict[str, dict[str, str]] = {"en": _EN}

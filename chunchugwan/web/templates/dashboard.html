@@ -1,8 +1,38 @@
 {% extends "base.html" %}
 {% from "_network_tag.html" import network_tag_badge with context %}
+{% from "_logo.html" import logo %}
 {% block title %}{{ _("현황") }} — {{ _("춘추관") }}{% endblock %}
 {% block head %}
 <style>
+/* 구글 검색 느낌의 히어로 — 현황 위에 로고 + 큰 둥근 검색창을 중앙 배치.
+   검색은 별도 결과 화면(/search)으로 GET 이동한다 (도메인·최신 필터는 거기서). */
+.search-hero { text-align: center; padding: 26px 0 30px; margin-bottom: 4px;
+               border-bottom: 1px solid var(--border); }
+.search-hero-brand { display: inline-flex; align-items: center; gap: 9px;
+                     color: var(--fg); margin-bottom: 18px; }
+.search-hero-brand .logo { width: 38px; height: 38px; }
+.search-hero-title { font-size: 26px; font-weight: 700; letter-spacing: .08em; }
+.search-hero-form { max-width: 600px; margin: 0 auto; }
+.search-hero-box { display: flex; align-items: center; gap: 6px;
+                   border: 1px solid var(--border); border-radius: 26px;
+                   background: var(--surface); padding: 4px 6px 4px 16px;
+                   box-shadow: 0 1px 6px rgba(0, 0, 0, .07);
+                   transition: box-shadow .15s, border-color .15s; }
+.search-hero-box:focus-within { box-shadow: 0 2px 14px rgba(0, 0, 0, .16);
+                                border-color: var(--link); }
+.search-hero-icon { flex: none; width: 19px; height: 19px; color: var(--muted); }
+.search-hero-box input[type=text] { flex: 1; min-width: 0; border: none; box-shadow: none;
+                                    background: none; padding: 9px 4px; font-size: 16px; }
+.search-hero-box input[type=text]:focus { outline: none; }
+.search-hero-box button { flex: none; border-radius: 20px; padding: 8px 22px; font-size: 14px;
+                          color: #fff; background: var(--link); border-color: var(--link); }
+.search-hero-box button:hover { background: var(--link); filter: brightness(1.08); }
+@media (max-width: 599px) {
+  .search-hero { padding: 14px 0 18px; }
+  .search-hero-brand { margin-bottom: 14px; }
+  .search-hero-title { font-size: 22px; }
+  .search-hero-box button { padding: 8px 16px; }
+}
 .trend-table { max-width: 680px; }
 .trend-bar { height: 12px; border-radius: 3px; background: var(--link); opacity: .35;
              min-width: 0; }
@@ -16,6 +46,24 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
                       'forced_same': 'same', 'error': 'error'} %}
 {% set status_label = {'new': _('신규'), 'changed': _('변경'), 'unchanged': _('동일'),
                        'forced_same': _('동일(강제)'), 'error': _('실패')} %}
+
+{% if can_search %}
+<section class="search-hero">
+  <div class="search-hero-brand">{{ logo(38) }}<span class="search-hero-title">{{ _("춘추관") }}</span></div>
+  <form class="search-hero-form" method="get" action="/search" role="search">
+    <div class="search-hero-box">
+      <svg class="search-hero-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="7"></circle><line x1="15.5" y1="15.5" x2="21" y2="21"></line>
+      </svg>
+      <input type="text" name="q" autocomplete="off" autofocus
+             aria-label="{{ _('검색') }}"
+             placeholder="{{ _('아카이브 본문·문서에서 검색…') }}">
+      <button type="submit">{{ _("검색") }}</button>
+    </div>
+  </form>
+</section>
+{% endif %}
 
 <h2>{{ _("현황") }}</h2>
 
@@ -65,7 +113,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
 {% if not recent_snaps %}
 <p class="muted">{{ _("아직 스냅샷이 없습니다.") }}</p>
 {% else %}
-<div class="table-wrap">
+<div class="table-wrap cards">
 <table>
   <thead><tr><th>{{ _("시각") }}</th><th>{{ _("상태") }}</th><th>URL</th><th>{{ _("용량") }}</th><th></th></tr></thead>
   <tbody>
@@ -93,7 +141,7 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
 {% if not recent_logs %}
 <p class="muted">{{ _("로그가 없습니다. 아카이빙을 실행하면 결과가 여기에 기록됩니다.") }}</p>
 {% else %}
-<div class="table-wrap wide">
+<div class="table-wrap wide cards">
 <table>
   <thead><tr><th>{{ _("시각") }}</th><th>{{ _("상태") }}</th><th>URL</th><th>{{ _("소요") }}</th><th>{{ _("출처") }}</th><th></th></tr></thead>
   <tbody>
@@ -123,4 +171,25 @@ td.url-cell { max-width: 420px; overflow: hidden; text-overflow: ellipsis;
 </div>
 <p class="more-link" style="margin-top:8px"><a href="/logs">{{ _("전체 로그 →") }}</a></p>
 {% endif %}
+
+<section class="card" style="margin-top:20px">
+  <h3>{{ _("더 빠르고 편리하게 아카이브 하세요!") }}</h3>
+  <p class="muted" style="max-width:640px">
+    {{ _("크롬 확장을 설치하면 보고 있는 페이지를 클릭 한 번으로 아카이브하고, 아카이브 히스토리도 바로 확인할 수 있습니다.") }}
+  </p>
+  <p>
+    <a class="button" href="/extension/download">{{ _("크롬 확장 내려받기") }}</a>
+    <span class="mono muted" style="margin-left:8px">v{{ extension_version }}</span>
+  </p>
+  <details>
+    <summary>{{ _("설치 방법") }}</summary>
+    <ol class="muted" style="font-size:13px; line-height:1.8; max-width:640px">
+      <li>{{ _("내려받은 ZIP 파일의 압축을 풉니다.") }}</li>
+      <li>{{ _("크롬 주소창에") }} <span class="mono">chrome://extensions</span> {{ _("를 엽니다.") }}</li>
+      <li>{{ _("우측 상단 ‘개발자 모드’를 켭니다.") }}</li>
+      <li>{{ _("‘압축해제된 확장 프로그램을 로드’를 눌러 압축 푼 폴더를 선택합니다.") }}</li>
+      <li>{{ _("확장 아이콘을 눌러 이 춘추관 주소와, 개인 API Key 화면에서 발급한 키를 입력하면 연결됩니다.") }}</li>
+    </ol>
+  </details>
+</section>
 {% endblock %}

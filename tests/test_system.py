@@ -66,6 +66,86 @@ def test_system_page_shows_version(client):
     assert f"v{__version__}" in res.text
 
 
+def test_capture_settings_toggle_mobile_screenshot(client):
+    """캡처 설정 — 모바일 스크린샷 활성화 토글이 설정에 반영된다 (기본 off)."""
+    res = client.get("/system")
+    assert "캡처 설정" in res.text
+    assert "모바일 해상도 스크린샷도 함께 저장" in res.text
+    with db.connect() as conn:
+        assert db.mobile_screenshot_enabled(conn) is False  # 기본 off
+
+    res = client.post(
+        "/system/capture-settings",
+        data={"mobile_screenshot_enabled": "on"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.mobile_screenshot_enabled(conn) is True
+    assert "checked" in client.get("/system").text
+
+    # 체크박스 미포함 = off
+    res = client.post(
+        "/system/capture-settings", data={}, follow_redirects=False
+    )
+    assert res.status_code == 303
+    with db.connect() as conn:
+        assert db.mobile_screenshot_enabled(conn) is False
+
+
+def test_document_settings_defaults_and_save(client):
+    """문서 아카이브 설정 — 기본 한도가 보이고, 유효 값을 저장하면 반영된다."""
+    from chunchugwan import documents
+
+    res = client.get("/system")
+    assert "문서 아카이브 설정" in res.text
+    with db.connect() as conn:
+        lim = documents.limits(conn)  # 설정 없으면 config 기본값
+        assert lim.max_count == config.DOCUMENT_MAX_COUNT_DEFAULT
+        assert lim.max_bytes == config.DOCUMENT_MAX_MB_DEFAULT * 1024 * 1024
+        assert lim.timeout_seconds == config.DOCUMENT_FETCH_TIMEOUT_DEFAULT
+
+    res = client.post(
+        "/system/document-settings",
+        data={"document_max_count": 5, "document_max_mb": 10,
+              "document_fetch_timeout": 45},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and "notice=" in res.headers["location"]
+    with db.connect() as conn:
+        lim = documents.limits(conn)
+        assert lim.max_count == 5
+        assert lim.max_bytes == 10 * 1024 * 1024
+        assert lim.timeout_seconds == 45
+
+
+def test_document_settings_rejects_out_of_range(client):
+    """범위를 벗어난 값은 저장하지 않고 오류로 돌려보낸다."""
+    from chunchugwan import documents
+
+    res = client.post(
+        "/system/document-settings",
+        data={"document_max_count": config.DOCUMENT_MAX_COUNT_MAX + 1,
+              "document_max_mb": 10, "document_fetch_timeout": 45},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303 and "error=" in res.headers["location"]
+    with db.connect() as conn:
+        assert db.get_setting(conn, db.DOCUMENT_MAX_COUNT_KEY) is None  # 미저장
+
+
+def test_document_limits_clamps_corrupt_setting(client):
+    """오염·범위 밖 설정 값은 config 범위로 클램핑(또는 기본값)된다."""
+    from chunchugwan import documents
+
+    with db.connect() as conn:
+        db.set_setting(conn, db.DOCUMENT_MAX_COUNT_KEY, "99999")  # 범위 초과
+        db.set_setting(conn, db.DOCUMENT_MAX_MB_KEY, "쓰레기")      # 정수 아님
+        lim = documents.limits(conn)
+        assert lim.max_count == config.DOCUMENT_MAX_COUNT_MAX
+        assert lim.max_bytes == config.DOCUMENT_MAX_MB_DEFAULT * 1024 * 1024
+
+
 def test_backup_download_and_restore_upload(client, tmp_path, monkeypatch):
     res = client.post("/system/backup")
     assert res.status_code == 200
