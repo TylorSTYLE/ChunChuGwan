@@ -55,6 +55,8 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         ext_credential_ttl_hours = db.ext_credential_ttl_hours(conn)
         mobile_screenshot_enabled = db.mobile_screenshot_enabled(conn)
         doc_limits = documents.limits(conn)
+        smtp = mailer.resolve_config(conn)
+        smtp_has_password = db.get_setting(conn, db.SMTP_PASSWORD_KEY) not in (None, "")
     usage = storage.archive_disk_usage()
     return templates.TemplateResponse(
         request, "system.html",
@@ -97,6 +99,19 @@ def system_view(request: Request, notice: str = "", error: str = ""):
                 "timeout_max": config.DOCUMENT_FETCH_TIMEOUT_MAX,
             },
             "credential_key_set": crypto.is_configured(),
+            "smtp_config": {
+                "host": smtp.host,
+                "port": smtp.port,
+                "user": smtp.user,
+                "sender": smtp.sender,
+                "tls": smtp.tls,
+                "enabled": smtp.enabled,
+                "has_password": smtp_has_password,
+            },
+            "smtp_tls_modes": mailer.SMTP_TLS_MODES,
+            "smtp_test_to": (
+                request.state.user["email"] if request.state.user else ""
+            ),
             "archive_root": str(config.ARCHIVE_ROOT),
             "db_bytes": usage["db"],
             "sites_bytes": usage["sites"],
@@ -398,6 +413,81 @@ def system_document_settings(
     return _system_redirect(notice=t(request, "문서 아카이브 설정을 저장했습니다."))
 
 
+@router.post("/smtp-settings")
+def system_smtp_settings(
+    request: Request,
+    smtp_host: str = Form(""),
+    smtp_port: int = Form(587),
+    smtp_user: str = Form(""),
+    smtp_password: str = Form(""),
+    smtp_from: str = Form(""),
+    smtp_tls: str = Form("starttls"),
+    smtp_clear_password: bool = Form(False),
+):
+    """초대 메일 발송 SMTP 설정 저장 (DB — WCCG_SMTP_* 환경변수보다 우선).
+
+    비밀번호는 대칭 암호화한 암호문으로만 저장한다(원칙 6 예외). 입력칸을
+    비우면 기존 저장값을 유지하고, '저장된 비밀번호 삭제'를 켜면 지운다.
+    """
+    smtp_host = smtp_host.strip()
+    smtp_user = smtp_user.strip()
+    smtp_from = smtp_from.strip()
+    if smtp_tls not in mailer.SMTP_TLS_MODES:
+        return _system_redirect(error=t(request, "TLS 모드가 올바르지 않습니다."))
+    if not (1 <= smtp_port <= 65535):
+        return _system_redirect(
+            error=t(request, "SMTP 포트는 1 ~ 65535 사이여야 합니다.")
+        )
+    if smtp_password and not crypto.is_configured():
+        return _system_redirect(
+            error=t(request,
+                    "WCCG_SECRET_KEY 가 설정되지 않아 SMTP 비밀번호를 저장할 수 없습니다.")
+        )
+    with db.connect() as conn:
+        db.set_setting(conn, db.SMTP_HOST_KEY, smtp_host)
+        db.set_setting(conn, db.SMTP_PORT_KEY, str(smtp_port))
+        db.set_setting(conn, db.SMTP_USER_KEY, smtp_user)
+        db.set_setting(conn, db.SMTP_FROM_KEY, smtp_from)
+        db.set_setting(conn, db.SMTP_TLS_KEY, smtp_tls)
+        if smtp_password:
+            db.set_setting(conn, db.SMTP_PASSWORD_KEY, crypto.encrypt(smtp_password))
+        elif smtp_clear_password:
+            db.delete_setting(conn, db.SMTP_PASSWORD_KEY)
+    audit.log(
+        request, "메일(SMTP) 설정 변경: 호스트 %s, 포트 %d, TLS %s",
+        smtp_host or "(없음)", smtp_port, smtp_tls,
+    )
+    return _system_redirect(notice=t(request, "메일(SMTP) 설정을 저장했습니다."))
+
+
+@router.post("/smtp-test")
+def system_smtp_test(request: Request):
+    """저장된 SMTP 설정으로 요청 관리자 본인에게 테스트 메일을 보낸다."""
+    me = request.state.user
+    to_email = me["email"] if me else ""
+    if not to_email:
+        return _system_redirect(
+            error=t(request, "테스트 메일을 받을 이메일 주소가 없습니다.")
+        )
+    with db.connect() as conn:
+        smtp = mailer.resolve_config(conn)
+    if not smtp.enabled:
+        return _system_redirect(
+            error=t(request, "SMTP 호스트가 설정되지 않았습니다.")
+        )
+    try:
+        mailer.send_test(smtp, to_email)
+    except (smtplib.SMTPException, OSError) as e:
+        logger.warning("SMTP 테스트 메일 발송 실패 (%s): %s", to_email, e)
+        return _system_redirect(
+            error=t(request, "테스트 메일 발송에 실패했습니다: {e}", e=e)
+        )
+    audit.log(request, "SMTP 테스트 메일 발송: %s", to_email)
+    return _system_redirect(
+        notice=t(request, "{email} 로 테스트 메일을 보냈습니다.", email=to_email)
+    )
+
+
 # ---- 로컬 네트워크 태그 ----
 # 사설 IP 대역(로컬 네트워크) 아카이빙을 허용하는 태그. id 는 GUID 자동
 # 발급, 표시 이름·설명은 문자열. 태그가 없으면 사설 대역은 아카이빙 불가
@@ -545,6 +635,7 @@ def users_view(request: Request, notice: str = "", error: str = ""):
         db.delete_expired_invites(conn)  # 기회적 정리
         users = db.list_users(conn)
         invites = db.list_invites(conn)
+        mail_on = mailer.mail_enabled(conn)
     return templates.TemplateResponse(
         request, "users.html",
         {
@@ -554,7 +645,7 @@ def users_view(request: Request, notice: str = "", error: str = ""):
             "roles": db.ASSIGNABLE_ROLES,
             "invitable_roles": db.INVITABLE_ROLES,
             "role_labels": db.ROLE_LABELS,
-            "mail_enabled": config.mail_enabled(),
+            "mail_enabled": mail_on,
             "invite_ttl_days": config.INVITE_TTL_DAYS,
             "notice": notice, "error": error,
         },
@@ -708,13 +799,15 @@ def users_invite(request: Request, email: str = Form(...), role: str = Form("vie
         request, "사용자 초대 발급: %s (권한 %s)", email, db.ROLE_LABELS[role]
     )
     link = _invite_link(request, token)
-    if config.mail_enabled():
+    with db.connect() as conn:
+        smtp = mailer.resolve_config(conn)
+    if smtp.enabled:
         inviter = (
             request.state.user["email"] if request.state.user
             else t(request, "관리자")
         )
         try:
-            mailer.send_invite(email, link, inviter, db.ROLE_LABELS[role])
+            mailer.send_invite(smtp, email, link, inviter, db.ROLE_LABELS[role])
         except (smtplib.SMTPException, OSError) as e:
             logger.warning("초대 메일 발송 실패 (%s): %s", email, e)
             return _users_redirect(

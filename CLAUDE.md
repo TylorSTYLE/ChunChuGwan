@@ -320,7 +320,12 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   페이지가 링크한 문서를 받을 때의 스냅샷당 수·문서 1개 크기(MB)·다운로드
   타임아웃(초). 해석·클램핑은 `documents.limits`(오염·범위 밖이면 config
   기본값), pipeline 이 읽어 `documents.download_documents`/`download_direct`
-  에 전달, 이후 저장되는 스냅샷에 적용)
+  에 전달, 이후 저장되는 스냅샷에 적용)과 메일(SMTP) 설정
+  (`smtp_host`/`smtp_port`/`smtp_user`/`smtp_password`/`smtp_from`/`smtp_tls` —
+  초대 메일 발송 서버. 시스템 화면 또는 `WCCG_SMTP_*` 환경변수로 두며 DB 값이
+  우선, 해석·환경변수 폴백은 `mailer.resolve_config`. `smtp_password` 는
+  `crypto` 로 대칭 암호화한 암호문만 저장 — 외부 SMTP 에 replay 해야 하므로
+  복원 가능, 원칙 6 예외이며 사이트 로그인 자격증명과 같은 처리)
 - `webauthn_credentials` — 패스키 공개키 자격증명 (2FA 용)
 - `api_keys` — 외부 소프트웨어용 API 키 (`/api/v1` REST API 인증).
   키마다 보기/아카이브 권한과 만료 시각(NULL=영구), 토큰은 SHA-256 해시만

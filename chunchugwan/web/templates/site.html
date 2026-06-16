@@ -38,7 +38,7 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
   {% endif %}
   {% if can_delete %}
   <form class="inline" method="post" action="/sites/{{ site['id'] }}/delete"
-        onsubmit="return confirm({{ (site['site_key'] ~ '\n\n' ~ _('페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', p=page_count, c=crawls|length))|tojson }})">
+        onsubmit='return confirm({{ (site['site_key'] ~ '\n\n' ~ _('페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', p=page_count, c=crawls|length))|tojson }})'>
     <button type="submit" class="danger">{{ _("사이트 삭제") }}</button>
   </form>
   {% endif %}
@@ -82,7 +82,7 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
         {% endif %}
         {% if can_delete %}
         <form class="inline" method="post" action="/page/{{ p['id'] }}/delete"
-              onsubmit="return confirm({{ (p['url'] ~ '\n\n' ~ _('스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', n=p['snapshot_count']))|tojson }})">
+              onsubmit='return confirm({{ (p['url'] ~ '\n\n' ~ _('스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.', n=p['snapshot_count']))|tojson }})'>
           <button type="submit" class="danger">{{ _("삭제") }}</button>
         </form>
         {% endif %}

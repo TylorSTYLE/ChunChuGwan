@@ -547,9 +547,39 @@ _EN: dict[str, str] = {
     "초대 링크는 {n}일 후 만료되며, 같은 이메일을 다시 초대하면 새 링크로 교체됩니다.":
         "Invite links expire after {n} day(s); re-inviting the same email replaces "
         "the link.",
-    "메일 발송이 설정되지 않아(WCCG_SMTP_*) 초대 링크가 화면에 표시됩니다 — 직접 전달하세요.":
-        "Mail is not configured (WCCG_SMTP_*), so invite links are shown on screen — "
-        "share them directly.",
+    "메일 발송이 설정되지 않아 초대 링크가 화면에 표시됩니다 — 시스템 → 메일(SMTP) 설정에서 설정하거나 링크를 직접 전달하세요.":
+        "Mail is not configured, so invite links are shown on screen — configure it in "
+        "System → Mail (SMTP) settings, or share the link directly.",
+    # ---- 메일(SMTP) 설정 (시스템 화면) ----
+    "메일(SMTP) 설정": "Mail (SMTP) settings",
+    "사용자 초대 메일을 보낼 SMTP 서버입니다. 호스트를 비우면 메일 발송이 꺼지고 초대 링크가 화면에 표시됩니다. 환경변수(WCCG_SMTP_*)로도 설정할 수 있으며, 여기서 저장한 값이 우선합니다.":
+        "SMTP server used to send user invite emails. Leave the host blank to disable "
+        "mail (invite links are then shown on screen). It can also be set via "
+        "environment variables (WCCG_SMTP_*); values saved here take precedence.",
+    "SMTP 호스트": "SMTP host",
+    "포트": "Port",
+    "TLS 모드": "TLS mode",
+    "로그인 사용자": "Login user",
+    "비우면 인증 생략": "Blank = no auth",
+    "로그인 비밀번호": "Login password",
+    "변경하려면 입력 (비우면 유지)": "Enter to change (blank = keep)",
+    "저장된 비밀번호 삭제": "Delete saved password",
+    "WCCG_SECRET_KEY 가 설정되지 않아 비밀번호를 저장할 수 없습니다 (환경변수 WCCG_SMTP_PASSWORD 는 그대로 쓸 수 있습니다).":
+        "WCCG_SECRET_KEY is not set, so the password cannot be saved (the "
+        "WCCG_SMTP_PASSWORD environment variable still works).",
+    "발신자 주소": "Sender address",
+    "비우면 로그인 사용자": "Blank = login user",
+    "테스트 메일 보내기": "Send test email",
+    "메일(SMTP) 설정을 저장했습니다.": "Saved mail (SMTP) settings.",
+    "TLS 모드가 올바르지 않습니다.": "Invalid TLS mode.",
+    "SMTP 포트는 1 ~ 65535 사이여야 합니다.": "SMTP port must be between 1 and 65535.",
+    "WCCG_SECRET_KEY 가 설정되지 않아 SMTP 비밀번호를 저장할 수 없습니다.":
+        "WCCG_SECRET_KEY is not set, so the SMTP password cannot be saved.",
+    "테스트 메일을 받을 이메일 주소가 없습니다.":
+        "No email address available to receive the test mail.",
+    "SMTP 호스트가 설정되지 않았습니다.": "SMTP host is not configured.",
+    "테스트 메일 발송에 실패했습니다: {e}": "Failed to send test email: {e}",
+    "{email} 로 테스트 메일을 보냈습니다.": "Sent a test email to {email}.",
     "초대": "Invite",
     "초대한 사람": "Invited by",
     "만료": "Expires",
