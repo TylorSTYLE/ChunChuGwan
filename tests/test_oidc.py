@@ -144,4 +144,4 @@ def test_oidc_disabled_404(client, monkeypatch):
 
 def test_login_page_shows_sso_button(client):
     res = client.get("/login")
-    assert "Authentik" in res.text and "/auth/oidc/login" in res.text
+    assert "SSO" in res.text and "/auth/oidc/login" in res.text
