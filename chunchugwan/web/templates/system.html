@@ -143,57 +143,10 @@ h3.danger-heading { color: var(--red); }
       {% endif %}
     </div>
   </div>
+</div>
 
-  <div class="sys-card">
-    <h4>{{ _("전체 백업") }}</h4>
-    <p>
-      {{ _("DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.") }}
-    </p>
-    <div class="actions">
-      <form method="post" action="/system/backup">
-        <button type="submit">{{ _("전체 백업 다운로드") }}</button>
-      </form>
-    </div>
-  </div>
-
-  <div class="sys-card">
-    <h4>{{ _("아카이브 내보내기") }}</h4>
-    <p>
-      {{ _("페이지·스냅샷·확인 기록·크롤 회차·인증서·아카이브 로그와 스냅샷 파일을 담습니다 (인증 데이터 제외). 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.") }}
-    </p>
-    <div class="actions">
-      <form method="post" action="/system/export">
-        <button type="submit">{{ _("내보내기 다운로드") }}</button>
-      </form>
-    </div>
-  </div>
-
-  <div class="sys-card">
-    <h4>{{ _("가입 설정") }}</h4>
-    <form method="post" action="/system/settings"
-          style="display:flex; flex-direction:column; gap:10px; flex:1">
-      <p>
-        {{ _("로그인 화면의 회원 가입 기능과 가입 계정의 초기 권한을 설정합니다 (SSO 자동 생성 계정에도 적용). '권한없음'으로 가입한 사용자는 관리자가 사용자 관리에서 권한을 부여할 때까지 서비스를 이용할 수 없습니다.") }}
-      </p>
-      <label class="mode">
-        <input type="checkbox" name="signup_enabled" value="on"
-               {% if signup_enabled %}checked{% endif %}>
-        {{ _("로그인 화면에서 회원 가입 허용") }}
-      </label>
-      <label class="mode">
-        {{ _("가입 초기 권한") }}
-        <select name="signup_default_role" style="margin-left:6px">
-          {% for r in signup_roles %}
-          <option value="{{ r }}" {% if r == signup_default_role %}selected{% endif %}>{{ _(role_labels[r]) }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <div class="actions">
-        <button type="submit">{{ _("저장") }}</button>
-      </div>
-    </form>
-  </div>
-
+<h3>{{ _("아카이브 설정") }}</h3>
+<div class="sys-grid">
   <div class="sys-card">
     <h4>{{ _("사이트 아카이브 설정") }}</h4>
     <form method="post" action="/system/crawl-settings"
@@ -230,6 +183,25 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
+    <h4>{{ _("캡처 설정") }}</h4>
+    <form method="post" action="/system/capture-settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1">
+      <p>
+        {{ _("아카이빙할 때 데스크탑 스크린샷 외에 모바일 해상도(화면비율) 스크린샷도 함께 저장합니다. 같은 URL 을 안드로이드 크롬 모바일 브라우저로 한 번 더 열어 찍으며, 이후 새로 만들어지는 스냅샷에만 적용됩니다(기존 스냅샷은 그대로).") }}
+      </p>
+      <label class="mode">
+        <input type="checkbox" name="mobile_screenshot_enabled" value="on"
+               {% if mobile_screenshot_enabled %}checked{% endif %}>
+        {{ _("모바일 해상도 스크린샷도 함께 저장") }}
+        <span class="mono" style="color:var(--muted); margin-left:6px">{{ mobile_screenshot_size }}</span>
+      </label>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="sys-card">
     <h4>{{ _("확장 자격증명 설정") }}</h4>
     <form method="post" action="/system/credential-settings"
           style="display:flex; flex-direction:column; gap:10px; flex:1">
@@ -245,25 +217,6 @@ h3.danger-heading { color: var(--red); }
       {% if not credential_key_set %}
       <p class="muted">{{ _("WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.") }}</p>
       {% endif %}
-      <div class="actions">
-        <button type="submit">{{ _("저장") }}</button>
-      </div>
-    </form>
-  </div>
-
-  <div class="sys-card">
-    <h4>{{ _("캡처 설정") }}</h4>
-    <form method="post" action="/system/capture-settings"
-          style="display:flex; flex-direction:column; gap:10px; flex:1">
-      <p>
-        {{ _("아카이빙할 때 데스크탑 스크린샷 외에 모바일 해상도(화면비율) 스크린샷도 함께 저장합니다. 같은 URL 을 안드로이드 크롬 모바일 브라우저로 한 번 더 열어 찍으며, 이후 새로 만들어지는 스냅샷에만 적용됩니다(기존 스냅샷은 그대로).") }}
-      </p>
-      <label class="mode">
-        <input type="checkbox" name="mobile_screenshot_enabled" value="on"
-               {% if mobile_screenshot_enabled %}checked{% endif %}>
-        {{ _("모바일 해상도 스크린샷도 함께 저장") }}
-        <span class="mono" style="color:var(--muted); margin-left:6px">{{ mobile_screenshot_size }}</span>
-      </label>
       <div class="actions">
         <button type="submit">{{ _("저장") }}</button>
       </div>
@@ -301,6 +254,99 @@ h3.danger-heading { color: var(--red); }
     </form>
   </div>
 
+  <div class="sys-card">
+    <h4>{{ _("로컬 네트워크 태그") }}</h4>
+    <p>
+      {{ _("사설 IP 대역(로컬 네트워크)의 웹서버를 아카이빙할 때 어느 네트워크인지 구분하는 태그입니다. 사설 대역 주소는 태그를 지정해야 아카이빙할 수 있고, 루프백 주소는 항상 아카이빙할 수 없습니다. ID(GUID)는 자동 발급됩니다.") }}
+    </p>
+    {% if network_tags %}
+    <div class="table-wrap cards">
+    <table style="font-size:12px; border-collapse:collapse; width:100%">
+      <thead>
+        <tr style="text-align:left; color:var(--muted)">
+          <th style="padding:2px 8px 2px 0">{{ _("이름") }}</th>
+          <th style="padding:2px 8px 2px 0">{{ _("설명") }}</th>
+          <th style="padding:2px 8px 2px 0">{{ _("사용") }}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for tag in network_tags %}
+        <tr title="ID: {{ tag.id }}">
+          <td style="padding:2px 8px 2px 0">{{ tag.name }}</td>
+          <td style="padding:2px 8px 2px 0; color:var(--muted)">{{ tag.description }}</td>
+          <td style="padding:2px 8px 2px 0" class="mono">{{ tag.page_count + tag.crawl_count }}</td>
+          <td style="padding:2px 0; text-align:right">
+            <form method="post" action="/system/network-tags/{{ tag.id }}/delete"
+                  onsubmit='return confirm({{ _('태그를 삭제할까요? 페이지·크롤이 사용 중이면 삭제되지 않습니다.')|tojson }})'>
+              <button type="submit" class="danger" style="font-size:11px; padding:1px 8px">{{ _("삭제") }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="muted" style="font-size:12px">{{ _("등록된 태그가 없습니다 — 사설 IP 대역 아카이빙이 모두 거부됩니다.") }}</p>
+    {% endif %}
+    <form method="post" action="/system/network-tags" class="actions">
+      <input type="text" name="name" required maxlength="60" style="width:9em"
+             placeholder="{{ _('이름 (예: 집 NAS)') }}">
+      <input type="text" name="description" maxlength="200" style="flex:1; min-width:10em"
+             placeholder="{{ _('설명 (선택)') }}">
+      <button type="submit">{{ _("추가") }}</button>
+    </form>
+    {% if network_tags and network_tags|length >= 2 %}
+    <p class="muted" style="font-size:11px; margin:8px 0 4px">
+      {{ _("같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.") }}
+    </p>
+    <form method="post" action="/system/network-tags/merge" class="actions"
+          onsubmit='return confirm({{ _('출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 같은 IP·포트를 가리킬 때만 병합됩니다.')|tojson }})'>
+      <select name="source" aria-label="{{ _('출처 태그(삭제됨)') }}" style="font-size:11px">
+        {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
+      </select>
+      <span style="font-size:11px; color:var(--muted)">&rarr;</span>
+      <select name="target" aria-label="{{ _('대상 태그(유지)') }}" style="font-size:11px">
+        {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
+      </select>
+      <button type="submit" style="font-size:11px; padding:1px 8px">{{ _("병합") }}</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<h3>{{ _("사용자 설정") }}</h3>
+<div class="sys-grid">
+  <div class="sys-card">
+    <h4>{{ _("가입 설정") }}</h4>
+    <form method="post" action="/system/settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1">
+      <p>
+        {{ _("로그인 화면의 회원 가입 기능과 가입 계정의 초기 권한을 설정합니다 (SSO 자동 생성 계정에도 적용). '권한없음'으로 가입한 사용자는 관리자가 사용자 관리에서 권한을 부여할 때까지 서비스를 이용할 수 없습니다.") }}
+      </p>
+      <label class="mode">
+        <input type="checkbox" name="signup_enabled" value="on"
+               {% if signup_enabled %}checked{% endif %}>
+        {{ _("로그인 화면에서 회원 가입 허용") }}
+      </label>
+      <label class="mode">
+        {{ _("가입 초기 권한") }}
+        <select name="signup_default_role" style="margin-left:6px">
+          {% for r in signup_roles %}
+          <option value="{{ r }}" {% if r == signup_default_role %}selected{% endif %}>{{ _(role_labels[r]) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<h3>{{ _("서버 환경설정") }}</h3>
+<div class="sys-grid">
   <div class="sys-card">
     <h4>{{ _("메일(SMTP) 설정") }}</h4>
     <form method="post" action="/system/smtp-settings"
@@ -367,73 +413,39 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
-    <h4>{{ _("로컬 네트워크 태그") }}</h4>
-    <p>
-      {{ _("사설 IP 대역(로컬 네트워크)의 웹서버를 아카이빙할 때 어느 네트워크인지 구분하는 태그입니다. 사설 대역 주소는 태그를 지정해야 아카이빙할 수 있고, 루프백 주소는 항상 아카이빙할 수 없습니다. ID(GUID)는 자동 발급됩니다.") }}
-    </p>
-    {% if network_tags %}
-    <div class="table-wrap cards">
-    <table style="font-size:12px; border-collapse:collapse; width:100%">
-      <thead>
-        <tr style="text-align:left; color:var(--muted)">
-          <th style="padding:2px 8px 2px 0">{{ _("이름") }}</th>
-          <th style="padding:2px 8px 2px 0">{{ _("설명") }}</th>
-          <th style="padding:2px 8px 2px 0">{{ _("사용") }}</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for tag in network_tags %}
-        <tr title="ID: {{ tag.id }}">
-          <td style="padding:2px 8px 2px 0">{{ tag.name }}</td>
-          <td style="padding:2px 8px 2px 0; color:var(--muted)">{{ tag.description }}</td>
-          <td style="padding:2px 8px 2px 0" class="mono">{{ tag.page_count + tag.crawl_count }}</td>
-          <td style="padding:2px 0; text-align:right">
-            <form method="post" action="/system/network-tags/{{ tag.id }}/delete"
-                  onsubmit='return confirm({{ _('태그를 삭제할까요? 페이지·크롤이 사용 중이면 삭제되지 않습니다.')|tojson }})'>
-              <button type="submit" class="danger" style="font-size:11px; padding:1px 8px">{{ _("삭제") }}</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    </div>
-    {% else %}
-    <p class="muted" style="font-size:12px">{{ _("등록된 태그가 없습니다 — 사설 IP 대역 아카이빙이 모두 거부됩니다.") }}</p>
-    {% endif %}
-    <form method="post" action="/system/network-tags" class="actions">
-      <input type="text" name="name" required maxlength="60" style="width:9em"
-             placeholder="{{ _('이름 (예: 집 NAS)') }}">
-      <input type="text" name="description" maxlength="200" style="flex:1; min-width:10em"
-             placeholder="{{ _('설명 (선택)') }}">
-      <button type="submit">{{ _("추가") }}</button>
-    </form>
-    {% if network_tags and network_tags|length >= 2 %}
-    <p class="muted" style="font-size:11px; margin:8px 0 4px">
-      {{ _("같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.") }}
-    </p>
-    <form method="post" action="/system/network-tags/merge" class="actions"
-          onsubmit='return confirm({{ _('출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 같은 IP·포트를 가리킬 때만 병합됩니다.')|tojson }})'>
-      <select name="source" aria-label="{{ _('출처 태그(삭제됨)') }}" style="font-size:11px">
-        {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
-      </select>
-      <span style="font-size:11px; color:var(--muted)">&rarr;</span>
-      <select name="target" aria-label="{{ _('대상 태그(유지)') }}" style="font-size:11px">
-        {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
-      </select>
-      <button type="submit" style="font-size:11px; padding:1px 8px">{{ _("병합") }}</button>
-    </form>
-    {% endif %}
-  </div>
-
-  <div class="sys-card">
     <h4>{{ _("API 키") }}</h4>
     <p>
       {{ _("외부 소프트웨어가 /api/v1 REST API 에 접근할 때 쓰는 키를 발급·폐기합니다. 키마다 보기/아카이브 권한과 만료를 설정합니다.") }}
     </p>
     <div class="actions">
       <a href="/system/api-keys">{{ _("API 키 관리") }} &rarr;</a>
+    </div>
+  </div>
+</div>
+
+<h3>{{ _("데이터 관리") }}</h3>
+<div class="sys-grid">
+  <div class="sys-card">
+    <h4>{{ _("전체 백업") }}</h4>
+    <p>
+      {{ _("DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.") }}
+    </p>
+    <div class="actions">
+      <form method="post" action="/system/backup">
+        <button type="submit">{{ _("전체 백업 다운로드") }}</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="sys-card">
+    <h4>{{ _("전체 아카이브 내보내기") }}</h4>
+    <p>
+      {{ _("페이지·스냅샷·확인 기록·크롤 회차·인증서·아카이브 로그와 스냅샷 파일을 담습니다 (인증 데이터 제외). 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.") }}
+    </p>
+    <div class="actions">
+      <form method="post" action="/system/export">
+        <button type="submit">{{ _("내보내기 다운로드") }}</button>
+      </form>
     </div>
   </div>
 

@@ -423,6 +423,10 @@ _EN: dict[str, str] = {
     "공유 자원": "Shared resources",
     "합계": "Total",
     "유지 관리": "Maintenance",
+    "아카이브 설정": "Archive settings",
+    "사용자 설정": "User settings",
+    "서버 환경설정": "Server settings",
+    "데이터 관리": "Data management",
     "저장공간 최적화": "Storage optimization",
     "대상 {n}개": "{n} pending",
     "대상 없음": "None pending",
@@ -454,6 +458,7 @@ _EN: dict[str, str] = {
     "복원": "Restore",
     "위험 구역": "Danger zone",
     "아카이브 내보내기": "Archive export",
+    "전체 아카이브 내보내기": "Full archive export",
     "페이지·스냅샷·확인 기록·크롤 회차·인증서·아카이브 로그와 스냅샷 파일을 담습니다 (인증 데이터 제외). 다른 인스턴스로 아카이브를 옮기거나 합칠 때 사용합니다.":
         "Contains pages, snapshots, checks, crawl runs, certificates, archive "
         "logs, and snapshot files (no auth data). Use this to move or merge "
