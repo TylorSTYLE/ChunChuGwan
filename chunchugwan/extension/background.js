@@ -163,7 +163,8 @@ const HANDLERS = {
     return apiFetch("/api/v1/crawl", { method: "POST", body });
   },
 
-  authProfile: async (m) => {
+  // 로그인 세션 포함 단일 페이지 — 쿠키 캡슐을 모아 1회성 인증 캡처로.
+  archivePageAuth: async (m) => {
     const capsule = await collectCapsule(m.payload.url);
     if (capsule == null) return { ok: false, status: 0, error: "permission_denied" };
     if (capsule.cookies.length === 0) return { ok: false, status: 0, error: "no_cookies" };
@@ -171,6 +172,19 @@ const HANDLERS = {
       method: "POST",
       body: { url: m.payload.url, storage_state: capsule, force: !!m.payload.force },
     });
+  },
+
+  // 로그인 세션 포함 사이트 전체 — 쿠키 캡슐을 크롤에 실어 전 페이지를 인증 상태로.
+  archiveSiteAuth: async (m) => {
+    const capsule = await collectCapsule(m.payload.url);
+    if (capsule == null) return { ok: false, status: 0, error: "permission_denied" };
+    if (capsule.cookies.length === 0) return { ok: false, status: 0, error: "no_cookies" };
+    const body = { url: m.payload.url, storage_state: capsule };
+    for (const k of ["max_pages", "max_depth", "delay"]) {
+      if (m.payload[k] != null && m.payload[k] !== "") body[k] = Number(m.payload[k]);
+    }
+    if (m.payload.network_tag) body.network_tag = m.payload.network_tag;
+    return apiFetch("/api/v1/crawl", { method: "POST", body });
   },
 
   cookieCount: async (m) => {

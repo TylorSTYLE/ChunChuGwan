@@ -3615,8 +3615,10 @@ def delete_ephemeral_credential(conn: sqlite3.Connection, cred_id: int) -> None:
 def delete_expired_ext_credentials(conn: sqlite3.Connection) -> int:
     """만료된 1회성(확장) 자격증명을 정리 (삭제 누락 안전망 GC). 삭제 행 수 반환.
 
-    아직 큐에 남아 처리되지 않은 작업(archive_jobs)이 참조 중인 행은 FK 보호를
-    위해 건드리지 않는다. 참조 없는 만료분만 지운다.
+    아직 처리되지 않은 작업이 참조 중인 행은 건드리지 않는다 — 큐에 남은
+    단발 작업(archive_jobs)뿐 아니라 진행 중 크롤(crawls.status='running')도
+    보호한다. 크롤은 여러 페이지를 시간차로 캡처하므로, 만료(기본 24h)가
+    크롤 도중에 와도 인증이 끊기지 않게 한다. 참조 없는 만료분만 지운다.
     """
     rows = conn.execute(
         """
@@ -3624,6 +3626,10 @@ def delete_expired_ext_credentials(conn: sqlite3.Connection) -> int:
         WHERE expires_at IS NOT NULL AND expires_at <= ?
           AND id NOT IN (
               SELECT credential_id FROM archive_jobs WHERE credential_id IS NOT NULL
+          )
+          AND id NOT IN (
+              SELECT credential_id FROM crawls
+              WHERE status = 'running' AND credential_id IS NOT NULL
           )
         """,
         (_utcnow(),),

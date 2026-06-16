@@ -277,6 +277,7 @@ class CrawlRequest(BaseModel):
     max_depth: int | None = None
     delay: int | None = None
     network_tag: str | None = None  # 사설 대역 GUID (공인 주소면 무시)
+    storage_state: dict | None = None  # 확장의 로그인 세션 — 있으면 인증 크롤(쿠키만)
 
 
 @router.post("/crawl", status_code=202)
@@ -284,6 +285,9 @@ def api_crawl(request: Request, payload: CrawlRequest):
     """사이트 전체 아카이브(크롤) 트리거 — 큐 등록만 동기, 실행은 워커가 소비.
 
     같은 시작 URL 의 크롤이 진행 중이면 그 크롤로 병합(merged=true)한다.
+    storage_state 가 실리면 확장의 로그인 세션으로 1회성 session 자격증명을
+    만들어 crawls.credential_id 에 실어 크롤 전 페이지를 인증 상태로 캡처한다
+    (auth-profiles 와 같은 공통 가드 — https·사용자 토큰·대상 호스트 스코프).
     """
     _require_archive(request)
     try:
@@ -291,18 +295,33 @@ def api_crawl(request: Request, payload: CrawlRequest):
     except ValueError as e:
         raise HTTPException(400, f"잘못된 URL: {e}")
     tag_id = _resolve_network_tag(norm, payload.network_tag)
+    cred_id = None
+    if payload.storage_state is not None:
+        cred_id, _owner = _ephemeral_session_credential(request, norm, payload.storage_state)
     try:
         crawl, merged = crawler.start_crawl(
             payload.url,
             max_pages=payload.max_pages, max_depth=payload.max_depth,
             delay_seconds=payload.delay, source="api", network_tag_id=tag_id,
+            credential_id=cred_id,
         )
     except ValueError as e:
+        if cred_id is not None:  # 쓰지 못한 1회성 자격증명 폐기
+            with db.connect() as conn:
+                db.delete_ephemeral_credential(conn, cred_id)
         raise HTTPException(400, str(e))
+    if cred_id is not None and merged:
+        # 진행 중 크롤로 병합 — 이번 옵션·자격증명은 버려지므로 즉시 폐기
+        with db.connect() as conn:
+            db.delete_ephemeral_credential(conn, cred_id)
+        cred_id = None
     with db.connect() as conn:
         counts = db.crawl_page_counts(conn, crawl["id"])
     verb = "병합" if merged else "등록"
-    audit.log(request, "사이트 아카이브 %s(API): %s → 크롤 #%d", verb, norm, crawl["id"])
+    suffix = " (인증)" if cred_id is not None else ""
+    audit.log(
+        request, "사이트 아카이브 %s(API)%s: %s → 크롤 #%d", verb, suffix, norm, crawl["id"]
+    )
     return _crawl_json(crawl, counts, merged)
 
 
@@ -336,16 +355,16 @@ def _scope_cookies(storage_state: dict, scope_host: str) -> dict:
     return {"cookies": kept, "origins": []}
 
 
-@router.post("/auth-profiles", status_code=202)
-def api_auth_profile(request: Request, payload: AuthProfileRequest):
-    """확장의 '로그인 페이지' 1회성 인증 캡처.
+def _ephemeral_session_credential(
+    request: Request, norm: str, storage_state: dict
+) -> tuple[int, int | None]:
+    """확장의 로그인 세션 쿠키로 1회성 session 자격증명을 만들어 (cred_id, owner_id) 반환.
 
-    확장이 보낸 세션 쿠키로 site_credentials(kind=session) 1회성 자격증명을 만들고
-    그 credential_id 로 아카이빙을 큐에 넣는다. 자격증명은 캡처 직후 폐기되고,
-    누락분은 만료 GC(설정 가능, 기본 24h)가 정리한다. 예약·크롤 재사용에는
-    연결하지 않는다(1회성).
+    인증 캡처의 공통 가드 — WCCG_SECRET_KEY 필수(503), 사용자 확장 토큰만(403),
+    https 대상만(400), 대상 호스트 스코프 쿠키만. auth-profiles(단일 페이지)와
+    crawl(사이트 전체)이 공유한다. 자격증명은 1회성(expires_at 설정)이라 소비자가
+    캡처 후 폐기하고, 누락분은 만료 GC(설정 가능, 기본 24h)가 정리한다.
     """
-    _require_archive(request)
     if not crypto.is_configured():
         raise HTTPException(
             503, "세션 자격증명을 저장할 수 없습니다 — WCCG_SECRET_KEY 가 설정되지 않았습니다"
@@ -355,15 +374,10 @@ def api_auth_profile(request: Request, payload: AuthProfileRequest):
     if owner_id is None:
         # 사용자 귀속 확장 토큰만 — 시스템 키·인증 off 로는 소유자를 정할 수 없다
         raise HTTPException(403, "인증 캡처는 사용자 확장 토큰으로만 가능합니다")
-    try:
-        norm = storage.normalize_url(payload.url)
-    except ValueError as e:
-        raise HTTPException(400, f"잘못된 URL: {e}")
     if not norm.startswith("https://"):
         raise HTTPException(400, "인증 캡처는 https 대상만 허용합니다")
-    tag_id = _resolve_network_tag(norm, payload.network_tag)
     scope_host = urlsplit(norm).hostname or ""
-    scoped = _scope_cookies(payload.storage_state, scope_host)
+    scoped = _scope_cookies(storage_state, scope_host)
     try:
         cred_payload = credentials.build_payload(
             credentials.KIND_SESSION,
@@ -380,6 +394,27 @@ def api_auth_profile(request: Request, payload: AuthProfileRequest):
             created_by=owner_id, ttl_seconds=ttl_seconds,
         )
         db.delete_expired_ext_credentials(conn)  # 기회적 만료 정리(핫패스)
+    return cred_id, owner_id
+
+
+@router.post("/auth-profiles", status_code=202)
+def api_auth_profile(request: Request, payload: AuthProfileRequest):
+    """확장의 '로그인 페이지' 1회성 인증 캡처.
+
+    확장이 보낸 세션 쿠키로 site_credentials(kind=session) 1회성 자격증명을 만들고
+    그 credential_id 로 아카이빙을 큐에 넣는다. 자격증명은 캡처 직후 폐기되고,
+    누락분은 만료 GC(설정 가능, 기본 24h)가 정리한다. 예약·크롤 재사용에는
+    연결하지 않는다(1회성).
+    """
+    _require_archive(request)
+    try:
+        norm = storage.normalize_url(payload.url)
+    except ValueError as e:
+        raise HTTPException(400, f"잘못된 URL: {e}")
+    tag_id = _resolve_network_tag(norm, payload.network_tag)
+    cred_id, owner_id = _ephemeral_session_credential(
+        request, norm, payload.storage_state
+    )
     from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
 
     queued = webapp._queue_archive(
