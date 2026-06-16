@@ -439,11 +439,14 @@ def _archive_url(
         content_hash = storage.content_sha256(normalized)
         run.step("hash", f"sha256 {content_hash[:12]}")
 
+        # --- 트랜잭션 1: 인증서 기록 + 중복 판정 (짧게) ---
+        # 문서 다운로드·압축·파일 확정·색인 같은 느린 I/O 를 DB 트랜잭션
+        # 안에서 하면 그동안 쓰기 락을 쥐어 다른 워커·serve 가 'database is
+        # locked' 로 막힌다 (busy_timeout 초과). 그래서 판정에 필요한 읽기·
+        # 짧은 쓰기만 여기서 하고 락을 놓은 뒤 느린 작업을 한다. 페이지 행
+        # 생성은 트랜잭션 2 로 미뤄 스냅샷과 원자적으로 만든다 (느린 작업
+        # 실패 시 스냅샷 없는 고아 페이지가 남지 않게).
         with db.connect() as conn:
-            page_id = db.get_or_create_page(
-                conn, norm, domain, slug, network_tag_id=network_tag_id,
-                credential_id=credential_id,
-            )
             if cert_info:
                 # 콘텐츠가 동일(unchanged)해도 인증서 갱신은 기록돼야 하므로
                 # 저장 생략 판단 전에 기록한다
@@ -457,13 +460,15 @@ def _archive_url(
                     + f" — {cert_info['fingerprint'][:12]} · "
                       f"만료 {cert_info['not_after']}",
                 )
-            prev = db.last_snapshot(conn, page_id)
+            existing = db.get_page(conn, norm)
+            prev = db.last_snapshot(conn, existing["id"]) if existing else None
+            doc_limits = documents.limits(conn)
 
             if prev and prev["content_hash"] == content_hash and not force:
-                db.insert_check(conn, page_id, content_hash)
+                db.insert_check(conn, existing["id"], content_hash)
                 run.step("decide", f"직전 스냅샷({prev['taken_at']})과 동일 — 저장 생략")
                 run.write(
-                    conn, status="unchanged", page_id=page_id,
+                    conn, status="unchanged", page_id=existing["id"],
                     content_hash=content_hash, http_status=result.http_status,
                 )
                 return ArchiveOutcome(
@@ -473,54 +478,64 @@ def _archive_url(
                     http_status=result.http_status, title=result.title,
                     snapshot_id=prev["id"], page_links=result.page_links,
                 )
+            # 락을 놓은 채 느린 작업을 하므로, 이후 필요한 직전 스냅샷 정보는
+            # 값으로만 들고 나간다 (conn 에 묶인 Row 를 들고 나가지 않는다)
+            prev_hash = prev["content_hash"] if prev else None
+            prev_taken_at = prev["taken_at"] if prev else None
 
-            # 저장이 확정된 뒤에만 문서 다운로드 — unchanged 면 받지 않는다
-            # (주기적 재아카이빙에서 변경 없는 페이지의 문서를 매번 다시
-            # 받는 낭비 방지). 다운로드 실패는 아카이빙을 막지 않는다.
-            # 받은 문서는 문서 CAS 로 이동 — 같은 내용은 스냅샷·페이지가
-            # 달라도 한 번만 저장된다 (참조는 snapshot_documents 행).
-            doc_manifest: list[dict] = []
-            if result.document_links:
-                doc_manifest, doc_failed = documents.download_documents(
-                    result.document_links, tmp_dir / "files",
-                    referer=result.final_url,
-                    verify=not insecure_tls,  # 자체 서명 사이트의 문서도 받는다
-                    auth=(credentials.httpx_auth(credential.kind, credential.payload)
-                          if credential else None),
-                    auth_origin=credential.origin if credential else None,
-                    limits=documents.limits(conn),
-                )
-                documents.ingest_into_cas(tmp_dir / "files", doc_manifest)
-                run.step(
-                    "documents",
-                    f"문서 링크 {len(result.document_links)}개 → "
-                    f"{len(doc_manifest)}개 저장"
-                    + (f" · 실패 {len(doc_failed)}개" if doc_failed else ""),
-                )
-
-            # 저장이 확정된 뒤에만 압축 변환 — unchanged 면 CAS 에 자원을
-            # 남기지 않고 임시 디렉토리째 버려진다
-            stats = resources.compact_snapshot_dir(tmp_dir, result.final_url)
+        # --- 느린 작업(문서 다운로드·압축·파일 확정)은 DB 락 없이 수행 ---
+        # 저장이 확정된 뒤에만 문서 다운로드 — unchanged 면 여기 오지 않으므로
+        # 변경 없는 페이지의 문서를 매번 다시 받는 낭비가 없다. 다운로드
+        # 실패는 아카이빙을 막지 않는다. 받은 문서는 문서 CAS 로 이동 —
+        # 같은 내용은 스냅샷·페이지가 달라도 한 번만 저장된다.
+        doc_manifest: list[dict] = []
+        if result.document_links:
+            doc_manifest, doc_failed = documents.download_documents(
+                result.document_links, tmp_dir / "files",
+                referer=result.final_url,
+                verify=not insecure_tls,  # 자체 서명 사이트의 문서도 받는다
+                auth=(credentials.httpx_auth(credential.kind, credential.payload)
+                      if credential else None),
+                auth_origin=credential.origin if credential else None,
+                limits=doc_limits,
+            )
+            documents.ingest_into_cas(tmp_dir / "files", doc_manifest)
             run.step(
-                "compress",
-                f"자원 {stats.externalized}개 추출 · "
-                f"{stats.before_bytes // 1024}KB → {stats.after_bytes // 1024}KB",
+                "documents",
+                f"문서 링크 {len(result.document_links)}개 → "
+                f"{len(doc_manifest)}개 저장"
+                + (f" · 실패 {len(doc_failed)}개" if doc_failed else ""),
             )
 
-            taken_at = datetime.now(timezone.utc)
-            meta = storage.SnapshotMeta(
-                url=norm,
-                final_url=result.final_url,
-                taken_at=taken_at.isoformat(timespec="seconds"),
-                content_hash=content_hash,
-                http_status=result.http_status,
-                title=result.title,
-                documents=doc_manifest or None,
+        # 압축 변환 — unchanged 면 여기 오지 않으므로 임시 디렉토리째 버려진다
+        stats = resources.compact_snapshot_dir(tmp_dir, result.final_url)
+        run.step(
+            "compress",
+            f"자원 {stats.externalized}개 추출 · "
+            f"{stats.before_bytes // 1024}KB → {stats.after_bytes // 1024}KB",
+        )
+
+        taken_at = datetime.now(timezone.utc)
+        meta = storage.SnapshotMeta(
+            url=norm,
+            final_url=result.final_url,
+            taken_at=taken_at.isoformat(timespec="seconds"),
+            content_hash=content_hash,
+            http_status=result.http_status,
+            title=result.title,
+            documents=doc_manifest or None,
+        )
+        snap_dir = storage.finalize_snapshot(
+            tmp_dir, domain, slug, meta, normalized, taken_at
+        )
+        changed = 1 if prev_hash is None else int(prev_hash != content_hash)
+
+        # --- 트랜잭션 2: 페이지·스냅샷·참조 기록 (짧게, 원자적) ---
+        with db.connect() as conn:
+            page_id = db.get_or_create_page(
+                conn, norm, domain, slug, network_tag_id=network_tag_id,
+                credential_id=credential_id,
             )
-            snap_dir = storage.finalize_snapshot(
-                tmp_dir, domain, slug, meta, normalized, taken_at
-            )
-            changed = 1 if prev is None else int(prev["content_hash"] != content_hash)
             snapshot_id = db.insert_snapshot(
                 conn, page_id,
                 taken_at=meta.taken_at, dir_name=snap_dir.name,
@@ -543,21 +558,31 @@ def _archive_url(
                         for n in stats.resource_names
                     ],
                 )
+
+        # --- 트랜잭션 3: 검색 색인 (별도 연결 — 본문 추출 동안 락 안 잡음) ---
+        # 문서 본문 추출(doctext)은 큰 PDF 에서 느릴 수 있다. 위 스냅샷
+        # 기록과 분리된 연결로 돌리면 추출(읽기)은 락 없이 하고 FTS 기록
+        # 순간에만 쓰기 락을 짧게 잡는다. 실패 시 search_indexed=0 으로
+        # 남아 'wccg search reindex' 백필이 메운다 (best-effort).
+        with db.connect() as conn:
             _index_snapshot_safe(conn, snapshot_id, run)
-            status = "new" if prev is None else ("changed" if changed else "forced_same")
-            run.step("store", f"스냅샷 저장 [{status}]: {snap_dir.name}")
+
+        status = "new" if prev_hash is None else ("changed" if changed else "forced_same")
+        run.step("store", f"스냅샷 저장 [{status}]: {snap_dir.name}")
+        # --- 트랜잭션 4: 실행 로그 기록 (짧게) ---
+        with db.connect() as conn:
             run.write(
                 conn, status=status, page_id=page_id, snapshot_id=snapshot_id,
                 content_hash=content_hash, http_status=result.http_status,
             )
-            return ArchiveOutcome(
-                status=status, url=norm, content_hash=content_hash,
-                snapshot_dir=snap_dir, taken_at=meta.taken_at,
-                last_taken_at=prev["taken_at"] if prev else None,
-                http_status=result.http_status, title=result.title,
-                documents=len(doc_manifest),
-                snapshot_id=snapshot_id, page_links=result.page_links,
-            )
+        return ArchiveOutcome(
+            status=status, url=norm, content_hash=content_hash,
+            snapshot_dir=snap_dir, taken_at=meta.taken_at,
+            last_taken_at=prev_taken_at,
+            http_status=result.http_status, title=result.title,
+            documents=len(doc_manifest),
+            snapshot_id=snapshot_id, page_links=result.page_links,
+        )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -685,11 +710,10 @@ def _archive_document_url(
     content_hash = storage.content_sha256(text)
     run.step("hash", f"문서 메타데이터 {len(text)}자 · sha256 {content_hash[:12]}")
 
+    # --- 트랜잭션 1: 인증서 기록 + 중복 판정 (짧게) ---
+    # 파일 CAS 이동·압축·확정·색인 같은 느린 I/O 동안 쓰기 락을 쥐지 않도록
+    # 판정에 필요한 읽기·짧은 쓰기만 하고 락을 놓는다 (_archive_url 과 동일).
     with db.connect() as conn:
-        page_id = db.get_or_create_page(
-            conn, norm, domain, slug, network_tag_id=network_tag_id,
-            credential_id=credential_id,
-        )
         if cert_info:
             site_id = db.get_or_create_site(conn, storage.site_key(norm))
             created = db.upsert_site_certificate(
@@ -701,13 +725,14 @@ def _archive_document_url(
                 + f" — {cert_info['fingerprint'][:12]} · "
                   f"만료 {cert_info['not_after']}",
             )
-        prev = db.last_snapshot(conn, page_id)
+        existing = db.get_page(conn, norm)
+        prev = db.last_snapshot(conn, existing["id"]) if existing else None
 
         if prev and prev["content_hash"] == content_hash and not force:
-            db.insert_check(conn, page_id, content_hash)
+            db.insert_check(conn, existing["id"], content_hash)
             run.step("decide", f"직전 스냅샷({prev['taken_at']})과 동일 — 저장 생략")
             run.write(
-                conn, status="unchanged", page_id=page_id,
+                conn, status="unchanged", page_id=existing["id"],
                 content_hash=content_hash, http_status=dl.http_status,
             )
             return ArchiveOutcome(
@@ -717,31 +742,41 @@ def _archive_document_url(
                 http_status=dl.http_status, title=str(entry["file"]),
                 snapshot_id=prev["id"],
             )
+        prev_hash = prev["content_hash"] if prev else None
+        prev_taken_at = prev["taken_at"] if prev else None
 
-        manifest = [entry]
-        documents.ingest_into_cas(tmp_dir / "files", manifest)
-        if not manifest:
-            # download_direct 가 화이트리스트 확장자를 보장하므로 정상적으로는
-            # 도달하지 않는다 — 존재하지 않는 문서를 참조하는 스냅샷 방지
-            raise capture.CaptureError(f"{norm} 문서 CAS 저장 실패")
-        _write_document_page_html(tmp_dir, entry)
-        stats = resources.compact_snapshot_dir(tmp_dir, dl.final_url)
-        run.step("compress", f"{stats.before_bytes // 1024}KB → {stats.after_bytes // 1024}KB")
+    # --- 느린 작업(파일 CAS 이동·압축·확정)은 DB 락 없이 수행 ---
+    manifest = [entry]
+    documents.ingest_into_cas(tmp_dir / "files", manifest)
+    if not manifest:
+        # download_direct 가 화이트리스트 확장자를 보장하므로 정상적으로는
+        # 도달하지 않는다 — 존재하지 않는 문서를 참조하는 스냅샷 방지
+        raise capture.CaptureError(f"{norm} 문서 CAS 저장 실패")
+    _write_document_page_html(tmp_dir, entry)
+    stats = resources.compact_snapshot_dir(tmp_dir, dl.final_url)
+    run.step("compress", f"{stats.before_bytes // 1024}KB → {stats.after_bytes // 1024}KB")
 
-        taken_at = datetime.now(timezone.utc)
-        meta = storage.SnapshotMeta(
-            url=norm,
-            final_url=dl.final_url,
-            taken_at=taken_at.isoformat(timespec="seconds"),
-            content_hash=content_hash,
-            http_status=dl.http_status,
-            title=str(entry["file"]),
-            documents=manifest,
+    taken_at = datetime.now(timezone.utc)
+    meta = storage.SnapshotMeta(
+        url=norm,
+        final_url=dl.final_url,
+        taken_at=taken_at.isoformat(timespec="seconds"),
+        content_hash=content_hash,
+        http_status=dl.http_status,
+        title=str(entry["file"]),
+        documents=manifest,
+    )
+    snap_dir = storage.finalize_snapshot(
+        tmp_dir, domain, slug, meta, text, taken_at
+    )
+    changed = 1 if prev_hash is None else int(prev_hash != content_hash)
+
+    # --- 트랜잭션 2: 페이지·스냅샷·문서 참조 기록 (짧게, 원자적) ---
+    with db.connect() as conn:
+        page_id = db.get_or_create_page(
+            conn, norm, domain, slug, network_tag_id=network_tag_id,
+            credential_id=credential_id,
         )
-        snap_dir = storage.finalize_snapshot(
-            tmp_dir, domain, slug, meta, text, taken_at
-        )
-        changed = 1 if prev is None else int(prev["content_hash"] != content_hash)
         snapshot_id = db.insert_snapshot(
             conn, page_id,
             taken_at=meta.taken_at, dir_name=snap_dir.name,
@@ -753,17 +788,23 @@ def _archive_document_url(
             authenticated_by=authenticated_by if credential is not None else None,
         )
         db.insert_snapshot_documents(conn, snapshot_id, manifest)
+
+    # --- 트랜잭션 3: 검색 색인 (별도 연결 — 본문 추출 동안 락 안 잡음) ---
+    with db.connect() as conn:
         _index_snapshot_safe(conn, snapshot_id, run)
-        status = "new" if prev is None else ("changed" if changed else "forced_same")
-        run.step("store", f"문서 스냅샷 저장 [{status}]: {snap_dir.name}")
+
+    status = "new" if prev_hash is None else ("changed" if changed else "forced_same")
+    run.step("store", f"문서 스냅샷 저장 [{status}]: {snap_dir.name}")
+    # --- 트랜잭션 4: 실행 로그 기록 (짧게) ---
+    with db.connect() as conn:
         run.write(
             conn, status=status, page_id=page_id, snapshot_id=snapshot_id,
             content_hash=content_hash, http_status=dl.http_status,
         )
-        return ArchiveOutcome(
-            status=status, url=norm, content_hash=content_hash,
-            snapshot_dir=snap_dir, taken_at=meta.taken_at,
-            last_taken_at=prev["taken_at"] if prev else None,
-            http_status=dl.http_status, title=str(entry["file"]),
-            documents=1, snapshot_id=snapshot_id,
-        )
+    return ArchiveOutcome(
+        status=status, url=norm, content_hash=content_hash,
+        snapshot_dir=snap_dir, taken_at=meta.taken_at,
+        last_taken_at=prev_taken_at,
+        http_status=dl.http_status, title=str(entry["file"]),
+        documents=1, snapshot_id=snapshot_id,
+    )
