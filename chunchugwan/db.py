@@ -2308,7 +2308,15 @@ def enqueue_archive_job(
     IGNORE 가 활성 중복이면 0행을 넣고 False 를 반환한다 (현재 _register_job 의
     중복-방지 역할 대체). requested_by 는 요청 사용자(web/확장 토큰) — 작업이
     실행돼 archive_logs 한 행이 될 때 그대로 이어진다('내 아카이브' 귀속).
+
+    확장(브라우저) 캡처 페이지(pages.client_captured=1)는 서버가 다시 가져오지
+    않는다(불변식) — 큐에 넣지 않고 False 를 반환한다. 갱신은 확장 재캡처로만.
     """
+    page = conn.execute(
+        "SELECT client_captured FROM pages WHERE url = ?", (url,)
+    ).fetchone()
+    if page is not None and page["client_captured"]:
+        return False
     cur = conn.execute(
         """
         INSERT OR IGNORE INTO archive_jobs

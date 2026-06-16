@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from chunchugwan import config, db, documents, ingest, netcheck, resources, storage
+from chunchugwan import config, db, documents, ingest, netcheck, pipeline, resources, storage
 
 
 def _use_advancing_clock(monkeypatch):
@@ -154,6 +154,22 @@ def test_ingest_document_url_mode(root):
     d = _dir_for("https://example.com/report.pdf", snap["dir_name"])
     assert (d / "page.html.gz").is_file()       # 안내 페이지
     assert not (d / "raw.html.gz").exists()      # 문서는 raw 없음
+
+
+def test_client_captured_blocks_enqueue(root):
+    """확장 캡처 후 그 URL 의 단발 큐 등록은 거부된다 (불변식 — 서버 재요청 차단)."""
+    ingest.ingest_capture(url=URL, page_html=PAGE, raw_html=RAW)
+    norm = storage.normalize_url(URL)
+    with db.connect() as conn:
+        assert db.enqueue_archive_job(conn, norm, source="cli") is False
+        assert conn.execute("SELECT COUNT(*) c FROM archive_jobs").fetchone()["c"] == 0
+
+
+def test_client_captured_blocks_pipeline_archive(root):
+    """확장 캡처 후 pipeline.archive_url 은 캡처 전에 차단한다 (스케줄·크롤·워커 공통 백스톱)."""
+    ingest.ingest_capture(url=URL, page_html=PAGE, raw_html=RAW)
+    with pytest.raises(ValueError, match="확장"):
+        pipeline.archive_url(URL, source="schedule")
 
 
 def test_ingest_incomplete_and_capture_env_in_meta(root):

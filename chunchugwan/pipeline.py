@@ -297,6 +297,18 @@ def _archive_url(
     run.step("normalize", f"{norm} → {domain}/{slug}"
              + (" (도메인 룰 적용)" if rules else ""))
 
+    # 확장(브라우저) 캡처 페이지는 서버가 다시 가져오지 않는다 (불변식 — 캡처 전에
+    # 차단해 비싼 캡처를 낭비하지 않는다). 스케줄·크롤·워커·직접 호출이 모두 이
+    # 함수로 수렴하므로 여기 한 곳이 서버 재요청의 최종 차단선이다. 갱신은 확장
+    # 재캡처(ingest)로만 — enqueue_archive_job 도 큐 진입에서 함께 막는다.
+    with db.connect() as conn:
+        existing_page = db.get_page(conn, norm)
+    if existing_page is not None and existing_page["client_captured"]:
+        raise ValueError(
+            "확장(브라우저) 캡처 페이지는 서버에서 다시 가져올 수 없습니다 — "
+            "확장에서 재캡처하세요"
+        )
+
     # 이 URL 에 적용할 로그인 자격증명을 정한다 — 폼이 넘긴 credential_id 가
     # 우선, 없으면 페이지에 저장된 연결(pages.credential_id)을 쓴다 (스케줄·
     # CLI 재아카이빙이 저장된 자격증명을 이어 쓰는 경로). 복호화는 키 부재·
