@@ -563,9 +563,10 @@ _EN: dict[str, str] = {
     "패스키": "Passkey",
     "변경 불가": "Locked",
     "탈퇴 — 삭제만 가능": "Withdrawn — delete only",
-    "{email} 계정 정보를 완전히 삭제할까요? 되돌릴 수 없으며, 같은 이메일로 다시 가입하거나 초대할 수 있게 됩니다.":
-        "Permanently delete the account record of {email}? This cannot be undone, "
-        "and the email becomes available for sign-up or invites again.",
+    "{email} 계정 정보를 완전히 삭제하려면 이메일 주소를 다시 입력하세요. 삭제하면 되돌릴 수 없으며, 같은 이메일로 다시 가입하거나 초대할 수 있게 됩니다.":
+        "To permanently delete the account record of {email}, re-enter the email "
+        "address. This cannot be undone, and the email becomes available for "
+        "sign-up or invites again.",
     "본인 계정의 모든 세션을 로그아웃합니다. 지금 이 로그인도 종료됩니다. 계속할까요?":
         "Log out all sessions of your own account? This login ends too. Continue?",
     "{email} 의 모든 세션을 로그아웃할까요?": "Log out all sessions of {email}?",
