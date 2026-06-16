@@ -202,6 +202,28 @@ def _add_failed_page(crawl_id: int, url: str) -> int:
     return page["id"]
 
 
+def test_site_crawl_list_retry_failed_button(client):
+    """사이트 회차 목록 — 실패 페이지가 있는 회차에만 '실패 일괄 재시도' 버튼이
+    보이고, 누르면 실패 페이지만 큐로 되돌아온다 (전체 재실행과 구분)."""
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
+    retry_action = f'action="/crawls/{crawl["id"]}/retry"'
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    # 실패가 없으면 회차 행에 실패 재시도 버튼이 없다
+    assert retry_action not in client.get(f"/sites/{site['id']}").text
+    # 실패 페이지가 생기면 버튼이 보인다
+    cp_id = _add_failed_page(crawl["id"], "https://example.com/docs/fail")
+    assert retry_action in client.get(f"/sites/{site['id']}").text
+    # 누르면 실패 페이지만 pending 으로 되돌아온다 (성공 페이지는 그대로)
+    res = client.post(f"/crawls/{crawl['id']}/retry", follow_redirects=False)
+    assert res.status_code == 303
+    with db.connect() as conn:
+        cp = conn.execute(
+            "SELECT * FROM crawl_pages WHERE id = ?", (cp_id,)
+        ).fetchone()
+    assert cp["status"] == "pending" and cp["attempts"] == 0
+
+
 def test_crawl_detail_status_filter(client):
     """페이지 목록은 ?status= 로 상태별 필터링된다 (잘못된 값은 전체)."""
     crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")

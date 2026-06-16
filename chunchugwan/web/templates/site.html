@@ -230,6 +230,11 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
       </td>
       <td>
         {% if can_archive %}
+        {% if c['failed_count'] %}
+        <form class="inline" method="post" action="/crawls/{{ c['id'] }}/retry">
+          <button type="submit" title="{{ _('실패한 페이지만 큐로 되돌려 다시 시도합니다 (성공한 페이지는 그대로).') }}">{{ _("실패 일괄 재시도") }}</button>
+        </form>
+        {% endif %}
         <form class="inline" method="post" action="/sites/{{ site['id'] }}/crawls/{{ c['id'] }}/rerun"
               onsubmit='return confirm({{ (c['start_url'] ~ '\n\n' ~ _('같은 범위·옵션으로 사이트 전체를 다시 아카이빙합니다. 계속할까요?'))|tojson }})'>
           <button type="submit" title="{{ _('같은 시작 URL·범위·옵션으로 사이트 아카이브를 다시 실행합니다.') }}">{{ _("다시 아카이빙") }}</button>

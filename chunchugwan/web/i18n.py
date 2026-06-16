@@ -1055,6 +1055,8 @@ _EN: dict[str, str] = {
         "Re-archive the entire site with the same scope and options. Continue?",
     "같은 시작 URL·범위·옵션으로 사이트 아카이브를 다시 실행합니다.":
         "Re-run the site archive with the same start URL, scope, and options.",
+    "실패한 페이지만 큐로 되돌려 다시 시도합니다 (성공한 페이지는 그대로).":
+        "Re-queue and retry only the failed pages (successful ones are left as is).",
     "사이트 내보내기": "Export site",
     "소속 페이지·스냅샷을 아카이브 내보내기 파일(tar.gz)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.":
         "Download this site's pages and snapshots as an archive export file "
