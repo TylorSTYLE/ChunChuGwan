@@ -920,6 +920,15 @@ def get_or_create_page(
     return cur.lastrowid
 
 
+def set_page_client_captured(conn: sqlite3.Connection, page_id: int) -> None:
+    """페이지를 확장(브라우저 클라이언트) 캡처로 표시 — 서버 재요청을 막는다.
+
+    한번 1 이 되면 스케줄·크롤·재시도·대시보드 재아카이빙이 그 URL 을 서버
+    캡처하지 않는다(불변식). 갱신은 확장 재캡처로만. 멱등.
+    """
+    conn.execute("UPDATE pages SET client_captured = 1 WHERE id = ?", (page_id,))
+
+
 def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
     """해당 페이지의 가장 최근 스냅샷 row (없으면 None)."""
     return conn.execute(
