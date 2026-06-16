@@ -243,7 +243,10 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
 - `archive_logs` — 아카이브 실행 로그 (성공/실패, 단계별 소요시간 JSON,
   출처 cli/web/schedule/api/crawl). `requested_by` 는 직접 요청한 사용자
   (web·확장 토큰 소유자) — '내 아카이브'(`/settings/archives`)의 필터 기준.
-  큐(archive_jobs.requested_by)를 거쳐 이어지며, cli/schedule/crawl 은 NULL
+  큐(archive_jobs.requested_by)를 거쳐 이어지며, cli/schedule/crawl 은 NULL.
+  `job_id` 는 이 로그를 만든 archive_jobs.id (작업은 완료 시 삭제되므로 FK
+  없는 상관 키) — 확장이 요청한 작업의 결과를 `GET /api/v1/archive/status`
+  로 되찾는 데 쓴다
 - `system_logs` — 앱 동작 로그 (`system_log.py` 의 logging 핸들러가
   chunchugwan 네임스페이스의 INFO 이상 레코드를 적재 — 레벨·로거·출처
   serve/worker/cli·트레이스백). 비차단 큐 + 쓰기 스레드, 보관 한도
@@ -257,7 +260,8 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   'DB 큐 + 원자적 클레임 + 폴링' 패턴(pending/in_progress, attempts·next_attempt_at·
   claimed_at·error). 같은 URL 의 활성 작업은 부분 UNIQUE 로 하나만(중복 enqueue
   무시). 회차·범위·링크추적·페이싱이 없어 단순하며, 완료/최종실패 행은 삭제하고
-  결과·오류는 `archive_logs` 가 보존한다. interval 이 실리면 소비자가 캡처 후
+  결과·오류는 `archive_logs` 가 보존한다 (소비 시 job_id 를 로그에 남겨 확장이
+  `GET /api/v1/archive/status` 로 완료/실패/사람확인 결과를 추적). interval 이 실리면 소비자가 캡처 후
   주기를 `schedules` 에 등록한다. `wccg worker`/serve(`WCCG_SCHEDULER`)/`wccg archive
   run` 이 소비한다. 진행 상태(`/archive/active` 폴링)의 데이터 소스.
   `WCCG_LIVE_CHALLENGE=on` 이면 자동으로 못 푼 인터랙티브 챌린지를 사람이
@@ -284,7 +288,10 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   크롤이 병렬 진행된다.
   같은 시작 URL 의 크롤이 진행 중이면 새 등록은 그 크롤로 자동 병합
   (`start_crawl` 이 기존 크롤 + merged=True 반환, 새 옵션은 버림).
-  실패 재시도 대기·횟수는 `settings` 의 `crawl_retry_backoff_seconds` 기준
+  실패 재시도 대기·횟수는 `settings` 의 `crawl_retry_backoff_seconds` 기준.
+  `crawls.requested_by` 는 요청자(web/확장 토큰) — 확장이 크롤 완료/취소를
+  `GET /api/v1/archive/status` 로 추적하는 결과 알림 귀속 (페이지 단위 로그는
+  source=crawl·requested_by=NULL 이라 별도)
 - `crawl_schedules` — 사이트 전체 아카이브의 주기적 재실행 (시작 URL 별
   크롤 옵션 + 주기 1시간~1개월·`run_at_time`). 기한이 되면 같은 옵션으로
   새 크롤을 등록(source=schedule)하되, 같은 URL 의 크롤이 진행 중이면 끝날
@@ -344,6 +351,10 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   변환. 무관한 서드파티 쿠키가 섞이지 않게 **대상 사이트의 등록 도메인**
   쿠키만 남긴다(origin 스코프 원칙과 일관 — 외부 IdP 등 다른 등록 도메인
   SSO 는 JSON 직접 입력), localStorage 는 미포함).
+  크롬 확장의 '로그인 정보 포함'은 페이지의 인증용 JWT(localStorage/
+  sessionStorage 의 Bearer 토큰)를 감지하면 jwt, 아니면 세션 쿠키를 보내
+  방식을 자동 판단하고, 서버가 1회성 자격증명(`jwt`/`session`)을 만든다
+  (`_ephemeral_credential` — https·사용자 토큰 가드, 캡처 후 폐기).
   사이트 prune·삭제 시 함께 정리(FK), 삭제 시 이 자격증명을 연결한
   `pages.credential_id` 도 NULL 로 끊는다. 새 아카이빙 폼은 입력 URL 의
   도메인 자격증명을 조회(`/archive/credentials`)해 골라 페이지에 연결할 수

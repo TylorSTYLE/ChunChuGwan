@@ -72,3 +72,22 @@
       같은 URL 의 과거 캡처본 재사용 폴백). 저장공간 최적화 — `wccg
       compact` 를 압축 변환 + 참조 백필 + 고아 자원 정리(sweep, 유예 창 +
       삭제 직전 재확인)로 확장, 시스템 메뉴 라벨을 "저장공간 최적화"로 변경.
+- [x] **A12 확장 결과 알림**: 크롬 확장이 요청한 아카이빙의 결과를 데스크톱
+      알림으로 받는다. 단발 작업은 `archive_logs.job_id`(작업 행은 완료 시
+      삭제되므로 FK 없는 상관 키, `_RunLog`→`insert_archive_log` 로 적재)로,
+      크롤은 `crawls.requested_by`(요청자 귀속)로 이어, 신규
+      `GET /api/v1/archive/status?jobs=…&crawls=…`(소유자 스코프)가 완료/실패/
+      사람확인·크롤 완료/취소 상태를 돌려준다 (활성 작업이 있으면 우선,
+      없으면 로그로 종결 상태 도출). `/archive`·`/auth-profiles` 응답에 `job_id`
+      추가. 확장은 `chrome.alarms` 주기 폴링 + `chrome.notifications`(전이 시
+      1회, 배지·딥링크 클릭, "작업이 끝나면 알림 받기" 토글, 기본 켜짐)로 표시 —
+      manifest 에 notifications·alarms 권한 추가(업데이트 시 재승인).
+- [x] **A13 확장 — 로컬 시간 표시 + 로그인 방식 자동 판단**: (1) 확장 히스토리의
+      스냅샷 시각을 브라우저(시스템) 시간대로 표시(`formatLocalTime`, ISO→
+      `toLocaleString`). (2) '로그인 정보 포함' 캡처 시 페이지의 인증용
+      JWT(localStorage/sessionStorage 의 Bearer 토큰)를 감지하면 jwt, 아니면
+      세션 쿠키를 보내 방식을 자동 판단 — 확장은 `scripting` 권한으로
+      `chrome.scripting.executeScript` 스캔(인증 힌트 키의 JWT 만 채택),
+      서버 `/api/v1/auth-profiles`·`/crawl` 에 `jwt` 필드 추가 +
+      `_ephemeral_credential` 이 jwt/session 1회성 자격증명 생성(캡처가 jwt 는
+      대상 origin Authorization: Bearer 로 주입). 토글에 감지 방식 미리보기 표시.

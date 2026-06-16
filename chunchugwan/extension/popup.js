@@ -6,6 +6,7 @@ const send = (type, payload) => chrome.runtime.sendMessage({ type, payload });
 const msg = (key, subs) => chrome.i18n.getMessage(key, subs) || key;
 
 let currentUrl = "";
+let currentTabId = null;
 
 // ---- 호스트 권한 (user gesture 필요) ----
 //
@@ -177,6 +178,22 @@ function initConnect() {
 
 // ---- 아카이브 ----
 
+// 인증 캡처에 실제로 쓰인 로그인 방식 표시 (background 가 res.auth_kind 로 알려준다)
+function authSuffix(res) {
+  if (res.auth_kind === "jwt") return " · " + msg("auth_kind_jwt");
+  if (res.auth_kind === "session") return " · " + msg("auth_kind_session");
+  return "";
+}
+
+// 토글 미리보기 — detectAuth 응답을 사람이 읽는 문구로
+function authPreview(det) {
+  if (!det) return "";
+  if (det.kind === "jwt") return msg("login_detected_jwt");
+  if (det.kind === "session") return msg("login_cookie_count", String(det.count));
+  if (det.kind === "none") return msg("login_detected_none");
+  return ""; // unknown — 권한 미부여 (실행 시 요청)
+}
+
 function initArchive() {
   const kind = hostKind(currentUrl);
   if (kind === "loopback") {
@@ -200,10 +217,12 @@ function initArchive() {
       return;
     }
     const res = await send(auth ? "archivePageAuth" : "archivePage",
-      { url: currentUrl, force: $("#force").checked });
+      { url: currentUrl, force: $("#force").checked, tabId: currentTabId });
     if (res.ok && res.data) {
-      showNote("#archive-result",
-        res.data.queued ? msg("msg_archived", res.data.url) : msg("msg_already"), "");
+      const base = res.data.queued ? msg("msg_archived", res.data.url) : msg("msg_already");
+      const hint = res.data.queued && $("#notify-toggle").checked
+        ? " " + msg("archive_notify_hint") : "";
+      showNote("#archive-result", base + (auth ? authSuffix(res) : "") + hint, "");
     } else showNote("#archive-result", msg(apiError(res)), "err");
   });
 
@@ -214,16 +233,26 @@ function initArchive() {
       return;
     }
     const res = await send(auth ? "archiveSiteAuth" : "archiveSite", {
-      url: currentUrl,
+      url: currentUrl, tabId: currentTabId,
       max_pages: $("#max-pages").value, max_depth: $("#max-depth").value,
       delay: $("#delay").value,
     });
     if (res.ok && res.data) {
-      showNote("#archive-result",
-        res.data.merged ? msg("msg_crawl_merged", String(res.data.crawl_id))
-                        : msg("msg_crawl_started", String(res.data.crawl_id)), "");
+      const base = res.data.merged ? msg("msg_crawl_merged", String(res.data.crawl_id))
+                                   : msg("msg_crawl_started", String(res.data.crawl_id));
+      const hint = $("#notify-toggle").checked ? " " + msg("archive_notify_hint") : "";
+      showNote("#archive-result", base + (auth ? authSuffix(res) : "") + hint, "");
     } else showNote("#archive-result", msg(apiError(res)), "err");
   });
+}
+
+// 작업 완료 알림 토글 — background 의 notify_enabled 와 동기 (기본 on).
+async function initNotifyToggle() {
+  const cb = $("#notify-toggle");
+  if (!cb) return;
+  const pref = await send("getNotifyPref", {});
+  cb.checked = !(pref && pref.on === false);
+  cb.addEventListener("change", () => send("setNotifyPref", { on: cb.checked }));
 }
 
 // ---- 로그인 세션 포함 옵션 (인증 캡처는 서버 가드와 일치해 https 대상만) ----
@@ -247,14 +276,20 @@ function initLoginOption() {
       showNote("#archive-result", msg("err_permission"), "err");
       return;
     }
-    const cc = await send("cookieCount", { url: currentUrl });
-    $("#login-cookie-count").textContent =
-      cc.count == null ? "" : msg("login_cookie_count", String(cc.count));
+    const det = await send("detectAuth", { url: currentUrl, tabId: currentTabId });
+    $("#login-cookie-count").textContent = authPreview(det);
     info.style.display = "block";
   });
 }
 
 // ---- 히스토리 ----
+
+// 서버의 ISO 8601(UTC 등) 시각을 브라우저(시스템)의 시간대로 표시. 파싱 실패 시 원문.
+function formatLocalTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso || "";
+  return d.toLocaleString();
+}
 
 function badgeClass(changed, isFirst) {
   if (isFirst) return "new";
@@ -281,7 +316,7 @@ async function loadHistory() {
     div.className = "snap";
     const bcls = badgeClass(s.changed, isFirst);
     div.innerHTML =
-      `<div class="ts mono">${s.taken_at}</div>` +
+      `<div class="ts mono">${formatLocalTime(s.taken_at)}</div>` +
       `<div><span class="badge ${bcls}">${msg("badge_" + bcls)}</span> ` +
       `<span class="hash mono">${(s.content_hash || "").slice(0, 12)}</span></div>`;
     div.addEventListener("click", () =>
@@ -298,9 +333,11 @@ async function main() {
   initConnect();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentUrl = (tab && tab.url) || "";
+  currentTabId = tab && tab.id != null ? tab.id : null;
   $("#cur-url").textContent = displayUrl(currentUrl);
   await refreshStatus();
   initArchive();
+  initNotifyToggle();
   $("#open-dashboard").addEventListener("click", () =>
     send("openDeepLink", { url: currentUrl }));
 }

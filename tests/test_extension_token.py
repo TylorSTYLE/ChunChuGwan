@@ -458,3 +458,86 @@ def test_gc_keeps_credential_of_running_crawl(client, monkeypatch):
         conn.execute("UPDATE crawls SET status = 'done' WHERE id = ?", (crawl["id"],))
         assert db.delete_expired_ext_credentials(conn) == 1
         assert db.get_site_credential(conn, cred_id) is None
+
+
+# ---- JWT 로그인 정보 (확장이 localStorage/sessionStorage 에서 감지 → jwt 자격증명) ----
+
+# 서버는 토큰 구조를 검증하지 않는다(구조 판별은 확장이 함) — 비어있지 않고 공백 없으면 됨
+_JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2ln"
+
+
+def _auth_profile_jwt(client, token, url="https://example.com/secret", jwt=_JWT):
+    return client.post(
+        "/api/v1/auth-profiles", json={"url": url, "jwt": jwt}, headers=_headers(token)
+    )
+
+
+def test_auth_profile_jwt_creates_oneshot_jwt_credential(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret-passphrase")
+    token = _ext_token("arch@test.co")
+    r = _auth_profile_jwt(client, token)
+    assert r.status_code == 202 and r.json()["authenticated"] is True
+    with db.connect() as conn:
+        cred = conn.execute("SELECT * FROM site_credentials").fetchone()
+        # kind=jwt, 1회성, 소유자=발급 사용자, 토큰이 복호화로 되살아난다
+        assert cred["kind"] == "jwt" and cred["expires_at"] is not None
+        assert cred["created_by"] == _uid("arch@test.co")
+        assert credentials.reveal(conn, cred["id"]) == {"token": _JWT}
+        job = conn.execute(
+            "SELECT * FROM archive_jobs WHERE credential_id = ?", (cred["id"],)
+        ).fetchone()
+        assert job is not None
+
+
+def test_auth_profile_jwt_preferred_over_cookies(client, monkeypatch):
+    """둘 다 실리면 JWT 가 우선 (확장이 JWT 를 감지하면 토큰으로 보낸다)."""
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    token = _ext_token("arch@test.co")
+    r = client.post(
+        "/api/v1/auth-profiles",
+        json={"url": "https://example.com/x", "jwt": _JWT,
+              "storage_state": {"cookies": _COOKIES, "origins": []}},
+        headers=_headers(token),
+    )
+    assert r.status_code == 202
+    with db.connect() as conn:
+        assert conn.execute("SELECT kind FROM site_credentials").fetchone()["kind"] == "jwt"
+
+
+def test_auth_profile_without_any_auth_rejected(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    r = client.post(
+        "/api/v1/auth-profiles", json={"url": "https://example.com/x"},
+        headers=_headers(_ext_token("arch@test.co")),
+    )
+    assert r.status_code == 400  # 세션 쿠키도 JWT 도 없음
+
+
+def test_auth_profile_jwt_https_only(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    r = _auth_profile_jwt(client, _ext_token("arch@test.co"), url="http://example.com/x")
+    assert r.status_code == 400
+
+
+def test_auth_profile_jwt_rejects_whitespace_token(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    r = _auth_profile_jwt(client, _ext_token("arch@test.co"), jwt="bad token")
+    assert r.status_code == 400  # build_payload(jwt) 가 공백·줄바꿈을 거부
+
+
+def test_crawl_jwt_creates_credential(client, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    token = _ext_token("arch@test.co")
+    r = client.post(
+        "/api/v1/crawl", json={"url": "https://example.com/docs/", "jwt": _JWT},
+        headers=_headers(token),
+    )
+    assert r.status_code == 202
+    with db.connect() as conn:
+        cred = conn.execute("SELECT * FROM site_credentials").fetchone()
+        assert cred["kind"] == "jwt"
+        assert credentials.reveal(conn, cred["id"]) == {"token": _JWT}
+        crawl = conn.execute(
+            "SELECT * FROM crawls WHERE credential_id = ?", (cred["id"],)
+        ).fetchone()
+        assert crawl is not None

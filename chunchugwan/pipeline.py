@@ -47,11 +47,15 @@ class ArchiveOutcome:
 class _RunLog:
     """단계별 소요시간/결과를 모아 archive_logs 한 행으로 기록하는 수집기."""
 
-    def __init__(self, url: str, source: str, requested_by: int | None = None) -> None:
+    def __init__(
+        self, url: str, source: str, requested_by: int | None = None,
+        job_id: int | None = None,
+    ) -> None:
         self.url = url          # normalize 성공 시 정규화 URL로 교체
         self.domain = ""
         self.source = source
         self.requested_by = requested_by  # 요청한 사용자 (web/확장 토큰, 없으면 None)
+        self.job_id = job_id    # 이 실행을 만든 archive_jobs.id (확장 결과 알림 상관 키)
         self.started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         self._t0 = time.monotonic()
         self._t_step = self._t0
@@ -87,6 +91,7 @@ class _RunLog:
             http_status=http_status, content_hash=content_hash,
             error=error,
             steps=json.dumps(self.steps, ensure_ascii=False),
+            job_id=self.job_id,
         )
 
 
@@ -115,6 +120,7 @@ def archive_url(
     network_tag_id: str | None = None,
     credential_id: int | None = None,
     live_session: object | None = None,
+    job_id: int | None = None,
 ) -> ArchiveOutcome:
     """URL 아카이빙 전체 흐름.
 
@@ -123,7 +129,8 @@ def archive_url(
     source 는 실행 주체('cli' | 'web' | 'schedule' | 'api' | 'crawl') —
     archive_logs 에 기록된다. requested_by 는 요청한 사용자(web/확장 토큰,
     없으면 None) — 로그에 남아 '내 아카이브' 화면이 본인 요청을 추린다.
-    link_rewriter 는 사이트 전체 아카이브용
+    job_id 는 이 실행을 만든 archive_jobs.id — 로그에 남겨(작업은 완료 시
+    삭제되므로) 확장이 결과를 되찾는 상관 키로 쓴다. link_rewriter 는 사이트 전체 아카이브용
     page.html 앵커 재작성, browser_session 은 크롤러의 브라우저 재사용
     (둘 다 capture 참조).
 
@@ -131,7 +138,7 @@ def archive_url(
     network_tag_id(시스템 설정의 로컬 네트워크 태그) 또는 기존 페이지의
     태그가 있어야 한다 — 없으면 ValueError. 공인 주소면 태그는 무시된다.
     """
-    run = _RunLog(url, source, requested_by)
+    run = _RunLog(url, source, requested_by, job_id)
     try:
         outcome = _archive_url(url, force, run, link_rewriter, browser_session,
                                network_tag_id, credential_id, live_session)

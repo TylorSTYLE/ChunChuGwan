@@ -198,7 +198,10 @@ def test_api_archive_triggers_pipeline(client):
         headers=_headers(token),
     )
     assert r.status_code == 202
-    assert r.json() == {"queued": True, "url": "https://example.com/new"}
+    body = r.json()
+    assert body["queued"] is True and body["url"] == "https://example.com/new"
+    # 확장이 결과를 추적할 수 있게 큐에 등록된 작업 id 를 함께 돌려준다
+    assert isinstance(body["job_id"], int)
     # 정규화된 URL 로 source='api' 작업이 큐에 등록된다 (worker 가 캡처)
     with db.connect() as conn:
         jobs = conn.execute("SELECT url, force, source FROM archive_jobs").fetchall()

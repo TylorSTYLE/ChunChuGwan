@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS crawls (
     max_depth      INTEGER NOT NULL,
     delay_seconds  INTEGER NOT NULL,   -- 페이지 간 최소 간격 (대상 서버 부담 방지)
     source         TEXT NOT NULL DEFAULT 'web',      -- 'web' | 'cli'
+    requested_by   INTEGER REFERENCES users(id),     -- 요청한 사용자 (web/확장 토큰) — 결과 알림 귀속
     site_id        INTEGER REFERENCES sites(id),     -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id), -- 사설 대역 크롤의 로컬 네트워크 태그
     credential_id  INTEGER REFERENCES site_credentials(id), -- 크롤 페이지에 적용할 로그인 자격증명(선택)
@@ -255,10 +256,14 @@ CREATE TABLE IF NOT EXISTS archive_logs (
     http_status  INTEGER,
     content_hash TEXT,
     error        TEXT,                   -- status='error' 일 때 예외 요약
-    steps        TEXT                    -- 단계별 기록 JSON [{step, ms, detail}]
+    steps        TEXT,                   -- 단계별 기록 JSON [{step, ms, detail}]
+    job_id       INTEGER                 -- 이 로그를 만든 archive_jobs.id (FK 아님 — 작업은
+                                         --   완료 시 삭제되므로, 삭제된 id 를 보존해 확장이
+                                         --   요청한 작업의 결과를 되찾는 상관 키로 쓴다)
 );
 CREATE INDEX IF NOT EXISTS idx_archive_logs_page ON archive_logs(page_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_archive_logs_domain ON archive_logs(domain, started_at);
+CREATE INDEX IF NOT EXISTS idx_archive_logs_job ON archive_logs(job_id);
 
 CREATE TABLE IF NOT EXISTS system_logs (
     id         INTEGER PRIMARY KEY,
@@ -500,6 +505,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_archive_logs_requester "
         "ON archive_logs(requested_by, started_at)"
     )
+    # 결과 알림용 상관 키 — 확장이 요청한 작업의 결과(완료/실패)를 되찾게 작업 id 를
+    # 로그까지 잇는다. 작업 행은 완료 시 삭제되므로 FK 는 걸지 않는다 (foreign_keys=ON
+    # 이라 FK 면 작업 삭제가 막힌다). 기존 로그는 NULL (과거 작업 id 를 알 수 없음).
+    if cols and "job_id" not in cols:
+        conn.execute("ALTER TABLE archive_logs ADD COLUMN job_id INTEGER")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_archive_logs_job ON archive_logs(job_id)"
+    )
+    # 크롤 요청자 — 확장/웹이 시작한 사이트 전체 아카이브의 결과 알림 귀속. 기존 크롤은 NULL.
+    crawl_cols = {r["name"] for r in conn.execute("PRAGMA table_info(crawls)")}
+    if crawl_cols and "requested_by" not in crawl_cols:
+        conn.execute(
+            "ALTER TABLE crawls ADD COLUMN requested_by INTEGER REFERENCES users(id)"
+        )
     _backfill_sites(conn)
 
 
@@ -1024,7 +1043,7 @@ _ARCHIVE_LOG_COLUMNS = frozenset(
     {
         "url", "domain", "page_id", "snapshot_id", "source", "requested_by",
         "status", "started_at", "duration_ms", "http_status", "content_hash",
-        "error", "steps",
+        "error", "steps", "job_id",
     }
 )
 
@@ -1941,12 +1960,14 @@ def insert_crawl(
     max_depth: int,
     delay_seconds: int,
     source: str,
+    requested_by: int | None = None,
     network_tag_id: str | None = None,
     credential_id: int | None = None,
 ) -> int:
     """크롤 row 생성 후 id 반환. next_page_at 은 지금 — 즉시 시작 가능.
 
-    소속 사이트(site_id)는 시작 URL 에서 계산해 자동 연결한다.
+    소속 사이트(site_id)는 시작 URL 에서 계산해 자동 연결한다. requested_by 는
+    요청한 사용자(web/확장 토큰) — 확장의 결과 알림 귀속에 쓴다.
     """
     now = _utcnow()
     site_id = get_or_create_site(conn, storage.site_key(start_url))
@@ -1954,12 +1975,13 @@ def insert_crawl(
         """
         INSERT INTO crawls
             (start_url, scope_host, scope_path, max_pages, max_depth,
-             delay_seconds, source, site_id, network_tag_id, credential_id,
-             created_at, next_page_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             delay_seconds, source, requested_by, site_id, network_tag_id,
+             credential_id, created_at, next_page_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (start_url, scope_host, scope_path, max_pages, max_depth,
-         delay_seconds, source, site_id, network_tag_id, credential_id, now, now),
+         delay_seconds, source, requested_by, site_id, network_tag_id,
+         credential_id, now, now),
     )
     return cur.lastrowid
 
@@ -2274,6 +2296,79 @@ def list_active_archive_jobs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         FROM archive_jobs WHERE status IN ('pending', 'in_progress')
         """
     ).fetchall()
+
+
+# ---- 확장 결과 알림 — 작업/크롤 상태 조회 (소유자 스코프) ----
+#
+# 확장이 요청한 작업의 결과(완료/실패/사람 확인)를 폴링으로 되찾는다. 한 사용자가
+# 남의 작업 id 를 조회하지 못하게 토큰 소유자(requested_by)로 스코프한다.
+
+def _owner_scope(owner_id: int | None, scoped: bool) -> tuple[str, list[object]]:
+    """소유자 스코프 WHERE 조각(앞에 ' AND ' 포함)과 파라미터를 반환.
+
+    scoped=False(인증 off) → 무필터(단일 로컬 사용자), owner_id 있음(확장 토큰)
+    → requested_by = ?, 없음(시스템 키) → requested_by IS NULL.
+    """
+    if not scoped:
+        return "", []
+    if owner_id is None:
+        return " AND requested_by IS NULL", []
+    return " AND requested_by = ?", [owner_id]
+
+
+def get_active_archive_job_id(conn: sqlite3.Connection, url: str) -> int | None:
+    """url 의 활성(대기/진행) 작업 id (없으면 None) — 부분 UNIQUE 로 최대 하나.
+
+    enqueue 직후 같은 트랜잭션에서 작업 id 를 되읽어 확장이 결과를 추적하게 한다.
+    """
+    row = conn.execute(
+        "SELECT id FROM archive_jobs WHERE url = ? AND status IN ('pending', 'in_progress')",
+        (url,),
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def archive_job_status(
+    conn: sqlite3.Connection, job_id: int, *, owner_id: int | None, scoped: bool
+) -> sqlite3.Row | None:
+    """소유자 스코프 활성 작업 1건 (id·url·status·needs_human_at). 없으면 None."""
+    clause, params = _owner_scope(owner_id, scoped)
+    return conn.execute(
+        f"SELECT id, url, status, needs_human_at FROM archive_jobs WHERE id = ?{clause}",
+        [job_id, *params],
+    ).fetchone()
+
+
+def latest_archive_log_for_job(
+    conn: sqlite3.Connection, job_id: int, *, owner_id: int | None, scoped: bool
+) -> sqlite3.Row | None:
+    """소유자 스코프, 이 작업의 최신 로그 1건. 없으면 None.
+
+    재시도로 여러 행이면 최신(id DESC)이 종결 상태다 (과거 error 로그로 오판 방지).
+    """
+    clause, params = _owner_scope(owner_id, scoped)
+    return conn.execute(
+        f"""
+        SELECT status, url, page_id, snapshot_id, http_status, error
+        FROM archive_logs WHERE job_id = ?{clause}
+        ORDER BY id DESC LIMIT 1
+        """,
+        [job_id, *params],
+    ).fetchone()
+
+
+def crawl_status_for_owner(
+    conn: sqlite3.Connection, crawl_id: int, *, owner_id: int | None, scoped: bool
+) -> sqlite3.Row | None:
+    """소유자 스코프 크롤 1건 (id·start_url·status). 없으면 None.
+
+    상태별 페이지 수는 호출부가 crawl_page_counts 로 따로 조회한다.
+    """
+    clause, params = _owner_scope(owner_id, scoped)
+    return conn.execute(
+        f"SELECT id, start_url, status FROM crawls WHERE id = ?{clause}",
+        [crawl_id, *params],
+    ).fetchone()
 
 
 # ---- 사람 보조 챌린지 해결 (라이브 세션 — live_challenge.py / 대시보드) ----
@@ -3101,6 +3196,10 @@ def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
     )
     conn.execute(
         "UPDATE archive_jobs SET requested_by = NULL WHERE requested_by = ?",
+        (user_id,),
+    )
+    conn.execute(
+        "UPDATE crawls SET requested_by = NULL WHERE requested_by = ?",
         (user_id,),
     )
     conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
