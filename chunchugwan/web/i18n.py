@@ -818,7 +818,7 @@ _EN: dict[str, str] = {
     # ---- 로그인 / 가입 / 초대 (auth) ----
     "로그인": "Log in",
     "이메일 또는 패스워드가 올바르지 않습니다.": "Incorrect email or password.",
-    "Authentik으로 로그인 →": "Log in with Authentik →",
+    "SSO 로그인 →": "SSO login →",
     "계정이 없나요?": "No account?",
     "가입하기": "Sign up",
     "가입": "Sign up",

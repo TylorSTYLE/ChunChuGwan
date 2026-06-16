@@ -100,7 +100,7 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 2단계를 건너뛴다.
 | `WCCG_LIVE_CHALLENGE` | `off` | `on` 이면 자동으로 못 푼 인터랙티브 챌린지를 관리자가 대시보드(`/archive/needs-human`)에서 직접 클릭/입력해 통과시키는 최후 수단 활성. 스텔스(patchright/headful)일 때만 의미. worker 가 해당 작업을 멈추고 사람을 기다린다 — **데이터센터 IP 에서는 사람이 눌러도 통과 미보장** |
 | `WCCG_LIVE_CHALLENGE_TIMEOUT_SECONDS` | `300` | 라이브 세션에서 사람 입력을 기다리는 하드 타임아웃(초). 초과 시 차단 처리 |
 
-OIDC 변수 3개가 모두 설정되면 로그인 페이지에 "Authentik으로 로그인" 버튼이
+OIDC 변수 3개가 모두 설정되면 로그인 페이지에 "SSO 로그인" 버튼이
 나타난다. HTTPS 종료(HSTS 포함)는 리버스 프록시 책임이다.
 
 > **스텔스 캡처 주의.** `WCCG_CAPTURE_*` 로 Cloudflare Turnstile 같은 봇 차단
