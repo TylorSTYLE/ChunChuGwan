@@ -365,6 +365,133 @@ def test_site_pages_per_page_choices(client):
     assert "1/3 페이지" in client.get(f"/sites/{site['id']}?per_page=33").text
 
 
+def test_site_documents_pagination(client):
+    """문서 표도 페이지 목록처럼 독립 페이징된다 (dpage/dper)."""
+    with db.connect() as conn:
+        entries = [
+            {
+                "url": f"https://example.com/files/doc-{i:02d}.pdf",
+                "file": f"doc-{i:02d}.pdf", "bytes": 100 + i,
+                "sha256": hashlib.sha256(f"doc-{i}".encode()).hexdigest(),
+                "content_type": "application/pdf",
+            }
+            for i in range(30)
+        ]
+        db.insert_snapshot_documents(conn, 1, entries)
+        site = db.get_site_by_key(conn, "example.com")
+    # guide(픽스처) + 30 = 31개 문서 → 25개씩 2페이지, 줄 수는 dper 로 독립 선택
+    res1 = client.get(f"/sites/{site['id']}")
+    assert "총 31건" in res1.text
+    assert 'name="dper"' in res1.text
+    assert f"/sites/{site['id']}?dpage=2" in res1.text
+    assert "2/2 페이지" in client.get(f"/sites/{site['id']}?dpage=2").text
+
+
+def _seed_failed_pages(n: int) -> None:
+    """서로 다른 URL 의 실패 로그 n개 삽입 (실패 목록 페이징 테스트용)."""
+    with db.connect() as conn:
+        for i in range(n):
+            u = f"https://example.com/fail-{i:02d}"
+            pid = db.get_or_create_page(conn, u, "example.com", storage.url_to_slug(u))
+            db.insert_archive_log(
+                conn, url=u, domain="example.com", page_id=pid, source="web",
+                status="error", started_at=f"2026-06-03T00:00:{i:02d}+00:00",
+                duration_ms=100, error=f"boom-{i}",
+            )
+
+
+def test_site_failed_pagination(client):
+    """실패한 작업 표도 독립 페이징된다 (fpage/fper) — 다른 섹션과 무관."""
+    _seed_failed_pages(30)
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    res1 = client.get(f"/sites/{site['id']}")
+    assert "총 30건" in res1.text  # 실패 30건 (페이지 표는 총 31건)
+    assert 'name="fper"' in res1.text
+    assert f"/sites/{site['id']}?fpage=2" in res1.text
+    assert "2/2 페이지" in client.get(f"/sites/{site['id']}?fpage=2").text
+
+
+def test_site_failed_retry_all(client):
+    """'모두 재시도' — 직접 실패는 큐에 넣고, 크롤 실패 페이지는 다시 연다."""
+    _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
+    crawl_id, cp_id = _insert_failed_crawl_page("https://example.com/broken")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+        assert db.get_crawl(conn, crawl_id)["status"] == "done"
+    res = client.post(
+        f"/sites/{site['id']}/failed/retry-all", follow_redirects=False
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith(f"/sites/{site['id']}?notice=")
+    assert [j["url"] for j in _archive_jobs()] == ["https://example.com/post"]
+    with db.connect() as conn:
+        cp = conn.execute("SELECT * FROM crawl_pages WHERE id = ?", (cp_id,)).fetchone()
+        crawl = db.get_crawl(conn, crawl_id)
+    assert cp["status"] == "pending" and cp["attempts"] == 0 and cp["error"] is None
+    assert crawl["status"] == "running" and crawl["finished_at"] is None
+
+
+def test_site_failed_retry_all_button_shown(client):
+    """실패 작업이 있으면 '모두 재시도' 버튼이 보인다 (없으면 섹션 자체가 없다)."""
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert f"/sites/{site['id']}/failed/retry-all" not in client.get(
+        f"/sites/{site['id']}"
+    ).text
+    _insert_log("error", started_at="2026-06-03T00:00:00+00:00", error="boom")
+    assert f"/sites/{site['id']}/failed/retry-all" in client.get(
+        f"/sites/{site['id']}"
+    ).text
+
+
+def _insert_done_crawl(start_url: str = "https://example.com/docs/") -> int:
+    """유효 옵션의 완료된 크롤 1개 삽입 (다시 아카이빙 테스트용)."""
+    with db.connect() as conn:
+        crawl_id = db.insert_crawl(
+            conn, start_url=start_url, scope_host="example.com",
+            scope_path="/docs/", max_pages=10, max_depth=2, delay_seconds=10,
+            source="web",
+        )
+        conn.execute("UPDATE crawls SET status = 'done' WHERE id = ?", (crawl_id,))
+    return crawl_id
+
+
+def test_site_crawl_rerun(client):
+    """크롤 회차 '다시 아카이빙' — 같은 옵션의 새 크롤을 만들고 진행 화면으로 보낸다."""
+    crawl_id = _insert_done_crawl()
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+        before = conn.execute("SELECT COUNT(*) FROM crawls").fetchone()[0]
+    # 회차 목록에 '다시 아카이빙' 버튼이 보인다
+    assert f"/sites/{site['id']}/crawls/{crawl_id}/rerun" in client.get(
+        f"/sites/{site['id']}"
+    ).text
+    res = client.post(
+        f"/sites/{site['id']}/crawls/{crawl_id}/rerun", follow_redirects=False
+    )
+    assert res.status_code == 303
+    assert res.headers["location"].startswith("/crawls/")
+    with db.connect() as conn:
+        after = conn.execute("SELECT COUNT(*) FROM crawls").fetchone()[0]
+    assert after == before + 1  # 끝난 크롤이라 새 크롤 생성 (진행 중이면 병합)
+
+
+def test_site_crawl_rerun_unknown(client):
+    """없는 크롤·다른 사이트의 크롤은 404."""
+    crawl_id, _ = _insert_failed_crawl_page("https://example.com/broken")
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, "example.com")
+    assert client.post(f"/sites/{site['id']}/crawls/999/rerun").status_code == 404
+    assert client.post(f"/sites/999/crawls/{crawl_id}/rerun").status_code == 404
+
+
+def test_card_mode_unwraps_truncated_cells(client):
+    """모바일 카드 모드 CSS — 말줄임 셀(*-cell)을 펼치는 규칙이 base.html 에 있다."""
+    res = client.get("/archives")
+    assert 'td[class*="-cell"]' in res.text
+
+
 def test_site_failed_retry_unknown_log(client):
     """없는 로그·실패가 아닌 로그·다른 사이트의 로그는 404."""
     ok_id = _insert_log("changed", started_at="2026-06-04T00:00:00+00:00")

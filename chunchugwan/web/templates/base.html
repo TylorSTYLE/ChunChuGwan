@@ -217,6 +217,12 @@ header .spacer { flex: 1; }
   .table-wrap.cards > table > tbody > tr.cardrow > td:not([data-label])::before {
     content: none; }
   .table-wrap.cards > table > tbody > tr.cardrow > td:empty { display: none; }
+  /* 긴 URL·텍스트는 카드를 넘지 않게 어디서든 줄바꿈하고, 데스크탑 표에서만
+     쓰는 말줄임 셀(고정 폭·nowrap 인 *-cell: url/name/error)도 카드에서는
+     펼쳐서 전부 보여준다 — 가로 스크롤·잘림 방지 */
+  .table-wrap.cards > table > tbody > tr.cardrow > td { overflow-wrap: anywhere; }
+  .table-wrap.cards > table > tbody > tr.cardrow > td[class*="-cell"] {
+    max-width: none; white-space: normal; overflow: visible; }
 }
 .pager { display: flex; gap: 12px; align-items: center; margin-top: 10px;
          font-size: 13px; flex-wrap: wrap; }

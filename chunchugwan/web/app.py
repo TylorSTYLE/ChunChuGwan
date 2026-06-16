@@ -479,11 +479,73 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
     )
 
 
-# 사이트 상세의 페이지 목록 페이징 단위 — 선택 가능한 표시 개수와 기본값
+# 사이트 상세의 표 페이징 단위 — 선택 가능한 표시 개수와 섹션별 기본값.
+# 페이지·문서·실패한 작업 표가 각자 독립으로 페이징하되 같은 선택지를 쓴다.
 _SITE_PAGES_PER_PAGE_CHOICES = (25, 50, 75, 100, 200)
 _SITE_PAGES_PER_PAGE = 25
-# 사이트 상세에 함께 보여줄 문서 목록 상한 — 넘으면 전체 문서 화면으로 안내
-_SITE_DOCUMENTS_CAP = 50
+_SITE_DOCS_PER_PAGE = 25
+_SITE_FAILED_PER_PAGE = 25
+# 사이트 상세 쿼리 파라미터의 표준 순서 (URL·hidden 을 안정적으로 직렬화)
+_SITE_PARAM_ORDER = ("page", "per_page", "dpage", "dper", "fpage", "fper")
+
+
+def _site_pager(
+    site_id: int, total: int, page: int, per_page: int,
+    *, page_key: str, per_key: str, state: dict[str, int],
+) -> dict:
+    """사이트 상세 한 섹션의 페이저 컨텍스트 (page_num·total_pages·prev/next·hidden).
+
+    state 는 현재 모든 섹션의 비기본 쿼리 파라미터다. prev/next 는 state 에서
+    이 섹션의 page 만 바꿔 다른 섹션 위치를 보존하고, per_page 폼의 hidden 은
+    다른 섹션 파라미터를 실어 줄 수 변경 시에도 유지되게 한다 (이 섹션 page 는
+    빼므로 줄 수를 바꾸면 1페이지로 돌아간다). 파라미터는 _SITE_PARAM_ORDER 로
+    정렬해 직렬화한다.
+    """
+    total_pages = max(1, -(-total // per_page))  # ceil
+
+    def _url(n: int) -> str:
+        merged = dict(state)
+        if n > 1:
+            merged[page_key] = n
+        else:
+            merged.pop(page_key, None)
+        qs = urlencode({k: merged[k] for k in _SITE_PARAM_ORDER if k in merged})
+        return f"/sites/{site_id}" + (f"?{qs}" if qs else "")
+
+    return {
+        "total": total, "page_num": page, "total_pages": total_pages,
+        "per_page": per_page, "page_key": page_key, "per_key": per_key,
+        "prev_url": _url(page - 1) if page > 1 else None,
+        "next_url": _url(page + 1) if page < total_pages else None,
+        "hidden": {k: v for k, v in state.items() if k not in (page_key, per_key)},
+    }
+
+
+def _failed_items(
+    site_id: int, failed_logs: list, failed_crawl_pages: list,
+) -> list[dict]:
+    """실패한 작업을 직접 아카이빙 실패(로그)와 크롤 페이지 실패로 합쳐 시각
+    내림차순으로 정렬한 dict 리스트 (사이트 상세 '실패한 작업' 페이징·렌더용).
+
+    kind='log' 행은 페이지 링크·진행/대기 배지(page_url 기준)와 로그 재시도를,
+    kind='crawl' 행은 크롤 회차 링크와 크롤 페이지 재시도를 쓴다. at 은 정렬·
+    표시용 시각(로그=started_at, 크롤=failed_at, 없으면 None → 맨 뒤)."""
+    items: list[dict] = []
+    for f in failed_logs:
+        items.append({
+            "kind": "log", "page_id": f["page_id"], "page_url": f["page_url"],
+            "url": f["url"], "at": f["started_at"], "source": f["source"],
+            "error": f["error"],
+            "retry_action": f"/sites/{site_id}/failed/{f['id']}/retry",
+        })
+    for f in failed_crawl_pages:
+        items.append({
+            "kind": "crawl", "url": f["url"], "at": f["failed_at"],
+            "crawl_id": f["crawl_id"], "error": f["error"],
+            "retry_action": f"/sites/{site_id}/crawl-failed/{f['id']}/retry",
+        })
+    items.sort(key=lambda x: x["at"] or "", reverse=True)
+    return items
 
 
 @app.get("/sites/{site_id}", response_class=HTMLResponse)
@@ -494,16 +556,25 @@ def site_view(
     notice: str = "",
     page: int = Query(1, ge=1),
     per_page: int = Query(0),
+    dpage: int = Query(1, ge=1),
+    dper: int = Query(0),
+    fpage: int = Query(1, ge=1),
+    fper: int = Query(0),
 ):
-    """사이트 상세 — 소속 페이지 목록(페이징) + 크롤 회차 목록 + 스케줄.
+    """사이트 상세 — 소속 페이지·문서·실패한 작업 목록(각자 페이징) + 크롤 회차.
 
     사이트는 서브도메인 단위 그릇이고, 크롤 회차는 그 사이트를 특정 시점에
     돌았던 실행 기록이다 — 회차 상세(/crawls/{id})는 그대로 유지된다.
+    페이지(page/per_page)·문서(dpage/dper)·실패(fpage/fper)는 독립 페이징한다.
     """
     active = _active_snapshot()
     nh_urls = _needs_human_urls(request)  # url→job_id (관리자에게만, serve LIVE 설정 무관)
     if per_page not in _SITE_PAGES_PER_PAGE_CHOICES:
         per_page = _SITE_PAGES_PER_PAGE
+    if dper not in _SITE_PAGES_PER_PAGE_CHOICES:
+        dper = _SITE_DOCS_PER_PAGE
+    if fper not in _SITE_PAGES_PER_PAGE_CHOICES:
+        fper = _SITE_FAILED_PER_PAGE
     with db.connect() as conn:
         site = db.get_site(conn, site_id)
         if site is None:
@@ -521,18 +592,26 @@ def site_view(
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
         certificates = db.list_site_certificates(conn, site_id)
         site_network_tags = db.list_site_network_tags(conn, site_id)
+        # 실패한 작업 — 직접 아카이빙 실패(로그)와 크롤 페이지 실패를 하나의
+        # 목록으로 합쳐 페이징한다. 크롤 실패는 페이지 행이 없는 신규 URL 까지
+        # 포함하되, 로그 목록에 이미 있는 URL 은 겹치지 않게 뺀다.
         failed_logs = db.list_site_failed_logs(conn, site_id)
-        # 크롤 실패는 페이지 행이 없는 신규 URL 까지 포함 — 실패한 작업
-        # 목록(archive_logs 기반)에 이미 있는 URL 은 겹치지 않게 뺀다
         failed_log_urls = {f["page_url"] for f in failed_logs}
         failed_crawl_pages = [
             r for r in db.list_site_failed_crawl_pages(conn, site_id)
             if r["url"] not in failed_log_urls
         ]
-        # 이 사이트가 아카이빙한 문서 파일 (sha256 그룹). 상한 + 1 개를 받아
-        # 초과 여부를 판단하고, 넘으면 전체 문서 화면으로 안내한다.
+        failed_all = _failed_items(site_id, failed_logs, failed_crawl_pages)
+        failed_total = len(failed_all)
+        failed_pages_total = max(1, -(-failed_total // fper))
+        fpage = min(fpage, failed_pages_total)
+        failed_items = failed_all[(fpage - 1) * fper : fpage * fper]
+        # 이 사이트가 아카이빙한 문서 파일 (sha256 그룹) — 독립 페이징
+        doc_total = db.count_site_document_groups(conn, site_id)
+        doc_pages_total = max(1, -(-doc_total // dper))
+        dpage = min(dpage, doc_pages_total)
         site_documents = db.list_site_document_groups(
-            conn, site_id, limit=_SITE_DOCUMENTS_CAP + 1
+            conn, site_id, limit=dper, offset=(dpage - 1) * dper,
         )
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
@@ -571,13 +650,21 @@ def site_view(
         for c in crawls if c["status"] == "running"
     ]
 
-    def _page_url(n: int) -> str:
-        params = []
-        if n > 1:
-            params.append(f"page={n}")
-        if per_page != _SITE_PAGES_PER_PAGE:
-            params.append(f"per_page={per_page}")
-        return f"/sites/{site_id}" + ("?" + "&".join(params) if params else "")
+    # 모든 섹션의 비기본 쿼리 파라미터 — 각 페이저가 다른 섹션 위치를 보존하는
+    # prev/next URL·hidden 입력을 만드는 기준 (클램핑 끝난 page 값으로 구성)
+    state: dict[str, int] = {}
+    if page > 1:
+        state["page"] = page
+    if per_page != _SITE_PAGES_PER_PAGE:
+        state["per_page"] = per_page
+    if dpage > 1:
+        state["dpage"] = dpage
+    if dper != _SITE_DOCS_PER_PAGE:
+        state["dper"] = dper
+    if fpage > 1:
+        state["fpage"] = fpage
+    if fper != _SITE_FAILED_PER_PAGE:
+        state["fper"] = fper
 
     return templates.TemplateResponse(
         request, "site.html",
@@ -585,21 +672,28 @@ def site_view(
             "site": site, "pages": pages, "crawls": crawls,
             "site_title": _site_title(snap_dirs),
             "network_tags": site_network_tags,
-            "failed_logs": failed_logs,
-            "failed_crawl_pages": failed_crawl_pages,
-            "site_documents": site_documents[:_SITE_DOCUMENTS_CAP],
-            "site_documents_more": len(site_documents) > _SITE_DOCUMENTS_CAP,
+            "failed_items": failed_items,
+            "site_documents": site_documents,
+            "doc_total": doc_total,
             "schedule_labels": schedule_labels,
             "crawl_schedules": crawl_schedule_labels,
             "page_count": totals["page_count"],
             "snapshot_total": totals["snapshot_count"],
             "page_bytes": page_bytes,
             "site_bytes": sum(page_bytes.values()),
-            "page_num": page, "total_pages": total_pages,
-            "per_page": per_page,
             "per_page_choices": _SITE_PAGES_PER_PAGE_CHOICES,
-            "prev_url": _page_url(page - 1) if page > 1 else None,
-            "next_url": _page_url(page + 1) if page < total_pages else None,
+            "pages_pager": _site_pager(
+                site_id, totals["page_count"], page, per_page,
+                page_key="page", per_key="per_page", state=state,
+            ),
+            "docs_pager": _site_pager(
+                site_id, doc_total, dpage, dper,
+                page_key="dpage", per_key="dper", state=state,
+            ),
+            "failed_pager": _site_pager(
+                site_id, failed_total, fpage, fper,
+                page_key="fpage", per_key="fper", state=state,
+            ),
             "certificates": cert_rows,
             "active": active, "running_crawls": running_crawls,
             "needs_human": nh_urls, "needs_human_urls": sorted(nh_urls),
@@ -629,6 +723,45 @@ def site_failed_retry(
     return RedirectResponse(f"/sites/{site_id}?{urlencode(params)}", status_code=303)
 
 
+@app.post("/sites/{site_id}/failed/retry-all")
+def site_failed_retry_all(request: Request, site_id: int):
+    """사이트의 실패한 작업을 모두 재시도. admin/archiver 전용.
+
+    '실패한 작업' 목록에 보이는 항목과 같은 범위로 — 직접 아카이빙 실패(로그)는
+    각 URL 을 아카이빙 큐에 넣고, 크롤 페이지 실패는 큐로 되돌려(끝난 크롤은 다시
+    연다) 크롤러가 다시 집어가게 한다. 이미 큐에 있는 URL 은 중복 없이 무시된다.
+    """
+    _require_archiver(request)
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, t(request, "사이트 없음"))
+        failed_logs = db.list_site_failed_logs(conn, site_id)
+        failed_log_urls = {f["page_url"] for f in failed_logs}
+        failed_crawl_pages = [
+            r for r in db.list_site_failed_crawl_pages(conn, site_id)
+            if r["url"] not in failed_log_urls
+        ]
+        crawl_retried = db.retry_failed_crawl_pages_by_ids(
+            conn, [r["id"] for r in failed_crawl_pages]
+        )
+    requester = _requester_id(request)
+    queued = sum(
+        _queue_archive(f["page_url"], requested_by=requester) for f in failed_logs
+    )
+    if queued or crawl_retried:
+        audit.log(
+            request, "사이트 실패 작업 모두 재시도: site #%d (로그 %d · 크롤 %d)",
+            site_id, queued, crawl_retried,
+        )
+        params = {"notice": t(
+            request, "실패한 작업을 모두 재시도합니다 — 백그라운드에서 진행됩니다."
+        )}
+    else:
+        params = {"notice": t(request, "재시도할 실패 작업이 없습니다.")}
+    return RedirectResponse(f"/sites/{site_id}?{urlencode(params)}", status_code=303)
+
+
 @app.post("/sites/{site_id}/crawl-failed/{crawl_page_id}/retry")
 def site_crawl_failed_retry(request: Request, site_id: int, crawl_page_id: int):
     """실패한 크롤 페이지 재시도 — 큐로 되돌려 크롤러가 다시 집어가게 한다.
@@ -644,6 +777,39 @@ def site_crawl_failed_retry(request: Request, site_id: int, crawl_page_id: int):
     audit.log(request, "크롤 페이지 재시도: %s", row["url"])
     params = {"notice": t(request, "재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.")}
     return RedirectResponse(f"/sites/{site_id}?{urlencode(params)}", status_code=303)
+
+
+@app.post("/sites/{site_id}/crawls/{crawl_id}/rerun")
+def site_crawl_rerun(request: Request, site_id: int, crawl_id: int):
+    """크롤 회차를 같은 시작 URL·범위·옵션으로 다시 실행. admin/archiver 전용.
+
+    회차 목록에서 사이트 전체를 수동으로 다시 아카이빙하는 진입점이다 —
+    새 크롤을 등록하고 진행 화면으로 보낸다. 같은 시작 URL 의 크롤이 진행
+    중이면 crawler.start_crawl 이 그 크롤로 자동 병합한다(merged=1).
+    """
+    _require_archiver(request)
+    with db.connect() as conn:
+        crawl = db.get_crawl(conn, crawl_id)
+        if crawl is None or crawl["site_id"] != site_id:
+            raise HTTPException(404, t(request, "크롤 없음"))
+    try:
+        new_crawl, merged = crawler.start_crawl(
+            crawl["start_url"],
+            max_pages=crawl["max_pages"], max_depth=crawl["max_depth"],
+            delay_seconds=crawl["delay_seconds"], source="web",
+            network_tag_id=crawl["network_tag_id"],
+            credential_id=crawl["credential_id"],
+        )
+    except ValueError as exc:
+        params = urlencode({"error": t(request, "아카이빙 실패: {e}", e=exc)})
+        return RedirectResponse(f"/sites/{site_id}?{params}", status_code=303)
+    audit.log(
+        request, "사이트 아카이브 다시 실행: %s → 크롤 #%d%s",
+        crawl["start_url"], new_crawl["id"],
+        " (진행 중인 크롤로 병합)" if merged else "",
+    )
+    suffix = "?merged=1" if merged else ""
+    return RedirectResponse(f"/crawls/{new_crawl['id']}{suffix}", status_code=303)
 
 
 @app.get("/sites/{site_id}/certificates/{cert_id}.pem")

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_network_tag.html" import network_tag_badge with context %}
+{% from "_pager.html" import section_pager with context %}
 {% block title %}{{ site['site_key'] }} — {{ _("춘추관") }}{% endblock %}
 {% block content %}
 <style>
@@ -93,24 +94,12 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
   </tbody>
 </table>
 </div>
-<div class="pager">
-  <span class="muted">{{ _("총 {n}건", n=page_count) }}{% if total_pages > 1 %} · {{ _("{p}/{t} 페이지", p=page_num, t=total_pages) }}{% endif %}</span>
-  <form class="inline" method="get" action="/sites/{{ site['id'] }}">
-    <select name="per_page" aria-label="{{ _('표시 줄 수') }}" onchange="this.form.submit()">
-      {% for n in per_page_choices %}
-      <option value="{{ n }}" {% if n == per_page %}selected{% endif %}>{{ _("{n}줄", n=n) }}</option>
-      {% endfor %}
-    </select>
-  </form>
-  <span class="spacer"></span>
-  {% if prev_url %}<a href="{{ prev_url }}">&larr; {{ _("이전") }}</a>{% endif %}
-  {% if next_url %}<a href="{{ next_url }}">{{ _("다음") }} &rarr;</a>{% endif %}
-</div>
+{{ section_pager(pages_pager, site['id'], per_page_choices) }}
 {% else %}
 <p class="muted">{{ _("아직 페이지가 없습니다 — 크롤이 진행되면 여기에 쌓입니다.") }}</p>
 {% endif %}
 
-{% if site_documents %}
+{% if doc_total %}
 <h3>{{ _("문서") }}</h3>
 <p class="muted" style="font-size:13px">
   {{ _("이 사이트의 페이지가 링크한 문서 파일(PDF·워드·한글 등)입니다. 같은 내용의 문서는 한 번만 저장됩니다.") }}
@@ -151,13 +140,20 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
   </tbody>
 </table>
 </div>
-{% if site_documents_more %}
-<p class="muted" style="font-size:13px"><a href="/documents">{{ _("문서가 더 있습니다 — 전체 목록 보기") }}</a></p>
-{% endif %}
+{{ section_pager(docs_pager, site['id'], per_page_choices) }}
 {% endif %}
 
-{% if failed_logs or failed_crawl_pages %}
-<h3>{{ _("실패한 작업") }}</h3>
+{% if failed_pager.total %}
+<div class="toolbar">
+  <h3 style="margin:0">{{ _("실패한 작업") }}</h3>
+  <span class="spacer"></span>
+  {% if can_archive %}
+  <form class="inline" method="post" action="/sites/{{ site['id'] }}/failed/retry-all"
+        onsubmit='return confirm({{ _("실패한 작업을 모두 재시도할까요?")|tojson }})'>
+    <button type="submit">{{ _("모두 재시도") }}</button>
+  </form>
+  {% endif %}
+</div>
 <p class="muted" style="font-size:13px">
   {{ _("최근 실행이 실패로 끝난 페이지입니다. 크롤 중 실패한 페이지도 포함되며, 재시도가 성공하면 목록에서 사라집니다.") }}
 </p>
@@ -167,43 +163,43 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
     <tr><th>URL</th><th>{{ _("시각") }}</th><th>{{ _("출처") }}</th><th>{{ _("오류") }}</th><th></th></tr>
   </thead>
   <tbody>
-  {% for f in failed_logs %}
+  {% for f in failed_items %}
     <tr>
-      <td><a href="/page/{{ f['page_id'] }}" title="{{ f['url'] }}">{{ f['page_url'] }}</a></td>
-      <td class="mono">{{ f['started_at'] | ts }}</td>
-      <td class="mono muted">{{ f['source'] }}</td>
-      <td class="error-cell mono" title="{{ f['error'] }}">{{ f['error'] or '-' }}</td>
+      {% if f.kind == 'log' %}
+      <td><a href="/page/{{ f.page_id }}" title="{{ f.url }}">{{ f.page_url }}</a></td>
+      <td class="mono">{{ f.at | ts }}</td>
+      <td class="mono muted">{{ f.source }}</td>
+      <td class="error-cell mono" title="{{ f.error }}">{{ f.error or '-' }}</td>
       <td>
-        {% if needs_human.get(f['page_url']) %}
-        <a class="badge needs-human" href="/archive/jobs/{{ needs_human[f['page_url']] }}/live">{{ _("사람 확인 대기") }}</a>
-        {% elif f['page_url'] in active %}
+        {% if needs_human.get(f.page_url) %}
+        <a class="badge needs-human" href="/archive/jobs/{{ needs_human[f.page_url] }}/live">{{ _("사람 확인 대기") }}</a>
+        {% elif f.page_url in active %}
         <span class="badge running">{{ _("아카이빙 중") }}</span>
         {% elif can_archive %}
-        <form class="inline" method="post" action="/sites/{{ site['id'] }}/failed/{{ f['id'] }}/retry">
+        <form class="inline" method="post" action="{{ f.retry_action }}">
           <button type="submit">{{ _("재시도", ctx="action") }}</button>
         </form>
         {% endif %}
       </td>
-    </tr>
-  {% endfor %}
-  {% for f in failed_crawl_pages %}
-    <tr>
-      <td class="mono" title="{{ f['url'] }}">{{ f['url'] }}</td>
-      <td class="mono">{% if f['failed_at'] %}{{ f['failed_at'] | ts }}{% else %}-{% endif %}</td>
-      <td class="mono muted"><a href="/crawls/{{ f['crawl_id'] }}">crawl</a></td>
-      <td class="error-cell mono" title="{{ f['error'] }}">{{ f['error'] or '-' }}</td>
+      {% else %}
+      <td class="mono" title="{{ f.url }}">{{ f.url }}</td>
+      <td class="mono">{% if f.at %}{{ f.at | ts }}{% else %}-{% endif %}</td>
+      <td class="mono muted"><a href="/crawls/{{ f.crawl_id }}">crawl</a></td>
+      <td class="error-cell mono" title="{{ f.error }}">{{ f.error or '-' }}</td>
       <td>
         {% if can_archive %}
-        <form class="inline" method="post" action="/sites/{{ site['id'] }}/crawl-failed/{{ f['id'] }}/retry">
+        <form class="inline" method="post" action="{{ f.retry_action }}">
           <button type="submit">{{ _("재시도", ctx="action") }}</button>
         </form>
         {% endif %}
       </td>
+      {% endif %}
     </tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+{{ section_pager(failed_pager, site['id'], per_page_choices) }}
 {% endif %}
 
 <h3>{{ _("크롤 회차") }}</h3>
@@ -211,7 +207,7 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
 <div class="table-wrap cards">
 <table id="crawls">
   <thead>
-    <tr><th>{{ _("시작 URL") }}</th><th>{{ _("범위") }}</th><th class="num">{{ _("페이지") }}</th><th>{{ _("시작") }}</th><th>{{ _("상태") }}</th></tr>
+    <tr><th>{{ _("시작 URL") }}</th><th>{{ _("범위") }}</th><th class="num">{{ _("페이지") }}</th><th>{{ _("시작") }}</th><th>{{ _("상태") }}</th><th></th></tr>
   </thead>
   <tbody>
   {% for c in crawls %}
@@ -231,6 +227,14 @@ td.name-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis;
         <span class="badge same">{{ _("취소됨") }}</span>
         {% endif %}
         {% if c['failed_count'] %}<span class="badge error">{{ _("실패") }} {{ c['failed_count'] }}</span>{% endif %}
+      </td>
+      <td>
+        {% if can_archive %}
+        <form class="inline" method="post" action="/sites/{{ site['id'] }}/crawls/{{ c['id'] }}/rerun"
+              onsubmit='return confirm({{ (c['start_url'] ~ '\n\n' ~ _('같은 범위·옵션으로 사이트 전체를 다시 아카이빙합니다. 계속할까요?'))|tojson }})'>
+          <button type="submit" title="{{ _('같은 시작 URL·범위·옵션으로 사이트 아카이브를 다시 실행합니다.') }}">{{ _("다시 아카이빙") }}</button>
+        </form>
+        {% endif %}
       </td>
     </tr>
   {% endfor %}
