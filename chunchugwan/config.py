@@ -105,7 +105,7 @@ DOCUMENT_EXTENSIONS = (
 # 화면)이 우선하며, 값 해석·클램핑은 documents.limits 가 맡는다 (오염 시 기본값).
 DOCUMENT_MAX_COUNT_DEFAULT = 20             # 스냅샷당 문서 수 한도
 DOCUMENT_MAX_COUNT_MIN = 1
-DOCUMENT_MAX_COUNT_MAX = 200
+DOCUMENT_MAX_COUNT_MAX = 10000
 DOCUMENT_MAX_MB_DEFAULT = 50                 # 문서 1개 크기 한도 (MB)
 DOCUMENT_MAX_MB_MIN = 1
 DOCUMENT_MAX_MB_MAX = 1024
@@ -127,8 +127,8 @@ TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")
 # ---- 사이트 전체 아카이브 (crawler.py) ----
 # CRAWL_DEFAULT_* 와 CRAWL_RETRY_BACKOFF_SECONDS 는 시스템 설정(settings 테이블,
 # 대시보드 시스템 화면)으로 오버라이드된다 — crawler.crawl_defaults / retry_backoff 참조.
-CRAWL_DEFAULT_MAX_PAGES = 100
-CRAWL_MAX_PAGES_LIMIT = 2000
+CRAWL_DEFAULT_MAX_PAGES = 500
+CRAWL_MAX_PAGES_LIMIT = 10000
 CRAWL_DEFAULT_MAX_DEPTH = 5
 CRAWL_MAX_DEPTH_LIMIT = 20
 CRAWL_DEFAULT_DELAY_SECONDS = 5      # 페이지 간 최소 간격 (대상 서버 부담 방지)
