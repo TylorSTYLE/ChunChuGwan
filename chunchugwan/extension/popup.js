@@ -7,6 +7,41 @@ const msg = (key, subs) => chrome.i18n.getMessage(key, subs) || key;
 
 let currentUrl = "";
 
+// ---- 호스트 권한 (user gesture 필요) ----
+//
+// chrome.permissions.request 는 사용자 제스처가 살아있는 컨텍스트에서만
+// 동작한다. 팝업의 클릭 제스처는 sendMessage 로 background(service worker)
+// 까지 전파되지 않으므로, 권한 요청은 반드시 여기 팝업에서 직접 한다.
+// 받아두면 background 의 contains() 검사가 프롬프트 없이 통과한다.
+
+function normalizeBaseUrl(raw) {
+  let url = (raw || "").trim();
+  if (!url) return "";
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+  return url.replace(/\/+$/, ""); // 후행 슬래시 제거
+}
+
+function originPattern(url) {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}/*`;
+  } catch (e) {
+    return null;
+  }
+}
+
+// url 오리진에 대한 host 권한 확보. 이미 있으면 프롬프트 없이 통과.
+async function ensureHostPermission(url) {
+  const pattern = originPattern(normalizeBaseUrl(url));
+  if (!pattern) return false;
+  if (await chrome.permissions.contains({ origins: [pattern] })) return true;
+  try {
+    return await chrome.permissions.request({ origins: [pattern] });
+  } catch (e) {
+    return false;
+  }
+}
+
 function applyI18n() {
   for (const el of document.querySelectorAll("[data-i18n]")) {
     el.textContent = msg(el.dataset.i18n);
@@ -106,8 +141,15 @@ async function refreshStatus() {
 
 function initConnect() {
   $("#connect-btn").addEventListener("click", async () => {
+    const baseUrl = $("#base-url").value;
+    // host 권한은 클릭 제스처가 살아있는 지금(팝업) 받아야 한다.
+    // background 에서 요청하면 제스처가 없어 거부된다 (→ err_permission).
+    if (!(await ensureHostPermission(baseUrl))) {
+      showNote("#connect-result", msg("err_permission"), "err");
+      return;
+    }
     const res = await send("connect", {
-      base_url: $("#base-url").value,
+      base_url: baseUrl,
       token: $("#token").value,
     });
     if (res.ok) {
@@ -182,6 +224,11 @@ async function initLogin() {
   const runBtn = $("#auth-run");
   consent.addEventListener("change", () => { runBtn.disabled = !consent.checked; });
   runBtn.addEventListener("click", async () => {
+    // 쿠키 수집에 필요한 host 권한도 제스처가 있는 팝업에서 먼저 받는다.
+    if (!(await ensureHostPermission(currentUrl))) {
+      showNote("#login-result", msg("err_permission"), "err");
+      return;
+    }
     const res = await send("authProfile", { url: currentUrl });
     if (res.ok && res.data) showNote("#login-result", msg("msg_auth_queued"), "");
     else showNote("#login-result", msg(apiError(res)), "err");
