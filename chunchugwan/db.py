@@ -263,7 +263,9 @@ CREATE TABLE IF NOT EXISTS archive_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_archive_logs_page ON archive_logs(page_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_archive_logs_domain ON archive_logs(domain, started_at);
-CREATE INDEX IF NOT EXISTS idx_archive_logs_job ON archive_logs(job_id);
+-- idx_archive_logs_job(job_id) 은 _migrate 가 만든다 — job_id 는 마이그레이션으로
+-- 추가되는 컬럼이라 SCHEMA 단계(executescript)에서 인덱스를 걸면 구형 DB 에서
+-- "no such column: job_id" 로 깨진다 (requested_by 인덱스와 같은 이유로 _migrate 전용).
 
 CREATE TABLE IF NOT EXISTS system_logs (
     id         INTEGER PRIMARY KEY,
