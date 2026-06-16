@@ -59,7 +59,7 @@
           <button type="submit">{{ _("다음 실행 변경") }}</button>
         </form>
         <form class="inline" method="post" action="/page/{{ s['page_id'] }}/schedule/delete"
-              onsubmit="return confirm({{ (s['url'] ~ '\n\n' ~ _('자동 재아카이빙을 해제합니다. 저장된 스냅샷은 그대로 남습니다.'))|tojson }})">
+              onsubmit='return confirm({{ (s['url'] ~ '\n\n' ~ _('자동 재아카이빙을 해제합니다. 저장된 스냅샷은 그대로 남습니다.'))|tojson }})'>
           <input type="hidden" name="next" value="/schedules">
           <button type="submit" class="danger">{{ _("해제") }}</button>
         </form>
@@ -107,7 +107,7 @@
           <button type="submit">{{ _("다음 실행 변경") }}</button>
         </form>
         <form class="inline" method="post" action="/crawl-schedules/{{ s['id'] }}/delete"
-              onsubmit="return confirm({{ (s['start_url'] ~ '\n\n' ~ _('사이트 아카이브 스케줄을 해제합니다. 저장된 스냅샷과 진행 중인 크롤은 그대로 남습니다.'))|tojson }})">
+              onsubmit='return confirm({{ (s['start_url'] ~ '\n\n' ~ _('사이트 아카이브 스케줄을 해제합니다. 저장된 스냅샷과 진행 중인 크롤은 그대로 남습니다.'))|tojson }})'>
           <button type="submit" class="danger">{{ _("해제") }}</button>
         </form>
       </td>

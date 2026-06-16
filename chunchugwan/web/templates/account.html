@@ -97,7 +97,7 @@
       {{ _("탈퇴하면 즉시 로그아웃되고 다시 로그인할 수 없습니다. 계정 정보 삭제(같은 이메일 재가입)는 관리자에게 요청하세요.") }}
     </p>
     <form method="post" action="/settings/account/withdraw"
-          onsubmit="return confirm({{ _('정말 탈퇴할까요? 다시 로그인할 수 없습니다.')|tojson }})">
+          onsubmit='return confirm({{ _('정말 탈퇴할까요? 다시 로그인할 수 없습니다.')|tojson }})'>
       {% if has_password %}
       <label>{{ _("패스워드 확인") }}
         <input type="password" name="password" required

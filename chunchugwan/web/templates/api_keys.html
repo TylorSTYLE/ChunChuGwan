@@ -11,8 +11,8 @@
 {% if new_key %}
 <div class="notice" style="word-break: break-all">
   <strong class="mono" style="font-size:13px">{{ new_key }}</strong>
-  <button type="button" onclick="navigator.clipboard.writeText({{ new_key|tojson }})
-          .then(() => this.textContent = {{ _('복사됨')|tojson }})">{{ _("복사") }}</button>
+  <button type="button" onclick='navigator.clipboard.writeText({{ new_key|tojson }})
+          .then(() => this.textContent = {{ _("복사됨")|tojson }})'>{{ _("복사") }}</button>
 </div>
 {% endif %}
 
@@ -48,7 +48,7 @@
       <td class="mono">{{ k['last_used_at'] | ts if k['last_used_at'] else '-' }}</td>
       <td>
         <form class="inline" method="post" action="/system/api-keys/{{ k['id'] }}/delete"
-              onsubmit="return confirm({{ _('{name} 키를 폐기할까요? 이 키를 쓰는 외부 소프트웨어의 접근이 즉시 차단됩니다.', name=k['name'])|tojson }})">
+              onsubmit='return confirm({{ _('{name} 키를 폐기할까요? 이 키를 쓰는 외부 소프트웨어의 접근이 즉시 차단됩니다.', name=k['name'])|tojson }})'>
           <button type="submit" class="danger">{{ _("폐기") }}</button>
         </form>
       </td>

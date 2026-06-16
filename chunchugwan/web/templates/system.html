@@ -106,7 +106,7 @@ h3.danger-heading { color: var(--red); }
     <div class="actions">
       {% if optimize_pending %}
       <form method="post" action="/system/compact"
-            onsubmit="return confirm({{ _('기존 스냅샷을 압축·인덱스하고 참조 없는 공유 자원을 정리합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')|tojson }})">
+            onsubmit='return confirm({{ _('기존 스냅샷을 압축·인덱스하고 참조 없는 공유 자원을 정리합니다. 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')|tojson }})'>
         <button type="submit">{{ _("최적화 실행") }}</button>
       </form>
       {% else %}
@@ -297,7 +297,7 @@ h3.danger-heading { color: var(--red); }
           <td style="padding:2px 8px 2px 0" class="mono">{{ tag.page_count + tag.crawl_count }}</td>
           <td style="padding:2px 0; text-align:right">
             <form method="post" action="/system/network-tags/{{ tag.id }}/delete"
-                  onsubmit="return confirm({{ _('태그를 삭제할까요? 페이지·크롤이 사용 중이면 삭제되지 않습니다.')|tojson }})">
+                  onsubmit='return confirm({{ _('태그를 삭제할까요? 페이지·크롤이 사용 중이면 삭제되지 않습니다.')|tojson }})'>
               <button type="submit" class="danger" style="font-size:11px; padding:1px 8px">{{ _("삭제") }}</button>
             </form>
           </td>
@@ -321,7 +321,7 @@ h3.danger-heading { color: var(--red); }
       {{ _("같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.") }}
     </p>
     <form method="post" action="/system/network-tags/merge" class="actions"
-          onsubmit="return confirm({{ _('출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 같은 IP·포트를 가리킬 때만 병합됩니다.')|tojson }})">
+          onsubmit='return confirm({{ _('출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 같은 IP·포트를 가리킬 때만 병합됩니다.')|tojson }})'>
       <select name="source" aria-label="{{ _('출처 태그(삭제됨)') }}" style="font-size:11px">
         {% for tag in network_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}
       </select>
@@ -348,8 +348,8 @@ h3.danger-heading { color: var(--red); }
     <h4>{{ _("아카이브 가져오기") }}</h4>
     <form method="post" action="/system/import" enctype="multipart/form-data"
           style="display:flex; flex-direction:column; gap:10px; flex:1"
-          onsubmit="return this.mode.value !== 'overwrite'
-                    || confirm({{ _('overwrite 모드: 기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. 계속할까요?')|tojson }})">
+          onsubmit='return this.mode.value !== "overwrite"
+                    || confirm({{ _('overwrite 모드: 기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. 계속할까요?')|tojson }})'>
       <div style="flex:1">
         <label class="mode">
           <input type="radio" name="mode" value="merge" checked>
@@ -377,7 +377,7 @@ h3.danger-heading { color: var(--red); }
     </p>
     <form method="post" action="/system/restore" enctype="multipart/form-data"
           class="actions"
-          onsubmit="return confirm({{ _('정말 복원할까요? 현재 데이터가 모두 백업 시점으로 교체됩니다.')|tojson }})">
+          onsubmit='return confirm({{ _('정말 복원할까요? 현재 데이터가 모두 백업 시점으로 교체됩니다.')|tojson }})'>
       <input type="file" name="file" accept=".tar.gz,.tgz,application/gzip" required>
       <button type="submit" class="danger">{{ _("복원") }}</button>
     </form>
