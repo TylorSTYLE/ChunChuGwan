@@ -180,6 +180,17 @@ def test_crawl_cancel_and_retry(client):
         assert db.list_crawl_pages(conn, crawl["id"])[0]["status"] == "pending"
 
 
+def test_crawl_detail_rerun_button(client):
+    """회차 상세 — 끝난 크롤에는 '다시 아카이빙' 버튼이 보이고 진행 중에는 없다."""
+    crawl, _ = crawler.start_crawl("https://example.com/docs/", source="web")
+    rerun_action = f"/sites/{crawl['site_id']}/crawls/{crawl['id']}/rerun"
+    # 진행 중에는 안 보인다 (취소·실패 일괄 재시도만)
+    assert rerun_action not in client.get(f"/crawls/{crawl['id']}").text
+    # 취소되어 끝나면 같은 옵션으로 다시 실행하는 버튼이 보인다
+    client.post(f"/crawls/{crawl['id']}/cancel")
+    assert rerun_action in client.get(f"/crawls/{crawl['id']}").text
+
+
 def _add_failed_page(crawl_id: int, url: str) -> int:
     """크롤에 실패(failed) 페이지 한 줄 추가 후 crawl_page id 반환."""
     with db.connect() as conn:

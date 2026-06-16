@@ -149,7 +149,9 @@
   /crawls/{id}/cancel`)·실패 일괄 재시도(`POST /crawls/{id}/retry`)·실패
   페이지 단건 재시도(`POST /crawls/{id}/pages/{crawl_page_id}/retry` —
   실패 행의 버튼, 끝난 크롤이면 다시 열고 ?status 필터를 유지한 채
-  복귀)는 admin/archiver 전용. 링크 리졸버 `GET /crawl/{id}/goto?url=` 은 크롤
+  복귀)는 admin/archiver 전용. 끝난(완료·취소) 크롤이면 도구막대에 "다시
+  아카이빙" — 사이트 상세 회차 목록과 같은 `POST /sites/{id}/crawls/{cid}/rerun`
+  로 같은 옵션의 새 크롤을 만든다(진행 중에는 안 보인다). 링크 리졸버 `GET /crawl/{id}/goto?url=` 은 크롤
   세트의 스냅샷 → 그 URL 의 최신 스냅샷 → 미아카이브 안내(404) 순으로
   처리한다 — 크롤로 저장된 page.html 의 재작성 링크(`target="_top"`)가
   여기로 온다.
