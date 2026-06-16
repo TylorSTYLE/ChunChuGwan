@@ -144,4 +144,5 @@ def test_oidc_disabled_404(client, monkeypatch):
 
 def test_login_page_shows_sso_button(client):
     res = client.get("/login")
+    # 레이블은 "SSO 로그인 →"(ko) / "SSO login →"(en) — 로케일 무관하게 "SSO"
     assert "SSO" in res.text and "/auth/oidc/login" in res.text
