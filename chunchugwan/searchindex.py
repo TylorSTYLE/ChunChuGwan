@@ -20,6 +20,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from . import config, db, doctext, documents, storage
 
@@ -118,40 +119,62 @@ def pending_count() -> int:
         return db.count_unindexed_search_snapshots(conn)
 
 
-def backfill_all() -> int:
+def backfill_all(progress: Callable[[int, int], None] | None = None) -> int:
     """미색인 스냅샷을 전수 색인 (멱등). 색인한 스냅샷 수 반환.
 
-    optimize._backfill_refs 와 같은 패턴 — content.md 가 없거나 추출이
-    실패해도 완료로 표시한다(빈 본문도 색인). 중단 후 재실행 안전.
+    content.md 가 없거나 추출이 실패해도 완료로 표시한다(빈 본문도 색인).
+    중단 후 재실행 안전. progress(done, total) 콜백을 주면 스냅샷마다 호출한다.
+    total 은 시작 시점의 미색인 수라 근사치다 — 재색인 도중 새로 들어온
+    스냅샷은 다음 백필이 잡는다(라이브 색인이 안 되는 가져오기 등).
+
+    스냅샷마다 트랜잭션을 커밋한다 — 전체를 한 트랜잭션으로 묶으면 재색인
+    내내 DB 쓰기 락을 점유해 아카이빙 등 다른 쓰기가 'database is locked'
+    로 막힌다(그리고 무거운 문서 본문 추출이 락 안에서 일어난다). 스냅샷
+    단위로 끊으면 추출은 락 밖(WAL 읽기)에서 일어나고, 짧은 쓰기만 락을
+    잠깐 잡았다 푼다. 처리 직전 스냅샷을 다시 조회해(index_snapshot 과 동일)
+    그 사이 삭제된 스냅샷은 건너뛴다 — 없는 스냅샷에 FTS 행을 만들어 orphan
+    이 생기는 것을 막는다(잔여 경합은 verify/repair 가 정리).
     """
     if not available():
         return 0
+    with db.connect() as conn:
+        targets = db.list_unindexed_search_snapshots(conn)
+    total = len(targets)
+    if progress is not None:
+        progress(0, total)
     done = 0
     with db.connect() as conn:
-        for snap in db.list_unindexed_search_snapshots(conn):
-            try:
-                _index_row(conn, snap)
-            except Exception as e:  # noqa: BLE001 — 한 스냅샷 실패가 전체를 막지 않게
-                logger.warning("스냅샷 %d 검색 색인 실패: %s", snap["id"], e)
-            db.mark_snapshot_search_indexed(conn, snap["id"])
+        for snap in targets:
+            sid = snap["id"]
+            current = db.get_snapshot(conn, sid)
+            if current is not None:  # 처리 전 동시 삭제됐으면 건너뜀(orphan 방지)
+                try:
+                    _index_row(conn, current)
+                except Exception as e:  # noqa: BLE001 — 한 스냅샷 실패가 전체를 막지 않게
+                    logger.warning("스냅샷 %d 검색 색인 실패: %s", sid, e)
+                db.mark_snapshot_search_indexed(conn, sid)
+                conn.commit()  # 스냅샷마다 커밋 — 쓰기 락을 오래 점유하지 않게
             done += 1
+            if progress is not None:
+                progress(done, total)
     if done:
         logger.info("검색 인덱스 백필: 스냅샷 %d개", done)
     return done
 
 
-def reindex_all() -> int:
+def reindex_all(progress: Callable[[int, int], None] | None = None) -> int:
     """인덱스를 비우고 전체 스냅샷을 다시 색인 (정규화 규칙 변경·정합성 교정 등).
 
     FTS 행을 통째로 지우고 모든 스냅샷을 미색인으로 되돌린 뒤 백필하므로,
     과소 색인·orphan·stale 을 한 번에 모두 바로잡는 완전 교정 수단이다.
+    progress(done, total) 콜백은 백필 단계(느린 부분)에 전달된다.
     """
     if not available():
         return 0
     with db.connect() as conn:
         db.clear_search_index(conn)
         db.reset_search_indexed(conn)
-    return backfill_all()
+    return backfill_all(progress=progress)
 
 
 # ---- 정합성 점검 / 교정 ----

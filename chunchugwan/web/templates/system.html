@@ -41,6 +41,10 @@
 .sys-card.danger-card { border-color: var(--red); }
 .sys-card.danger-card h4 { color: var(--red); }
 h3.danger-heading { color: var(--red); }
+.reindex-progress { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
+.reindex-progress[hidden] { display: none; }
+.reindex-progress progress { flex: 1; height: 12px; }
+.reindex-progress span { font-size: 12px; white-space: nowrap; }
 </style>
 {% endblock %}
 {% block content %}
@@ -118,7 +122,8 @@ h3.danger-heading { color: var(--red); }
 
   <div class="sys-card">
     <h4>{{ _("검색 인덱스") }}
-      {% if not search.available %}<span class="badge same">{{ _("비활성") }}</span>
+      {% if search_reindex.running %}<span class="badge running" id="reindex-badge">{{ _("재색인 중") }}</span>
+      {% elif not search.available %}<span class="badge same">{{ _("비활성") }}</span>
       {% elif not search.consistent %}<span class="badge changed">{{ _("불일치 {n}개", n=search.missing + search.orphan) }}</span>
       {% elif search.pending %}<span class="badge changed">{{ _("미색인 {n}개", n=search.pending) }}</span>
       {% else %}<span class="badge same">{{ _("정상") }}</span>{% endif %}
@@ -131,11 +136,18 @@ h3.danger-heading { color: var(--red); }
       {{ _("색인됨") }} {{ search.indexed }} · {{ _("미색인") }} {{ search.pending }} · {{ _("FTS 행") }} {{ search.fts_rows }}{% if not search.consistent %} · {{ _("과소 색인") }} {{ search.missing }} · orphan {{ search.orphan }}{% endif %}
     </p>
     {% endif %}
+    {% if search_reindex.error and not search_reindex.running %}
+    <p class="error" style="font-size:12px">{{ _("마지막 전체 다시 색인이 실패했습니다 — 시스템 로그를 확인하세요.") }}</p>
+    {% endif %}
+    <div id="reindex-progress" class="reindex-progress"{% if not search_reindex.running %} hidden{% endif %}>
+      <progress id="reindex-bar"{% if search_reindex.total %} max="{{ search_reindex.total }}" value="{{ search_reindex.done }}"{% endif %}></progress>
+      <span class="mono muted" id="reindex-text">{{ search_reindex.done }} / {{ search_reindex.total }}</span>
+    </div>
     <div class="actions">
       {% if search.available %}
       <form method="post" action="/system/search/reindex"
             onsubmit='return confirm({{ _('검색 인덱스를 비우고 전체 스냅샷을 다시 색인합니다(첨부 문서 본문 포함). 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')|tojson }})'>
-        <button type="submit">{{ _("전체 다시 색인") }}</button>
+        <button type="submit" id="reindex-btn"{% if search_reindex.running %} disabled{% endif %}>{{ _("전체 다시 색인") }}</button>
       </form>
       {% else %}
       <button type="button" disabled>{{ _("전체 다시 색인") }}</button>
@@ -488,4 +500,28 @@ h3.danger-heading { color: var(--red); }
     </form>
   </div>
 </div>
+
+<script>
+// 전체 다시 색인 진행률 폴링 — running 이면 status 를 주기적으로 읽어 막대·
+// 카운트를 갱신하고, 끝나면 새로고침해 정합성 카운트와 결과를 반영한다.
+(function () {
+  if (!{{ 'true' if search_reindex.running else 'false' }}) return;
+  const box = document.getElementById('reindex-progress');
+  const bar = document.getElementById('reindex-bar');
+  const text = document.getElementById('reindex-text');
+  if (!box) return;
+  const poll = setInterval(async () => {
+    if (document.hidden) return;
+    try {
+      const res = await fetch('/system/search/reindex/status');
+      if (!res.ok) return;
+      const s = await res.json();
+      if (s.total) { bar.max = s.total; bar.value = s.done; }
+      else { bar.removeAttribute('value'); }  // total 미정 — 불확정 막대
+      text.textContent = s.done + ' / ' + s.total;
+      if (!s.running) { clearInterval(poll); location.reload(); }
+    } catch (e) { /* 일시 오류 — 다음 폴링에서 재시도 */ }
+  }, 1500);
+})();
+</script>
 {% endblock %}

@@ -1123,6 +1123,12 @@ _EN: dict[str, str] = {
     "FTS 행": "FTS rows",
     "과소 색인": "Under-indexed",
     "전체 다시 색인": "Reindex all",
+    "재색인 중": "Reindexing",
+    "이미 전체 다시 색인이 진행 중입니다.": "A full reindex is already in progress.",
+    "검색 인덱스 전체 다시 색인을 시작했습니다 — 아래에 진행 상황이 표시됩니다.":
+        "Started a full reindex of the search index — progress is shown below.",
+    "마지막 전체 다시 색인이 실패했습니다 — 시스템 로그를 확인하세요.":
+        "The last full reindex failed — check the system logs.",
     "아카이브 본문과 첨부 문서 본문의 전문 검색 인덱스(FTS5)입니다. 새 스냅샷은 저장 시 자동 색인됩니다. 가져오기·구형 스냅샷, compact 로 첨부 문서가 새로 생긴 스냅샷은 다시 색인이 필요할 수 있습니다. 아래 버튼은 인덱스를 비우고 전체 스냅샷을 다시 색인합니다(첨부 문서 본문 포함) — 스냅샷이 많으면 시간이 걸릴 수 있습니다.":
         "Full-text search index (FTS5) over archived page text and attached "
         "document bodies. New snapshots are indexed automatically on save. "
