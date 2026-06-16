@@ -1041,6 +1041,16 @@ _EN: dict[str, str] = {
     "실패 기록 없음": "Failed run not found",
     "재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.":
         "Retry queued — the crawler will try again shortly.",
+    "모두 재시도": "Retry all",
+    "실패한 작업을 모두 재시도할까요?": "Retry all failed runs?",
+    "실패한 작업을 모두 재시도합니다 — 백그라운드에서 진행됩니다.":
+        "Retrying all failed runs — this proceeds in the background.",
+    "재시도할 실패 작업이 없습니다.": "No failed runs to retry.",
+    "다시 아카이빙": "Re-archive",
+    "같은 범위·옵션으로 사이트 전체를 다시 아카이빙합니다. 계속할까요?":
+        "Re-archive the entire site with the same scope and options. Continue?",
+    "같은 시작 URL·범위·옵션으로 사이트 아카이브를 다시 실행합니다.":
+        "Re-run the site archive with the same start URL, scope, and options.",
     "사이트 내보내기": "Export site",
     "소속 페이지·스냅샷을 아카이브 내보내기 파일(tar.gz)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.":
         "Download this site's pages and snapshots as an archive export file "

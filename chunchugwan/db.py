@@ -8,7 +8,7 @@ import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Iterator
+from typing import Iterator, Sequence
 
 from . import config, storage
 
@@ -1817,6 +1817,23 @@ def list_site_document_groups(
     ).fetchall()
 
 
+def count_site_document_groups(conn: sqlite3.Connection, site_id: int) -> int:
+    """사이트 소속 스냅샷이 참조하는 고유 문서(sha256) 수 — 사이트 상세 문서 페이징용."""
+    return conn.execute(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT d2.sha256
+            FROM snapshot_documents d2
+            JOIN snapshots s2 ON s2.id = d2.snapshot_id
+            JOIN pages p2 ON p2.id = s2.page_id
+            WHERE p2.site_id = ?
+            GROUP BY d2.sha256
+        )
+        """,
+        (site_id,),
+    ).fetchone()[0]
+
+
 def document_totals(conn: sqlite3.Connection) -> sqlite3.Row:
     """문서 목록 화면 요약 — 고유 문서 수(groups)·저장 용량(unique_bytes)·
     중복 제거로 절약된 용량(saved_bytes = 참조 수 - 1 만큼의 중복분)."""
@@ -2479,6 +2496,41 @@ def retry_failed_crawl_pages(conn: sqlite3.Connection, crawl_id: int) -> int:
         )
         """,
         (_utcnow(), crawl_id, crawl_id),
+    )
+    return cur.rowcount
+
+
+def retry_failed_crawl_pages_by_ids(
+    conn: sqlite3.Connection, ids: Sequence[int]
+) -> int:
+    """주어진 failed 크롤 페이지들을 일괄 재시도 대상으로 되돌리고, 끝난 크롤을
+    다시 연다 (사이트 상세 '모두 재시도'용). 반환은 되돌린 페이지 수.
+
+    여러 크롤에 흩어진 페이지를 한 번에 처리한다 — retry_failed_crawl_pages
+    의 페이지-id 버전. 영향받은 크롤 중 끝난(done/cancelled) 것만 다시 연다.
+    """
+    if not ids:
+        return 0
+    placeholders = ",".join("?" * len(ids))
+    cur = conn.execute(
+        f"""
+        UPDATE crawl_pages
+        SET status = 'pending', attempts = 0, next_attempt_at = NULL, error = NULL
+        WHERE status = 'failed' AND id IN ({placeholders})
+        """,
+        tuple(ids),
+    )
+    conn.execute(
+        f"""
+        UPDATE crawls SET status = 'running', finished_at = NULL, next_page_at = ?
+        WHERE status IN ('done', 'cancelled')
+          AND id IN (SELECT DISTINCT crawl_id FROM crawl_pages WHERE id IN ({placeholders}))
+          AND EXISTS (
+              SELECT 1 FROM crawl_pages cp
+              WHERE cp.crawl_id = crawls.id AND cp.status IN ('pending', 'in_progress')
+          )
+        """,
+        (_utcnow(), *ids),
     )
     return cur.rowcount
 
