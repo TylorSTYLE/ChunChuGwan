@@ -511,6 +511,22 @@ def test_root_serves_dashboard(client):
     assert 'href="/archives"' in res.text  # 헤더 메뉴의 목록 링크
 
 
+def test_dashboard_has_search_hero(client):
+    """현황 상단에 구글 느낌의 검색 박스 — 제출하면 별도 결과 화면(/search)으로 간다.
+
+    검색 폼은 GET·action=/search·name=q 라 새 페이지에서 결과를 보여준다.
+    현황 본문은 그 아래에 그대로 유지된다.
+    """
+    html = client.get("/").text
+    assert 'class="search-hero"' in html
+    assert 'action="/search"' in html        # 결과는 별도 검색 화면에서
+    assert 'method="get"' in html
+    assert 'name="q"' in html
+    assert "아카이브 본문·문서에서 검색…" in html  # placeholder
+    # 검색 박스가 현황 통계보다 위에 온다 (상단 검색 + 하단 현황)
+    assert html.index('class="search-hero"') < html.index('class="stat-grid"')
+
+
 def test_timeline(client):
     res = client.get("/page/1")
     assert res.status_code == 200
