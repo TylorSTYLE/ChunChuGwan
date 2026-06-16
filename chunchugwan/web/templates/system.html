@@ -117,6 +117,34 @@ h3.danger-heading { color: var(--red); }
   </div>
 
   <div class="sys-card">
+    <h4>{{ _("검색 인덱스") }}
+      {% if not search.available %}<span class="badge same">{{ _("비활성") }}</span>
+      {% elif not search.consistent %}<span class="badge changed">{{ _("불일치 {n}개", n=search.missing + search.orphan) }}</span>
+      {% elif search.pending %}<span class="badge changed">{{ _("미색인 {n}개", n=search.pending) }}</span>
+      {% else %}<span class="badge same">{{ _("정상") }}</span>{% endif %}
+    </h4>
+    <p>
+      {{ _("아카이브 본문과 첨부 문서 본문의 전문 검색 인덱스(FTS5)입니다. 새 스냅샷은 저장 시 자동 색인됩니다. 가져오기·구형 스냅샷, compact 로 첨부 문서가 새로 생긴 스냅샷은 다시 색인이 필요할 수 있습니다. 아래 버튼은 인덱스를 비우고 전체 스냅샷을 다시 색인합니다(첨부 문서 본문 포함) — 스냅샷이 많으면 시간이 걸릴 수 있습니다.") }}
+    </p>
+    {% if search.available %}
+    <p class="muted mono" style="font-size:12px">
+      {{ _("색인됨") }} {{ search.indexed }} · {{ _("미색인") }} {{ search.pending }} · {{ _("FTS 행") }} {{ search.fts_rows }}{% if not search.consistent %} · {{ _("과소 색인") }} {{ search.missing }} · orphan {{ search.orphan }}{% endif %}
+    </p>
+    {% endif %}
+    <div class="actions">
+      {% if search.available %}
+      <form method="post" action="/system/search/reindex"
+            onsubmit='return confirm({{ _('검색 인덱스를 비우고 전체 스냅샷을 다시 색인합니다(첨부 문서 본문 포함). 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?')|tojson }})'>
+        <button type="submit">{{ _("전체 다시 색인") }}</button>
+      </form>
+      {% else %}
+      <button type="button" disabled>{{ _("전체 다시 색인") }}</button>
+      <span class="muted" style="font-size:12px">{{ _("이 환경의 SQLite 빌드에 FTS5 가 없어 검색을 쓸 수 없습니다. 기존 아카이빙은 영향받지 않습니다.") }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="sys-card">
     <h4>{{ _("전체 백업") }}</h4>
     <p>
       {{ _("DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.") }}

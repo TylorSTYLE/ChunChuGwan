@@ -559,6 +559,11 @@ def _compact_snapshot_documents(
         })
     if manifest:
         db.insert_snapshot_documents(conn, snapshot_id, manifest)
+        # 첨부 문서가 새로 생겼으므로 검색 인덱스를 다시 만들어야 한다 —
+        # 이 스냅샷이 이미 색인됐다면 문서 본문이 빠진 상태이기 때문이다.
+        # 다시 색인 필요로 표시만 하고(코어 경유), 실제 색인은 'wccg search
+        # reindex'/시스템 메뉴 버튼이 백필한다 (compact ↔ 인덱스 정합).
+        db.mark_snapshot_search_stale(conn, snapshot_id)
     try:
         (snap_dir / "files").rmdir()
     except OSError:

@@ -41,7 +41,15 @@ uv run wccg search 키워드 --limit 50        # 결과 수 (기본 20)
 uv run wccg search status                   # 인덱스 상태 / 미색인 스냅샷 수
 uv run wccg search reindex                  # 미색인 스냅샷 백필
 uv run wccg search reindex --all            # 전체 재색인 (인덱스 비우고 다시)
+uv run wccg search verify                   # 정합성 점검 (과소 색인·orphan 감지)
+uv run wccg search verify --repair          # 발견한 불일치 교정
 ```
+
+`status` 는 정상적인 미색인(pending) 수만 보여준다. `verify` 는 한 걸음 더
+나아가 **플래그와 실제 FTS 행의 불일치** — *과소 색인*(색인됨으로 표시됐지만
+FTS 행이 없음)과 *orphan*(스냅샷이 없는 FTS 행) — 을 잡는다. 이 부류는
+pending 카운트만으로는 보이지 않는다. `--repair` 는 orphan 을 지우고 과소
+색인 스냅샷을 다시 색인한다 (전체를 비우는 `reindex --all` 보다 가볍다).
 
 ## 대시보드
 
@@ -52,6 +60,12 @@ uv run wccg search reindex --all            # 전체 재색인 (인덱스 비우
 > 전문 검색은 사실상 모든 아카이브 본문을 열람하는 강한 권한이라 **보기 전용
 > (viewer) 이상**만 쓸 수 있다. 인증이 꺼진 loopback 환경에서는 누구나 가능.
 
+**시스템 메뉴**(`/system`, 관리자 전용)의 **검색 인덱스** 카드는 인덱스
+상태(색인됨·미색인·과소 색인·orphan)를 보여주고, **전체 다시 색인** 버튼으로
+인덱스를 비우고 전체 스냅샷을 다시 색인한다 (`wccg search reindex --all` 과
+동일 — 과소 색인·orphan·stale 을 한 번에 교정). 동기 실행이라 스냅샷이 많으면
+시간이 걸릴 수 있다.
+
 ## 색인은 언제 만들어지나
 
 - **새 스냅샷**은 저장 시점에 자동으로 색인된다 (아카이빙 파이프라인이 같은
@@ -61,7 +75,26 @@ uv run wccg search reindex --all            # 전체 재색인 (인덱스 비우
   않는다. **`wccg search reindex`** 를 한 번 돌리면 일괄 색인된다
   (`wccg compact` 와 같은 멱등 백필 패턴).
 - 스냅샷을 삭제하면 인덱스에서도 함께 제거된다. `compact` 는 본문(content.md)을
-  바꾸지 않으므로 재색인이 필요 없다.
+  바꾸지 않으므로 페이지 본문은 재색인이 필요 없다 — 다만 `compact` 가 구형
+  스냅샷의 `files/` 문서를 문서 CAS 로 이전하면(첨부 문서가 새로 인식됨) 그
+  스냅샷을 자동으로 "다시 색인 필요"(`search_indexed=0`)로 표시한다. 이후
+  `search reindex`(또는 시스템 메뉴의 전체 다시 색인)가 그 문서 본문까지
+  색인한다. `compact` 뒤에 `search status` 에 미색인 수가 보이면 이 때문이다.
+
+## 정합성
+
+검색 인덱스(`search_indexed` 플래그 + `snapshot_fts` 행)와 아카이브 데이터의
+정합성은 다음으로 유지된다:
+
+- **삭제**는 `db.delete_snapshot`/`delete_page` 한 곳을 거치며 FTS 행도 함께
+  지운다 (단일/페이지/사이트 삭제·overwrite 가져오기 모두 커버). → orphan 미발생.
+- **본문 불변** — `content.md` 는 생성 시 1회 기록 후 바뀌지 않는다(원칙 2).
+  → 페이지 본문 색인은 stale 되지 않는다.
+- **첨부 문서 변동**은 `compact` 의 self-heal(위)로 다시 색인 대상이 된다.
+
+정상 경로 밖(외부 DB 조작·파일 손상·백필 실패)으로 어긋날 수 있는 두 부류는
+`wccg search verify` 로 감지하고 `--repair` 또는 **전체 다시 색인**으로 교정한다:
+*과소 색인*(플래그=1·FTS 행 없음)과 *orphan*(FTS 행·스냅샷 없음).
 
 ## 동작하지 않을 때
 

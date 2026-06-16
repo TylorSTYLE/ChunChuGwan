@@ -744,6 +744,35 @@ def search_status() -> None:
         click.echo("검색 인덱스: 활성 · 모든 스냅샷 색인됨")
 
 
+@search.command("verify")
+@click.option("--repair", is_flag=True, help="발견한 불일치를 교정 (orphan 삭제 + 누락 재색인)")
+def search_verify(repair: bool) -> None:
+    """검색 인덱스 정합성 점검 — 플래그와 실제 FTS 행의 불일치를 찾는다.
+
+    과소 색인(색인됨으로 표시됐지만 FTS 행 없음)·orphan(스냅샷 없는 FTS 행)을
+    보고한다 — 미색인 카운트만으로는 못 잡는 부류다. --repair 로 교정한다.
+    """
+    if not searchindex.available():
+        click.echo("검색 인덱스: 비활성 (이 SQLite 빌드에 FTS5 없음)")
+        return
+    report = searchindex.verify()
+    click.echo(
+        f"색인됨 {report.indexed} · 미색인(pending) {report.pending} · "
+        f"FTS 행 {report.fts_rows}"
+    )
+    click.echo(f"과소 색인 {report.missing} · orphan {report.orphan}")
+    if report.consistent:
+        click.echo("정합성 정상 — 플래그와 FTS 행이 일치합니다.")
+    elif not repair:
+        click.echo("불일치 발견 — 'wccg search verify --repair' 로 교정하세요.")
+    if repair:
+        result = searchindex.repair()
+        click.echo(
+            f"교정 완료 — orphan {result.orphans_removed}개 삭제 · "
+            f"재색인 {result.reindexed}개"
+        )
+
+
 def _counts_label(manifest: dict) -> str:
     """manifest 의 counts 를 확인 메시지용 한 줄로."""
     c = manifest.get("counts", {})

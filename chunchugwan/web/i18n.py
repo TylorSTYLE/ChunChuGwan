@@ -1108,6 +1108,31 @@ _EN: dict[str, str] = {
     "일치하는 결과가 없습니다.": "No matching results.",
     "짧은 검색어라 부분일치로 찾았습니다.": "Short query — matched by substring.",
     "검색 권한이 없습니다": "You do not have permission to search",
+    # ---- 검색 인덱스 (시스템 메뉴 카드 / 정합성) ----
+    "검색 인덱스": "Search index",
+    "비활성": "Disabled",
+    "정상": "OK",
+    "불일치 {n}개": "{n} inconsistent",
+    "미색인 {n}개": "{n} unindexed",
+    "색인됨": "Indexed",
+    "미색인": "Unindexed",
+    "FTS 행": "FTS rows",
+    "과소 색인": "Under-indexed",
+    "전체 다시 색인": "Reindex all",
+    "아카이브 본문과 첨부 문서 본문의 전문 검색 인덱스(FTS5)입니다. 새 스냅샷은 저장 시 자동 색인됩니다. 가져오기·구형 스냅샷, compact 로 첨부 문서가 새로 생긴 스냅샷은 다시 색인이 필요할 수 있습니다. 아래 버튼은 인덱스를 비우고 전체 스냅샷을 다시 색인합니다(첨부 문서 본문 포함) — 스냅샷이 많으면 시간이 걸릴 수 있습니다.":
+        "Full-text search index (FTS5) over archived page text and attached "
+        "document bodies. New snapshots are indexed automatically on save. "
+        "Imported and legacy snapshots, and snapshots whose attached documents "
+        "were newly migrated by compact, may need re-indexing. The button below "
+        "clears the index and re-indexes every snapshot (including document "
+        "bodies) — this can take a while with many snapshots.",
+    "검색 인덱스를 비우고 전체 스냅샷을 다시 색인합니다(첨부 문서 본문 포함). 스냅샷이 많으면 시간이 걸릴 수 있습니다. 계속할까요?":
+        "Clear the search index and re-index every snapshot (including document "
+        "bodies)? This can take a while with many snapshots.",
+    "검색 인덱스를 쓸 수 없습니다 — 이 SQLite 빌드에 FTS5 가 없습니다.":
+        "Search index is unavailable — this SQLite build lacks FTS5.",
+    "검색 인덱스 전체 다시 색인 완료 — 스냅샷 {n}개":
+        "Search index rebuilt — {n} snapshot(s)",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다
