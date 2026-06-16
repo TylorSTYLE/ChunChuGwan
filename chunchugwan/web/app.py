@@ -2091,7 +2091,7 @@ def _archive_site(
             "delay_seconds": int(delay) if delay else None,
         }
         crawl, merged = crawler.start_crawl(
-            url, **options, source="web",
+            url, **options, source="web", requested_by=_requester_id(request),
             network_tag_id=network_tag_id, credential_id=credential_id,
         )
         if interval_seconds:

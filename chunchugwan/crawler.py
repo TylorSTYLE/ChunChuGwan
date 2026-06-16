@@ -205,6 +205,7 @@ def start_crawl(
     max_depth: int | None = None,
     delay_seconds: int | None = None,
     source: str = "web",
+    requested_by: int | None = None,
     network_tag_id: str | None = None,
     credential_id: int | None = None,
 ) -> tuple[sqlite3.Row, bool]:
@@ -242,7 +243,7 @@ def start_crawl(
             conn,
             start_url=norm, scope_host=scope_host, scope_path=scope_path,
             max_pages=max_pages, max_depth=max_depth,
-            delay_seconds=delay_seconds, source=source,
+            delay_seconds=delay_seconds, source=source, requested_by=requested_by,
             network_tag_id=network_tag_id, credential_id=credential_id,
         )
         db.insert_crawl_page(conn, crawl_id, norm, 0)

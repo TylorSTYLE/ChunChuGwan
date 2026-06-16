@@ -1,7 +1,7 @@
 """단발 아카이빙 작업 큐 + 소비자 테스트 (archive_worker.py / db.py). 캡처 없이 모킹."""
 import pytest
 
-from chunchugwan import archive_worker, config, crawler, db, live_challenge, storage
+from chunchugwan import archive_worker, config, crawler, db, live_challenge, pipeline, storage
 from chunchugwan.pipeline import ArchiveOutcome
 
 URL = "https://example.com/post"
@@ -190,3 +190,31 @@ def test_process_next_injects_live_session_when_enabled(archive_env, monkeypatch
         db.enqueue_archive_job(conn, URL, source="web")
     archive_worker.process_next(archive_fn=fake)
     assert isinstance(seen["live_session"], live_challenge.LiveChallengeSession)
+
+
+# ---- 결과 알림 상관 키 (job_id) ----
+
+def test_process_next_passes_job_id_to_pipeline(archive_env):
+    """worker 가 클레임한 작업 id 를 파이프라인으로 넘긴다 (로그까지 이어지는 상관 키)."""
+    seen = {}
+
+    def fake(url, force=False, source="web", **kw):
+        seen["job_id"] = kw.get("job_id")
+        return _outcome("new")
+
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, URL, source="api")
+        job_id = db.get_active_archive_job_id(conn, URL)
+    archive_worker.process_next(archive_fn=fake)
+    assert seen["job_id"] == job_id
+
+
+def test_archive_url_writes_job_id_to_log_on_failure(archive_env):
+    """실패 로그(_log_failure)에도 job_id 가 남아 확장이 결과를 되찾을 수 있다."""
+    with pytest.raises(ValueError):
+        pipeline.archive_url("ftp://example.com", source="api", job_id=777)
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT job_id, status FROM archive_logs ORDER BY id DESC"
+        ).fetchone()
+    assert row is not None and row["status"] == "error" and row["job_id"] == 777

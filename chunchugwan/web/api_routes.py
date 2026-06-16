@@ -247,6 +247,7 @@ def api_archive(request: Request, payload: ArchiveRequest):
     """아카이빙 트리거 — 검증은 동기, 캡처는 worker 가 큐를 소비해 실행 (웹 UI 와 동일 경로).
 
     같은 URL 이 이미 큐에 있으면 중복 등록하지 않고 queued=false 로 응답한다.
+    응답의 job_id 로 확장이 GET /api/v1/archive/status 에서 결과(완료/실패)를 추적한다.
     """
     _require_archive(request)
     try:
@@ -254,19 +255,21 @@ def api_archive(request: Request, payload: ArchiveRequest):
     except ValueError as e:
         raise HTTPException(400, f"잘못된 URL: {e}")
     tag_id = _resolve_network_tag(norm, payload.network_tag)
-    from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
-
     # 사용자 귀속 확장 토큰이면 그 소유자를 요청자로 기록 → '내 아카이브'에 귀속.
     # 시스템 키(owner=NULL)·인증 off 면 None (주체 없음).
     key = request.state.api_key
     owner_id = key["owner_user_id"] if key is not None else None
-    queued = webapp._queue_archive(
-        norm, force=payload.force, source="api", requested_by=owner_id,
-        network_tag_id=tag_id,
-    )
+    # 큐잉과 활성 작업 id 되읽기를 한 트랜잭션에서 — 그 사이 worker 가 끝내 버리는
+    # 레이스 없이 확장이 추적할 job_id 를 확보한다 (queued=false 인 중복 시에도 기존 작업 id).
+    with db.connect() as conn:
+        queued = db.enqueue_archive_job(
+            conn, norm, force=payload.force, source="api", requested_by=owner_id,
+            network_tag_id=tag_id,
+        )
+        job_id = db.get_active_archive_job_id(conn, norm)
     if queued:
         audit.log(request, "새 아카이빙 등록(API): %s", norm)
-    return {"queued": queued, "url": norm}
+    return {"queued": queued, "url": norm, "job_id": job_id}
 
 
 class CrawlRequest(BaseModel):
@@ -278,6 +281,7 @@ class CrawlRequest(BaseModel):
     delay: int | None = None
     network_tag: str | None = None  # 사설 대역 GUID (공인 주소면 무시)
     storage_state: dict | None = None  # 확장의 로그인 세션 — 있으면 인증 크롤(쿠키만)
+    jwt: str | None = None             # 확장이 감지한 Bearer 토큰(JWT) — 있으면 jwt 인증 크롤
 
 
 @router.post("/crawl", status_code=202)
@@ -285,9 +289,9 @@ def api_crawl(request: Request, payload: CrawlRequest):
     """사이트 전체 아카이브(크롤) 트리거 — 큐 등록만 동기, 실행은 워커가 소비.
 
     같은 시작 URL 의 크롤이 진행 중이면 그 크롤로 병합(merged=true)한다.
-    storage_state 가 실리면 확장의 로그인 세션으로 1회성 session 자격증명을
+    storage_state(세션 쿠키) 또는 jwt(Bearer 토큰)가 실리면 1회성 자격증명을
     만들어 crawls.credential_id 에 실어 크롤 전 페이지를 인증 상태로 캡처한다
-    (auth-profiles 와 같은 공통 가드 — https·사용자 토큰·대상 호스트 스코프).
+    (auth-profiles 와 같은 공통 가드 — https·사용자 토큰, 세션은 대상 호스트 스코프).
     """
     _require_archive(request)
     try:
@@ -295,15 +299,20 @@ def api_crawl(request: Request, payload: CrawlRequest):
     except ValueError as e:
         raise HTTPException(400, f"잘못된 URL: {e}")
     tag_id = _resolve_network_tag(norm, payload.network_tag)
+    # 확장 토큰 소유자를 크롤 요청자로 기록 → 확장이 크롤 완료 알림을 받을 수 있게.
+    key = request.state.api_key
+    owner_id = key["owner_user_id"] if key is not None else None
     cred_id = None
-    if payload.storage_state is not None:
-        cred_id, _owner = _ephemeral_session_credential(request, norm, payload.storage_state)
+    if payload.jwt is not None or payload.storage_state is not None:
+        cred_id, _owner = _ephemeral_credential(
+            request, norm, storage_state=payload.storage_state, jwt=payload.jwt
+        )
     try:
         crawl, merged = crawler.start_crawl(
             payload.url,
             max_pages=payload.max_pages, max_depth=payload.max_depth,
-            delay_seconds=payload.delay, source="api", network_tag_id=tag_id,
-            credential_id=cred_id,
+            delay_seconds=payload.delay, source="api", requested_by=owner_id,
+            network_tag_id=tag_id, credential_id=cred_id,
         )
     except ValueError as e:
         if cred_id is not None:  # 쓰지 못한 1회성 자격증명 폐기
@@ -326,10 +335,12 @@ def api_crawl(request: Request, payload: CrawlRequest):
 
 
 class AuthProfileRequest(BaseModel):
-    """POST /api/v1/auth-profiles — 확장이 보낸 로그인 세션으로 1회성 인증 캡처."""
+    """POST /api/v1/auth-profiles — 확장이 보낸 로그인 정보로 1회성 인증 캡처."""
 
     url: str
-    storage_state: dict          # Playwright storage_state — 쿠키만 (ID/PW 필드 없음)
+    # 확장이 감지한 로그인 정보 — 둘 중 하나 (jwt 우선, 없으면 storage_state 쿠키)
+    storage_state: dict | None = None  # Playwright storage_state — 쿠키만 (ID/PW 필드 없음)
+    jwt: str | None = None             # Bearer 토큰(JWT) — localStorage/sessionStorage 에서 감지
     force: bool = False
     network_tag: str | None = None
 
@@ -355,15 +366,18 @@ def _scope_cookies(storage_state: dict, scope_host: str) -> dict:
     return {"cookies": kept, "origins": []}
 
 
-def _ephemeral_session_credential(
-    request: Request, norm: str, storage_state: dict
+def _ephemeral_credential(
+    request: Request, norm: str, *,
+    storage_state: dict | None = None, jwt: str | None = None,
 ) -> tuple[int, int | None]:
-    """확장의 로그인 세션 쿠키로 1회성 session 자격증명을 만들어 (cred_id, owner_id) 반환.
+    """확장의 로그인 정보(세션 쿠키 또는 JWT)로 1회성 자격증명을 만들어 (cred_id, owner_id) 반환.
 
     인증 캡처의 공통 가드 — WCCG_SECRET_KEY 필수(503), 사용자 확장 토큰만(403),
-    https 대상만(400), 대상 호스트 스코프 쿠키만. auth-profiles(단일 페이지)와
-    crawl(사이트 전체)이 공유한다. 자격증명은 1회성(expires_at 설정)이라 소비자가
-    캡처 후 폐기하고, 누락분은 만료 GC(설정 가능, 기본 24h)가 정리한다.
+    https 대상만(400). jwt 가 있으면 kind=jwt(캡처가 대상 origin 에 Authorization:
+    Bearer 주입), 없으면 storage_state 로 kind=session(대상 호스트 스코프 쿠키만).
+    둘 다 없으면 400. auth-profiles(단일 페이지)와 crawl(사이트 전체)이 공유한다.
+    자격증명은 1회성(expires_at)이라 소비자가 캡처 후 폐기하고, 누락분은 만료 GC
+    (설정 가능, 기본 24h)가 정리한다. 비밀은 crypto 로 암호화 저장(원칙 6 예외).
     """
     if not crypto.is_configured():
         raise HTTPException(
@@ -376,13 +390,19 @@ def _ephemeral_session_credential(
         raise HTTPException(403, "인증 캡처는 사용자 확장 토큰으로만 가능합니다")
     if not norm.startswith("https://"):
         raise HTTPException(400, "인증 캡처는 https 대상만 허용합니다")
-    scope_host = urlsplit(norm).hostname or ""
-    scoped = _scope_cookies(storage_state, scope_host)
+    # 확장이 판단한 종류 — JWT 가 있으면 jwt, 없으면 세션 쿠키 (둘 다 없으면 거부)
+    if jwt is not None:
+        kind, form = credentials.KIND_JWT, {"token": jwt}
+    elif storage_state is not None:
+        scope_host = urlsplit(norm).hostname or ""
+        kind = credentials.KIND_SESSION
+        form = {"storage_state": json.dumps(
+            _scope_cookies(storage_state, scope_host), ensure_ascii=False
+        )}
+    else:
+        raise HTTPException(400, "로그인 정보(세션 쿠키 또는 JWT)가 없습니다")
     try:
-        cred_payload = credentials.build_payload(
-            credentials.KIND_SESSION,
-            {"storage_state": json.dumps(scoped, ensure_ascii=False)},
-        )
+        cred_payload = credentials.build_payload(kind, form)
     except credentials.CredentialError as e:
         raise HTTPException(400, str(e))
     label = f"ext:{owner_id}:{secrets.token_hex(4)}"
@@ -390,7 +410,7 @@ def _ephemeral_session_credential(
         site_id = db.get_or_create_site(conn, storage.site_key(norm))
         ttl_seconds = db.ext_credential_ttl_hours(conn) * 3600
         cred_id = credentials.add(
-            conn, site_id, label, credentials.KIND_SESSION, cred_payload,
+            conn, site_id, label, kind, cred_payload,
             created_by=owner_id, ttl_seconds=ttl_seconds,
         )
         db.delete_expired_ext_credentials(conn)  # 기회적 만료 정리(핫패스)
@@ -401,10 +421,10 @@ def _ephemeral_session_credential(
 def api_auth_profile(request: Request, payload: AuthProfileRequest):
     """확장의 '로그인 페이지' 1회성 인증 캡처.
 
-    확장이 보낸 세션 쿠키로 site_credentials(kind=session) 1회성 자격증명을 만들고
-    그 credential_id 로 아카이빙을 큐에 넣는다. 자격증명은 캡처 직후 폐기되고,
-    누락분은 만료 GC(설정 가능, 기본 24h)가 정리한다. 예약·크롤 재사용에는
-    연결하지 않는다(1회성).
+    확장이 감지한 로그인 정보(JWT 또는 세션 쿠키)로 site_credentials(kind=jwt
+    또는 session) 1회성 자격증명을 만들고 그 credential_id 로 아카이빙을 큐에
+    넣는다. 자격증명은 캡처 직후 폐기되고, 누락분은 만료 GC(설정 가능, 기본
+    24h)가 정리한다. 예약·크롤 재사용에는 연결하지 않는다(1회성).
     """
     _require_archive(request)
     try:
@@ -412,19 +432,98 @@ def api_auth_profile(request: Request, payload: AuthProfileRequest):
     except ValueError as e:
         raise HTTPException(400, f"잘못된 URL: {e}")
     tag_id = _resolve_network_tag(norm, payload.network_tag)
-    cred_id, owner_id = _ephemeral_session_credential(
-        request, norm, payload.storage_state
+    cred_id, owner_id = _ephemeral_credential(
+        request, norm, storage_state=payload.storage_state, jwt=payload.jwt
     )
-    from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
-
-    queued = webapp._queue_archive(
-        norm, force=payload.force, source="api", requested_by=owner_id,
-        network_tag_id=tag_id, credential_id=cred_id,
-    )
-    if not queued:
-        # 같은 URL 이 이미 큐에 있음 — 쓰지 않은 1회성 자격증명을 즉시 폐기
-        with db.connect() as conn:
+    # 큐잉·작업 id 되읽기·(중복 시)자격증명 폐기를 한 트랜잭션에서.
+    with db.connect() as conn:
+        queued = db.enqueue_archive_job(
+            conn, norm, force=payload.force, source="api", requested_by=owner_id,
+            network_tag_id=tag_id, credential_id=cred_id,
+        )
+        job_id = db.get_active_archive_job_id(conn, norm)
+        if not queued:
+            # 같은 URL 이 이미 큐에 있음 — 쓰지 않은 1회성 자격증명을 즉시 폐기
             db.delete_ephemeral_credential(conn, cred_id)
-    else:
+    if queued:
         audit.log(request, "확장 인증 캡처 등록(API): %s → 자격증명 #%d", norm, cred_id)
-    return {"queued": queued, "url": norm, "authenticated": True}
+    return {"queued": queued, "url": norm, "authenticated": True, "job_id": job_id}
+
+
+_STATUS_ID_CAP = 50  # 요청당 조회 id 상한 (확장의 추적 목록은 보통 한 줌)
+
+
+def _parse_id_list(raw: str | None) -> list[int]:
+    """쉼표 구분 정수 id 목록 파싱 — 잘못된 토큰 무시, 중복 제거, 최대 _STATUS_ID_CAP 개."""
+    if not raw:
+        return []
+    ids: list[int] = []
+    seen: set[int] = set()
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            n = int(tok)
+        except ValueError:
+            continue
+        if n in seen:
+            continue
+        seen.add(n)
+        ids.append(n)
+        if len(ids) >= _STATUS_ID_CAP:
+            break
+    return ids
+
+
+@router.get("/archive/status")
+def api_archive_status(
+    request: Request, jobs: str | None = None, crawls: str | None = None
+):
+    """확장이 추적 중인 단발 작업·크롤의 현재 상태 일괄 조회 (소유자 스코프).
+
+    jobs·crawls 는 쉼표 구분 id 목록(각 최대 50개). 다른 사용자의 id 는 unknown
+    으로만 보인다(소유자 스코프). 단발 작업 행은 완료/최종실패 시 삭제되므로,
+    활성 작업이 없으면 archive_logs(job_id) 최신 행으로 종결 상태를 도출한다 —
+    활성 작업이 있으면 그 상태가 우선이라(재시도 중 작업이 과거 error 로그로
+    오판되지 않는다). 확장은 이 응답의 전이를 보고 데스크톱 알림을 띄운다.
+    """
+    _require_view(request)
+    key = request.state.api_key
+    scoped = key is not None              # 인증 off(키 없음)면 단일 로컬 사용자 — 무필터
+    owner_id = key["owner_user_id"] if key is not None else None
+    job_out: list[dict] = []
+    crawl_out: list[dict] = []
+    with db.connect() as conn:
+        for jid in _parse_id_list(jobs):
+            active = db.archive_job_status(conn, jid, owner_id=owner_id, scoped=scoped)
+            if active is not None:
+                state = "needs_human" if active["needs_human_at"] else active["status"]
+                job_out.append({"id": jid, "state": state, "url": active["url"]})
+                continue
+            log = db.latest_archive_log_for_job(
+                conn, jid, owner_id=owner_id, scoped=scoped
+            )
+            if log is None:
+                job_out.append({"id": jid, "state": "unknown"})
+            elif log["status"] == "error":
+                job_out.append({
+                    "id": jid, "state": "failed",
+                    "url": log["url"], "error": log["error"],
+                })
+            else:
+                job_out.append({
+                    "id": jid, "state": "succeeded", "outcome": log["status"],
+                    "url": log["url"], "page_id": log["page_id"],
+                    "snapshot_id": log["snapshot_id"], "http_status": log["http_status"],
+                })
+        for cid in _parse_id_list(crawls):
+            crawl = db.crawl_status_for_owner(conn, cid, owner_id=owner_id, scoped=scoped)
+            if crawl is None:
+                crawl_out.append({"id": cid, "status": "unknown"})
+                continue
+            crawl_out.append({
+                "id": cid, "status": crawl["status"], "url": crawl["start_url"],
+                "counts": db.crawl_page_counts(conn, cid),
+            })
+    return {"jobs": job_out, "crawls": crawl_out}
