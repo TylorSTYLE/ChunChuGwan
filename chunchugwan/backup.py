@@ -222,7 +222,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 raise ValueError(f"사이트 없음: {site_id}")
             prefix += "-" + site["site_key"].replace(":", "_")
         pages = [
-            {k: r[k] for k in ("url", "domain", "slug", "created_at")}
+            {k: r[k] for k in ("url", "domain", "slug", "client_captured", "created_at")}
             for r in conn.execute(f"SELECT * FROM pages p{where} ORDER BY p.id", args)
         ]
         snapshots = [
@@ -231,6 +231,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 for k in (
                     "page_url", "domain", "slug", "taken_at", "dir_name",
                     "content_hash", "final_url", "http_status", "changed", "note",
+                    "origin", "incomplete",
                 )
             }
             for r in conn.execute(
@@ -579,11 +580,12 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     site_id = db.get_or_create_site(conn, storage.site_key(p["url"]))
                     cur = conn.execute(
                         """
-                        INSERT INTO pages (url, domain, slug, site_id, created_at)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO pages
+                            (url, domain, slug, site_id, client_captured, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         (p["url"], p["domain"], p["slug"], site_id,
-                         p["created_at"] or _utcnow()),
+                         int(p.get("client_captured", 0)), p["created_at"] or _utcnow()),
                     )
                     page_ids[p["url"]] = cur.lastrowid
                     page_paths[p["url"]] = (p["domain"], p["slug"])
@@ -611,6 +613,8 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     content_hash=s["content_hash"], final_url=s["final_url"],
                     http_status=s.get("http_status"),
                     changed=int(s.get("changed", 1)), note=s.get("note"),
+                    origin=s.get("origin", "server"),
+                    incomplete=int(s.get("incomplete", 0)),
                 )
                 result.snapshots_added += 1
 

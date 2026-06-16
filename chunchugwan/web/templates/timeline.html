@@ -79,7 +79,10 @@ tr.steps-row > td { background: var(--bg-soft); padding: 10px 14px 14px; }
       <td class="num">{{ it.idx }}</td>
       <td class="mono"><a href="/snapshot/{{ it.snap['id'] }}">{{ it.snap['taken_at'] | ts }}</a></td>
       <td class="mono">{{ it.snap['content_hash'][:12] }}</td>
-      <td><span class="badge {{ it.badge }}">{{ {'new': _('신규'), 'changed': _('변경'), 'same': _('동일')}[it.badge] }}</span></td>
+      <td><span class="badge {{ it.badge }}">{{ {'new': _('신규'), 'changed': _('변경'), 'same': _('동일')}[it.badge] }}</span>
+        {% if it.snap['origin'] == 'extension' %}<span class="badge local" title="{{ _('브라우저 확장으로 캡처') }}">{{ _("브라우저 캡처") }}</span>{% endif %}
+        {% if it.snap['incomplete'] %}<span class="badge incomplete">{{ _("불완전") }}</span>{% endif %}
+      </td>
       <td class="num">{{ it.snap['http_status'] or '-' }}</td>
       <td class="num mono">{{ it.total_bytes|filesize if it.files else '-' }}</td>
       <td>

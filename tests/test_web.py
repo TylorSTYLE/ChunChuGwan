@@ -1475,3 +1475,29 @@ def test_resource_route_serves_gzipped_css(client, monkeypatch):
     assert res.headers.get("content-encoding") == "gzip"
     assert res.headers["content-type"].startswith("text/css")
     assert res.headers["content-security-policy"] == "sandbox"
+
+
+def test_diff_server_snapshots_show_screenshot_compare(client):
+    """서버 캡처끼리는 스크린샷 비교 UI 가 그대로 나온다 (회귀 가드)."""
+    with db.connect() as conn:
+        page = conn.execute("SELECT id FROM pages LIMIT 1").fetchone()
+    res = client.get(f"/diff/{page['id']}")
+    assert res.status_code == 200
+    assert 'id="btn-old"' in res.text
+    assert "변경이 과장될 수 있습니다" not in res.text
+
+
+def test_diff_extension_snapshot_disables_screenshot_compare(client):
+    """로컬(확장) 캡처가 한쪽이라도 끼면 스크린샷 비교를 숨기고 본문 diff 경고를 띄운다."""
+    with db.connect() as conn:
+        page = conn.execute("SELECT id FROM pages LIMIT 1").fetchone()
+        conn.execute(
+            "UPDATE snapshots SET origin = 'extension' "
+            "WHERE id = (SELECT id FROM snapshots ORDER BY id DESC LIMIT 1)"
+        )
+        conn.commit()
+    res = client.get(f"/diff/{page['id']}")
+    assert res.status_code == 200
+    assert "변경이 과장될 수 있습니다" in res.text          # 본문 diff 경고 배너
+    assert "스크린샷 비교를 제공하지 않습니다" in res.text   # 스크린샷 비교 미제공 안내
+    assert 'id="btn-old"' not in res.text                    # 스크린샷 토글 버튼 없음

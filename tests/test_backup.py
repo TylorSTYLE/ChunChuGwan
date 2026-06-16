@@ -130,6 +130,34 @@ def test_export_import_includes_documents(roots, tmp_path, monkeypatch):
     assert n == 1
 
 
+def test_export_import_preserves_provenance(roots, tmp_path, monkeypatch):
+    """확장 캡처 출처(origin/incomplete)와 client_captured 표식이 라운드트립된다."""
+    root_a, root_b = roots
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE snapshots SET origin = 'extension', incomplete = 1 WHERE dir_name = ?",
+            ("2026-06-02T00-00-00",),
+        )
+        conn.execute("UPDATE pages SET client_captured = 1 WHERE url = ?", (URL_A,))
+        conn.commit()
+    out = backup.export_archive(tmp_path / "e.tar.gz")
+
+    _patch_root(monkeypatch, root_b)
+    backup.import_archive(out, mode="merge")
+    with db.connect() as conn:
+        assert db.get_page(conn, URL_A)["client_captured"] == 1
+        ext = conn.execute(
+            "SELECT origin, incomplete FROM snapshots WHERE dir_name = ?",
+            ("2026-06-02T00-00-00",),
+        ).fetchone()
+        assert ext["origin"] == "extension" and ext["incomplete"] == 1
+        srv = conn.execute(
+            "SELECT origin, incomplete FROM snapshots WHERE dir_name = ?",
+            ("2026-06-01T00-00-00",),
+        ).fetchone()
+        assert srv["origin"] == "server" and srv["incomplete"] == 0
+
+
 def test_export_site_only(roots, tmp_path, monkeypatch):
     """site_id 한정 내보내기 — 소속 페이지·스냅샷·참조 CAS 만 담긴다."""
     root_a, root_b = roots
