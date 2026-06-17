@@ -4031,6 +4031,14 @@ SMTP_PASSWORD_KEY = "smtp_password"  # crypto.encrypt 암호문 (평문·해시 
 SMTP_FROM_KEY = "smtp_from"
 SMTP_TLS_KEY = "smtp_tls"  # 'starttls' | 'ssl' | 'off'
 
+# 춘추관 간 데이터 이전(마이그레이션). 소스(보내는 쪽)가 이전 모드를 켜면
+# 인증 토큰을 발급하고, 그 동안 모든 스크래핑·스케줄·크롤이 중단된다.
+# 받는 쪽은 토큰으로 소스의 /api/migration/* 에서 전체 데이터를 Pull 한다.
+# 토큰은 세션·API 키와 같이 SHA-256 해시만 저장한다 (원칙 6 단방향).
+MIGRATION_MODE_KEY = "migration_mode"               # 'on' | 'off' (기본 off)
+MIGRATION_TOKEN_HASH_KEY = "migration_token_hash"   # 발급 토큰의 SHA-256 (모드 끄면 삭제)
+MIGRATION_TOKEN_CREATED_AT_KEY = "migration_token_created_at"  # 발급 시각 (표시용)
+
 # 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한은
 # db.signup_roles(conn) (pending + admin 외 권한 보유 그룹). 기본은 권한없음
 # (pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.
@@ -4073,6 +4081,31 @@ def signup_default_role(conn: sqlite3.Connection) -> str:
 def email_verification_enabled(conn: sqlite3.Connection) -> bool:
     """이메일 본인 인증 사용 여부 (기본 off — 옵트인). SMTP 미설정이면 호출부가 무시한다."""
     return get_setting(conn, EMAIL_VERIFICATION_ENABLED_KEY) == "on"
+
+
+def migration_mode_enabled(conn: sqlite3.Connection) -> bool:
+    """이전(마이그레이션) 모드 여부 (기본 off). 켜진 동안 스크래핑·스케줄·크롤 중단."""
+    return get_setting(conn, MIGRATION_MODE_KEY) == "on"
+
+
+def get_migration_token_hash(conn: sqlite3.Connection) -> str | None:
+    """발급된 이전 토큰의 SHA-256 해시 (없으면 None)."""
+    return get_setting(conn, MIGRATION_TOKEN_HASH_KEY)
+
+
+def set_migration_mode(
+    conn: sqlite3.Connection, on: bool, token_hash: str | None = None
+) -> None:
+    """이전 모드를 켜고/끈다. 켜면 토큰 해시를 저장하고, 끄면 토큰을 무효화(삭제)한다."""
+    if on:
+        set_setting(conn, MIGRATION_MODE_KEY, "on")
+        if token_hash is not None:
+            set_setting(conn, MIGRATION_TOKEN_HASH_KEY, token_hash)
+            set_setting(conn, MIGRATION_TOKEN_CREATED_AT_KEY, _utcnow())
+    else:
+        set_setting(conn, MIGRATION_MODE_KEY, "off")
+        delete_setting(conn, MIGRATION_TOKEN_HASH_KEY)
+        delete_setting(conn, MIGRATION_TOKEN_CREATED_AT_KEY)
 
 
 def email_verification_ttl_minutes(conn: sqlite3.Connection) -> int:

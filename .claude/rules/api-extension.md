@@ -2,6 +2,8 @@
 description: REST API(/api/v1)·API 키·브라우저 확장 클라이언트 캡처(ingest). api_routes/ingest/extension 을 만질 때.
 paths:
   - "chunchugwan/web/api_routes.py"
+  - "chunchugwan/web/migration_routes.py"
+  - "chunchugwan/migration.py"
   - "chunchugwan/ingest.py"
   - "chunchugwan/extension/**"
   - "docs/API.md"
@@ -9,6 +11,18 @@ paths:
 ---
 
 # REST API · 확장 클라이언트 캡처
+
+## 춘추관 간 이전 엔드포인트 (`/api/migration/*`)
+
+`/api/v1`(API 키) 와 **별개**의 machine-to-machine 채널 — 받는 쪽이 소스에서
+전체 데이터를 파일 단위로 Pull 한다. 인증은 API 키가 아니라 **이전 토큰**
+(`X-Migration-Token` 헤더, `secrets.compare_digest`, 이전 모드일 때만 유효).
+미들웨어가 `/api/` 를 세션 인증에서 면제하므로 토큰만으로 접근된다.
+라우트는 `web/migration_routes.py`(소스 서빙), 받는 쪽 워커·매니페스트 빌드는
+`migration.py`: `GET /info`(버전·요약) / `/manifest`(DB sha256 + 파일 목록) /
+`/db`(일관 스냅샷) / `/file?path=`(단일 파일, traversal 검증 — `resolve_transfer_file`).
+이전 모드 게이트·토큰 저장(`db.set_migration_mode`, SHA-256 단방향)·받는 쪽
+setup 흐름은 `.claude/rules/authentication.md`·`.claude/rules/capture-crawl.md` 참조.
 
 ## 브라우저 클라이언트 캡처
 

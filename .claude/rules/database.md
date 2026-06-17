@@ -95,4 +95,9 @@ paths:
   초대 메일 발송 서버. 시스템 화면 또는 `WCCG_SMTP_*` 환경변수로 두며 DB 값이
   우선, 해석·환경변수 폴백은 `mailer.resolve_config`. `smtp_password` 는
   `crypto` 로 대칭 암호화한 암호문만 저장 — 외부 SMTP 에 replay 해야 하므로
-  복원 가능, 원칙 6 예외이며 사이트 로그인 자격증명과 같은 처리)
+  복원 가능, 원칙 6 예외이며 사이트 로그인 자격증명과 같은 처리)과
+  춘추관 간 이전 설정 (`migration_mode` on/off 기본 off — 켜면 스크래핑·스케줄·
+  크롤 전면 중단, `db.migration_mode_enabled`/`set_migration_mode`. `migration_token_hash`
+  — 발급한 이전 토큰의 SHA-256 해시만 저장(세션·API 키와 같은 단방향, 원칙 6),
+  `migration_token_created_at` — 발급 시각 표시용. 모드를 끄면 토큰 키들이 삭제된다.
+  흐름은 `.claude/rules/authentication.md`·`.claude/rules/capture-crawl.md` 참조)

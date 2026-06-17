@@ -372,6 +372,9 @@ def process_next(
     """
     now = _utcnow()
     with db.connect() as conn:
+        # 이전(마이그레이션) 모드 — 데이터 이전 중이면 크롤 처리 중단
+        if db.migration_mode_enabled(conn):
+            return None
         recovered = db.recover_stale_crawl_pages(
             conn, _iso(now - timedelta(seconds=config.CRAWL_STALE_CLAIM_SECONDS))
         )
@@ -512,6 +515,9 @@ def run_due_schedules(*, source: str = "schedule") -> list[ScheduleStep]:
     중복 등록되지 않는다. 등록 실패도 next_run_at 은 미뤄 연속 재시도를 막는다.
     """
     with db.connect() as conn:
+        # 이전(마이그레이션) 모드 — 데이터 이전 중이면 크롤 스케줄 실행 중단
+        if db.migration_mode_enabled(conn):
+            return []
         due = db.list_due_crawl_schedules(conn, _iso(_utcnow()))
 
     results: list[ScheduleStep] = []

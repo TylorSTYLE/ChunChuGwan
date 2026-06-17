@@ -516,6 +516,65 @@ h3.danger-heading { color: var(--red); }
   </div>
 </div>
 
+<h3>{{ _("다른 춘추관으로 이전") }}</h3>
+<div class="sys-grid" style="max-width:760px">
+  <div class="sys-card{% if migration_mode %} danger-card{% endif %}">
+    <h4>{{ _("이전(마이그레이션) 모드") }}
+      {% if migration_mode %}
+        <span class="badge changed">{{ _("켜짐") }}</span>
+      {% else %}
+        <span class="badge same">{{ _("꺼짐") }}</span>
+      {% endif %}
+    </h4>
+    <p>
+      {{ _("이전 모드를 켜면 인증 토큰을 발급하고, 새로 설치한 춘추관의 최초 설정 화면에서 이 서버의 주소와 토큰을 입력하면 모든 데이터(아카이브·인증 포함)를 네트워크로 가져갑니다. 이전 모드인 동안에는 이 서버의 모든 스크래핑·스케줄·크롤이 중단됩니다.") }}
+    </p>
+    <p>
+      {{ _("토큰은 전체 데이터 접근 권한을 가지므로 안전한 채널로 전달하세요. 받는 쪽이 평문 http 로 접속하면 토큰이 노출될 수 있습니다(https 권장). 받는 쪽은 같은 WCCG_SECRET_KEY 를 써야 외부 사이트 로그인 자격증명을 복호화할 수 있습니다.") }}
+    </p>
+
+    {% if migration_token %}
+    <div class="storage-card" style="border-color:var(--amber); margin:4px 0 8px">
+      <p style="margin:0 0 6px"><b>{{ _("발급된 토큰 — 지금만 표시됩니다. 안전하게 복사하세요.") }}</b></p>
+      <p class="mono" style="word-break:break-all; user-select:all; margin:0 0 8px; display:block">{{ migration_token }}</p>
+      {% if public_url %}
+      <p style="margin:0; font-size:12px; color:var(--muted)">
+        {{ _("소스 주소") }}: <span class="mono" style="user-select:all">{{ public_url }}</span>
+      </p>
+      {% else %}
+      <p style="margin:0; font-size:12px; color:var(--muted)">
+        {{ _("소스 주소는 받는 쪽이 이 서버에 접근할 수 있는 URL 입니다 (예: http://NAS주소:8765). WCCG_PUBLIC_URL 을 설정하면 여기에 표시됩니다.") }}
+      </p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if migration_mode %}
+      {% if migration_token_created_at %}
+      <p style="font-size:12px; color:var(--muted)">
+        {{ _("토큰 발급 시각") }}: <span class="mono">{{ migration_token_created_at }}</span>
+      </p>
+      {% endif %}
+      <div class="actions">
+        <form method="post" action="/system/migration/regenerate">
+          <button type="submit">{{ _("토큰 재발급") }}</button>
+        </form>
+        <form method="post" action="/system/migration/disable"
+              onsubmit='return confirm({{ _('이전 모드를 끄고 스크래핑·스케줄·크롤을 재개할까요? 발급된 토큰은 무효화됩니다.')|tojson }})'>
+          <button type="submit">{{ _("이전 모드 끄기 (스크래핑 재개)") }}</button>
+        </form>
+      </div>
+    {% else %}
+      <div class="actions">
+        <form method="post" action="/system/migration/enable"
+              onsubmit='return confirm({{ _('이전 모드를 켜면 이 서버의 스크래핑·스케줄·크롤이 모두 중단됩니다. 계속할까요?')|tojson }})'>
+          <button type="submit">{{ _("이전 모드 켜기 + 토큰 발급") }}</button>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
 <h3 class="danger-heading">{{ _("위험 구역") }}</h3>
 <div class="sys-grid" style="max-width:640px">
   <div class="sys-card danger-card">

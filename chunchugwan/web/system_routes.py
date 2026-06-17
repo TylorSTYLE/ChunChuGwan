@@ -55,7 +55,9 @@ router = APIRouter(prefix="/system", dependencies=[Depends(_require_admin)])
 
 
 @router.get("", response_class=HTMLResponse)
-def system_view(request: Request, notice: str = "", error: str = ""):
+def system_view(
+    request: Request, notice: str = "", error: str = "", migration_token: str = ""
+):
     with db.connect() as conn:
         counts = {
             t: conn.execute(f"SELECT COUNT(*) AS c FROM {t}").fetchone()["c"]
@@ -75,6 +77,10 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         doc_limits = documents.limits(conn)
         smtp = mailer.resolve_config(conn)
         smtp_has_password = db.get_setting(conn, db.SMTP_PASSWORD_KEY) not in (None, "")
+        migration_mode = db.migration_mode_enabled(conn)
+        migration_token_created_at = db.get_setting(
+            conn, db.MIGRATION_TOKEN_CREATED_AT_KEY
+        )
     usage = storage.archive_disk_usage()
     return templates.TemplateResponse(
         request, "system.html",
@@ -144,6 +150,10 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "optimize_pending": sum(optimize.pending_counts()),
             "search": searchindex.verify(),
             "search_reindex": reindex_status(),
+            "migration_mode": migration_mode,
+            "migration_token_created_at": migration_token_created_at,
+            "migration_token": migration_token,
+            "public_url": config.PUBLIC_URL,
             "notice": notice, "error": error,
         },
     )
@@ -755,6 +765,52 @@ def system_restore(request: Request, file: UploadFile = File(...)):
             created_at=manifest.get("created_at", "?"),
             pages=c.get("pages", "?"), snapshots=c.get("snapshots", "?"),
         )
+    )
+
+
+# ---- 춘추관 간 데이터 이전(마이그레이션) ----
+
+
+def _issue_migration_token(request: Request) -> RedirectResponse:
+    """이전 토큰을 발급(또는 재발급)하고 모드를 켠다. 토큰 원문은 1회만 노출한다.
+
+    토큰은 SHA-256 해시만 저장한다 (원칙 6 단방향, API 키와 동일). 원문은
+    API 키 발급과 같은 방식으로 리다이렉트 쿼리에 실어 시스템 화면에서 1회 표시.
+    """
+    token = secrets.token_urlsafe(32)
+    with db.connect() as conn:
+        db.set_migration_mode(conn, True, auth.hash_token(token))
+    query = urlencode({
+        "migration_token": token,
+        "notice": t(request, "이전 모드가 켜졌습니다 — 스크래핑·스케줄·크롤이 중단됩니다."),
+    })
+    return RedirectResponse(f"/system?{query}", status_code=303)
+
+
+@router.post("/migration/enable")
+def migration_enable(request: Request):
+    """이전 모드 ON + 토큰 발급. 받는 쪽이 이 토큰으로 데이터를 가져간다."""
+    audit.log(request, "이전(마이그레이션) 모드 켬 — 토큰 발급")
+    return _issue_migration_token(request)
+
+
+@router.post("/migration/regenerate")
+def migration_regenerate(request: Request):
+    """이전 토큰 재발급 (이전 토큰은 무효화). 모드는 켜진 채로 둔다."""
+    audit.log(request, "이전(마이그레이션) 토큰 재발급")
+    return _issue_migration_token(request)
+
+
+@router.post("/migration/disable")
+def migration_disable(request: Request):
+    """이전 모드 OFF + 토큰 무효화 — 스크래핑·스케줄·크롤을 재개한다."""
+    from .. import migration as migration_mod
+    with db.connect() as conn:
+        db.set_migration_mode(conn, False)
+    migration_mod.cleanup_source()
+    audit.log(request, "이전(마이그레이션) 모드 끔 — 스크래핑 재개")
+    return _system_redirect(
+        notice=t(request, "이전 모드를 껐습니다 — 스크래핑·스케줄·크롤이 재개됩니다.")
     )
 
 
