@@ -108,9 +108,12 @@ CREATE TABLE IF NOT EXISTS snapshots (
                                                   --   0 이면 저장공간 최적화의 추출 대상
     search_indexed INTEGER NOT NULL DEFAULT 0,    -- 텍스트 검색 인덱스(snapshot_fts) 반영 여부.
                                                   --   0 이면 'wccg search reindex' 백필 대상
-    bytes         INTEGER NOT NULL DEFAULT 0      -- 스냅샷 디렉토리 파일 용량 합(비정규화).
+    bytes         INTEGER NOT NULL DEFAULT 0,     -- 스냅샷 디렉토리 파일 용량 합(비정규화).
                                                   --   캡처/compact 시 1회 기록, 용량 집계가
                                                   --   파일시스템 stat 대신 SUM(bytes) 를 쓴다
+    title         TEXT                            -- 캡처 당시 페이지 제목(meta.json 사본).
+                                                  --   목록·상세의 현재 제목 표시가 meta.json
+                                                  --   반복 파싱 대신 이 컬럼을 쓴다
 );
 
 CREATE TABLE IF NOT EXISTS checks (
@@ -516,6 +519,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         n = backfill_snapshot_bytes(conn)
         if n:
             logger.info("스냅샷 용량(bytes) 백필: %d개", n)
+    # 페이지 제목 비정규화 — 목록·상세가 meta.json 을 반복 파싱하지 않게 한다.
+    # 컬럼 최초 추가 시에만 기존 스냅샷의 meta.json 에서 1회 백필한다.
+    if cols and "title" not in cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN title TEXT")
+        n = backfill_snapshot_titles(conn)
+        if n:
+            logger.info("스냅샷 제목(title) 백필: %d개", n)
     _ensure_search_index(conn)
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
@@ -1078,7 +1088,7 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
      "note", "resources_indexed", "css_externalized", "search_indexed", "bytes",
-     "authenticated", "authenticated_by", "origin", "incomplete"}
+     "title", "authenticated", "authenticated_by", "origin", "incomplete"}
 )
 
 
@@ -1123,6 +1133,28 @@ def backfill_snapshot_bytes(
             (storage.snapshot_dir_bytes(snap_dir), r["id"]),
         )
         n += 1
+    return n
+
+
+def backfill_snapshot_titles(conn: sqlite3.Connection) -> int:
+    """모든 스냅샷의 title 을 meta.json 에서 채우고 갱신 건수 반환 (컬럼 최초 추가용).
+
+    meta.json 이 없거나 title 키가 없으면 NULL 로 둔다 (오류 페이지·구형 등).
+    """
+    rows = conn.execute(
+        "SELECT s.id, p.domain, p.slug, s.dir_name "
+        "FROM snapshots s JOIN pages p ON p.id = s.page_id"
+    ).fetchall()
+    n = 0
+    for r in rows:
+        meta = storage.page_dir(r["domain"], r["slug"]) / r["dir_name"] / "meta.json"
+        try:
+            title = json.loads(meta.read_text(encoding="utf-8")).get("title") or None
+        except (OSError, ValueError):
+            title = None
+        if title is not None:
+            conn.execute("UPDATE snapshots SET title = ? WHERE id = ?", (title, r["id"]))
+            n += 1
     return n
 
 
@@ -1543,13 +1575,16 @@ def count_pages(conn: sqlite3.Connection) -> int:
 
 
 def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """모든 스냅샷의 시각·디렉토리 위치 (id, taken_at, site_id, domain, slug, dir_name).
+    """모든 스냅샷의 시각·위치·용량·제목 (id, taken_at, site_id, domain, slug,
+    dir_name, bytes, title).
 
-    현황 대시보드의 기간별 집계와 아카이브 목록의 사이트별 용량 합산에 쓴다.
+    현황 대시보드의 기간별 집계와 아카이브 목록의 사이트별 용량 합산·제목
+    표시에 쓴다 (bytes·title 비정규화로 파일시스템·meta.json 접근 없음).
     """
     return conn.execute(
         """
-        SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name, s.bytes
+        SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name,
+               s.bytes, s.title
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         """
     ).fetchall()
@@ -3014,14 +3049,15 @@ def site_page_totals(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row:
 def list_site_snapshot_dirs(
     conn: sqlite3.Connection, site_id: int
 ) -> list[sqlite3.Row]:
-    """사이트 소속 스냅샷의 시각·디렉토리 위치 (page_id, taken_at, domain, slug, dir_name).
+    """사이트 소속 스냅샷의 시각·위치·용량·제목 (page_id, taken_at, domain, slug,
+    dir_name, bytes, title).
 
-    사이트 상세가 페이지별·사이트 전체 저장 용량 합산과 최신 스냅샷의
-    타이틀 조회에 쓴다.
+    사이트 상세가 페이지별·사이트 전체 저장 용량 합산과 현재 제목 표시에 쓴다
+    (bytes·title 비정규화로 파일시스템·meta.json 접근 없음).
     """
     return conn.execute(
         """
-        SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name, s.bytes
+        SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name, s.bytes, s.title
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         WHERE p.site_id = ?
         """,

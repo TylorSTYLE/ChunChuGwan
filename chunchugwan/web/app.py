@@ -375,30 +375,15 @@ def extension_download(request: Request) -> Response:
     )
 
 
-def _snapshot_title(domain: str, slug: str, dir_name: str) -> str | None:
-    """스냅샷 meta.json 의 title (없거나 읽기 실패 시 None)."""
-    path = storage.page_dir(domain, slug) / dir_name / "meta.json"
-    try:
-        return json.loads(path.read_text(encoding="utf-8")).get("title") or None
-    except (OSError, ValueError):
-        return None
-
-
-# 사이트 타이틀 탐색 시 거슬러 올라가는 최신 스냅샷 수 한도
-_TITLE_LOOKBACK = 5
-
-
 def _site_title(snap_rows) -> str | None:
-    """사이트 스냅샷 중 최신 것부터 meta.json title 을 찾는다 (현재 타이틀).
+    """사이트 스냅샷 중 최신 것부터 비정규화된 title 을 찾는다 (현재 타이틀).
 
-    오류 페이지 캡처 등 title 없는 스냅샷이 끼어도 직전 제목으로 폴백하되,
-    파일 IO 를 한정하기 위해 _TITLE_LOOKBACK 개까지만 본다.
+    오류 페이지 캡처 등 title 없는 스냅샷이 끼면 직전 제목으로 폴백한다.
+    snapshots.title 컬럼을 쓰므로 파일 IO 가 없다 — lookback 한도가 불필요하다.
     """
-    recent = sorted(snap_rows, key=lambda r: r["taken_at"], reverse=True)
-    for row in recent[:_TITLE_LOOKBACK]:
-        title = _snapshot_title(row["domain"], row["slug"], row["dir_name"])
-        if title:
-            return title
+    for row in sorted(snap_rows, key=lambda r: r["taken_at"], reverse=True):
+        if row["title"]:
+            return row["title"]
     return None
 
 

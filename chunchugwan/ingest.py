@@ -254,6 +254,7 @@ def ingest_capture(
                 http_status=http_status, changed=changed,
                 resources_indexed=1, css_externalized=1,
                 bytes=storage.snapshot_dir_bytes(snap_dir),
+                title=meta.title,
                 origin="extension", incomplete=int(bool(incomplete)),
             )
             if manifest:
@@ -373,6 +374,7 @@ def ingest_document(
                 http_status=http_status, changed=changed,
                 resources_indexed=1, css_externalized=1,
                 bytes=storage.snapshot_dir_bytes(snap_dir),
+                title=meta.title,
                 origin="extension", incomplete=int(bool(incomplete)),
             )
             db.insert_snapshot_documents(conn, snapshot_id, manifest)

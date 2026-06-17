@@ -134,6 +134,33 @@ def test_backfill_snapshot_bytes_from_filesystem(conn):
     assert conn.execute("SELECT bytes FROM snapshots WHERE id=?", (snap_id,)).fetchone()[0] == expected
 
 
+def test_backfill_snapshot_titles_from_meta(conn):
+    """backfill_snapshot_titles 가 meta.json title 을 채우고, 없으면 NULL 로 둔다."""
+    from chunchugwan import storage
+
+    page_id = db.get_or_create_page(conn, "https://example.com/", "example.com", "root-abcd1234")
+    # snap1: meta.json 에 title 있음 / snap2: meta.json 없음
+    ids = {}
+    for dir_name, title in (("2026-06-01T00-00-00", "제목 있음"), ("2026-06-02T00-00-00", None)):
+        ids[dir_name] = db.insert_snapshot(
+            conn, page_id, taken_at=dir_name[:10] + "T00:00:00+00:00", dir_name=dir_name,
+            content_hash="0" * 64, final_url="https://example.com/", http_status=200, changed=1,
+        )
+        snap_dir = storage.page_dir("example.com", "root-abcd1234") / dir_name
+        snap_dir.mkdir(parents=True)
+        if title is not None:
+            storage.write_meta(snap_dir, storage.SnapshotMeta(
+                url="https://example.com/", final_url="https://example.com/",
+                taken_at=dir_name[:10] + "T00:00:00+00:00", content_hash="0" * 64,
+                http_status=200, title=title,
+            ))
+
+    assert db.backfill_snapshot_titles(conn) == 1  # title 있는 1개만 갱신
+    got = dict(conn.execute("SELECT id, title FROM snapshots").fetchall())
+    assert got[ids["2026-06-01T00-00-00"]] == "제목 있음"
+    assert got[ids["2026-06-02T00-00-00"]] is None
+
+
 def test_migrate_creates_perf_indexes(conn):
     """핫패스·삭제·정리 경로 인덱스 묶음이 _migrate 로 생성된다 (멱등)."""
     have = {
