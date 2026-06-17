@@ -151,6 +151,26 @@ def test_export_import_sets_snapshot_bytes(roots, tmp_path, monkeypatch):
         assert r["bytes"] == actual
 
 
+def test_export_import_preserves_title(roots, tmp_path, monkeypatch):
+    """비정규화된 스냅샷 title 이 내보내기/가져오기로 라운드트립된다."""
+    root_a, root_b = roots
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE snapshots SET title = ? WHERE dir_name = ?",
+            ("내보낸 제목", "2026-06-01T00-00-00"),
+        )
+        conn.commit()
+    out = backup.export_archive(tmp_path / "e.tar.gz")
+
+    _patch_root(monkeypatch, root_b)
+    backup.import_archive(out, mode="merge")
+    with db.connect() as conn:
+        title = conn.execute(
+            "SELECT title FROM snapshots WHERE dir_name = ?", ("2026-06-01T00-00-00",)
+        ).fetchone()["title"]
+    assert title == "내보낸 제목"
+
+
 def test_export_import_preserves_provenance(roots, tmp_path, monkeypatch):
     """확장 캡처 출처(origin/incomplete)와 client_captured 표식이 라운드트립된다."""
     root_a, root_b = roots

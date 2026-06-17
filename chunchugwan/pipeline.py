@@ -561,6 +561,7 @@ def _archive_url(
                 resources_indexed=1,  # 참조는 바로 아래에서 기록 — 백필 불필요
                 css_externalized=1,   # compact_snapshot_dir 가 위에서 추출 완료
                 bytes=storage.snapshot_dir_bytes(snap_dir),
+                title=result.title,
                 authenticated=1 if credential is not None else 0,
                 authenticated_by=authenticated_by if credential is not None else None,
             )
@@ -803,6 +804,7 @@ def _archive_document_url(
             resources_indexed=1,  # 공유 자원 없음 — 백필 불필요
             css_externalized=1,   # 인라인 <style> 없음
             bytes=storage.snapshot_dir_bytes(snap_dir),
+            title=meta.title,
             authenticated=1 if credential is not None else 0,
             authenticated_by=authenticated_by if credential is not None else None,
         )

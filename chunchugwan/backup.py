@@ -292,7 +292,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 for k in (
                     "page_url", "domain", "slug", "taken_at", "dir_name",
                     "content_hash", "final_url", "http_status", "changed", "note",
-                    "origin", "incomplete", "bytes",
+                    "origin", "incomplete", "bytes", "title",
                 )
             }
             for r in conn.execute(
@@ -677,6 +677,7 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     origin=s.get("origin", "server"),
                     incomplete=int(s.get("incomplete", 0)),
                     bytes=int(s.get("bytes", 0)),
+                    title=s.get("title"),
                 )
                 snap_ids[(s["page_url"], s["dir_name"])] = snap_id
                 result.snapshots_added += 1

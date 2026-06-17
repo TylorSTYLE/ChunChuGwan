@@ -252,7 +252,23 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires      ON sessions(expires_at);
 
 ### Phase 3 — 제목 비정규화
 
-- [ ] `pages`/`sites` 에 최신 title 저장, 목록·상세의 meta.json 파싱 제거 (순위 9)
+- [x] 스냅샷 title 비정규화, 목록·상세의 meta.json 파싱 제거 (순위 9)
+
+> **완료 (perf/phase-3).** title 은 `pages`/`sites` 가 아니라 **`snapshots.title`** 에
+> 저장했다 — title 은 캡처 시점의 스냅샷 고유값(meta.json 사본)이라 여기가 자연스럽고,
+> 스냅샷 삭제 시 사이트/페이지 제목을 재계산할 필요가 없으며(`_site_title` 이 남은
+> 스냅샷 중 최신 제목을 고름), 목록·상세 읽기 경로가 이미 로드하는 스냅샷 행
+> (`list_snapshot_dirs`·`list_site_snapshot_dirs`)에서 제목을 공짜로 얻는다.
+> SCHEMA + `_migrate` ALTER(최초 추가 시 meta.json 1회 백필 — `backfill_snapshot_titles`),
+> 쓰기 경로(pipeline·ingest 저장 시 기록, export/import 라운드트립), 읽기 경로
+> (`_site_title` 이 `row["title"]` 사용 — 파일 IO·lookback 한도 제거, `_snapshot_title`
+> 삭제). 스냅샷 뷰어는 문서 목록 때문에 meta.json 을 어차피 읽어 그대로 둔다.
+> 테스트: 백필(`test_db.py`)·export/import 라운드트립(`test_backup.py`)·목록/상세 표시
+> 와 폴백(`test_web.py`). 전체 1186 통과.
+>
+> 이로써 Phase 2 에서 보류한 "행 로드 없는 SQL 집계"의 선행 조건(제목 비정규화)이
+> 풀렸다 — 다만 현 구현도 파일시스템·meta.json 접근은 0 이라 추가 SQL 집계는 큰
+> 아카이브에서 필요해지면 별도로 진행한다.
 
 ### Phase 4 — 요청 단위 커넥션 + 권한 1회 계산
 
