@@ -581,6 +581,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE crawls ADD COLUMN requested_by INTEGER REFERENCES users(id)"
         )
+    # 핫패스·삭제·정리 경로의 인덱스 묶음 (멱등). crawl_pages·archive_logs 는
+    # 데이터 증가에 가장 크게 자라는 테이블이라, 인덱스가 없으면 아카이빙마다
+    # 전체 스캔하거나 삭제·로그 화면이 행 수에 비례해 느려진다. 대상 컬럼은
+    # 모두 SCHEMA 또는 위 ALTER 로 이 시점에 존재가 보장된다.
+    for ddl in (
+        # 아카이빙 핫패스 (pipeline 이 아카이빙마다 url 로 조회)
+        "CREATE INDEX IF NOT EXISTS idx_crawl_pages_url ON crawl_pages(url)",
+        "CREATE INDEX IF NOT EXISTS idx_crawls_start_url ON crawls(start_url)",
+        # 삭제 경로 (스냅샷 삭제 시 참조 해제 — 현재 전체 스캔)
+        "CREATE INDEX IF NOT EXISTS idx_crawl_pages_snapshot ON crawl_pages(snapshot_id)",
+        "CREATE INDEX IF NOT EXISTS idx_archive_logs_snapshot ON archive_logs(snapshot_id)",
+        # 자격증명 삭제 시 참조 NULL 처리 / 조회
+        "CREATE INDEX IF NOT EXISTS idx_pages_credential ON pages(credential_id)",
+        "CREATE INDEX IF NOT EXISTS idx_crawls_credential ON crawls(credential_id)",
+        "CREATE INDEX IF NOT EXISTS idx_crawl_schedules_credential "
+        "ON crawl_schedules(credential_id)",
+        # 로그 목록 무필터 정렬 / 만료 세션 정리
+        "CREATE INDEX IF NOT EXISTS idx_archive_logs_started ON archive_logs(started_at)",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)",
+    ):
+        conn.execute(ddl)
     _seed_permission_groups(conn)
     _migrate_api_key_permission(conn)
     _backfill_sites(conn)
