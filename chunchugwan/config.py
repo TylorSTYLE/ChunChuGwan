@@ -195,6 +195,9 @@ ADMIN_EMAIL = os.environ.get("WCCG_ADMIN_EMAIL", "").strip()
 ADMIN_PASSWORD = os.environ.get("WCCG_ADMIN_PASSWORD", "")
 SESSION_TTL_DAYS = int(os.environ.get("WCCG_SESSION_TTL_DAYS", "14"))
 SESSION_COOKIE = "wccg_session"
+# API 키 last_used_at 갱신 스로틀 — 읽기 API 폴링(확장 등)이 매 요청 쓰기
+# 트랜잭션을 일으키지 않게, 이 간격 이내면 갱신을 생략한다 (표시용 근사값).
+API_KEY_TOUCH_THROTTLE_SECONDS = 60
 TOTP_ISSUER = "ChunChuGwan"
 PENDING_TOTP_TTL_SECONDS = 600          # 패스워드 통과 후 OTP 입력 제한 시간
 MIN_PASSWORD_LENGTH = 8

@@ -4463,9 +4463,20 @@ def list_api_keys_for_owner(
 
 
 def touch_api_key(conn: sqlite3.Connection, key_id: int) -> None:
-    """API 키 마지막 사용 시각 갱신."""
+    """API 키 마지막 사용 시각 갱신 — 스로틀 창 이내면 생략(조건부 UPDATE).
+
+    읽기 API 폴링(확장 버전 체크·상태 조회 등)이 매 요청 쓰기 트랜잭션을
+    일으키지 않게, last_used_at 이 config.API_KEY_TOUCH_THROTTLE_SECONDS 이내면
+    행을 건드리지 않는다. last_used_at 은 표시용 근사값이라 이 정도 지연은 무방.
+    """
+    cutoff = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=config.API_KEY_TOUCH_THROTTLE_SECONDS)
+    ).isoformat(timespec="seconds")
     conn.execute(
-        "UPDATE api_keys SET last_used_at = ? WHERE id = ?", (_utcnow(), key_id)
+        "UPDATE api_keys SET last_used_at = ? WHERE id = ? "
+        "AND (last_used_at IS NULL OR last_used_at < ?)",
+        (_utcnow(), key_id, cutoff),
     )
 
 
