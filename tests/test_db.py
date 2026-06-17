@@ -1,6 +1,8 @@
 """db.py 쿼리 함수 테스트. 임시 디렉토리에 격리된 DB 사용."""
+import contextlib
 import os
 import sqlite3
+import threading
 
 import pytest
 
@@ -14,6 +16,70 @@ def conn(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     with db.connect() as c:
         yield c
+
+
+class _NeverReady:
+    """프로세스 내 스키마 준비 캐시를 무력화 — 두 스레드 모두 _migrate 에 진입시킨다."""
+
+    def __contains__(self, key) -> bool:
+        return False
+
+    def add(self, key) -> None:
+        pass
+
+
+def test_ensure_schema_concurrent_processes(tmp_path, monkeypatch):
+    """serve·worker 가 같은 DB 를 동시에 처음 열어도 'duplicate column' 으로 죽지 않는다.
+
+    _migrate 의 'cols 읽기 → 가드 → ALTER' 는 프로세스 간 비원자라, 쓰기 락
+    (BEGIN IMMEDIATE)으로 직렬화하지 않으면 두 프로세스가 같은 신규 컬럼을 모두
+    추가하려다 깨진다. 프로세스 내 직렬화 장치(_schema_lock·_schema_ready)를 풀어
+    두 스레드가 동시에 _ensure_schema 를 타게 해 프로세스 간 동시 기동을 재현한다.
+    (회귀: serve·worker 동시 기동 시 snapshots.title duplicate column)
+    """
+    db_path = tmp_path / "index.db"
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+
+    # 신규 컬럼(title)이 빠진 구버전 DB 를 흉내 — 마이그레이션 후 컬럼을 떨군다
+    raw = sqlite3.connect(db_path)
+    raw.row_factory = sqlite3.Row
+    raw.executescript(db.SCHEMA)
+    db._migrate(raw)
+    raw.execute("ALTER TABLE snapshots DROP COLUMN title")
+    raw.commit()
+    raw.close()
+
+    # 프로세스 내 직렬화를 풀어 두 스레드가 동시에 _ensure_schema(→_migrate) 진입
+    monkeypatch.setattr(db, "_schema_ready", _NeverReady())
+    monkeypatch.setattr(db, "_schema_lock", contextlib.nullcontext())
+
+    barrier = threading.Barrier(2)
+    errors: list[str] = []
+
+    def worker() -> None:
+        c = sqlite3.connect(db_path, timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            barrier.wait()
+            db._ensure_schema(c, db_path)
+        except Exception as e:  # noqa: BLE001 — 어떤 예외든 회귀로 본다
+            errors.append(repr(e))
+        finally:
+            c.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, errors
+    check = sqlite3.connect(db_path)
+    cols = {r[1] for r in check.execute("PRAGMA table_info(snapshots)")}
+    check.close()
+    assert "title" in cols
 
 
 def test_get_or_create_page_idempotent(conn):
