@@ -89,6 +89,20 @@ def _handle_failure(item, exc: Exception) -> ArchiveStep:
             conn, item["id"],
             attempts=attempts, error=error, next_attempt_at=next_attempt_at,
         )
+    # 재시도 예약인지 최종 실패인지 로그로 구분한다 — 로그만 봐도 추적이
+    # 이어지게 (시도 횟수·전체 시도 한도·다음 시도 시각). 전체 한도는 첫 시도 +
+    # 백오프 재시도 횟수.
+    max_attempts = len(backoff) + 1
+    if next_attempt_at:
+        logger.warning(
+            "아카이빙 실패: %s — %s (job #%d, 시도 %d/%d, %s 재시도)",
+            item["url"], error, item["id"], attempts, max_attempts, next_attempt_at,
+        )
+    else:
+        logger.warning(
+            "아카이빙 최종 실패: %s — %s (job #%d, 시도 %d/%d 소진)",
+            item["url"], error, item["id"], attempts, max_attempts,
+        )
     return ArchiveStep(
         url=item["url"],
         status="retry" if next_attempt_at else "failed",
@@ -129,6 +143,11 @@ def process_next(
             db.release_archive_job(conn, item["id"])
         return ArchiveStep(url=url, status="skipped")
 
+    logger.info(
+        "아카이빙 시작: %s (job #%d, source=%s, 시도 %d)",
+        url, item["id"], item["source"], item["attempts"] + 1,
+    )
+    started = time.monotonic()
     try:
         try:
             # browser_session·network_tag_id·credential_id 는 있을 때만 넘긴다 —
@@ -157,7 +176,7 @@ def process_next(
             if release is not None:
                 release(url)
     except Exception as e:
-        logger.warning("아카이빙 작업 실패: %s — %s", url, e)
+        # 실패 로그(재시도/최종 구분·시도 횟수)는 _handle_failure 가 남긴다.
         return _handle_failure(item, e)
 
     with db.connect() as conn:
@@ -173,6 +192,10 @@ def process_next(
             scheduler.set_schedule(url, item["interval_seconds"], run_at=item["run_at"])
         except ValueError as e:
             logger.warning("자동 재아카이빙 등록 실패: %s — %s", url, e)
+    logger.info(
+        "아카이빙 완료: %s — %s (job #%d, %dms)",
+        url, outcome.status, item["id"], int((time.monotonic() - started) * 1000),
+    )
     return ArchiveStep(url=url, status=outcome.status)
 
 

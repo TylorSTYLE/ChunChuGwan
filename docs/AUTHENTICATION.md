@@ -197,7 +197,7 @@ SSO(OIDC) 로그인은 IdP 쪽 2FA를 신뢰하므로 2단계를 건너뛴다.
 | `WCCG_SCHEDULER` | `on` | `off` 면 serve 가 스케줄·크롤을 실행하지 않음 — `wccg worker` 나 cron 으로 대체 |
 | `WCCG_CRAWL_WORKERS` | `2` | `wccg worker` 의 크롤 스레드 수 = 동시 진행 크롤(사이트) 수 (1~8) |
 | `WCCG_SYSTEM_LOG_MAX_ROWS` | `20000` | 시스템 로그(`/system/logs`) 보관 한도 행 수 — 초과분은 오래된 것부터 자동 정리 |
-| `WCCG_LOG_FILE` | (없음) | 설정 시 콘솔 로그(INFO 이상)를 그 경로에 회전 파일로도 남긴다 — 도커는 볼륨에 마운트해 호스트에서 읽는다. 프로세스(dashboard/worker/cli)별로 다른 파일을 쓸 것(회전 경합 방지). `WCCG_LOG_FILE_MAX_BYTES`(기본 10MB)·`WCCG_LOG_FILE_BACKUPS`(기본 5)로 회전 조정 |
+| `WCCG_LOG_FILE` | (없음) | 설정 시 INFO 이상 로그를 그 경로에 회전 파일로도 남긴다(콘솔 출력 레벨과 무관 — 콘솔은 `serve`·`worker` 가 기본 INFO, 그 외 명령은 `-v` 시 INFO, `--quiet` 면 WARNING). 도커는 볼륨에 마운트해 호스트에서 읽는다. 프로세스(dashboard/worker/cli)별로 다른 파일을 쓸 것(회전 경합 방지). `WCCG_LOG_FILE_MAX_BYTES`(기본 10MB)·`WCCG_LOG_FILE_BACKUPS`(기본 5)로 회전 조정 |
 | `WCCG_CAPTURE_ENGINE` | `playwright` | `patchright` 면 스텔스 캡처 엔진 사용 (Cloudflare 등의 `Runtime.enable` 봇 탐지 우회). 도커 이미지에 포함, 비도커는 `uv sync --extra stealth`. 미설치 시 playwright 로 자동 폴백 |
 | `WCCG_CAPTURE_HEADFUL` | `off` | `on` 이면 헤드리스 대신 헤드풀로 캡처 — 서버(디스플레이 없음)에서는 Xvfb 가 필요하다 (도커 엔트리포인트가 `xvfb-run` 으로 자동 래핑). Turnstile 류는 헤드풀이 사실상 필수 |
 | `WCCG_CAPTURE_CHANNEL` | (없음) | `chrome` 이면 번들 chromium 대신 시스템 real Chrome 사용 (TLS/HTTP2 지문이 진짜라 네트워크 레벨 탐지에 강함). 도커는 amd64 에만 Chrome 이 설치됨 — arm64 는 Chrome 이 없어 자동으로 번들 chromium 으로 폴백한다(동작은 하되 stealth 가 다소 약함). amd64·arm64 혼용이면 그냥 `chrome` 으로 둬도 안전 |

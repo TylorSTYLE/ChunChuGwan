@@ -138,6 +138,51 @@ def test_claim_conflict_releases_and_skips(archive_env):
     assert status == "pending"  # 반납되어 다음 폴링에서 재시도
 
 
+# ---- 운영 로그 (상태 확인·오류 분석) ----
+
+def test_process_next_logs_start_and_completion(archive_env, caplog):
+    """작업 시작·완료를 INFO 로 남긴다 — job_id·source·결과 status 포함."""
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, URL, source="cli")
+    with caplog.at_level("INFO", logger="chunchugwan.archive_worker"):
+        archive_worker.process_next(archive_fn=lambda url, **kw: _outcome("changed"))
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("아카이빙 시작" in m and "source=cli" in m for m in msgs)
+    assert any("아카이빙 완료" in m and "changed" in m for m in msgs)
+
+
+def test_failure_retry_logs_attempt_context(archive_env, monkeypatch, caplog):
+    """재시도 예약 실패는 시도 횟수·전체 한도와 함께 '재시도' 로 남긴다."""
+    monkeypatch.setattr(crawler, "retry_backoff", lambda conn: (300,))  # 한도 2
+
+    def boom(url, **kw):
+        raise RuntimeError("캡처 실패")
+
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, URL, source="web")
+    with caplog.at_level("WARNING", logger="chunchugwan.archive_worker"):
+        step = archive_worker.process_next(archive_fn=boom)
+    assert step.status == "retry"
+    warn = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("시도 1/2" in m and "재시도" in m for m in warn)
+
+
+def test_failure_final_logs_exhausted(archive_env, monkeypatch, caplog):
+    """시도 소진된 최종 실패는 '최종 실패' 로 구분해 남긴다."""
+    monkeypatch.setattr(crawler, "retry_backoff", lambda conn: ())  # 한도 1
+
+    def boom(url, **kw):
+        raise RuntimeError("캡처 실패")
+
+    with db.connect() as conn:
+        db.enqueue_archive_job(conn, URL, source="web")
+    with caplog.at_level("WARNING", logger="chunchugwan.archive_worker"):
+        step = archive_worker.process_next(archive_fn=boom)
+    assert step.status == "failed"
+    warn = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("최종 실패" in m and "1/1" in m for m in warn)
+
+
 # ---- 사람 보조(라이브) 세션 주입 게이트 (_live_session_for) ----
 
 _ITEM = {"id": 7, "network_tag_id": None}

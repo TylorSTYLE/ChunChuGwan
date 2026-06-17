@@ -142,6 +142,19 @@ def test_worker_command_runs_with_resolved_count(monkeypatch):
         signal.signal(signal.SIGTERM, old_term)
 
 
+def test_console_level_daemon_defaults_to_info():
+    """worker/serve 는 기본 INFO(데몬 운영 로그), 단발 명령은 WARNING. -v/-q 우선."""
+    import logging
+
+    assert cli._console_level(False, False, "worker") == logging.INFO
+    assert cli._console_level(False, False, "serve") == logging.INFO
+    assert cli._console_level(False, False, "add") == logging.WARNING
+    assert cli._console_level(False, False, None) == logging.WARNING
+    assert cli._console_level(True, False, "add") == logging.INFO        # -v
+    assert cli._console_level(False, True, "worker") == logging.WARNING  # --quiet
+    assert cli._console_level(True, True, "worker") == logging.INFO      # -v 가 우선
+
+
 # ---- add (큐 등록) + archive run (큐 소비) ----
 
 
