@@ -51,17 +51,24 @@ def _uid(email: str) -> int:
 
 def test_presets_reproduce_role_behaviour(tmp_db):
     assert db.effective_permissions("viewer") == frozenset({"view"})
-    assert db.effective_permissions("archiver") == frozenset({"view", "archive", "delete"})
+    # 신규 설치 archiver = 보기·아카이빙·개인 API Key (삭제 없음)
+    assert db.effective_permissions("archiver") == frozenset(
+        {"view", "archive", "use_api_keys"}
+    )
+    # 아카이브 관리 = +삭제
+    assert db.effective_permissions("archive_manager") == frozenset(
+        {"view", "archive", "delete", "use_api_keys"}
+    )
     assert db.effective_permissions("admin") == frozenset(db.PERMISSIONS)
     for inactive in ("pending", "blocked", "withdrawn"):
         assert db.effective_permissions(inactive) == frozenset()
 
 
 def test_overrides_add_and_remove(tmp_db):
-    # archiver 에서 삭제만 제거
-    assert db.effective_permissions("archiver", '{"delete": false}') == frozenset(
-        {"view", "archive"}
-    )
+    # archive_manager 에서 삭제만 제거
+    assert db.effective_permissions(
+        "archive_manager", '{"delete": false}'
+    ) == frozenset({"view", "archive", "use_api_keys"})
     # viewer 에게 아카이브 추가
     assert db.effective_permissions("viewer", '{"archive": true}') == frozenset(
         {"view", "archive"}

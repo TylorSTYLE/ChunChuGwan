@@ -3,6 +3,8 @@
 역할 프리셋(ROLE_PRESETS 상수)을 DB permission_groups 로 옮겨, 관리자가 코드
 배포 없이 역할의 기본 권한을 편집하고 새 그룹을 추가·삭제할 수 있다.
 """
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -50,23 +52,65 @@ def _uid(email: str) -> int:
 
 
 def test_seed_is_idempotent(tmp_db):
-    """_migrate 가 여러 번 돌아도 빌트인 3개만 유지된다(INSERT OR IGNORE)."""
+    """_migrate 가 여러 번 돌아도 빌트인 4개만 유지된다(INSERT OR IGNORE)."""
+    builtin = {"admin", "archive_manager", "archiver", "viewer"}
     with db.connect() as conn:
         names = {r["name"] for r in db.list_permission_groups(conn)}
-    assert names == {"admin", "archiver", "viewer"}
+    assert names == builtin
     # 두 번째 연결(=_migrate 재호출 가능)에도 그대로
     with db.connect() as conn:
         rows = db.list_permission_groups(conn)
-    assert {r["name"] for r in rows} == {"admin", "archiver", "viewer"}
+    assert {r["name"] for r in rows} == builtin
     assert all(r["is_builtin"] for r in rows)
 
 
-def test_builtin_presets_match_legacy(tmp_db):
+def test_builtin_presets_seed_defaults(tmp_db):
+    """신규 설치 기본 프리셋 — archiver 는 삭제 없음, archive_manager 가 삭제 보유.
+
+    개인 API Key(use_api_keys)는 viewer 외 빌트인에 기본 부여된다.
+    """
     with db.connect() as conn:
         presets = db.role_presets(conn)
     assert presets["viewer"] == frozenset({"view"})
-    assert presets["archiver"] == frozenset({"view", "archive", "delete"})
+    assert presets["archiver"] == frozenset({"view", "archive", "use_api_keys"})
+    assert presets["archive_manager"] == frozenset(
+        {"view", "archive", "delete", "use_api_keys"}
+    )
     assert presets["admin"] == frozenset(db.PERMISSIONS)
+
+
+def test_migrate_adds_use_api_keys_to_existing_builtins(tmp_db):
+    """기존 설치 보강 — admin·archiver 에 use_api_keys 추가, archiver 의 삭제는 유지.
+
+    use_api_keys 는 신규 권한이라 레거시 그룹 JSON 에 없다. 기존 archiver 는
+    삭제 권한을 그대로 두고(결정 사항) use_api_keys 만 보강하며, archive_manager
+    그룹이 새로 시드된다. viewer 는 보강 대상이 아니다.
+    """
+    # 레거시 상태로 되돌림 — use_api_keys 없음, archiver 는 삭제 보유, archive_manager 제거
+    with db.connect() as conn:
+        conn.execute("DELETE FROM permission_groups WHERE name = 'archive_manager'")
+        conn.execute(
+            "UPDATE permission_groups SET permissions = ? WHERE name = 'admin'",
+            (json.dumps([p for p in db.PERMISSIONS if p != "use_api_keys"]),),
+        )
+        conn.execute(
+            "UPDATE permission_groups SET permissions = ? WHERE name = 'archiver'",
+            (json.dumps(["view", "archive", "delete"]),),
+        )
+    # 보강 마이그레이션 재실행 (seed + use_api_keys 보강)
+    with db.connect() as conn:
+        db._seed_permission_groups(conn)
+        db._migrate_api_key_permission(conn)
+        presets = db.role_presets(conn)
+    # archiver 는 기존 삭제 유지 + use_api_keys 보강 (기존 설치는 삭제를 잃지 않는다)
+    assert presets["archiver"] == frozenset(
+        {"view", "archive", "delete", "use_api_keys"}
+    )
+    assert presets["admin"] == frozenset(db.PERMISSIONS)  # use_api_keys 포함
+    assert presets["archive_manager"] == frozenset(
+        {"view", "archive", "delete", "use_api_keys"}
+    )
+    assert presets["viewer"] == frozenset({"view"})  # 보강 대상 아님
 
 
 # ---- 이름 정규화 ----
@@ -79,7 +123,7 @@ def test_normalize_group_name():
     for bad in ("", "  ", "한글", "a" * 33, "bad!name"):
         with pytest.raises(ValueError):
             db.normalize_group_name(bad)
-    for reserved in ("admin", "viewer", "pending", "blocked", "withdrawn"):
+    for reserved in ("admin", "archive_manager", "viewer", "pending", "blocked", "withdrawn"):
         with pytest.raises(ValueError):
             db.normalize_group_name(reserved)
 

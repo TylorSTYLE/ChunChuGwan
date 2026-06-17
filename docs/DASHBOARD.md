@@ -217,7 +217,7 @@
   `searchindex.reindex_all`, `wccg search reindex --all` 과 동일. FTS5
   미지원이면 비활성)·가입 설정(회원
   가입 허용 여부 + 가입 초기 권한
-  권한없음/보기 전용/아카이브, 기본 권한없음 — `settings` 테이블)·사이트
+  관리자를 뺀 권한 그룹 + 권한없음 중 선택, 기본 권한없음 — `settings` 테이블)·사이트
   아카이브 설정(`POST /system/crawl-settings` — 크롤 기본 옵션 3종 + 실패
   재시도 대기 쉼표 목록, 대기 횟수 + 1 = 페이지당 최대 시도. `settings`
   테이블, 재시도 대기는 진행 중 크롤에도 즉시 적용)·캡처 설정
@@ -283,10 +283,13 @@
   발급·폐기. 권한(보기/아카이브)과 만료(영구·1일·1개월·1년·사용자 지정 일)
   선택, 키 원문은 발급 직후 1회만 표시. 개인용 키는 아래 "개인 API Key" 화면.
 - **개인 API Key** (personal_api_keys) — `/settings/api-keys`, 로그인 사용자
-  본인용 (개인설정 드롭다운에서 진입). 크롬 확장 등이 `Authorization: Bearer`
-  로 `/api/v1` 에 접근할 때 쓰는 본인 귀속 토큰(owner_user_id=본인)을 발급·폐기.
-  권한(보기/아카이브)은 발급 시 선택하되 내 역할 범위로 클램프(보기=viewer↑,
-  아카이브=archiver↑ 만 부여, 그 이상은 무시), 발급
+  본인용 (개인설정 드롭다운에서 진입). **`use_api_keys` 권한 전용** — 없으면
+  메뉴·계정 링크가 숨고 화면 직접 접근도 403, 토큰 사용도 401(빌트인 기본은
+  admin·archive_manager·archiver 보유, viewer 제외). 크롬 확장 등이
+  `Authorization: Bearer` 로 `/api/v1` 에 접근할 때 쓰는 본인 귀속
+  토큰(owner_user_id=본인)을 발급·폐기. 권한(보기/아카이브)은 발급 시 선택하되
+  내 역할 범위로 클램프(보기=`view`↑, 아카이브=`archive`↑ 만 부여, 그 이상은
+  무시), 발급
   (`POST /settings/api-keys`)·폐기(`POST /settings/api-keys/{id}/delete`)는
   본인 토큰만(IDOR 방어, 타인·시스템 키는 404). 원문은 발급 직후 1회만 표시.
   발급 폼 앵커 `#ext-token-form` — 확장이 미연결 시 이 화면을 연다.

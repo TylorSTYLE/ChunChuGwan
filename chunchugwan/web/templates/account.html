@@ -106,11 +106,13 @@
   {% endif %}
   {% endif %}
 
+  {% if can_use_api_keys %}
   <h3>{{ _("개인 API Key") }}</h3>
   <p style="font-size:13px; margin:4px 0">
     {{ _("크롬 확장 등 외부 도구가 쓰는 본인 전용 API Key 는 별도 화면에서 관리합니다.") }}
     — <a href="/settings/api-keys">{{ _("관리") }}</a>
   </p>
+  {% endif %}
 
   {% if role != 'admin' %}
   <fieldset class="danger-zone">
