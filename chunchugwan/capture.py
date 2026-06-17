@@ -640,9 +640,11 @@ def _capture_in_browser(
         # 않는다 — 그대로 해시하면 차단 페이지가 스냅샷으로 둔갑하거나 직전과
         # 같은 해시로 묻혀 아카이브를 오염시킨다 (아키텍처 원칙 3). raw.html 을
         # 쓰기 전에 판정해 out_dir 을 깨끗이 둔다.
+        title = page.title()
         reason = challenge_reason(
-            raw_html, response.status if response else None, page.url, page.title()
+            raw_html, response.status if response else None, page.url, title
         )
+        challenged = bool(reason)
         if reason:
             # 스텔스 캡처면 비상호작용 챌린지가 자동 통과하도록 잠시 기다린다.
             # 풀리면 갱신된 raw_html 로 진행, 끝내 안 풀리면 차단으로 실패.
@@ -653,6 +655,8 @@ def _capture_in_browser(
             raw_html, reason = live_session.solve(page, reason)
         if reason:
             raise CaptureChallengeError(f"{url}: {reason}")
+        if challenged:
+            title = page.title()  # 챌린지 통과로 DOM 이 바뀌었으니 최종 제목 재독
         (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
         document_links = _collect_document_links(page)
         page_links = _collect_page_links(page)
@@ -689,7 +693,7 @@ def _capture_in_browser(
         return CaptureResult(
             final_url=page.url,
             http_status=response.status if response else None,
-            title=page.title() or None,
+            title=title or None,
             raw_html=raw_html,
             content_html=content_html,
             document_links=document_links,

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
+from jinja2.environment import create_cache
 from markupsafe import Markup, escape
 
 
@@ -134,6 +135,11 @@ templates = Jinja2Templates(
     directory=Path(__file__).parent / "templates",
     context_processors=[_auth_context, _i18n_context, _tz_context],
 )
+# 템플릿은 패키지에 동봉돼 런타임에 바뀌지 않는다 — 매 렌더의 stat(변경 감지)을
+# 끄고(auto_reload), 컴파일된 템플릿을 전부 무제한 캐시(cache_size=-1)해 둔다.
+# (Starlette 1.x 는 env 옵션 kwargs 를 안 받으므로 생성 후 Environment 에 직접 적용.)
+templates.env.auto_reload = False
+templates.env.cache = create_cache(-1)
 templates.env.filters["filesize"] = filesize
 templates.env.filters["ts"] = ts
 templates.env.filters["highlight"] = highlight

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import html
 import re
+from functools import lru_cache
 
 from lxml import html as lxml_html
 
@@ -204,13 +205,19 @@ def _body_text_fallback(raw_html: str) -> str:
     return html.unescape(body)
 
 
+@lru_cache(maxsize=64)
+def _compile_drop_patterns(patterns: tuple[str, ...]) -> tuple[re.Pattern, ...]:
+    """도메인 룰의 줄 제거 정규식을 컴파일해 캐시 — normalize 호출마다 재컴파일 방지."""
+    return tuple(re.compile(p) for p in patterns)
+
+
 def normalize(text: str, drop_line_patterns: tuple[str, ...] = ()) -> str:
     """비교/해시 전 노이즈 제거. 멱등: normalize(normalize(x)) == normalize(x).
 
     drop_line_patterns: 도메인 룰(rules.json)의 추가 줄 제거 정규식.
     줄 단위로 search 가 걸리면 그 줄을 버린다.
     """
-    extra = [re.compile(p) for p in drop_line_patterns]
+    extra = _compile_drop_patterns(drop_line_patterns)
     for pat in _TIMESTAMP_PATTERNS:
         text = pat.sub("[TIME]", text)
     for pat in _RELATIVE_TIME_PATTERNS:
