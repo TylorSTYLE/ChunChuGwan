@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+	<title>춘추관</title>
+	<script>
+		/* 테마 적용 — 저장값(light|dark) 없으면 시스템 설정. 첫 페인트 전에 실행해 깜빡임 방지.
+		   기존 base.html 의 FOUC 방지 스크립트를 그대로 이식한다. */
+		(function () {
+			var KEY = 'wccg-theme';
+			var mq = window.matchMedia('(prefers-color-scheme: dark)');
+			function stored() {
+				try {
+					var v = localStorage.getItem(KEY);
+				} catch (e) {
+					return null;
+				}
+				return v === 'light' || v === 'dark' ? v : null;
+			}
+			function apply() {
+				document.documentElement.dataset.theme = stored() || (mq.matches ? 'dark' : 'light');
+			}
+			mq.addEventListener('change', function () {
+				if (!stored()) apply();
+			});
+			apply();
+			window.wccgTheme = { KEY: KEY, stored: stored, apply: apply };
+		})();
+	</script>
+	%sveltekit.head%
+</head>
+<body data-sveltekit-preload-data="hover">
+	<div style="display: contents">%sveltekit.body%</div>
+</body>
+</html>

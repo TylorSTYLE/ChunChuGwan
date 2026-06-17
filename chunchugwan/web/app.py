@@ -45,7 +45,9 @@ from .. import (
 )
 from . import (
     api_routes, audit, auth_routes, i18n, migration_routes, permissions, system_routes,
+    web_api_routes,
 )
+from fastapi.staticfiles import StaticFiles
 from .i18n import t
 from .templating import templates
 
@@ -107,6 +109,7 @@ app.include_router(auth_routes.router)
 app.include_router(system_routes.router)
 app.include_router(api_routes.router)
 app.include_router(migration_routes.router)
+app.include_router(web_api_routes.router)
 
 # 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)
 # /login/passkey* 는 패스워드 통과 후 pending 세션 단계라 user 가 아직 없다 —
@@ -152,10 +155,14 @@ async def auth_gate(request: Request, call_next):
     request.state.session = None
     request.state.locale = i18n.resolve_locale(request)
 
-    # /api/ POST 는 Bearer/X-API-Key 토큰이 자격증명이라 쿠키 기반 CSRF 가
-    # 성립하지 않는다 (확장 background fetch 는 Origin 이 없거나 chrome-extension://).
-    # 키 검증·권한 가드는 그대로 강제되므로 Origin 검사만 면제한다.
-    if request.method == "POST" and not request.url.path.startswith("/api/"):
+    # /api/v1·/api/migration POST 는 Bearer/X-API-Key·이전 토큰이 자격증명이라
+    # 쿠키 기반 CSRF 가 성립하지 않는다 (확장 background fetch 는 Origin 이 없거나
+    # chrome-extension://). 키 검증·권한 가드는 그대로 강제되므로 Origin 검사만
+    # 면제한다. 단 /api/web 은 세션 쿠키 인증(SPA)이라 면제하지 않고 검사한다.
+    _csrf_exempt = request.url.path.startswith("/api/") and not request.url.path.startswith(
+        "/api/web/"
+    )
+    if request.method == "POST" and not _csrf_exempt:
         origin = request.headers.get("origin") or request.headers.get("referer")
         if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
             return PlainTextResponse(t(request, "CSRF 검증 실패"), status_code=403)
@@ -232,6 +239,10 @@ async def auth_gate(request: Request, call_next):
                 or path.startswith("/invite/")
                 or path.startswith("/resource/")
                 or path.startswith("/api/")
+                # SPA 정적 셸·자원(/ui)은 인증 없이 로드된다 — 데이터(/api/web)가
+                # require_session 으로 401 게이트하고, SPA 가 401 을 받으면 로그인으로 안내한다.
+                or path == "/ui"
+                or path.startswith("/ui/")
             )
             if request.state.user is None and not public:
                 target = path + (f"?{request.url.query}" if request.url.query else "")
@@ -334,6 +345,35 @@ _FAVICON_PATH = Path(__file__).parent / "static" / "favicon.svg"
 def favicon() -> FileResponse:
     """SVG 파비콘 (OS 라이트/다크 자동) — 인증 없이 서빙 (_BROWSER_ICON_PATHS)."""
     return FileResponse(_FAVICON_PATH, media_type="image/svg+xml")
+
+
+# SvelteKit 정적 SPA 산출물 — 패키지 동봉본(web/frontend_dist) 우선,
+# 없으면 개발 빌드(frontend/build)를 가리킨다. 빅뱅 컷오버 전까지는 /ui 아래
+# 서빙해 기존 SSR(/)과 공존한다.
+_FRONTEND_DIST = Path(__file__).parent / "frontend_dist"
+if not _FRONTEND_DIST.exists():
+    _dev_dist = Path(__file__).resolve().parents[2] / "frontend" / "build"
+    if _dev_dist.exists():
+        _FRONTEND_DIST = _dev_dist
+
+
+@app.get("/ui", include_in_schema=False)
+@app.get("/ui/{path:path}", include_in_schema=False)
+def spa(path: str = "") -> FileResponse:
+    """SvelteKit 정적 SPA 서빙 + 클라이언트 라우팅 fallback.
+
+    실존 파일이면 그 파일을, 아니면 index.html 을 돌려준다 (딥링크·새로고침).
+    base path 가 /ui 라 SPA 의 자원 참조(/ui/_app/...)도 이 라우트가 받는다.
+    경로는 dist 안으로만 매핑한다 (path traversal 방지).
+    """
+    if not _FRONTEND_DIST.exists():
+        raise HTTPException(503, "SPA 빌드가 없습니다 — frontend 를 빌드하세요")
+    root = _FRONTEND_DIST.resolve()
+    if path:
+        candidate = (root / path).resolve()
+        if (candidate == root or root in candidate.parents) and candidate.is_file():
+            return FileResponse(candidate)
+    return FileResponse(root / "index.html")
 
 
 # 크롬 확장(MV3) 소스 — 패키지에 함께 실린다 (Docker·휠 모두 chunchugwan 포함)

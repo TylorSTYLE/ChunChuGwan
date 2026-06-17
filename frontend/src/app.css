@@ -1,0 +1,92 @@
+/* 전역 스타일 — 기존 base.html 의 테마 변수·기본 요소·뱃지·테이블·카드 스타일을
+   이식한다. 시각적 회귀를 최소화하는 것이 목표(도구다운 밀도 UI). 화면별
+   세부 스타일은 각 Svelte 컴포넌트의 scoped <style> 에 둔다. */
+:root {
+	color-scheme: light;
+	--bg: #ffffff; --fg: #1a1a1a; --muted: #6b7280; --border: #e2e2e2;
+	--bg-soft: #f7f7f7; --surface: #ffffff;
+	--amber: #92400e; --amber-bg: #fef3c7;
+	--green: #166534; --green-bg: #dcfce7;
+	--gray: #374151;  --gray-bg: #e5e7eb;
+	--blue: #1e40af;  --blue-bg: #dbeafe;
+	--red-bg: #fee2e2; --red: #dc2626; --red-text: #991b1b; --red-hover: #b91c1c;
+	--link: #1d4ed8;
+	--seal: #c2410c;
+}
+:root[data-theme='dark'] {
+	color-scheme: dark;
+	--bg: #14171a; --fg: #dde1e6; --muted: #8b929b; --border: #2c3138;
+	--bg-soft: #1c2025; --surface: #1c2025;
+	--amber: #fbbf24; --amber-bg: #423008;
+	--green: #4ade80; --green-bg: #15301f;
+	--gray: #c3c9d1;  --gray-bg: #343a42;
+	--blue: #93c5fd;  --blue-bg: #1e3a5f;
+	--red-bg: #3f181b; --red: #dc2626; --red-text: #f87171; --red-hover: #b91c1c;
+	--link: #60a5fa;
+	--seal: #ea7c4f;
+}
+* { box-sizing: border-box; }
+body {
+	font-family: system-ui, sans-serif; margin: 0; color: var(--fg);
+	font-size: 14px; background: var(--bg);
+}
+main { padding: 16px; max-width: 1280px; margin: 0 auto; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+h3 {
+	font-size: 13px; color: var(--muted); margin: 24px 0 8px;
+	text-transform: uppercase; letter-spacing: 0.04em;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); }
+td { overflow-wrap: anywhere; }
+th {
+	color: var(--muted); font-weight: 600; font-size: 11px;
+	text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap;
+}
+td.num { text-align: right; color: var(--muted); white-space: nowrap; }
+td.mono.muted { white-space: nowrap; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.muted { color: var(--muted); }
+
+.badge {
+	display: inline-block; font-size: 11px; font-weight: 600;
+	padding: 1px 7px; border-radius: 9px; white-space: nowrap;
+}
+.badge.changed { color: var(--amber); background: var(--amber-bg); }
+.badge.same { color: var(--gray); background: var(--gray-bg); }
+.badge.new { color: var(--green); background: var(--green-bg); }
+.badge.error { color: var(--red-text); background: var(--red-bg); }
+
+button, select, input[type='text'], input[type='url'], input[type='number'] {
+	font: inherit; font-size: 13px; padding: 3px 10px;
+	border: 1px solid var(--border); border-radius: 4px;
+	background: var(--surface); color: var(--fg);
+}
+button { cursor: pointer; }
+button:hover { background: var(--bg-soft); }
+
+.stat-grid {
+	display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+	gap: 10px; margin-bottom: 8px;
+}
+.stat-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; }
+.stat-card .label {
+	font-size: 11px; color: var(--muted); font-weight: 600;
+	text-transform: uppercase; letter-spacing: 0.04em;
+}
+.stat-card .value {
+	font-size: 22px; font-weight: 600; margin-top: 2px;
+	font-variant-numeric: tabular-nums;
+}
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-wrap > table { min-width: 640px; }
+.table-wrap.wide > table { min-width: 920px; }
+
+@media (max-width: 599px) {
+	main { padding: 12px; }
+	.stat-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+	.stat-card .value { font-size: 19px; }
+}
