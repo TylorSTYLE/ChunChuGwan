@@ -2,7 +2,9 @@
 	import { untrack } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
+	import { ts } from '$lib/format';
 	import { api, ApiError } from '$lib/api';
+	import { b64uToBuf, bufToB64u } from '$lib/webauthn';
 	import type { AccountData } from '$lib/types';
 
 	let { data }: { data: { data: AccountData } } = $props();
@@ -107,6 +109,66 @@
 			});
 			totpPassword = '';
 		}, '2단계 인증을 껐습니다.');
+
+	// ── 패스키 (WebAuthn) ──
+	let pkName = $state('');
+	let pkPasswords = $state<Record<number, string>>({});
+
+	async function registerPasskey() {
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			/* eslint-disable @typescript-eslint/no-explicit-any */
+			const opts = await api<any>('/settings/passkey/options', { method: 'POST' });
+			opts.challenge = b64uToBuf(opts.challenge);
+			opts.user.id = b64uToBuf(opts.user.id);
+			(opts.excludeCredentials || []).forEach((c: any) => (c.id = b64uToBuf(c.id)));
+			const cred = (await navigator.credentials.create({
+				publicKey: opts
+			})) as PublicKeyCredential;
+			const att = cred.response as AuthenticatorAttestationResponse;
+			await api('/settings/passkey/register', {
+				method: 'POST',
+				body: JSON.stringify({
+					name: pkName,
+					credential: {
+						id: cred.id,
+						rawId: bufToB64u(cred.rawId),
+						type: cred.type,
+						clientExtensionResults: cred.getClientExtensionResults(),
+						response: {
+							clientDataJSON: bufToB64u(att.clientDataJSON),
+							attestationObject: bufToB64u(att.attestationObject),
+							transports: att.getTransports ? att.getTransports() : []
+						}
+					}
+				})
+			});
+			pkName = '';
+			notice = t('패스키를 등록했습니다.');
+			await invalidateAll();
+		} catch (err) {
+			error =
+				err instanceof ApiError
+					? err.message
+					: (err as Error)?.message || t('패스키 등록이 취소되었습니다.');
+		} finally {
+			busy = false;
+		}
+	}
+
+	function deletePasskey(id: number) {
+		const pw = pkPasswords[id] || '';
+		if (!pw) return;
+		return run(async () => {
+			await api(`/settings/passkey/${id}/delete`, {
+				method: 'POST',
+				body: JSON.stringify({ password: pw })
+			});
+			delete pkPasswords[id];
+		}, '패스키를 삭제했습니다.');
+	}
 
 	async function withdraw() {
 		if (!confirm(t('정말 탈퇴할까요? 이 작업은 되돌릴 수 없습니다.'))) return;
@@ -225,6 +287,63 @@
 	{/if}
 </section>
 
+<section>
+	<h3>{t('패스키')}</h3>
+	{#if !d.has_password}
+		<p class="muted">{t('SSO 전용 계정의 2단계 인증은 IdP(Authentik)에서 관리합니다.')}</p>
+	{:else}
+		<p class="muted hint">
+			{t('Touch ID·보안 키·휴대폰 등을 패스워드 로그인의 2단계 인증 수단으로 등록합니다.')}
+		</p>
+		{#if d.passkeys.length > 0}
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th>{t('이름')}</th>
+							<th>{t('등록')}</th>
+							<th>{t('마지막 사용')}</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each d.passkeys as pk}
+							<tr>
+								<td>{pk.name}</td>
+								<td class="mono muted">{ts(pk.created_at)}</td>
+								<td class="mono muted">{pk.last_used_at ? ts(pk.last_used_at) : '—'}</td>
+								<td class="pk-del">
+									<input
+										type="password"
+										bind:value={pkPasswords[pk.id]}
+										placeholder={t('패스워드 확인')}
+									/>
+									<button
+										class="danger"
+										onclick={() => deletePasskey(pk.id)}
+										disabled={busy || !pkPasswords[pk.id]}>{t('삭제')}</button
+									>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{:else}
+			<p class="muted">{t('등록된 패스키가 없습니다.')}</p>
+		{/if}
+		<div class="form">
+			<input
+				type="text"
+				bind:value={pkName}
+				maxlength="64"
+				placeholder={t('새 패스키 이름 (예: 맥북 Touch ID)')}
+			/>
+			<button onclick={registerPasskey} disabled={busy}>{t('패스키 등록')}</button>
+		</div>
+	{/if}
+</section>
+
 {#if !d.is_admin}
 	<section class="danger-zone">
 		<h3>{t('위험 영역')}</h3>
@@ -299,6 +418,14 @@
 		font-size: 13px;
 		word-break: break-all;
 		margin-bottom: 8px;
+	}
+	.pk-del {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+	}
+	.pk-del input {
+		width: 130px;
 	}
 	.danger-zone {
 		border-top-color: var(--red);

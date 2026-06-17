@@ -376,6 +376,7 @@ export interface AccountData {
 	has_password: boolean;
 	totp_enabled: boolean;
 	passkey_count: number;
+	passkeys: { id: number; name: string; created_at: string; last_used_at: string | null }[];
 	email_verified: boolean;
 	email_verification_on: boolean;
 	timezone: string;

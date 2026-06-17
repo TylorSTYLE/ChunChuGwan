@@ -21,7 +21,7 @@ import sqlite3
 import zoneinfo
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from pydantic import BaseModel
@@ -1733,7 +1733,7 @@ def account(
     """계정 설정 — 표시이름·언어·타임존·패스워드·2FA/패스키 상태. auth.account_page 의 JSON 판."""
     user = _require_account(user)
     with db.connect() as conn:
-        passkey_count = db.count_passkeys(conn, user["id"])
+        passkeys = db.list_passkeys(conn, user["id"])
         email_verification_on = (
             db.email_verification_enabled(conn) and mailer.mail_enabled(conn)
         )
@@ -1746,7 +1746,14 @@ def account(
         "is_admin": user["role"] == "admin",
         "has_password": user["password_hash"] is not None,
         "totp_enabled": user["totp_secret"] is not None,
-        "passkey_count": passkey_count,
+        "passkey_count": len(passkeys),
+        "passkeys": [
+            {
+                "id": c["id"], "name": c["name"],
+                "created_at": c["created_at"], "last_used_at": c["last_used_at"],
+            }
+            for c in passkeys
+        ],
         "email_verified": bool(user["email_verified"]),
         "email_verification_on": email_verification_on,
         "timezone": user["timezone"] or "UTC",
@@ -2057,4 +2064,80 @@ def totp_disable(
         raise HTTPException(401, "패스워드가 올바르지 않습니다.")
     with db.connect() as conn:
         db.disable_totp(conn, user["id"])
+    return {"ok": True}
+
+
+# ── 개인 2단계 인증 (패스키 / WebAuthn) ───────────────────────────────────────
+# TOTP 와 동일하게 패스워드 로그인의 2단계 수단. challenge 는 세션 행에 저장해
+# options→register 사이를 잇는다. auth_routes 의 SSR /settings/passkey 의 JSON 판.
+
+
+@router.post("/settings/passkey/options")
+def passkey_register_options(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> Response:
+    """패스키 등록 옵션 발급 — 이미 등록된 자격증명은 제외 목록으로 전달."""
+    user = _require_account(user)
+    if user["password_hash"] is None:
+        raise HTTPException(400, "SSO 전용 계정은 패스키를 등록할 수 없습니다.")
+    with db.connect() as conn:
+        creds = db.list_passkeys(conn, user["id"])
+        options_json, challenge = auth.passkey_registration_options(
+            user["id"], user["email"], [c["credential_id"] for c in creds]
+        )
+        db.set_session_challenge(
+            conn, request.state.session["token_hash"], challenge
+        )
+    return Response(content=options_json, media_type="application/json")
+
+
+@router.post("/settings/passkey/register")
+async def passkey_register(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """패스키 등록 응답 검증 → 저장. credential 구조가 중첩이라 raw JSON 으로 받는다."""
+    user = _require_account(user)
+    if user["password_hash"] is None:
+        raise HTTPException(400, "SSO 전용 계정은 패스키를 등록할 수 없습니다.")
+    body = await request.json()
+    credential = body.get("credential")
+    if not isinstance(credential, dict):
+        raise HTTPException(400, "credential 누락")
+    name = (str(body.get("name") or "").strip() or "패스키")[:64]
+    with db.connect() as conn:
+        challenge = db.consume_session_challenge(
+            conn, request.state.session["token_hash"]
+        )
+        if challenge is None:
+            raise HTTPException(400, "진행 중인 등록이 없습니다 — 다시 시도하세요")
+        verified = auth.verify_passkey_registration(credential, challenge)
+        if verified is None:
+            raise HTTPException(400, "패스키 등록 검증에 실패했습니다")
+        try:
+            db.create_passkey(conn, user["id"], name=name, **verified)
+        except sqlite3.IntegrityError:
+            raise HTTPException(400, "이미 등록된 패스키입니다")
+    audit.log(request, "패스키 등록: '%s'", name)
+    return {"ok": True}
+
+
+class PasskeyDeleteReq(BaseModel):
+    password: str
+
+
+@router.post("/settings/passkey/{passkey_id}/delete")
+def passkey_delete(
+    request: Request, passkey_id: int, body: PasskeyDeleteReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """패스키 삭제 — 세션 탈취로 2FA 를 무력화하지 못하도록 패스워드 재확인."""
+    user = _require_account(user)
+    if user["password_hash"] is None or not auth.verify_password(
+        user["password_hash"], body.password
+    ):
+        raise HTTPException(401, "패스워드가 올바르지 않습니다.")
+    with db.connect() as conn:
+        if not db.delete_passkey(conn, user["id"], passkey_id):
+            raise HTTPException(404, "패스키 없음")
+    audit.log(request, "패스키 삭제: #%d", passkey_id)
     return {"ok": True}
