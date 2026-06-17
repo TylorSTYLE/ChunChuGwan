@@ -9,9 +9,20 @@ on:
 env:
   IMAGE: ghcr.io/tylorstyle/chunchugwan   # GHCR 은 소문자만 허용
 
+# 같은 ref 에 연속 push 시 멀티아치 빌드가 겹치지 않게 한다.
+# develop 는 최신만 의미가 있어 진행 중 빌드를 취소하지만, main·태그(릴리스)는
+# 보존해 릴리스 이미지가 중간에 끊기지 않게 한다.
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/develop' }}
+
 jobs:
   # 플랫폼별 네이티브 빌드 (QEMU 에뮬레이션 없이 — chromium 설치가 느려서)
   build:
+    # 릴리스(release.yml)는 main 범프 커밋·develop FF 를 따로 push 하는데, 같은 트리를
+    # 가리키는 vX.Y.Z 태그 빌드가 :latest·:main·:develop 태그까지 모두 떠맡으므로
+    # (아래 meta 참조) 범프 커밋에 의한 브랜치 push 빌드는 중복이라 건너뛴다.
+    if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && startsWith(github.event.head_commit.message, '춘추관 v')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -93,6 +104,11 @@ jobs:
             type=ref,event=branch
             type=sha
             type=semver,pattern={{version}}
+            # 릴리스 태그 빌드가 브랜치 push 빌드를 대신하므로 :latest·:main·:develop 도 함께 찍는다
+            # (태그 커밋 = main HEAD = FF 된 develop 와 동일 트리).
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=main,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=develop,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: GHCR 로그인
         uses: docker/login-action@v4
@@ -122,7 +138,7 @@ jobs:
 
     steps:
       - name: GHCR 로그인
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -167,7 +183,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}

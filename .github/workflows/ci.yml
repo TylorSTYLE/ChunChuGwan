@@ -32,6 +32,9 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          # uv.lock 의 무관한 패키지 변경으로 키가 빗나가도 직전 캐시에서 복원해
+          # chromium 통째 재다운로드를 피한다 (버전이 같으면 install 이 즉시 끝남).
+          restore-keys: playwright-${{ runner.os }}-
 
       - name: Chromium 설치
         if: steps.playwright-cache.outputs.cache-hit != 'true'
