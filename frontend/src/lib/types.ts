@@ -323,6 +323,37 @@ export interface SystemApiKeysData {
 	})[];
 }
 
+export interface SystemOverview {
+	version: string;
+	counts: Record<string, number>;
+	signup_enabled: boolean;
+	signup_default_role: string;
+	signup_roles: string[];
+	role_labels: Record<string, string>;
+	email_verification_enabled: boolean;
+	email_verification_ttl_minutes: number;
+	email_verification_ttl_limits: { min: number; max: number };
+	crawl_defaults: { max_pages: number; max_depth: number; delay: number };
+	crawl_retry_backoff: string;
+	crawl_limits: Record<string, number>;
+	ext_credential_ttl_hours: number;
+	ext_credential_ttl_limits: { min: number; max: number };
+	mobile_screenshot_enabled: boolean;
+	document_limits: { max_count: number; max_mb: number; timeout_seconds: number };
+	document_limit_ranges: Record<string, number>;
+	network_tags: (Record<string, unknown> & { id: string; name: string })[];
+	credential_key_set: boolean;
+	smtp_config: Record<string, unknown> & { enabled: boolean; host: string };
+	smtp_tls_modes: string[];
+	archive_root: string;
+	usage: Record<string, number>;
+	optimize_pending: number;
+	search: Record<string, unknown>;
+	migration_mode: boolean;
+	migration_token_created_at: string | null;
+	public_url: string | null;
+}
+
 export interface Dashboard {
 	total_pages: number;
 	total_sites: number;

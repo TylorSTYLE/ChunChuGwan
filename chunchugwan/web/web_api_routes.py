@@ -25,8 +25,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from .. import (
-    __version__, auth, config, crawler, db, deletion, differ, documents, mailer,
-    resources, scheduler, searchindex, storage,
+    __version__, auth, config, crawler, crypto, db, deletion, differ, documents,
+    mailer, optimize, resources, scheduler, searchindex, storage,
 )
 from . import audit, i18n, permissions
 from .templating import _auth_context
@@ -1460,4 +1460,253 @@ def system_api_key_delete(
             raise HTTPException(404, "API 키 없음")
         db.delete_api_key(conn, key_id)
     audit.log(request, "API 키 폐기: #%d", key_id)
+    return {"ok": True}
+
+
+# ── 시스템 현황 + 설정 ───────────────────────────────────────────────────────
+
+
+@router.get("/system")
+def system_overview(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """시스템 현황 + 설정 — system_routes.system_view 의 JSON 판.
+
+    운영 액션(백업/복원/이전/재색인)은 별도 POST 로 둔다. 여기서는 현황·설정값과
+    화면 폼 검증에 쓰는 한도 범위를 함께 내려준다.
+    """
+    _require_manage_system(user)
+    with db.connect() as conn:
+        counts = {
+            tbl: conn.execute(f"SELECT COUNT(*) AS c FROM {tbl}").fetchone()["c"]
+            for tbl in ("pages", "snapshots", "checks", "users")
+        }
+        signup_enabled = db.signup_enabled(conn)
+        signup_default_role = db.signup_default_role(conn)
+        signup_role_choices = db.signup_roles(conn)
+        role_labels = db.role_labels(conn)
+        email_verification_enabled = db.email_verification_enabled(conn)
+        email_verification_ttl_minutes = db.email_verification_ttl_minutes(conn)
+        crawl_defaults = crawler.crawl_defaults(conn)
+        crawl_backoff = crawler.retry_backoff(conn)
+        network_tags = db.list_network_tags(conn)
+        ext_credential_ttl_hours = db.ext_credential_ttl_hours(conn)
+        mobile_screenshot_enabled = db.mobile_screenshot_enabled(conn)
+        doc_limits = documents.limits(conn)
+        smtp = mailer.resolve_config(conn)
+        smtp_has_password = db.get_setting(conn, db.SMTP_PASSWORD_KEY) not in (None, "")
+        migration_mode = db.migration_mode_enabled(conn)
+        migration_token_created_at = db.get_setting(
+            conn, db.MIGRATION_TOKEN_CREATED_AT_KEY
+        )
+    usage = storage.archive_disk_usage()
+    return {
+        "version": __version__,
+        "counts": counts,
+        "signup_enabled": signup_enabled,
+        "signup_default_role": signup_default_role,
+        "signup_roles": list(signup_role_choices),
+        "role_labels": dict(role_labels),
+        "email_verification_enabled": email_verification_enabled,
+        "email_verification_ttl_minutes": email_verification_ttl_minutes,
+        "email_verification_ttl_limits": {
+            "min": config.EMAIL_VERIFICATION_TTL_MINUTES_MIN,
+            "max": config.EMAIL_VERIFICATION_TTL_MINUTES_MAX,
+        },
+        "crawl_defaults": {
+            "max_pages": crawl_defaults["max_pages"],
+            "max_depth": crawl_defaults["max_depth"],
+            "delay": crawl_defaults["delay_seconds"],
+        },
+        "crawl_retry_backoff": ", ".join(str(v) for v in crawl_backoff),
+        "crawl_limits": {
+            "max_pages": config.CRAWL_MAX_PAGES_LIMIT,
+            "max_depth": config.CRAWL_MAX_DEPTH_LIMIT,
+            "min_delay": config.CRAWL_MIN_DELAY_SECONDS,
+            "max_delay": config.CRAWL_MAX_DELAY_SECONDS,
+        },
+        "ext_credential_ttl_hours": ext_credential_ttl_hours,
+        "ext_credential_ttl_limits": {
+            "min": config.EXT_CREDENTIAL_TTL_HOURS_MIN,
+            "max": config.EXT_CREDENTIAL_TTL_HOURS_MAX,
+        },
+        "mobile_screenshot_enabled": mobile_screenshot_enabled,
+        "document_limits": {
+            "max_count": doc_limits.max_count,
+            "max_mb": doc_limits.max_bytes // (1024 * 1024),
+            "timeout_seconds": doc_limits.timeout_seconds,
+        },
+        "document_limit_ranges": {
+            "count_min": config.DOCUMENT_MAX_COUNT_MIN,
+            "count_max": config.DOCUMENT_MAX_COUNT_MAX,
+            "mb_min": config.DOCUMENT_MAX_MB_MIN,
+            "mb_max": config.DOCUMENT_MAX_MB_MAX,
+            "timeout_min": config.DOCUMENT_FETCH_TIMEOUT_MIN,
+            "timeout_max": config.DOCUMENT_FETCH_TIMEOUT_MAX,
+        },
+        "network_tags": [dict(tg) for tg in network_tags],
+        "credential_key_set": crypto.is_configured(),
+        "smtp_config": {
+            "host": smtp.host, "port": smtp.port, "user": smtp.user,
+            "sender": smtp.sender, "tls": smtp.tls, "enabled": smtp.enabled,
+            "has_password": smtp_has_password,
+        },
+        "smtp_tls_modes": list(mailer.SMTP_TLS_MODES),
+        "archive_root": str(config.ARCHIVE_ROOT),
+        "usage": {
+            "db": usage["db"], "sites": usage["sites"],
+            "resources": usage["resources"], "documents": usage["documents"],
+        },
+        "optimize_pending": sum(optimize.pending_counts()),
+        "search": searchindex.verify(),
+        "migration_mode": migration_mode,
+        "migration_token_created_at": migration_token_created_at,
+        "public_url": config.PUBLIC_URL,
+    }
+
+
+class SignupSettingsReq(BaseModel):
+    signup_enabled: bool = False
+    signup_default_role: str = "pending"
+
+
+@router.post("/system/settings")
+def system_settings(
+    request: Request, body: SignupSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """가입 설정 — system_routes.system_settings 의 JSON 판."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        if body.signup_default_role not in db.signup_roles(conn):
+            raise HTTPException(400, "가입 초기 권한으로 쓸 수 없는 역할")
+        db.set_setting(conn, db.SIGNUP_ENABLED_KEY, "on" if body.signup_enabled else "off")
+        db.set_setting(conn, db.SIGNUP_DEFAULT_ROLE_KEY, body.signup_default_role)
+    audit.log(request, "가입 설정 변경")
+    return {"ok": True}
+
+
+class EmailVerifyReq(BaseModel):
+    email_verification_enabled: bool = False
+    email_verification_ttl_minutes: int
+
+
+@router.post("/system/email-verification-settings")
+def system_email_verification(
+    request: Request, body: EmailVerifyReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """이메일 본인 인증 설정 — JSON 판."""
+    _require_manage_system(user)
+    lo = config.EMAIL_VERIFICATION_TTL_MINUTES_MIN
+    hi = config.EMAIL_VERIFICATION_TTL_MINUTES_MAX
+    if not (lo <= body.email_verification_ttl_minutes <= hi):
+        raise HTTPException(400, f"인증 코드 만료 시간은 {lo} ~ {hi}분 사이여야 합니다")
+    with db.connect() as conn:
+        db.set_setting(
+            conn, db.EMAIL_VERIFICATION_ENABLED_KEY,
+            "on" if body.email_verification_enabled else "off",
+        )
+        db.set_setting(
+            conn, db.EMAIL_VERIFICATION_TTL_MINUTES_KEY,
+            str(body.email_verification_ttl_minutes),
+        )
+    audit.log(request, "이메일 본인 인증 설정 변경")
+    return {"ok": True}
+
+
+class CrawlSettingsReq(BaseModel):
+    crawl_max_pages: int
+    crawl_max_depth: int
+    crawl_delay: int
+    crawl_retry_backoff: str
+
+
+@router.post("/system/crawl-settings")
+def system_crawl_settings(
+    request: Request, body: CrawlSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사이트 아카이브 기본 옵션·재시도 대기 — JSON 판."""
+    _require_manage_system(user)
+    try:
+        crawler.validate_options(body.crawl_max_pages, body.crawl_max_depth, body.crawl_delay)
+        backoff = crawler.parse_backoff(body.crawl_retry_backoff)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    with db.connect() as conn:
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY, str(body.crawl_max_pages))
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_DEPTH_KEY, str(body.crawl_max_depth))
+        db.set_setting(conn, db.CRAWL_DEFAULT_DELAY_KEY, str(body.crawl_delay))
+        db.set_setting(conn, db.CRAWL_RETRY_BACKOFF_KEY, ",".join(str(v) for v in backoff))
+    audit.log(request, "사이트 아카이브 설정 변경")
+    return {"ok": True}
+
+
+class CredentialSettingsReq(BaseModel):
+    ext_credential_ttl_hours: int
+
+
+@router.post("/system/credential-settings")
+def system_credential_settings(
+    request: Request, body: CredentialSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """확장 1회성 자격증명 TTL — JSON 판."""
+    _require_manage_system(user)
+    lo, hi = config.EXT_CREDENTIAL_TTL_HOURS_MIN, config.EXT_CREDENTIAL_TTL_HOURS_MAX
+    if not (lo <= body.ext_credential_ttl_hours <= hi):
+        raise HTTPException(400, f"자격증명 보관 시간은 {lo} ~ {hi}시간 사이여야 합니다")
+    with db.connect() as conn:
+        db.set_setting(conn, db.EXT_CREDENTIAL_TTL_HOURS_KEY, str(body.ext_credential_ttl_hours))
+    audit.log(request, "확장 자격증명 설정 변경")
+    return {"ok": True}
+
+
+class CaptureSettingsReq(BaseModel):
+    mobile_screenshot_enabled: bool = False
+
+
+@router.post("/system/capture-settings")
+def system_capture_settings(
+    request: Request, body: CaptureSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """캡처 설정(모바일 스크린샷) — JSON 판."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        db.set_setting(
+            conn, db.MOBILE_SCREENSHOT_ENABLED_KEY,
+            "on" if body.mobile_screenshot_enabled else "off",
+        )
+    audit.log(request, "캡처 설정 변경")
+    return {"ok": True}
+
+
+class DocumentSettingsReq(BaseModel):
+    document_max_count: int
+    document_max_mb: int
+    document_fetch_timeout: int
+
+
+@router.post("/system/document-settings")
+def system_document_settings(
+    request: Request, body: DocumentSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """문서 아카이브 한도 — JSON 판."""
+    _require_manage_system(user)
+    ranges = (
+        (body.document_max_count, config.DOCUMENT_MAX_COUNT_MIN, config.DOCUMENT_MAX_COUNT_MAX, "문서 수 한도"),
+        (body.document_max_mb, config.DOCUMENT_MAX_MB_MIN, config.DOCUMENT_MAX_MB_MAX, "문서 크기 한도(MB)"),
+        (body.document_fetch_timeout, config.DOCUMENT_FETCH_TIMEOUT_MIN, config.DOCUMENT_FETCH_TIMEOUT_MAX, "문서 다운로드 타임아웃(초)"),
+    )
+    for value, lo, hi, label in ranges:
+        if not (lo <= value <= hi):
+            raise HTTPException(400, f"{label}는 {lo} ~ {hi} 사이여야 합니다")
+    with db.connect() as conn:
+        db.set_setting(conn, db.DOCUMENT_MAX_COUNT_KEY, str(body.document_max_count))
+        db.set_setting(conn, db.DOCUMENT_MAX_MB_KEY, str(body.document_max_mb))
+        db.set_setting(conn, db.DOCUMENT_FETCH_TIMEOUT_KEY, str(body.document_fetch_timeout))
+    audit.log(request, "문서 아카이브 설정 변경")
     return {"ok": True}

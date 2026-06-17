@@ -59,6 +59,7 @@
 		{#if flags.can_manage_users}<a href="{base}/system/users">{t('사용자')}</a>{/if}
 		{#if flags.can_manage_system}<a href="{base}/system/groups">{t('권한 그룹')}</a>{/if}
 		{#if flags.can_manage_users}<a href="{base}/system/api-keys">{t('API 키')}</a>{/if}
+		{#if flags.can_manage_system}<a href="{base}/system">{t('시스템')}</a>{/if}
 		{#if flags.can_manage_system}<a href="{base}/system/logs">{t('시스템 로그')}</a>{/if}
 		<span class="spacer"></span>
 		<button type="button" onclick={cycleTheme}>{THEME_LABELS[themeMode]}</button>
