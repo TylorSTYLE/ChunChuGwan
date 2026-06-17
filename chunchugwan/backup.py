@@ -39,6 +39,13 @@ FORMAT_VERSION = 4
 MANIFEST_NAME = "manifest.json"
 ARCHIVE_DATA_NAME = "archive.json"
 
+# 백업·내보내기 tar.gz 의 gzip 압축 레벨. 용량 대부분이 이미 압축된 자원
+# (page.html.gz·screenshot.webp·CAS gzip/webp·PDF/zip)이라 높은 레벨로 재압축해도
+# 거의 안 줄고 CPU 만 크게 든다 — 레벨 1 로 낮춰 시간을 아낀다(출력은 여전히
+# 표준 .tar.gz 라 restore/import 의 r:gz 와 호환). 잘 압축되는 DB·JSON 도 레벨 1
+# 로 충분히 작아진다.
+_BACKUP_COMPRESSLEVEL = 1
+
 # 아카이브 내보내기 파일 확장자 — 내용은 tar.gz 지만 가져오기는 이 확장자만
 # 인식한다(전체 백업 .ccg.backup 와 구분). 강제는 사용자 경계(CLI import·웹 업로드).
 EXPORT_SUFFIX = ".ccg.export"
@@ -145,7 +152,7 @@ def create_backup(dest: Path) -> Path:
         (tmp / MANIFEST_NAME).write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        with tarfile.open(out, "w:gz") as tar:
+        with tarfile.open(out, "w:gz", compresslevel=_BACKUP_COMPRESSLEVEL) as tar:
             tar.add(tmp / MANIFEST_NAME, arcname=MANIFEST_NAME)
             tar.add(tmp / "index.db", arcname="index.db")
             if config.RULES_PATH.is_file():
@@ -454,7 +461,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
         (tmp / ARCHIVE_DATA_NAME).write_text(
             json.dumps(data, ensure_ascii=False), encoding="utf-8"
         )
-        with tarfile.open(out, "w:gz") as tar:
+        with tarfile.open(out, "w:gz", compresslevel=_BACKUP_COMPRESSLEVEL) as tar:
             tar.add(tmp / MANIFEST_NAME, arcname=MANIFEST_NAME)
             tar.add(tmp / ARCHIVE_DATA_NAME, arcname=ARCHIVE_DATA_NAME)
             for s in snapshots:
