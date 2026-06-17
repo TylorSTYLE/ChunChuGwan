@@ -106,6 +106,39 @@ def test_connect_applies_runtime_pragmas(conn):
     assert conn.execute("PRAGMA temp_store").fetchone()[0] == 2
 
 
+def test_migrate_creates_perf_indexes(conn):
+    """핫패스·삭제·정리 경로 인덱스 묶음이 _migrate 로 생성된다 (멱등)."""
+    have = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
+    expected = {
+        "idx_crawl_pages_url", "idx_crawls_start_url",
+        "idx_crawl_pages_snapshot", "idx_archive_logs_snapshot",
+        "idx_pages_credential", "idx_crawls_credential",
+        "idx_crawl_schedules_credential",
+        "idx_archive_logs_started", "idx_sessions_expires",
+    }
+    assert expected <= have
+
+
+def test_perf_indexes_used_by_query_planner(conn):
+    """대표 쿼리가 새 인덱스를 타는지 EXPLAIN QUERY PLAN 으로 확인."""
+    def plan(sql, params=()):
+        return " | ".join(
+            r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + sql, params)
+        )
+
+    assert "idx_crawl_pages_url" in plan(
+        "SELECT * FROM crawl_pages WHERE url = ?", ("x",))
+    assert "idx_crawls_start_url" in plan(
+        "SELECT * FROM crawls WHERE start_url = ?", ("x",))
+    assert "idx_archive_logs_started" in plan(
+        "SELECT * FROM archive_logs ORDER BY started_at DESC LIMIT 50")
+    assert "idx_sessions_expires" in plan(
+        "DELETE FROM sessions WHERE expires_at < ?", ("t",))
+
+
 def test_first_run_needed_latches_and_resets_on_db_swap(tmp_path, monkeypatch):
     """최초 구동 판정은 한 번 사용자를 보면 래치하고, DB 교체 시 재평가한다."""
     monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)

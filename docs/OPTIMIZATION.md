@@ -209,10 +209,19 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires      ON sessions(expires_at);
 
 ### Phase 1 — 인덱스 (멱등 마이그레이션)
 
-- [ ] 인덱스 묶음 추가 (순위 3) — `_migrate` 에 `CREATE INDEX IF NOT EXISTS`
+- [x] 인덱스 묶음 추가 (순위 3) — `_migrate` 에 `CREATE INDEX IF NOT EXISTS`
 
 검증: `test_migration.py` 에 신규 인덱스 존재 단언 추가, `EXPLAIN QUERY PLAN` 으로 해당 쿼리가
 인덱스를 타는지 확인.
+
+> **완료 (perf/phase-1).** `_migrate` 에 9개 인덱스를 멱등 추가:
+> `idx_crawl_pages_url`·`idx_crawls_start_url`(아카이빙 핫패스),
+> `idx_crawl_pages_snapshot`·`idx_archive_logs_snapshot`(삭제 시 참조 해제),
+> `idx_pages_credential`·`idx_crawls_credential`·`idx_crawl_schedules_credential`
+> (자격증명 삭제 NULL 처리), `idx_archive_logs_started`(로그 무필터 정렬)·
+> `idx_sessions_expires`(만료 세션 정리). 인덱스 존재·`EXPLAIN QUERY PLAN` 채택을
+> `test_db.py` 로 가드. 신규/기존 DB 모두 적용(멱등). 검증은 schema 마이그레이션을
+> 다루는 `test_db.py` 에 둠(`test_migration.py` 는 네트워크 이전 기능 전용).
 
 ### Phase 2 — `snapshots.bytes` 비정규화 ⭐ 최대 임팩트
 
