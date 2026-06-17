@@ -32,6 +32,15 @@ setup 흐름은 `.claude/rules/authentication.md`·`.claude/rules/capture-crawl.
 사용자에게 보일 수 있음을 캡처 시 고지. 서버측 구현은 `ingest.py`, 설계는
 `docs/EXTENSION_CLIENT_CAPTURE_PLAN.md` (확장은 `chunchugwan/extension/`).
 
+## 확장 버전 체크
+
+확장은 웹스토어 미등록 unpacked 로드라 자동 업데이트가 없다(`/extension/download`
+zip 빌드 시 manifest version 을 서버 `__version__` 으로 덮어쓴다 → 설치 버전 =
+다운로드 당시 서버 버전). `GET /api/v1/version` 이 서버 버전을 주고, 확장 background
+(`checkVersion`)가 `chrome.runtime.getManifest().version` 과 비교해 서버가 더
+최신이면 팝업 배너로 재설치를 안내한다(`openDownload` → `/extension/download` 새 탭).
+버전 조회는 권한 불필요(토큰만). 비교는 서버 > 확장일 때만 안내(오탐 방지).
+
 `pages.client_captured` = 확장으로 적재된 페이지 표식(`ingest.py` 가 1 로 설정) —
 1 이면 서버가 그 URL 을 다시 가져오지 않는다(스케줄·크롤·재시도·재아카이빙·enqueue 차단).
 `snapshots.origin=extension`·`incomplete` 의 뷰어/타임라인 뱃지와 diff 영향은

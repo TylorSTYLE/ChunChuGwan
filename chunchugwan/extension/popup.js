@@ -416,6 +416,18 @@ async function loadHistory() {
   });
 }
 
+// ---- 업데이트 안내 ----
+
+// 연결된 서버 버전과 설치된 확장 버전을 비교해, 서버가 더 최신이면 배너를 띄운다.
+// 확장은 웹스토어 미등록 unpacked 라 자동 업데이트가 없어 사용자가 직접 재설치해야 한다.
+async function checkUpdate() {
+  const res = await send("checkVersion", {});
+  if (!res || !res.update_available) return;
+  $("#update-text").textContent = msg("update_available", [res.latest]);
+  $("#update-banner").style.display = "block";
+  $("#update-reinstall").addEventListener("click", () => send("openDownload", {}));
+}
+
 // ---- 부팅 ----
 
 async function main() {
@@ -426,12 +438,13 @@ async function main() {
   currentUrl = (tab && tab.url) || "";
   currentTabId = tab && tab.id != null ? tab.id : null;
   $("#cur-url").textContent = displayUrl(currentUrl);
-  await refreshStatus();
+  const st = await refreshStatus();
   initArchive();
   initBrowserCapture();
   initNotifyToggle();
   $("#open-dashboard").addEventListener("click", () =>
     send("openDeepLink", { url: currentUrl }));
+  if (st && st.connected) checkUpdate();
 }
 
 document.addEventListener("DOMContentLoaded", main);

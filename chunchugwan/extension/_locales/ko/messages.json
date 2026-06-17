@@ -86,5 +86,7 @@
   "err_no_cookies": { "message": "전송할 로그인 정보(쿠키·토큰)가 없습니다." },
   "err_loopback": { "message": "루프백 주소는 아카이빙할 수 없습니다." },
   "err_need_base_url": { "message": "춘추관 주소를 먼저 입력하세요." },
-  "err_generic": { "message": "요청을 처리하지 못했습니다." }
+  "err_generic": { "message": "요청을 처리하지 못했습니다." },
+  "update_available": { "message": "새 버전 $1 사용 가능 — 재설치하세요.", "placeholders": {} },
+  "update_reinstall": { "message": "내려받기" }
 }
