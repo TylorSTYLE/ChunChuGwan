@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import shutil
+import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -283,6 +284,15 @@ def snapshot_files(snapshot_dir: Path) -> list[dict[str, object]]:
     return out
 
 
+def snapshot_dir_bytes(snapshot_dir: Path) -> int:
+    """스냅샷 디렉토리의 파일 용량 합 (바이트). 없으면 0.
+
+    snapshot_files 와 같은 기준(스냅샷 산출물 + files/ 문서)으로 합산한다 —
+    snapshots.bytes 비정규화 값의 단일 계산 지점이다.
+    """
+    return sum(f["bytes"] for f in snapshot_files(snapshot_dir))
+
+
 def dir_bytes(root: Path) -> int:
     """디렉토리 전체 파일 용량 합 (바이트). 없으면 0."""
     if not root.is_dir():
@@ -290,18 +300,38 @@ def dir_bytes(root: Path) -> int:
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
 
 
-def archive_disk_usage() -> dict[str, int]:
+# 아카이브 디스크 사용량 캐시 — sites/resources/documents 트리를 전부 rglob 하는
+# 비싼 계산이라 짧은 TTL 로 캐시한다. 현황·시스템 화면의 표시 전용 파생값이라
+# 약간의 부정확(최대 TTL)은 허용된다. 아카이브 루트별로 키를 둬 테스트·다중 루트
+# 에서 다른 데이터가 섞이지 않게 한다.
+_DISK_USAGE_TTL_SECONDS = 30
+_disk_usage_cache: "tuple[float, str, dict[str, int]] | None" = None
+
+
+def archive_disk_usage(*, fresh: bool = False) -> dict[str, int]:
     """아카이브 실제 저장공간 사용량 (바이트) — db/sites/resources/documents.
 
     스냅샷 파일 합산과 달리 DB·공유 자원 CAS·문서 CAS 를 포함한 디스크
     사용량이다. 현황·시스템 화면의 용량 표시가 같은 기준을 쓴다.
+    fresh=True 면 캐시를 무시하고 즉시 계산한다.
     """
-    return {
+    global _disk_usage_cache
+    root = str(config.ARCHIVE_ROOT)
+    now = time.monotonic()
+    cached = _disk_usage_cache
+    if (
+        not fresh and cached is not None and cached[1] == root
+        and now - cached[0] < _DISK_USAGE_TTL_SECONDS
+    ):
+        return dict(cached[2])
+    usage = {
         "db": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
         "sites": dir_bytes(config.SITES_DIR),
         "resources": dir_bytes(config.RESOURCES_DIR),
         "documents": dir_bytes(config.DOCUMENTS_DIR),
     }
+    _disk_usage_cache = (now, root, usage)
+    return dict(usage)
 
 
 def _validate_path_parts(*parts: str) -> None:

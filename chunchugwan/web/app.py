@@ -375,12 +375,6 @@ def extension_download(request: Request) -> Response:
     )
 
 
-def _snapshot_dir_size(domain: str, slug: str, dir_name: str) -> int:
-    """스냅샷 디렉토리의 파일 용량 합 (바이트). 디렉토리가 없으면 0."""
-    snap_dir = storage.page_dir(domain, slug) / dir_name
-    return sum(f["bytes"] for f in storage.snapshot_files(snap_dir))
-
-
 def _snapshot_title(domain: str, slug: str, dir_name: str) -> str | None:
     """스냅샷 meta.json 의 title (없거나 읽기 실패 시 None)."""
     path = storage.page_dir(domain, slug) / dir_name / "meta.json"
@@ -433,9 +427,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
     site_bytes: dict[int, int] = {}
     site_snaps: dict[int, list] = {}
     for row in snap_dirs:
-        site_bytes[row["site_id"]] = site_bytes.get(row["site_id"], 0) + (
-            _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
-        )
+        site_bytes[row["site_id"]] = site_bytes.get(row["site_id"], 0) + row["bytes"]
         site_snaps.setdefault(row["site_id"], []).append(row)
     titles = {sid: _site_title(rows) for sid, rows in site_snaps.items()}
     active_keys = {storage.site_key(u) for u in active}
@@ -656,9 +648,7 @@ def site_view(
     # 페이지별·사이트 전체 저장 용량 — 스냅샷 디렉토리 용량 합산
     page_bytes: dict[int, int] = {}
     for row in snap_dirs:
-        page_bytes[row["page_id"]] = page_bytes.get(row["page_id"], 0) + (
-            _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
-        )
+        page_bytes[row["page_id"]] = page_bytes.get(row["page_id"], 0) + row["bytes"]
     running_crawls = [
         {"id": c["id"],
          "counts": {"done": c["done_count"], "failed": c["failed_count"],
@@ -1117,7 +1107,7 @@ def dashboard(request: Request):
     counts = {k: 0 for k in starts}
     period_bytes = {k: 0 for k in starts}
     for row in snap_dirs:
-        size = _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
+        size = row["bytes"]
         sizes[row["id"]] = size
         for key, start in starts.items():
             if row["taken_at"] >= start:

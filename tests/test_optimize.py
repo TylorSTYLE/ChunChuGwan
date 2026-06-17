@@ -59,6 +59,41 @@ def _seed_snapshot(html: str | None, *, indexed: bool = False) -> int:
     return snap_id
 
 
+def test_compact_refreshes_snapshot_bytes(archive_env):
+    """압축 변환으로 디렉토리 형태가 바뀌면 snapshots.bytes 가 실제 용량으로 갱신된다."""
+    from PIL import Image
+
+    dir_name = "2026-06-01T00-00-00"
+    slug = storage.url_to_slug(URL)
+    snap_dir = storage.page_dir("example.com", slug) / dir_name
+    snap_dir.mkdir(parents=True)
+    # 구형(비압축) 산출물 — compact 가 page.html.gz·webp 로 변환한다
+    (snap_dir / "content.md").write_text("본문", encoding="utf-8")
+    (snap_dir / "page.html").write_text(
+        "<html><body>" + "본문 " * 500 + "</body></html>", encoding="utf-8"
+    )
+    Image.new("RGB", (64, 64), (123, 200, 50)).save(snap_dir / "screenshot.png")
+    storage.write_meta(snap_dir, storage.SnapshotMeta(
+        url=URL, final_url=URL, taken_at="2026-06-01T00:00:00+00:00",
+        content_hash="0" * 64, http_status=200, title=None,
+    ))
+    with db.connect() as conn:
+        page_id = db.get_or_create_page(conn, URL, "example.com", slug)
+        snap_id = db.insert_snapshot(
+            conn, page_id, taken_at="2026-06-01T00:00:00+00:00", dir_name=dir_name,
+            content_hash="0" * 64, final_url=URL, http_status=200, changed=1,
+            bytes=999999,  # 일부러 틀린 값 — compact 후 실제값으로 맞춰져야 한다
+        )
+
+    result = optimize.run()
+    assert result.compact.converted == 1
+
+    with db.connect() as conn:
+        stored = conn.execute("SELECT bytes FROM snapshots WHERE id=?", (snap_id,)).fetchone()[0]
+    assert stored == storage.snapshot_dir_bytes(snap_dir)
+    assert stored != 999999
+
+
 def test_backfill_scans_page_html(archive_env):
     name = _store_resource(b"R" * 5000)
     snap_id = _seed_snapshot(f'<img src="/resource/{name}">')
