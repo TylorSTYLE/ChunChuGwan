@@ -5,7 +5,7 @@
 
 ## 참고 문서 (해당 작업 시 읽을 것)
 
-- `docs/DASHBOARD.md` — 대시보드 화면 21개의 라우트·권한·세부 동작 레퍼런스.
+- `docs/DASHBOARD.md` — 대시보드 화면 22개의 라우트·권한·세부 동작 레퍼런스.
   웹 UI 화면을 추가/수정하기 전에 읽는다.
 - `docs/ROADMAP.md` — 완료된 구현 로드맵 히스토리(M1~M8, A1~A11 상세).
   기능의 도입 배경·구현 범위가 궁금할 때 읽는다.
@@ -325,12 +325,19 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   `signup_default_role` (pending/viewer/archiver, 기본 pending — 관리자가
   사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
   관리자로 권한 변경 불가. **권한은 세분 권한(`db.PERMISSIONS` — view·archive·
-  delete·manage_credentials·manage_system·manage_users·view_authenticated_all)을
-  1차 단위로, 역할은 그 묶음의 프리셋(`db.ROLE_PRESETS`)으로** 둔다. 역할만
+  delete·manage_credentials·manage_system·manage_users·view_authenticated_all,
+  고정 코드 상수)을 1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다. 역할 프리셋은
+  코드 상수가 아니라 DB `permission_groups` 테이블이 정본 — 관리자가 시스템 →
+  권한 그룹(`/system/groups`)에서 빌트인(admin/archiver/viewer) 권한 묶음을 편집하거나
+  커스텀 그룹을 추가·삭제할 수 있다(코드 배포 불필요). 코드에서는 `db.role_presets(conn)`
+  (모듈 캐시 + settings 단조 버전으로 멀티프로세스 staleness 방지, conn 없는
+  `web.permissions` 는 인증 미들웨어가 워밍한 캐시를 읽음)으로 읽는다. 역할만
   쓰면 동작은 종전과 동일하고, `users.permission_overrides`(JSON {권한:bool},
   프리셋과 다른 항목만) 로 사용자별 가감한다. 실효 권한 = 프리셋 ± 오버라이드
   (`db.effective_permissions`), 모든 라우트·메뉴 가드는 `web.permissions.
   has_permission`(실효 권한)으로 판정해 한 곳의 변경이 전 경로에 반영된다.
+  pending/blocked/withdrawn 은 권한 묶음이 아니라 접근 게이트 상태라
+  `permission_groups` 가 아닌 코드 상수(`db.STATE_ROLES`)로 남고 삭제·편집 불가다.
   역할을 바꾸면 오버라이드는 새 프리셋으로 초기화되고, `manage_users` 마지막
   활성 보유자에게서는 그 권한을 떼거나 역할을 낮출 수 없다(잠김 방지 —
   `db.count_active_users_with_permission`). 개인 API Key 권한도 실효 권한에서
@@ -342,6 +349,15 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   `pending_totp` 와 같은 방식)로 머무르고, 코드 확인 시 active 로 승격된다.
   강제는 `auth_routes._email_verification_required` 가 로그인·가입·2FA 마무리
   지점에서 하고, 기존 사용자는 개인 설정에서 직접 인증한다 (소급 차단 없음)
+- `permission_groups` — 역할 프리셋(권한 묶음)의 정본 테이블. `name` PK(=`users.role`
+  에 저장되는 정규화 키 `[a-z0-9_]`), `label`(표시 라벨), `permissions`(JSON 배열,
+  `db.PERMISSIONS` 부분집합), `is_builtin`(admin/archiver/viewer=1 — 삭제·개명 불가,
+  permissions 만 편집), `sort_order`. `_migrate` 가 빌트인 3개를 `INSERT OR IGNORE`
+  로 멱등 시드. 쓰기(CRUD — `db.create/update/delete_permission_group`)마다 settings
+  의 `permission_groups_version` 을 +1 해 `db.role_presets` 캐시를 무효화한다. 관리자
+  화면은 `/system/groups`. 역할 목록 접근자(`permission_group_names`/`assignable_roles`/
+  `invitable_roles`/`signup_roles`/`role_labels`/`all_valid_roles`)가 이 테이블을 읽어
+  종전 코드 상수(ROLE_PRESETS/PERMISSION_ROLES/ASSIGNABLE_ROLES 등)를 대체한다
 - `email_verifications` — 이메일 인증 코드 (user_id PK = 사용자당 1개,
   재발송 시 교체). 코드 원문은 메일로만 보내고 SHA-256 해시만 저장(만료
   시각 포함, 세션·API 키와 같은 단방향 — 원칙 6). 인증 완료·계정 삭제 시 삭제.
@@ -438,14 +454,16 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
 
 ## 대시보드 디자인 방향
 
-- 화면 21개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
+- 화면 22개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
   사이트 상세(`/sites/{id}` — 소속 페이지·문서·크롤 회차·스케줄·사이트 삭제),
   사이트 로그인 자격증명(`/sites/{id}/credentials` — 관리자 전용),
   문서(`/documents` — 문서 파일 통합 목록),
   검색(`/search` — 본문·문서 전문 검색, viewer 이상), 새 아카이빙(`/archive/new`),
   사이트 아카이브 진행(`/crawls/{id}` — 크롤 회차 상세), 스케줄(`/schedules`),
   타임라인, 스냅샷 뷰어, diff 뷰어, 아카이빙 로그(`/logs` — viewer 이상),
-  시스템 로그(`/system/logs` — 관리자 전용), 시스템, 사용자, API 키,
+  시스템 로그(`/system/logs` — 관리자 전용), 시스템, 사용자,
+  권한 그룹(`/system/groups` — 관리자 전용, 역할 프리셋 편집·커스텀 그룹 추가/삭제),
+  API 키,
   개인 API Key(`/settings/api-keys` — 본인 확장 토큰 발급·폐기),
   내 아카이브(`/settings/archives` — 본인이 요청한 아카이빙 이력),
   사람 확인 필요(`/archive/needs-human` — 관리자 전용, `WCCG_LIVE_CHALLENGE` 켜짐 시)·

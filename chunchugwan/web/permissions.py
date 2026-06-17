@@ -92,18 +92,13 @@ def system_allowed(user: sqlite3.Row | None) -> bool:
     )
 
 
-# 확장 토큰(사용자 귀속 API 키)이 동작할 수 있는 역할 — 그 외(pending/blocked/
-# withdrawn)는 토큰 자체가 무효 취급된다 (_api_auth 가 매 요청 재평가).
-TOKEN_ROLES = ("admin", "archiver", "viewer")
-
-
 def token_permissions_for_role(role: str) -> tuple[bool, bool]:
     """역할 프리셋에서 확장 토큰 권한(can_view, can_archive)을 파생 (오버라이드 미반영).
 
     보기=view, 아카이브=archive 권한 보유 여부. AUTH_ENABLED 여부는 여기서
-    보지 않는다 (게이트 계층의 몫).
+    보지 않는다 (게이트 계층의 몫). 프리셋은 모듈 캐시에서 읽는다.
     """
-    preset = db.ROLE_PRESETS.get(role, frozenset())
+    preset = db._presets_cache.get(role, frozenset())
     return "view" in preset, "archive" in preset
 
 

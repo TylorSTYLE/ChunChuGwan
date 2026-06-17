@@ -58,7 +58,9 @@ def _api_auth(request: Request) -> None:
         db.touch_api_key(conn, key["id"])
         if key["owner_user_id"] is not None:
             owner = db.get_user_by_id(conn, key["owner_user_id"])
-            if owner is None or owner["role"] not in permissions.TOKEN_ROLES:
+            # role_presets 로 프리셋 캐시를 워밍하며 권한 보유 그룹인지 확인한다
+            # (그룹 dict 는 STATE_ROLES·미지 역할을 포함하지 않아 그 자체가 게이트).
+            if owner is None or owner["role"] not in db.role_presets(conn):
                 raise HTTPException(
                     401, "토큰 소유자의 권한이 없습니다",
                     headers={"WWW-Authenticate": "Bearer"},

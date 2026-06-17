@@ -145,6 +145,9 @@ td.mono.muted { white-space: nowrap; }
 .badge.site    { color: var(--blue);  background: var(--blue-bg); }
 .badge.local   { color: var(--blue);  background: var(--blue-bg); }
 .badge.incomplete { color: var(--red-text); background: var(--red-bg); }
+/* 커스텀 권한 그룹 배지 fallback — 빌트인 역할의 specific 규칙(아래)이 같은
+   specificity 라 소스 순서로 이긴다. 이름이 정해지지 않은 커스텀 그룹만 이 색을 쓴다. */
+.badge[class*="role-"] { color: var(--blue); background: var(--blue-bg); }
 .badge.role-admin    { color: var(--green); background: var(--green-bg); }
 .badge.role-archiver { color: var(--blue);  background: var(--blue-bg); }
 .badge.role-viewer   { color: var(--gray);  background: var(--gray-bg); }
@@ -308,6 +311,7 @@ button.primary:hover { background: #15803d; }
       <summary>{{ _("관리자") }}</summary>
       <div class="nav-menu">
         {% if can_manage_users %}<a href="/system/users">{{ _("사용자") }}</a>{% endif %}
+        {% if can_manage_system %}<a href="/system/groups">{{ _("권한 그룹") }}</a>{% endif %}
         {% if can_manage_system %}<a href="/system">{{ _("시스템") }}</a>{% endif %}
       </div>
     </details>
