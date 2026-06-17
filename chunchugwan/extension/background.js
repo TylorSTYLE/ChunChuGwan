@@ -561,6 +561,42 @@ async function trackIngestResult(res, url) {
     msg(OUTCOME_KEY[st.status] || "notif_outcome_done") + " — " + shortUrl(st.url || url));
 }
 
+// ---- 버전 체크 (서버 버전 vs 설치된 확장 버전) ----
+//
+// 확장은 웹스토어 미등록 unpacked 로드라 자동 업데이트가 없다. 연결된 서버의
+// 현재 버전을 조회해 자기 manifest 버전과 비교하고, 서버가 더 최신이면 팝업이
+// 재설치 안내 배너를 띄운다.
+
+// a > b 면 1, a < b 면 -1, 같으면 0. 점으로 분해해 숫자만 비교한다 (1.2.3).
+// 숫자가 아닌 토큰(예: 0.0.0+unknown 의 '0+unknown')은 0 으로 취급(보수적).
+function compareVersions(a, b) {
+  const pa = String(a || "").split(".");
+  const pb = String(b || "").split(".");
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const x = parseInt(pa[i], 10) || 0;
+    const y = parseInt(pb[i], 10) || 0;
+    if (x > y) return 1;
+    if (x < y) return -1;
+  }
+  return 0;
+}
+
+// 서버 버전을 조회해 업데이트 필요 여부 반환. 미연결·조회 실패·파싱 불가면
+// update_available:false 로 조용히 무시한다(오탐 방지).
+async function checkVersion() {
+  const current = chrome.runtime.getManifest().version;
+  const res = await apiFetch("/api/v1/version");
+  const latest = res && res.ok && res.data && res.data.version;
+  if (!latest) return { ok: false, update_available: false, current, latest: null };
+  return {
+    ok: true,
+    update_available: compareVersions(latest, current) > 0,
+    current,
+    latest,
+  };
+}
+
 // ---- 메시지 라우터 ----
 
 const HANDLERS = {
@@ -697,6 +733,18 @@ const HANDLERS = {
     // status 의 connected 는 여전히 false 라 연결로 오인되지 않는다.
     if (typed) await chrome.storage.local.set({ base_url: typed });
     await chrome.tabs.create({ url: base + "/settings/api-keys#ext-token-form" });
+    return { ok: true };
+  },
+
+  // 서버 버전 조회 + 설치 버전 비교 (팝업이 업데이트 배너 표시 여부 판단).
+  checkVersion: () => checkVersion(),
+
+  // 업데이트 재설치 — 연결된 서버의 확장 다운로드(zip) 를 새 탭으로 연다.
+  // /extension/download 는 세션 인증이라 로그인된 브라우저에서만 바로 받아진다.
+  openDownload: async () => {
+    const { base_url } = await getConfig();
+    if (!base_url) return { ok: false };
+    await chrome.tabs.create({ url: base_url + "/extension/download" });
     return { ok: true };
   },
 };

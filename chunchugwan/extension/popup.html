@@ -78,6 +78,12 @@
     <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text" data-i18n="header_not_connected"></span></div>
   </header>
 
+  <!-- 업데이트 안내 (서버가 더 최신일 때만 노출 — popup.js 가 표시) -->
+  <div class="note warn" id="update-banner" style="display:none;border-radius:0;margin-top:0">
+    <span id="update-text"></span>
+    <button class="btn primary" id="update-reinstall" style="margin-top:6px" data-i18n="update_reinstall"></button>
+  </div>
+
   <nav>
     <button data-tab="connect" data-i18n="tab_connect" class="active"></button>
     <button data-tab="archive" data-i18n="tab_archive"></button>

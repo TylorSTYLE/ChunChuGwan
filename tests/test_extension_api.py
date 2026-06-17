@@ -2,7 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import auth, config, db, netcheck, storage
+from chunchugwan import __version__, auth, config, db, netcheck, storage
 from chunchugwan.web import app as web_app
 
 URL = "https://example.com/post"
@@ -56,6 +56,20 @@ def _login_admin(client):
         "/login", data={"email": "boss@test.co", "password": "bosspass1234"},
         follow_redirects=False,
     )
+
+
+# ---- GET /api/v1/version ----
+
+
+def test_api_version_returns_server_version(client):
+    token = _issue(can_view=False, can_archive=False)  # 권한 없는 토큰도 가능
+    r = client.get("/api/v1/version", headers=_headers(token))
+    assert r.status_code == 200
+    assert r.json() == {"version": __version__}
+
+
+def test_api_version_requires_token(client):
+    assert client.get("/api/v1/version").status_code == 401
 
 
 # ---- POST /api/v1/crawl ----

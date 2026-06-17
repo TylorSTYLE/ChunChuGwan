@@ -86,5 +86,7 @@
   "err_no_cookies": { "message": "No login info (cookies/token) to send." },
   "err_loopback": { "message": "Loopback addresses can't be archived." },
   "err_need_base_url": { "message": "Enter the ChunChuGwan address first." },
-  "err_generic": { "message": "The request failed." }
+  "err_generic": { "message": "The request failed." },
+  "update_available": { "message": "New version $1 available — please reinstall.", "placeholders": {} },
+  "update_reinstall": { "message": "Download" }
 }

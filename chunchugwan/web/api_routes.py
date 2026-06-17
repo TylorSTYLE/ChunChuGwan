@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from .. import __version__
 from .. import auth, config, crawler, credentials, crypto, db, ingest, netcheck, storage
 from . import audit, permissions
 
@@ -171,6 +172,15 @@ def _snapshot_json(snap: sqlite3.Row) -> dict:
             for name in _SNAPSHOT_FILE_NAMES
         },
     }
+
+
+@router.get("/version")
+def api_version() -> dict:
+    """서버(춘추관) 버전 — 확장이 자기 manifest 버전과 비교해 업데이트 안내.
+
+    토큰만 유효하면 누구나 조회 (확장은 항상 연결 토큰 보유). 별도 권한 불필요.
+    """
+    return {"version": __version__}
 
 
 @router.get("/pages")
