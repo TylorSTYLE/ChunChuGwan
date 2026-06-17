@@ -88,6 +88,7 @@ jobs:
         if: steps.bump.outputs.skip != 'true'
         uses: astral-sh/setup-uv@v6
         with:
+          enable-cache: true
           python-version: "3.12"
 
       - name: pyproject.toml · uv.lock 갱신 · 태그 · 푸시
