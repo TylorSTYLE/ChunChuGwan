@@ -106,6 +106,34 @@ def test_connect_applies_runtime_pragmas(conn):
     assert conn.execute("PRAGMA temp_store").fetchone()[0] == 2
 
 
+def test_backfill_snapshot_bytes_from_filesystem(conn):
+    """backfill_snapshot_bytes 가 디렉토리 파일 합으로 snapshots.bytes 를 채운다."""
+    from chunchugwan import storage
+
+    page_id = db.get_or_create_page(conn, "https://example.com/", "example.com", "root-abcd1234")
+    dir_name = "2026-06-01T00-00-00"
+    snap_id = db.insert_snapshot(
+        conn, page_id, taken_at="2026-06-01T00:00:00+00:00", dir_name=dir_name,
+        content_hash="0" * 64, final_url="https://example.com/", http_status=200, changed=1,
+    )
+    assert conn.execute("SELECT bytes FROM snapshots WHERE id=?", (snap_id,)).fetchone()[0] == 0
+
+    snap_dir = storage.page_dir("example.com", "root-abcd1234") / dir_name
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "content.md").write_text("본문 텍스트", encoding="utf-8")
+    (snap_dir / "meta.json").write_text('{"x": 1}', encoding="utf-8")
+    expected = storage.snapshot_dir_bytes(snap_dir)
+    assert expected > 0
+
+    assert db.backfill_snapshot_bytes(conn) == 1
+    assert conn.execute("SELECT bytes FROM snapshots WHERE id=?", (snap_id,)).fetchone()[0] == expected
+
+    # only_missing=True 는 이미 채워진 행을 건드리지 않는다
+    (snap_dir / "extra.bin").write_bytes(b"x" * 100)  # 파일이 늘어도
+    assert db.backfill_snapshot_bytes(conn, only_missing=True) == 0  # 0 이 아니라 건너뜀
+    assert conn.execute("SELECT bytes FROM snapshots WHERE id=?", (snap_id,)).fetchone()[0] == expected
+
+
 def test_migrate_creates_perf_indexes(conn):
     """핫패스·삭제·정리 경로 인덱스 묶음이 _migrate 로 생성된다 (멱등)."""
     have = {

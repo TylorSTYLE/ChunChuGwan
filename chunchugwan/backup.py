@@ -292,7 +292,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 for k in (
                     "page_url", "domain", "slug", "taken_at", "dir_name",
                     "content_hash", "final_url", "http_status", "changed", "note",
-                    "origin", "incomplete",
+                    "origin", "incomplete", "bytes",
                 )
             }
             for r in conn.execute(
@@ -668,7 +668,7 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     snap_ids[(s["page_url"], s["dir_name"])] = dup["id"]
                     result.snapshots_skipped += 1
                     continue
-                snap_ids[(s["page_url"], s["dir_name"])] = db.insert_snapshot(
+                snap_id = db.insert_snapshot(
                     conn, page_id,
                     taken_at=s["taken_at"], dir_name=s["dir_name"],
                     content_hash=s["content_hash"], final_url=s["final_url"],
@@ -676,7 +676,9 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     changed=int(s.get("changed", 1)), note=s.get("note"),
                     origin=s.get("origin", "server"),
                     incomplete=int(s.get("incomplete", 0)),
+                    bytes=int(s.get("bytes", 0)),
                 )
+                snap_ids[(s["page_url"], s["dir_name"])] = snap_id
                 result.snapshots_added += 1
 
                 domain, slug = page_paths[s["page_url"]]
@@ -685,6 +687,11 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                 if src_dir.is_dir() and not dst_dir.exists():
                     dst_dir.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(src_dir, dst_dir)
+                # 옮긴 실제 파일 기준으로 bytes 를 권위적으로 다시 맞춘다 — 구버전
+                # 내보내기(bytes 없음)나 직렬화 값과 파일의 불일치를 모두 흡수한다.
+                db.update_snapshot_bytes(
+                    conn, snap_id, storage.snapshot_dir_bytes(dst_dir)
+                )
 
             for c in data["checks"]:
                 page_id = page_ids.get(c["page_url"])

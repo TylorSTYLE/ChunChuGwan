@@ -225,14 +225,30 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires      ON sessions(expires_at);
 
 ### Phase 2 — `snapshots.bytes` 비정규화 ⭐ 최대 임팩트
 
-- [ ] 컬럼 추가 + `_migrate` 백필(`resources_indexed` 패턴 그대로)
-- [ ] 쓰기 경로: `storage`/캡처 저장 + `optimize`(compact 가 형태 바꾸면 bytes 갱신)
-- [ ] 읽기 경로: 현황·목록·사이트상세·타임라인·로그를 `SUM(bytes)` SQL 로 교체, `_snapshot_dir_size`
-      호출 제거
-- [ ] `archive_disk_usage` 표시값 TTL 캐시 (순위 21)
+- [x] 컬럼 추가 + `_migrate` 백필(`resources_indexed` 패턴 그대로)
+- [x] 쓰기 경로: `storage`/캡처 저장 + `optimize`(compact 가 형태 바꾸면 bytes 갱신)
+- [x] 읽기 경로: 현황·목록·사이트상세의 `_snapshot_dir_size` 파일시스템 N+1 제거
+      (`bytes` 컬럼 합산). 타임라인·로그는 용량을 계산하지 않아 대상 아님.
+- [x] `archive_disk_usage` 표시값 TTL 캐시 (순위 21)
 
 위험·검증: `export`/`import`/`backup`/`restore`/`compact` 후 bytes 일관성 테스트가 핵심.
 백필 누락 스냅샷은 0 폴백 후 lazy 보정.
+
+> **완료 (perf/phase-2).** `snapshots.bytes` 컬럼 추가(SCHEMA + `_migrate` ALTER,
+> 컬럼 최초 추가 시 파일시스템에서 1회 백필 — `backfill_snapshot_bytes`). 쓰기 경로:
+> 캡처(pipeline 페이지·문서 스냅샷)·확장 적재(ingest)가 저장 시점에 `bytes` 기록,
+> `optimize.run()` 이 압축 변환·스타일 추출로 형태가 바뀌면 재계산, import 는 옮긴
+> 실제 파일 기준으로 권위적 재계산(구버전 export 호환). 읽기 경로: 현황(`dashboard`)·
+> 목록(`index`)·사이트상세의 스냅샷당 `stat`/`iterdir` N+1 을 `bytes` 합산으로 대체
+> (`_snapshot_dir_size`/`list_snapshot_dirs`·`list_site_snapshot_dirs` 에 `bytes` 추가,
+> `_snapshot_dir_size` 제거). 단일 계산 지점 `storage.snapshot_dir_bytes`.
+> `archive_disk_usage` 는 루트별 30초 TTL 캐시(표시 전용 파생값). 일관성 테스트:
+> 백필(`test_db.py`)·compact 갱신(`test_optimize.py`)·export/import(`test_backup.py`)
+> + 읽기 경로 표시값(`test_web.py`). 전체 1184 통과.
+>
+> 추가 SQL 집계(`SUM(bytes)`)로 행 로드 자체를 없애는 것은 목록·상세가 같은 행으로
+> 제목(meta.json)도 읽기 때문에 **Phase 3(제목 비정규화) 이후**에 자연스럽다 — 지금은
+> 지배적 비용인 파일시스템 N+1 만 제거했다.
 
 ### Phase 3 — 제목 비정규화
 

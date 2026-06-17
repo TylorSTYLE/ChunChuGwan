@@ -106,8 +106,11 @@ CREATE TABLE IF NOT EXISTS snapshots (
                                                   --   0 이면 저장공간 최적화의 백필 대상
     css_externalized INTEGER NOT NULL DEFAULT 0,  -- 인라인 <style> 의 CAS 추출 여부.
                                                   --   0 이면 저장공간 최적화의 추출 대상
-    search_indexed INTEGER NOT NULL DEFAULT 0     -- 텍스트 검색 인덱스(snapshot_fts) 반영 여부.
+    search_indexed INTEGER NOT NULL DEFAULT 0,    -- 텍스트 검색 인덱스(snapshot_fts) 반영 여부.
                                                   --   0 이면 'wccg search reindex' 백필 대상
+    bytes         INTEGER NOT NULL DEFAULT 0      -- 스냅샷 디렉토리 파일 용량 합(비정규화).
+                                                  --   캡처/compact 시 1회 기록, 용량 집계가
+                                                  --   파일시스템 stat 대신 SUM(bytes) 를 쓴다
 );
 
 CREATE TABLE IF NOT EXISTS checks (
@@ -503,6 +506,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0"
         )
+    # 스냅샷 디렉토리 용량 비정규화 — 용량 집계가 매번 파일시스템을 stat 하지 않게
+    # 한다. 컬럼을 처음 추가하는 업그레이드에서만 기존 스냅샷을 파일시스템에서 1회
+    # 백필한다 (신규 스냅샷은 캡처 시점에 기록, compact 가 형태를 바꾸면 갱신).
+    if cols and "bytes" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0"
+        )
+        n = backfill_snapshot_bytes(conn)
+        if n:
+            logger.info("스냅샷 용량(bytes) 백필: %d개", n)
     _ensure_search_index(conn)
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
@@ -1064,7 +1077,7 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed", "css_externalized", "search_indexed",
+     "note", "resources_indexed", "css_externalized", "search_indexed", "bytes",
      "authenticated", "authenticated_by", "origin", "incomplete"}
 )
 
@@ -1081,6 +1094,36 @@ def insert_snapshot(conn: sqlite3.Connection, page_id: int, **fields) -> int:
         (page_id, *fields.values()),
     )
     return cur.lastrowid
+
+
+def update_snapshot_bytes(conn: sqlite3.Connection, snapshot_id: int, n: int) -> None:
+    """스냅샷의 비정규화 용량(bytes)을 갱신 — compact 가 저장 형태를 바꾼 뒤 호출."""
+    conn.execute("UPDATE snapshots SET bytes = ? WHERE id = ?", (n, snapshot_id))
+
+
+def backfill_snapshot_bytes(
+    conn: sqlite3.Connection, *, only_missing: bool = False
+) -> int:
+    """스냅샷 bytes 를 파일시스템에서 재계산해 갱신하고 갱신 건수 반환.
+
+    only_missing=True 면 bytes=0 인 행만(마이그레이션 후 lazy 보정), False 면
+    전체(컬럼 최초 추가·compact 후 형태 변경 반영). 디렉토리가 없는 스냅샷은
+    0 으로 둔다 (로그만 남고 파일이 지워진 경우).
+    """
+    where = " WHERE s.bytes = 0" if only_missing else ""
+    rows = conn.execute(
+        f"SELECT s.id, p.domain, p.slug, s.dir_name "
+        f"FROM snapshots s JOIN pages p ON p.id = s.page_id{where}"
+    ).fetchall()
+    n = 0
+    for r in rows:
+        snap_dir = storage.page_dir(r["domain"], r["slug"]) / r["dir_name"]
+        conn.execute(
+            "UPDATE snapshots SET bytes = ? WHERE id = ?",
+            (storage.snapshot_dir_bytes(snap_dir), r["id"]),
+        )
+        n += 1
+    return n
 
 
 def _adjacent_snapshot(
@@ -1506,7 +1549,7 @@ def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """
     return conn.execute(
         """
-        SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name
+        SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name, s.bytes
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         """
     ).fetchall()
@@ -2978,7 +3021,7 @@ def list_site_snapshot_dirs(
     """
     return conn.execute(
         """
-        SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name
+        SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name, s.bytes
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         WHERE p.site_id = ?
         """,
