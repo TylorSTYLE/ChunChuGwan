@@ -297,11 +297,29 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires      ON sessions(expires_at);
 
 ### Phase 5 — 검색/색인 메모리
 
-- [ ] FTS5 `snippet()` 도입 (순위 7) + doctext 조기 중단 (순위 8)
-- [ ] backfill 추출을 커넥션 밖에서 (순위 8 연계)
-- [ ] latest_only 윈도우 함수 (순위 15)
+- [x] FTS5 `snippet()` 도입 (순위 7) + doctext 조기 중단 (순위 8)
+- [x] backfill 추출을 커넥션 밖에서 (순위 8 연계) — 이미 충족(per-snapshot 커밋)
+- [ ] latest_only 윈도우 함수 (순위 15) — **보류**
 
 검증: `test_search.py` 스니펫 출력 비교 + trigram 위치 정합성.
+
+> **완료 (perf/phase-5) — 메모리 항목.** 순위 7: FTS 검색이 결과 행마다
+> `snapshot_fts.content`(첨부 문서 본문 최대 2MB/문서) 전문을 Python 으로 가져와
+> 260자 스니펫만 쓰던 것을, FTS5 내장 `snippet(snapshot_fts, 0, '', '', '…', 64)`
+> 으로 DB 가 매치 주변(~60자)만 잘라 주게 변경(`_SEARCH_SELECT_FTS`). LIKE 폴백
+> (1~2글자, MATCH 없어 snippet() 불가)은 종전대로 content 로 스니펫 생성. trigram
+> 위치 정합성은 4000자 본문 깊은 매치 테스트로 가드. 순위 8: `doctext` 추출기에
+> 누적 길이 가드를 넣어 `SEARCH_DOC_TEXT_MAX_CHARS` 에 닿으면 남은 PDF 페이지·zip
+> 멤버를 읽지 않는다(전 페이지/멤버를 메모리에 모은 뒤 사후 절단하던 것 제거).
+> 순위 8 연계(backfill 추출을 락 밖에서)는 `backfill_all` 이 이미 스냅샷마다 커밋해
+> 추출이 쓰기 락 밖(WAL 읽기)에서 일어나므로 추가 작업 불필요.
+>
+> **보류 — 순위 15(latest_only 상관 서브쿼리).** 이는 메모리가 아니라 쿼리 형태
+> 최적화다. 윈도우 함수 재작성은 FTS5 `bm25()`/`snippet()` 가 MATCH 컨텍스트를
+> 요구해 서브쿼리·윈도우와의 호환이 불확실하고, `pages.latest_snapshot_id` 비정규화는
+> **스냅샷 삭제 시 최신 재계산**(deletion.py) 이 필요해 위험이 있다. 현재 상관
+> 서브쿼리는 `idx_snapshots_page(page_id, taken_at)` 를 타 매치된 후보 집합에만
+> 적용되므로, 별도 PR 로 신중히 다룬다.
 
 ### Phase 6 — 백업/compact
 

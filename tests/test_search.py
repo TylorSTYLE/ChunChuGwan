@@ -77,6 +77,19 @@ def test_korean_substring_match(archive):
     assert "한민국" in res.hits[0].snippet
 
 
+def test_fts_snippet_finds_deep_match_and_is_bounded(archive):
+    """FTS5 snippet() 가 큰 본문 깊숙한 매치를 찾고, 본문 전문이 아니라 잘린
+    스니펫을 돌려준다 (trigram 위치 정합성 + 메모리 — 순위 7)."""
+    body = ("머리말 " * 500) + " 여기깊은곳에검색대상이있다 " + ("꼬리말 " * 500)
+    _make_snapshot("https://a.com/big", body)
+    res = searchindex.search("검색대상")
+    assert res.mode == "fts"
+    assert res.total == 1
+    snip = res.hits[0].snippet
+    assert "검색대상" in snip            # 4000자 본문 끝쪽 매치를 정확히 찾음
+    assert len(snip) < 200              # 본문 전문(수천 자)이 아니라 잘린 스니펫
+
+
 def test_no_match_returns_empty(archive):
     _make_snapshot("https://a.com/1", "전혀 다른 내용")
     res = searchindex.search("존재하지않는단어")
@@ -194,6 +207,31 @@ def test_doctext_extracts_docx(tmp_path):
     p.write_bytes(_make_docx_bytes("문서본문키워드 테스트"))
     text = doctext.extract_text(p)
     assert text and "문서본문키워드" in text
+
+
+def test_doctext_early_stops_at_char_limit(tmp_path, monkeypatch):
+    """추출 누적이 상한에 닿으면 남은 zip 멤버를 읽지 않는다 (조기 중단 — 순위 8)."""
+    monkeypatch.setattr(config, "SEARCH_DOC_TEXT_MAX_CHARS", 40)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "word/document.xml",
+            '<?xml version="1.0"?><w:document xmlns:w="x"><w:body><w:p><w:r><w:t>'
+            + ("앞부분본문 " * 20)  # 상한(40)을 훌쩍 넘김
+            + "</w:t></w:r></w:p></w:body></w:document>",
+        )
+        # 상한 도달 후라 읽히지 않아야 하는 멤버
+        zf.writestr(
+            "word/header1.xml",
+            '<?xml version="1.0"?><w:hdr xmlns:w="x"><w:p><w:r><w:t>'
+            "뒤에오는헤더마커</w:t></w:r></w:p></w:hdr>",
+        )
+    p = tmp_path / "big.docx"
+    p.write_bytes(buf.getvalue())
+    text = doctext.extract_text(p)
+    assert text is not None
+    assert len(text) <= 40                 # 상한에서 잘림
+    assert "헤더마커" not in text          # 조기 중단으로 뒤 멤버는 안 읽음
 
 
 def test_doctext_unsupported_returns_none(tmp_path):
