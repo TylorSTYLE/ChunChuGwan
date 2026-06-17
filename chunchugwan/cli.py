@@ -809,7 +809,7 @@ def _counts_label(manifest: dict) -> str:
 @main.command()
 @click.argument("dest", type=click.Path(path_type=Path), default=".", required=False)
 def backup(dest: Path) -> None:
-    """전체 백업 tar.gz 생성 — DB(인증 포함)·스냅샷 파일·rules.json."""
+    """전체 백업 파일(.ccg.backup) 생성 — DB(인증 포함)·스냅샷 파일·rules.json."""
     try:
         out = backup_mod.create_backup(dest)
     except OSError as e:
@@ -822,6 +822,10 @@ def backup(dest: Path) -> None:
 @click.option("--yes", is_flag=True, help="확인 없이 진행")
 def restore(src: Path, yes: bool) -> None:
     """전체 백업에서 복원 — 현재 아카이브 루트를 백업 시점 상태로 교체."""
+    if not backup_mod.is_backup_filename(src.name):
+        raise click.ClickException(
+            f"복원은 {backup_mod.BACKUP_SUFFIX} 확장자 파일만 받습니다: {src.name}"
+        )
     try:
         manifest = backup_mod.read_manifest(src)
     except (ValueError, tarfile.TarError, OSError) as e:
@@ -864,6 +868,10 @@ def export(dest: Path) -> None:
 @click.option("--yes", is_flag=True, help="overwrite 확인 없이 진행")
 def import_cmd(src: Path, mode: str, yes: bool) -> None:
     """내보낸 아카이브 데이터 가져오기 (인증 데이터는 건드리지 않음)."""
+    if not backup_mod.is_export_filename(src.name):
+        raise click.ClickException(
+            f"가져오기는 {backup_mod.EXPORT_SUFFIX} 확장자 파일만 받습니다: {src.name}"
+        )
     if mode == "overwrite" and not yes:
         click.confirm(
             "기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. "

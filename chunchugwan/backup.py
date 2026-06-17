@@ -39,6 +39,13 @@ FORMAT_VERSION = 4
 MANIFEST_NAME = "manifest.json"
 ARCHIVE_DATA_NAME = "archive.json"
 
+# 아카이브 내보내기 파일 확장자 — 내용은 tar.gz 지만 가져오기는 이 확장자만
+# 인식한다(전체 백업 .ccg.backup 와 구분). 강제는 사용자 경계(CLI import·웹 업로드).
+EXPORT_SUFFIX = ".ccg.export"
+# 전체 백업 파일 확장자 — 내용은 tar.gz 지만 복원은 이 확장자만 인식한다.
+# 강제는 사용자 경계(CLI restore·웹 업로드).
+BACKUP_SUFFIX = ".ccg.backup"
+
 # DB 값 → 파일시스템 경로 조립 시 path traversal 방지용 형식 검증
 _DOMAIN_RE = re.compile(r"^[a-z0-9.-]+(:[0-9]+)?$")
 _SLUG_RE = re.compile(r"^[a-z0-9-]+$")
@@ -62,12 +69,22 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _resolve_dest(dest: Path, prefix: str) -> Path:
+def _resolve_dest(dest: Path, prefix: str, ext: str = ".tar.gz") -> Path:
     """dest 가 디렉토리면 시각 붙은 기본 파일명을 만들고, 아니면 그대로 쓴다."""
     if dest.is_dir():
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        return dest / f"{prefix}-{stamp}.tar.gz"
+        return dest / f"{prefix}-{stamp}{ext}"
     return dest
+
+
+def is_export_filename(name: str) -> bool:
+    """가져오기 입력 파일명이 내보내기 확장자(.ccg.export)인지 — 대소문자 무시."""
+    return name.lower().endswith(EXPORT_SUFFIX)
+
+
+def is_backup_filename(name: str) -> bool:
+    """복원 입력 파일명이 전체 백업 확장자(.ccg.backup)인지 — 대소문자 무시."""
+    return name.lower().endswith(BACKUP_SUFFIX)
 
 
 def _consistent_db_copy(out: Path) -> None:
@@ -113,7 +130,7 @@ def read_manifest(src: Path) -> dict:
 def create_backup(dest: Path) -> Path:
     """전체 백업 tar.gz 생성 후 경로 반환. DB(인증 포함)·sites·rules.json 포함."""
     config.ensure_dirs()
-    out = _resolve_dest(dest, "chunchugwan-backup")
+    out = _resolve_dest(dest, "chunchugwan-backup", ext=BACKUP_SUFFIX)
     with db.connect() as conn:
         counts = _archive_counts(conn)
     manifest = {
@@ -416,7 +433,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
             )
         ]
 
-    out = _resolve_dest(dest, prefix)
+    out = _resolve_dest(dest, prefix, ext=EXPORT_SUFFIX)
     counts = {"pages": len(pages), "snapshots": len(snapshots), "checks": len(checks)}
     manifest = {
         "kind": "archive",

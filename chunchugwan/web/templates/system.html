@@ -471,7 +471,7 @@ h3.danger-heading { color: var(--red); }
   <div class="sys-card">
     <h4>{{ _("전체 백업") }}</h4>
     <p>
-      {{ _("DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.") }}
+      {{ _("DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 .ccg.backup 파일을 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.") }}
     </p>
     <div class="actions">
       <form method="post" action="/system/backup">
@@ -509,7 +509,7 @@ h3.danger-heading { color: var(--red); }
         </label>
       </div>
       <div class="actions">
-        <input type="file" name="file" accept=".tar.gz,.tgz,application/gzip" required>
+        <input type="file" name="file" accept=".ccg.export" required>
         <button type="submit">{{ _("가져오기") }}</button>
       </div>
     </form>
@@ -585,7 +585,7 @@ h3.danger-heading { color: var(--red); }
     <form method="post" action="/system/restore" enctype="multipart/form-data"
           class="actions"
           onsubmit='return confirm({{ _('정말 복원할까요? 현재 데이터가 모두 백업 시점으로 교체됩니다.')|tojson }})'>
-      <input type="file" name="file" accept=".tar.gz,.tgz,application/gzip" required>
+      <input type="file" name="file" accept=".ccg.backup" required>
       <button type="submit" class="danger">{{ _("복원") }}</button>
     </form>
   </div>

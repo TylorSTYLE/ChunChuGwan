@@ -254,7 +254,7 @@ def tar_download(make: Callable[[Path], Path], prefix: str) -> FileResponse:
 
 @router.post("/backup")
 def system_backup(request: Request) -> FileResponse:
-    """전체 백업 tar.gz 다운로드 (DB·인증 데이터·스냅샷 파일·rules.json)."""
+    """전체 백업 파일(.ccg.backup) 다운로드 (DB·인증 데이터·스냅샷 파일·rules.json)."""
     audit.log(request, "전체 백업 다운로드")
     return tar_download(backup_mod.create_backup, "backup")
 
@@ -748,6 +748,10 @@ def system_restore(request: Request, file: UploadFile = File(...)):
     복원되면 세션 테이블도 백업 시점으로 돌아가므로 현재 로그인은 무효가
     될 수 있다 (미들웨어가 /login 으로 보낸다).
     """
+    if not backup_mod.is_backup_filename(file.filename or ""):
+        return _system_redirect(
+            error=t(request, "복원은 .ccg.backup 확장자 파일만 받습니다.")
+        )
     tmp = _save_upload(file)
     try:
         manifest = backup_mod.restore_backup(tmp)
@@ -1362,6 +1366,10 @@ def system_import(
     """내보낸 아카이브 데이터 업로드로 가져오기 (인증 데이터는 건드리지 않음)."""
     if mode not in ("merge", "overwrite"):
         raise HTTPException(400, t(request, "알 수 없는 모드: {mode}", mode=repr(mode)))
+    if not backup_mod.is_export_filename(file.filename or ""):
+        return _system_redirect(
+            error=t(request, "가져오기는 .ccg.export 확장자 파일만 받습니다.")
+        )
     tmp = _save_upload(file)
     try:
         result = backup_mod.import_archive(tmp, mode=mode)
