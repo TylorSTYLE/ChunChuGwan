@@ -79,6 +79,28 @@ def test_externalize_style_block(cas_env):
     assert resources.is_gzipped(resources.resource_path(names[0]))
 
 
+def test_store_css_skips_recompress_when_present(cas_env, monkeypatch):
+    """이미 있는 CSS 는 gzip 재압축 없이 mtime 만 갱신한다 (재아카이빙 낭비 방지)."""
+    data = _CSS.encode()
+    name = resources._store_css(data)  # 최초 저장 — 압축 1회
+    path = resources.resource_path(name)
+    assert resources.is_gzipped(path)
+
+    calls = []
+    real_compress = gzip.compress
+    monkeypatch.setattr(
+        gzip, "compress",
+        lambda *a, **k: calls.append(1) or real_compress(*a, **k),
+    )
+    old_mtime = path.stat().st_mtime
+    import os
+    os.utime(path, (old_mtime - 100, old_mtime - 100))  # 과거로 돌려 갱신 확인
+
+    assert resources._store_css(data) == name
+    assert calls == []                       # 재압축 안 함
+    assert path.stat().st_mtime > old_mtime - 100  # mtime 은 갱신
+
+
 def test_externalize_style_keeps_small(cas_env):
     html = "<style>p{}</style>"  # 임계값 미만
     out, names = resources.externalize_style_blocks(html)

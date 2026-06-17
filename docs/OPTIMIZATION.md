@@ -185,17 +185,27 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires      ON sessions(expires_at);
 
 작은 변경만 모음. 회귀 위험 거의 없음. 먼저 체감 개선.
 
-- [ ] PRAGMA 3종 추가 (순위 1)
-- [ ] `count_users` 래치 (순위 4)
-- [ ] 브라우저 유휴 grace period (순위 5)
-- [ ] Jinja `auto_reload=False`/`cache_size=-1` (순위 11)
-- [ ] `extract.normalize` 정규식 캐시 (순위 16)
-- [ ] CLI 지연 import (순위 17)
-- [ ] `snapshot_file` immutable 캐시 헤더 (순위 22)
-- [ ] CSS 압축-후-확인 → 확인-후-압축 (순위 19)
-- [ ] 캡처 `get_page`/`title` 중복 제거 (순위 14)
+- [x] PRAGMA 3종 추가 (순위 1)
+- [x] `count_users` 래치 (순위 4)
+- [x] 브라우저 유휴 grace period (순위 5)
+- [x] Jinja `auto_reload=False`/`cache_size=-1` (순위 11)
+- [x] `extract.normalize` 정규식 캐시 (순위 16)
+- [x] CLI 지연 import (순위 17)
+- [x] `snapshot_file` immutable 캐시 헤더 (순위 22)
+- [x] CSS 압축-후-확인 → 확인-후-압축 (순위 19)
+- [x] 캡처 `get_page`/`title` 중복 제거 (순위 14)
 
 검증 게이트: `uv run pytest` 전체 통과 + `wccg serve` 로 현황/목록/검색 수동 확인.
+
+> **완료 (perf/phase-0).** `cache_size`/`mmap_size`/`temp_store` PRAGMA 를 매 커넥션에
+> 적용, 최초 구동 판정을 프로세스 전역 래치(`db.first_run_needed`, DB 교체 시 자동 재평가)로
+> 바꿔 요청당 `COUNT(*)` 제거, archive/crawl 워커가 유휴 `BROWSER_IDLE_CLOSE_SECONDS`(60s)
+> 를 넘겨야 브라우저를 내리도록 변경, Jinja `auto_reload` 끄고 템플릿 캐시 무제한, 도메인 룰
+> 정규식 컴파일 캐시(`_compile_drop_patterns`), CLI 의 capture(playwright)·PIL·lxml 그래프를
+> 지연 import 로 전환(list/search/add 콜드 스타트 단축), `/snapshot/{id}/file/{name}` 에
+> `Cache-Control: immutable`, `_store_css` 가 존재 확인 후에만 gzip, 캡처 전 `get_page` 3중
+> 조회·커넥션을 1회로 통합 + `page.title()` 중복 제거. 회귀 테스트 추가
+> (`test_db.py` PRAGMA·first-run 래치, `test_resources.py` CSS 재압축 회피).
 
 ### Phase 1 — 인덱스 (멱등 마이그레이션)
 

@@ -146,6 +146,9 @@ CRAWL_RETRY_BACKOFF_MAX_STEPS = 5          # 대기 항목 수 한도 — 최대
 CRAWL_STALE_CLAIM_SECONDS = 600      # 이보다 오래된 in_progress 는 중단으로 보고 복구
 CRAWLER_POLL_SECONDS = 2             # serve·워커 크롤러 폴링 간격
 ARCHIVE_POLL_SECONDS = 2             # serve·워커 단발 아카이빙 큐 폴링 간격 (archive_worker.py)
+# 큐가 빈 뒤 이 시간만큼 더 유휴여야 브라우저를 내린다 — 폴링(2초)마다 close/재기동
+# 스래싱을 막으면서 산발적 작업 사이에 chromium 을 재사용한다 (메모리 점유 ↔ 기동 비용 절충).
+BROWSER_IDLE_CLOSE_SECONDS = 60
 
 # ---- 아카이빙 워커 (`wccg worker`, worker.py) ----
 # 크롤 스레드 수 = 동시에 진행되는 크롤(사이트) 수. 같은 크롤은 스레드가

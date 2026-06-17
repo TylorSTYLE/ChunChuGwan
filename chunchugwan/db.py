@@ -25,6 +25,8 @@ _BUSY_TIMEOUT_SECONDS = 30
 # DB 파일 자체를 교체하는 코드는 invalidate_schema_cache() 를 호출할 것.
 _schema_ready: set[str] = set()
 _schema_lock = threading.Lock()
+# 최초 구동(사용자 0명) 판정 래치 — first_run_needed 가 1회 확인 후 세팅한다.
+_users_exist_latch = False
 
 
 def invalidate_schema_cache() -> None:
@@ -33,11 +35,12 @@ def invalidate_schema_cache() -> None:
     역할 프리셋 캐시도 함께 무효화한다 — 복원은 같은 경로에 다른 내용의 DB 를
     넣어 (경로, 버전) 키가 우연히 겹칠 수 있으므로 강제로 다음 호출에서 재로드.
     """
-    global _presets_version, _presets_cache_path
+    global _presets_version, _presets_cache_path, _users_exist_latch
     with _schema_lock:
         _schema_ready.clear()
     _presets_version = _PRESETS_UNSET
     _presets_cache_path = None
+    _users_exist_latch = False  # 복원이 DB 를 비울 수 있으므로 최초 구동 판정도 재평가
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS network_tags (
@@ -715,6 +718,11 @@ def connect() -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA synchronous = NORMAL")
+    # 런타임 PRAGMA — 커넥션마다 적용(영구 저장 아님), WAL+NORMAL 과 충돌 없음.
+    # 커넥션을 매 요청·작업마다 새로 여는 구조라 모든 쿼리에 깔리는 고정 비용을 낮춘다.
+    conn.execute("PRAGMA cache_size = -16000")    # ~16MB 페이지 캐시 (기본 ~2MB)
+    conn.execute("PRAGMA mmap_size = 268435456")  # 256MB — read() 대신 메모리 매핑
+    conn.execute("PRAGMA temp_store = MEMORY")    # ORDER BY/GROUP BY 임시정렬을 메모리에서
     _ensure_schema(conn, db_path)
     try:
         yield conn
@@ -729,6 +737,7 @@ def _ensure_schema(conn: sqlite3.Connection, db_path) -> None:
     db_path 는 conn 을 연 경로 — config.DB_PATH 를 다시 읽으면 다른 스레드가
     경로를 바꿨을 때(테스트 등) 엉뚱한 키가 '준비됨'으로 오염될 수 있다.
     """
+    global _users_exist_latch
     key = str(db_path)
     with _schema_lock:
         if key in _schema_ready:
@@ -739,6 +748,10 @@ def _ensure_schema(conn: sqlite3.Connection, db_path) -> None:
         _migrate(conn)
         conn.commit()
         _schema_ready.add(key)
+        # 새 DB 파일을 이 프로세스가 처음 쓰기 시작했다 — 최초 구동 판정 래치는
+        # 이전 DB 기준이라 무효다. 풀어서 first_run_needed 가 새 DB 로 재평가하게
+        # 한다 (복원·테스트의 DB 교체가 이 경로를 탄다).
+        _users_exist_latch = False
 
 
 def _utcnow() -> str:
@@ -3675,6 +3688,22 @@ def create_user(
 def count_users(conn: sqlite3.Connection) -> int:
     """전체 사용자 수 (0 이면 최초 구동으로 판단)."""
     return conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+
+
+def first_run_needed(conn: sqlite3.Connection) -> bool:
+    """최초 구동(사용자 0명) 여부 — 매 요청 COUNT(*) 를 피하려 프로세스 전역 래치.
+
+    auth_gate 가 모든 요청에서 호출한다. 사용자가 한 명이라도 생기면 영원히
+    0 이 아니므로, 한 번 확인하면 래치해 이후 COUNT(*) 를 건너뛴다. 복원으로
+    DB 가 비는 경로는 invalidate_schema_cache() 가 래치를 함께 풀어 보존한다.
+    """
+    global _users_exist_latch
+    if _users_exist_latch:
+        return False
+    if count_users(conn) > 0:
+        _users_exist_latch = True
+        return False
+    return True
 
 
 def create_first_admin(

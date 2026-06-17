@@ -120,9 +120,11 @@ def test_serve_rejects_external_bind_without_auth(monkeypatch):
 def test_worker_command_runs_with_resolved_count(monkeypatch):
     import signal
 
+    from chunchugwan import worker as worker_mod
+
     called = {}
     monkeypatch.setattr(
-        cli.worker_mod, "run",
+        worker_mod, "run",
         lambda stop, crawl_workers: called.setdefault("n", crawl_workers),
     )
     old_int = signal.getsignal(signal.SIGINT)

@@ -98,6 +98,40 @@ def test_connect_uses_wal(conn):
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
+def test_connect_applies_runtime_pragmas(conn):
+    """커넥션마다 cache_size·mmap_size·temp_store 런타임 PRAGMA 가 적용된다."""
+    assert conn.execute("PRAGMA cache_size").fetchone()[0] == -16000
+    assert conn.execute("PRAGMA mmap_size").fetchone()[0] == 268435456
+    # temp_store: 0=DEFAULT, 1=FILE, 2=MEMORY
+    assert conn.execute("PRAGMA temp_store").fetchone()[0] == 2
+
+
+def test_first_run_needed_latches_and_resets_on_db_swap(tmp_path, monkeypatch):
+    """최초 구동 판정은 한 번 사용자를 보면 래치하고, DB 교체 시 재평가한다."""
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
+
+    with db.connect() as c:
+        assert db.first_run_needed(c) is True   # 사용자 0명
+        db.create_user(c, "admin@test.co", "x", role="admin")
+        assert db.first_run_needed(c) is False  # 사용자 생김 → 래치
+
+    # 래치 후에는 COUNT 없이도 False 를 유지한다
+    calls = []
+    original = db.count_users
+    monkeypatch.setattr(db, "count_users", lambda c: calls.append(1) or original(c))
+    with db.connect() as c:
+        assert db.first_run_needed(c) is False
+    assert calls == []  # 래치가 COUNT(*) 를 건너뛴다
+
+    # 다른 DB 파일로 교체하면(테스트의 새 tmp DB·복원) 래치가 풀려 재평가
+    monkeypatch.setattr(db, "count_users", original)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "fresh.db")
+    with db.connect() as c:
+        assert db.first_run_needed(c) is True
+
+
 def test_schema_ensured_once_per_process(tmp_path, monkeypatch):
     """스키마 보장(_migrate 포함)은 같은 DB 파일에 대해 프로세스당 1회만."""
     monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)

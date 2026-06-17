@@ -141,8 +141,15 @@ def _store_css(data: bytes) -> str:
     있었으므로, 원문 그대로 저장하면 추출이 오히려 총용량을 늘린다.
     /resource/ 라우트가 gzip 매직 바이트를 감지해 Content-Encoding: gzip
     으로 서빙한다 (구형 아카이브의 비압축 .css 와 공존 가능).
+
+    이름(원문 sha256)으로 존재를 먼저 확인하고, 신규일 때만 gzip 압축한다 —
+    재아카이빙에서 안 바뀐 CSS 를 매번 level=9 로 재압축하는 낭비를 막는다.
     """
     name = hashlib.sha256(data).hexdigest() + ".css"
+    path = resource_path(name)
+    if path.is_file():
+        os.utime(path)  # _write_cas 와 동일 — sweep 유예 창 갱신
+        return name
     return _write_cas(name, gzip.compress(data, compresslevel=9, mtime=0))
 
 

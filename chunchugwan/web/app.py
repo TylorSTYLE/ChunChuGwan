@@ -168,7 +168,7 @@ async def auth_gate(request: Request, call_next):
             # 이 요청에서 최신 프리셋을 보도록 요청 앞단에서 한 번 갱신한다
             # (settings 버전 비교라 변동 없으면 SELECT 1행으로 끝, 멀티프로세스 안전).
             db.role_presets(conn)
-            if db.count_users(conn) == 0:
+            if db.first_run_needed(conn):
                 first_run = not auth.bootstrap_admin_from_env(conn)
             if not first_run and token:
                 sess = auth.resolve_session(conn, token)
@@ -1488,7 +1488,9 @@ def snapshot_file(request: Request, snapshot_id: int, name: str):
             break
     else:
         raise HTTPException(404, t(request, "파일 없음"))
-    headers = {}
+    # 스냅샷은 불변(원칙 2) — snapshot_id+name 은 항상 같은 바이트를 가리키므로
+    # 브라우저가 무기한 캐시하게 둔다 (인증 뒤라 private). 매번 재전송 방지.
+    headers = {"Cache-Control": "private, max-age=31536000, immutable"}
     if filename.endswith(".gz"):
         headers["Content-Encoding"] = "gzip"
     if name == "page.html":
