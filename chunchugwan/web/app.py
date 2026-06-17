@@ -835,7 +835,7 @@ def site_certificate_pem(request: Request, site_id: int, cert_id: int):
 
 @app.post("/sites/{site_id}/export")
 def site_export(request: Request, site_id: int):
-    """사이트 아카이브 내보내기 — 소속 페이지·스냅샷과 참조 자원만 담은 tar.gz.
+    """사이트 아카이브 내보내기 — 소속 페이지·스냅샷과 참조 자원만 담은 .ccg.export 파일.
 
     파일 형식은 전체 내보내기(/system/export)와 같아 가져오기(웹 화면·
     wccg import)로 복원할 수 있다. admin/archiver 전용.

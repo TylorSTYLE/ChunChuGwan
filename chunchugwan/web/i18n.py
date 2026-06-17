@@ -488,10 +488,10 @@ _EN: dict[str, str] = {
         "resources? With many snapshots this can take a while.",
     "최적화 실행": "Run optimization",
     "전체 백업": "Full backup",
-    "DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.":
-        "Downloads a tar.gz containing the entire DB (including auth data such as "
-        "users and sessions), snapshot files, and rules.json. It can be restored "
-        "as-is via Full restore below.",
+    "DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 .ccg.backup 파일을 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.":
+        "Downloads a .ccg.backup file containing the entire DB (including auth data "
+        "such as users and sessions), snapshot files, and rules.json. It can be "
+        "restored as-is via Full restore below.",
     "전체 백업 다운로드": "Download full backup",
     "전체 복원": "Full restore",
     "현재 데이터(인증 포함)를 모두 지우고 업로드한 전체 백업 시점으로 되돌립니다. 되돌릴 수 없습니다. 세션도 백업 시점으로 돌아가므로 복원 후 다시 로그인해야 할 수 있습니다.":
@@ -529,9 +529,13 @@ _EN: dict[str, str] = {
         "backfilled {indexed} reference(s) · cleaned {swept} orphaned "
         "resource(s) (saved {saved})",
     "복원 실패: {e}": "Restore failed: {e}",
+    "복원은 .ccg.backup 확장자 파일만 받습니다.":
+        "Restore only accepts files with the .ccg.backup extension.",
     "복원 완료 (백업: {created_at}, 페이지 {pages}개, 스냅샷 {snapshots}개)":
         "Restore complete (backup: {created_at}, {pages} pages, {snapshots} snapshots)",
     "가져오기 실패: {e}": "Import failed: {e}",
+    "가져오기는 .ccg.export 확장자 파일만 받습니다.":
+        "Import only accepts files with the .ccg.export extension.",
     "가져오기 완료 [{mode}]: 페이지 +{pages}, 스냅샷 +{snapshots} (스킵 {skipped}), 확인 기록 +{checks}, 크롤 +{crawls}, 인증서 +{certs}, 로그 +{logs}":
         "Import complete [{mode}]: pages +{pages}, snapshots +{snapshots} "
         "(skipped {skipped}), checks +{checks}, crawls +{crawls}, "
@@ -1163,9 +1167,9 @@ _EN: dict[str, str] = {
     "실패한 페이지만 큐로 되돌려 다시 시도합니다 (성공한 페이지는 그대로).":
         "Re-queue and retry only the failed pages (successful ones are left as is).",
     "사이트 내보내기": "Export site",
-    "소속 페이지·스냅샷을 아카이브 내보내기 파일(tar.gz)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.":
+    "소속 페이지·스냅샷을 아카이브 내보내기 파일(.ccg.export)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.":
         "Download this site's pages and snapshots as an archive export file "
-        "(tar.gz) — it can be restored via import.",
+        "(.ccg.export) — it can be restored via import.",
     "사이트 삭제": "Delete site",
     "페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
         "This deletes the entire site archive including {p} page(s) and {c} "
