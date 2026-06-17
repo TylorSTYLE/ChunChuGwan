@@ -15,6 +15,7 @@
 <table>
   <thead>
     <tr><th>{{ _("이메일") }}</th><th>{{ _("이름") }}</th><th>{{ _("권한") }}</th><th>2FA</th><th>SSO</th>
+        <th>{{ _("이메일 인증") }}</th>
         <th>{{ _("활성 세션") }}</th><th>{{ _("가입일") }}</th><th>{{ _("권한 변경") }}</th>
         <th>{{ _("계정 삭제") }}</th></tr>
   </thead>
@@ -39,6 +40,11 @@
         {% if not u['totp_secret'] and u['passkey_count'] == 0 %}<span class="muted">-</span>{% endif %}
       </td>
       <td>{% if u['identity_count'] > 0 %}<span class="badge same">OIDC</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+      <td>
+        {% if not u['password_hash'] %}<span class="muted" title="{{ _('SSO 계정은 IdP 가 이메일을 검증합니다.') }}">-</span>
+        {% elif u['email_verified'] %}<span class="badge new">{{ _("인증됨") }}</span>
+        {% else %}<span class="badge changed">{{ _("미인증") }}</span>{% endif %}
+      </td>
       <td class="num">
         {{ u['session_count'] }}
         {% if u['session_count'] > 0 %}

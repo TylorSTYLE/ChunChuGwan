@@ -111,6 +111,9 @@ app.include_router(api_routes.router)
 _PUBLIC_PATHS = {
     "/healthz", "/login", "/login/totp", "/signup",
     "/login/passkey/options", "/login/passkey",
+    # 이메일 인증 — 로그인 도중(pending_email_verify 세션)에는 아직 active
+    # 사용자가 아니라 핸들러가 세션을 직접 판별한다 (active 사용자도 같은 화면 사용).
+    "/verify-email", "/verify-email/resend",
 }
 
 # 브라우저가 주소만 보고 자동 요청하는 아이콘 경로 — /login·/setup 으로

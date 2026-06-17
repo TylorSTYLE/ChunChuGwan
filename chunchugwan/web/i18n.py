@@ -528,6 +528,45 @@ _EN: dict[str, str] = {
     "사이트 아카이브 설정을 저장했습니다.": "Site archive settings saved.",
     "재시도 대기는 쉼표로 구분한 초 단위 숫자 목록이어야 합니다 (예: 300, 900)":
         "Retry waits must be a comma-separated list of seconds (e.g. 300, 900)",
+    # ---- 이메일 본인 인증 ----
+    "이메일 본인 인증": "Email verification",
+    "회원 가입(패스워드 계정)으로 만든 계정이 메일로 받은 코드로 이메일 소유를 확인하게 합니다. SSO(OIDC) 계정은 IdP 가 검증하므로 제외됩니다.":
+        "Require accounts created via sign-up (password accounts) to confirm "
+        "ownership of their email with a code sent by mail. SSO (OIDC) accounts "
+        "are excluded since the IdP verifies them.",
+    "메일(SMTP) 설정이 없어 이 기능은 켜더라도 동작하지 않습니다 — 아래 메일(SMTP) 설정을 먼저 채우세요.":
+        "This feature does nothing even when enabled because mail (SMTP) is not "
+        "configured — fill in the Mail (SMTP) settings below first.",
+    "이메일 본인 인증 사용": "Enable email verification",
+    "인증 코드 만료 시간(분)": "Verification code expiry (minutes)",
+    "이메일 본인 인증 설정을 저장했습니다.": "Email verification settings saved.",
+    "인증 코드 만료 시간은 {lo} ~ {hi}분 사이여야 합니다.":
+        "The verification code expiry must be between {lo} and {hi} minutes.",
+    "{email} (으)로 보낸 인증 코드를 입력하세요. 코드는 {n}분 후 만료됩니다.":
+        "Enter the verification code sent to {email}. The code expires in {n} minutes.",
+    "인증 코드": "Verification code",
+    "코드를 받지 못했나요?": "Didn't get the code?",
+    "인증 코드 다시 보내기": "Resend verification code",
+    "메일 발송(SMTP)이 설정되지 않아 인증 코드를 보낼 수 없습니다. 관리자에게 문의하세요.":
+        "Mail (SMTP) is not configured, so no verification code can be sent. "
+        "Please contact your administrator.",
+    "계정 설정으로 돌아가기": "Back to account settings",
+    "인증 코드를 메일로 보냈습니다.": "A verification code has been emailed.",
+    "코드가 올바르지 않거나 만료되었습니다.": "The code is incorrect or has expired.",
+    "메일 발송이 설정되지 않아 코드를 보낼 수 없습니다.":
+        "Mail is not configured, so the code cannot be sent.",
+    "코드 발송에 실패했습니다. 잠시 후 다시 시도하세요.":
+        "Failed to send the code. Please try again later.",
+    "이메일 본인 인증을 완료했습니다.": "Email verification complete.",
+    "이메일 인증": "Email verified",
+    "SSO 계정은 IdP 가 이메일을 검증합니다.": "SSO accounts have their email verified by the IdP.",
+    "미인증": "Unverified",
+    "인증 코드 받기": "Get a verification code",
+    "코드를 메일로 보낸 뒤 인증 화면으로 이동합니다.":
+        "Sends a code by email and takes you to the verification screen.",
+    "이메일 본인 인증이 켜져 있지 않거나 메일(SMTP) 설정이 없어 지금은 인증할 수 없습니다.":
+        "Email verification is off or mail (SMTP) is not configured, so you "
+        "cannot verify right now.",
     # ---- 가입 설정 (system) ----
     "가입 설정": "Sign-up settings",
     "로그인 화면의 회원 가입 기능과 가입 계정의 초기 권한을 설정합니다 (SSO 자동 생성 계정에도 적용). '권한없음'으로 가입한 사용자는 관리자가 사용자 관리에서 권한을 부여할 때까지 서비스를 이용할 수 없습니다.":

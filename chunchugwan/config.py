@@ -196,6 +196,13 @@ TOTP_ISSUER = "ChunChuGwan"
 PENDING_TOTP_TTL_SECONDS = 600          # 패스워드 통과 후 OTP 입력 제한 시간
 MIN_PASSWORD_LENGTH = 8
 
+# 이메일 본인 인증 — 코드 만료 시간(분, 시스템 설정으로 변경)과 코드 자릿수.
+# 인증 대기(pending_email_verify) 세션 수명은 코드 만료 시간을 따른다.
+EMAIL_VERIFICATION_TTL_MINUTES_DEFAULT = 30
+EMAIL_VERIFICATION_TTL_MINUTES_MIN = 5
+EMAIL_VERIFICATION_TTL_MINUTES_MAX = 1440  # 24시간
+EMAIL_VERIFICATION_CODE_LENGTH = 6         # 숫자 코드 자릿수
+
 # 외부 사이트 로그인 자격증명 암호화 키 (대칭 — CLAUDE.md 원칙 6 예외).
 # 설정 시에만 자격증명 기능이 활성화된다. DB·저장소엔 암호문만 남고 키는
 # 여기(환경변수)에만 둔다. 바꾸면 기존 자격증명을 복호화할 수 없다.

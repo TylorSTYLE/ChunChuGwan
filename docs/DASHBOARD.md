@@ -234,7 +234,12 @@
   없는 항목만 환경변수로 폴백. 비밀번호는 `WCCG_SECRET_KEY` 로 암호화한 암호문만
   저장하고 화면엔 노출하지 않으며, 입력칸을 비우면 유지·'저장된 비밀번호 삭제'로
   제거. `POST /system/smtp-test` 는 저장된 설정으로 관리자 본인에게 테스트 메일을
-  보낸다)·로컬 네트워크 태그
+  보낸다)·이메일 본인 인증 설정
+  (`POST /system/email-verification-settings` — 사용자 설정 섹션. 패스워드
+  계정이 메일로 받은 코드로 이메일을 검증하게 할지(`settings` 테이블
+  `email_verification_enabled`, 기본 꺼짐)와 코드 만료 시간(분,
+  `email_verification_ttl_minutes`). SMTP 미설정이면 켜도 동작하지 않고 SSO
+  계정은 제외 — 인증 흐름은 `docs/AUTHENTICATION.md` 참조)·로컬 네트워크 태그
   (`POST /system/network-tags`, `POST /system/network-tags/{id}/delete`,
   `POST /system/network-tags/merge` — 사설 IP 대역 아카이빙을 허용하는 태그.
   id 는 GUID 자동 발급, 이름은 유일·60자, 설명 200자. 페이지·크롤·크롤
@@ -248,7 +253,8 @@
   `POST /system/users/{id}/permissions`)에서 권한별 체크박스로 프리셋과
   다른 권한을 가감한다 (별표 = 프리셋과 다름, 역할 변경 시 초기화). `manage_users`
   마지막 보유자에게서는 그 권한을 떼거나 역할을 낮출 수 없다(관리 잠김 방지).
-  차단 시 세션 즉시 무효화, 최초 관리자는 변경 불가.
+  차단 시 세션 즉시 무효화, 최초 관리자는 변경 불가. 계정별로 2FA·SSO와 함께
+  **이메일 인증 여부**(인증됨/미인증, SSO 계정은 `-`)를 표시한다.
   계정 정보 삭제(`POST /system/users/{id}/delete`) — 대상 이메일을 입력해
   확인해야 하며, 최초 관리자·본인은 불가. 삭제하면 세션·OIDC 연결·패스키까지
   지워져 같은 이메일로 재가입/초대가 가능해진다. 탈퇴(withdrawn) 계정은

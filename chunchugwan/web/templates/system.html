@@ -355,6 +355,37 @@ h3.danger-heading { color: var(--red); }
       </div>
     </form>
   </div>
+
+  <div class="sys-card">
+    <h4>{{ _("이메일 본인 인증") }}</h4>
+    <form method="post" action="/system/email-verification-settings"
+          style="display:flex; flex-direction:column; gap:10px; flex:1">
+      <p>
+        {{ _("회원 가입(패스워드 계정)으로 만든 계정이 메일로 받은 코드로 이메일 소유를 확인하게 합니다. SSO(OIDC) 계정은 IdP 가 검증하므로 제외됩니다.") }}
+      </p>
+      {% if not smtp_config['enabled'] %}
+      <p class="muted" style="font-size:12px">
+        {{ _("메일(SMTP) 설정이 없어 이 기능은 켜더라도 동작하지 않습니다 — 아래 메일(SMTP) 설정을 먼저 채우세요.") }}
+      </p>
+      {% endif %}
+      <label class="mode">
+        <input type="checkbox" name="email_verification_enabled" value="on"
+               {% if email_verification_enabled %}checked{% endif %}>
+        {{ _("이메일 본인 인증 사용") }}
+      </label>
+      <label class="mode">
+        {{ _("인증 코드 만료 시간(분)") }}
+        <input type="number" name="email_verification_ttl_minutes" required
+               style="width:6em; margin-left:6px"
+               value="{{ email_verification_ttl_minutes }}"
+               min="{{ email_verification_ttl_limits['min'] }}"
+               max="{{ email_verification_ttl_limits['max'] }}">
+      </label>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <h3>{{ _("서버 환경설정") }}</h3>

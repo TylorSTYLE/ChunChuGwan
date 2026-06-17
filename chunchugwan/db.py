@@ -290,6 +290,7 @@ CREATE TABLE IF NOT EXISTS users (
     permission_overrides TEXT NOT NULL DEFAULT '{}',  -- 프리셋과 다른 세분 권한 가감 (JSON {권한: bool})
     is_founder          INTEGER NOT NULL DEFAULT 0,  -- 최초 등록 관리자 (권한 변경 불가)
     display_name        TEXT,               -- 표시용 이름 (NULL = 이메일로 표시)
+    email_verified      INTEGER NOT NULL DEFAULT 0,  -- 이메일 본인 인증 완료 여부 (SSO 계정은 IdP 가 검증)
     created_at          TEXT NOT NULL
 );
 
@@ -373,6 +374,13 @@ CREATE TABLE IF NOT EXISTS oidc_states (
     redirect_to TEXT NOT NULL DEFAULT '/',
     created_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS email_verifications (
+    user_id     INTEGER PRIMARY KEY REFERENCES users(id),  -- 사용자당 1개 (재발송 시 교체)
+    code_hash   TEXT NOT NULL,           -- 인증 코드의 SHA-256 (원문은 메일에만 존재)
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
+);
 """
 
 
@@ -409,6 +417,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'")
     if cols and "locale" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT 'ko'")
+    # 이메일 본인 인증 여부 — 기존 사용자는 미인증(0)으로 시작한다. 관리자가
+    # 기능을 켜면 다음 로그인부터 인증을 요구받고, 개인 설정에서도 인증할 수 있다.
+    if cols and "email_verified" not in cols:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0"
+        )
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
     if cols and "webauthn_challenge" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN webauthn_challenge TEXT")
@@ -3434,6 +3448,7 @@ def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
     conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM identities WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM webauthn_credentials WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM email_verifications WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM api_keys WHERE owner_user_id = ?", (user_id,))
     conn.execute(
         "UPDATE api_keys SET created_by = NULL WHERE created_by = ?", (user_id,)
@@ -3707,6 +3722,12 @@ def merge_network_tags(
 SIGNUP_ENABLED_KEY = "signup_enabled"            # 'on' | 'off' (기본 on)
 SIGNUP_DEFAULT_ROLE_KEY = "signup_default_role"  # SIGNUP_ROLES 중 하나 (기본 pending)
 
+# 이메일 본인 인증 — 켜면 패스워드 가입·로그인 시 메일로 받은 코드로 이메일을
+# 검증한다 (SMTP 미설정이면 동작하지 않음, SSO 계정은 IdP 가 검증하므로 제외).
+# 코드 만료 시간은 분 단위로 설정한다. 해석·클램핑은 email_verification_ttl_minutes.
+EMAIL_VERIFICATION_ENABLED_KEY = "email_verification_enabled"        # 'on' | 'off' (기본 off)
+EMAIL_VERIFICATION_TTL_MINUTES_KEY = "email_verification_ttl_minutes"  # 분 (기본·오염 시 config 기본값)
+
 # 사이트 전체 아카이브 기본 옵션·실패 재시도 대기. 값 해석과 범위 검증은
 # crawler.crawl_defaults / crawler.retry_backoff 가 맡는다 (오염 시 config 기본값).
 CRAWL_DEFAULT_MAX_PAGES_KEY = "crawl_default_max_pages"
@@ -3768,6 +3789,64 @@ def signup_default_role(conn: sqlite3.Connection) -> str:
     """회원 가입으로 생성되는 계정의 초기 권한 (기본·값 오염 시 pending)."""
     role = get_setting(conn, SIGNUP_DEFAULT_ROLE_KEY)
     return role if role in SIGNUP_ROLES else "pending"
+
+
+def email_verification_enabled(conn: sqlite3.Connection) -> bool:
+    """이메일 본인 인증 사용 여부 (기본 off — 옵트인). SMTP 미설정이면 호출부가 무시한다."""
+    return get_setting(conn, EMAIL_VERIFICATION_ENABLED_KEY) == "on"
+
+
+def email_verification_ttl_minutes(conn: sqlite3.Connection) -> int:
+    """이메일 인증 코드 만료 시간(분) — 기본·오염·범위 밖이면 config 기본값으로 클램핑."""
+    raw = get_setting(conn, EMAIL_VERIFICATION_TTL_MINUTES_KEY)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return config.EMAIL_VERIFICATION_TTL_MINUTES_DEFAULT
+    return max(
+        config.EMAIL_VERIFICATION_TTL_MINUTES_MIN,
+        min(config.EMAIL_VERIFICATION_TTL_MINUTES_MAX, value),
+    )
+
+
+def set_email_verified(conn: sqlite3.Connection, user_id: int) -> None:
+    """이메일 본인 인증 완료 표시."""
+    conn.execute(
+        "UPDATE users SET email_verified = 1 WHERE id = ?", (user_id,)
+    )
+
+
+def create_email_verification(
+    conn: sqlite3.Connection, user_id: int, code_hash: str, ttl_seconds: int
+) -> None:
+    """이메일 인증 코드 발급 — 사용자당 1개, 재발송 시 교체. 해시만 저장한다."""
+    conn.execute(
+        """
+        INSERT INTO email_verifications (user_id, code_hash, created_at, expires_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET code_hash = excluded.code_hash,
+                                           created_at = excluded.created_at,
+                                           expires_at = excluded.expires_at
+        """,
+        (user_id, code_hash, _utcnow(), _later(ttl_seconds)),
+    )
+
+
+def get_email_verification(
+    conn: sqlite3.Connection, user_id: int
+) -> sqlite3.Row | None:
+    """만료되지 않은 이메일 인증 코드 행 조회 (없거나 만료면 None)."""
+    return conn.execute(
+        "SELECT * FROM email_verifications WHERE user_id = ? AND expires_at > ?",
+        (user_id, _utcnow()),
+    ).fetchone()
+
+
+def delete_email_verification(conn: sqlite3.Connection, user_id: int) -> None:
+    """이메일 인증 코드 삭제 (인증 완료·취소)."""
+    conn.execute(
+        "DELETE FROM email_verifications WHERE user_id = ?", (user_id,)
+    )
 
 
 MOBILE_SCREENSHOT_ENABLED_KEY = "mobile_screenshot_enabled"  # 'on' | 'off' (기본 off)
@@ -4182,6 +4261,16 @@ def activate_session(
     conn.execute(
         "UPDATE sessions SET state = 'active', expires_at = ? WHERE token_hash = ?",
         (_later(ttl_seconds), token_hash),
+    )
+
+
+def set_session_state(
+    conn: sqlite3.Connection, token_hash: str, state: str, ttl_seconds: int
+) -> None:
+    """세션 상태를 바꾸고 만료를 갱신 (예: 2FA 통과 → pending_email_verify)."""
+    conn.execute(
+        "UPDATE sessions SET state = ?, expires_at = ? WHERE token_hash = ?",
+        (state, _later(ttl_seconds), token_hash),
     )
 
 

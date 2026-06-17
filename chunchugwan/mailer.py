@@ -41,6 +41,17 @@ _TEST_BODY = """\
 이 메일을 받았다면 메일 발송 설정이 올바릅니다.
 """
 
+_VERIFY_BODY = """\
+춘추관(개인 웹 아카이브) 이메일 본인 인증 코드입니다.
+
+인증 코드: {code}
+
+이 코드는 {ttl_minutes}분 후 만료됩니다.
+대시보드의 인증 화면에 코드를 입력하면 인증이 완료됩니다.
+
+본인이 요청하지 않았다면 이 메일을 무시하세요.
+"""
+
 
 @dataclass(frozen=True)
 class SmtpConfig:
@@ -157,4 +168,15 @@ def send_test(cfg: SmtpConfig, to_email: str) -> None:
     msg["Subject"] = "춘추관 SMTP 테스트"
     msg["To"] = to_email
     msg.set_content(_TEST_BODY)
+    _send(cfg, msg)
+
+
+def send_verification_code(
+    cfg: SmtpConfig, to_email: str, code: str, ttl_minutes: int
+) -> None:
+    """이메일 본인 인증 코드 발송. 실패 시 smtplib.SMTPException/OSError 전파."""
+    msg = EmailMessage()
+    msg["Subject"] = "춘추관 이메일 인증 코드"
+    msg["To"] = to_email
+    msg.set_content(_VERIFY_BODY.format(code=code, ttl_minutes=ttl_minutes))
     _send(cfg, msg)
