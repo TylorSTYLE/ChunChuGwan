@@ -36,6 +36,9 @@
 
 	// 좁은 화면 메뉴 토글
 	let navOpen = $state(false);
+	// 개인설정 드롭다운 — SPA 클라이언트 이동은 전체 새로고침이 없어 <details open>
+	// 상태가 남으므로, 항목 클릭 시 직접 닫는다.
+	let menuOpen = $state(false);
 </script>
 
 <header>
@@ -64,14 +67,14 @@
 		<span class="spacer"></span>
 		<button type="button" onclick={cycleTheme}>{THEME_LABELS[themeMode]}</button>
 		{#if me.user}
-			<details class="user-menu">
+			<details class="user-menu" bind:open={menuOpen}>
 				<summary class="mono muted">{me.user.display_name || me.user.email}</summary>
 				<div class="user-menu-items">
-					<a href="{base}/settings/account">{t('계정')}</a>
+					<a href="{base}/settings/account" onclick={() => (menuOpen = false)}>{t('계정')}</a>
 					{#if flags.can_use_api_keys}
-						<a href="{base}/settings/api-keys">{t('개인 API Key')}</a>
+						<a href="{base}/settings/api-keys" onclick={() => (menuOpen = false)}>{t('개인 API Key')}</a>
 					{/if}
-					<a href="{base}/settings/archives">{t('내 아카이브')}</a>
+					<a href="{base}/settings/archives" onclick={() => (menuOpen = false)}>{t('내 아카이브')}</a>
 					<form method="POST" action="/logout"><button type="submit">{t('로그아웃')}</button></form>
 				</div>
 			</details>

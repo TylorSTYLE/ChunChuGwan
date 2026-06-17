@@ -1077,7 +1077,7 @@ def system_api_keys(
     _require_manage_users(user)
     with db.connect() as conn:
         keys = db.list_system_api_keys(conn)
-    return {"keys": [dict(k) for k in keys]}
+    return {"keys": [_public_api_key(k) for k in keys]}
 
 
 _SYSLOG_PAGE_SIZES = (25, 50, 100, 200)
@@ -1433,6 +1433,27 @@ class ApiKeyReq(BaseModel):
     custom_days: int = 0
 
 
+_TIMEZONES = sorted(zoneinfo.available_timezones())  # 프로세스 상수 — 요청마다 재열거 방지
+
+
+def _resolve_api_key_ttl(body: ApiKeyReq) -> int | None:
+    """API 키 만료 선택을 ttl 초로 변환(None=영구). 잘못된 입력은 400."""
+    if body.expiry in _API_KEY_EXPIRY_TTL:
+        return _API_KEY_EXPIRY_TTL[body.expiry]
+    if body.expiry == "custom":
+        if not (1 <= body.custom_days <= _MAX_API_KEY_CUSTOM_DAYS):
+            raise HTTPException(400, f"사용자 지정 만료는 1 ~ {_MAX_API_KEY_CUSTOM_DAYS}일 사이여야 합니다")
+        return body.custom_days * 86400
+    raise HTTPException(400, "알 수 없는 만료 선택")
+
+
+def _public_api_key(k: sqlite3.Row) -> dict:
+    """API 키 행에서 화면 표시용 필드만 추린다 — token_hash 등 비밀·내부 컬럼 제외(원칙 6)."""
+    fields = ("id", "name", "can_view", "can_archive", "expires_at", "created_at", "last_used_at")
+    cols = k.keys()
+    return {f: k[f] for f in fields if f in cols}
+
+
 @router.post("/system/api-keys")
 def system_api_key_create(
     request: Request, body: ApiKeyReq,
@@ -1446,14 +1467,7 @@ def system_api_key_create(
         raise HTTPException(400, err)
     if not (body.can_view or body.can_archive):
         raise HTTPException(400, "권한을 하나 이상 선택하세요")
-    if body.expiry in _API_KEY_EXPIRY_TTL:
-        ttl = _API_KEY_EXPIRY_TTL[body.expiry]
-    elif body.expiry == "custom":
-        if not (1 <= body.custom_days <= _MAX_API_KEY_CUSTOM_DAYS):
-            raise HTTPException(400, f"사용자 지정 만료는 1 ~ {_MAX_API_KEY_CUSTOM_DAYS}일 사이여야 합니다")
-        ttl = body.custom_days * 86400
-    else:
-        raise HTTPException(400, "알 수 없는 만료 선택")
+    ttl = _resolve_api_key_ttl(body)
     with db.connect() as conn:
         token = auth.issue_api_key(
             conn, name, can_view=body.can_view, can_archive=body.can_archive,
@@ -1772,7 +1786,7 @@ def account(
         "email_verified": bool(user["email_verified"]),
         "email_verification_on": email_verification_on,
         "timezone": user["timezone"] or "UTC",
-        "timezones": sorted(zoneinfo.available_timezones()),
+        "timezones": _TIMEZONES,
         "locale": user["locale"] or i18n.DEFAULT_LOCALE,
         "locales": list(i18n.SUPPORTED_LOCALES),
         "locale_names": i18n.LOCALE_NAMES,
@@ -1831,7 +1845,7 @@ def account_timezone(
     """표시 타임존 변경."""
     user = _require_account(user)
     tz = body.timezone.strip()
-    if tz not in zoneinfo.available_timezones():
+    if tz not in _TIMEZONES:
         raise HTTPException(400, "지원하지 않는 타임존입니다")
     with db.connect() as conn:
         db.set_user_timezone(conn, user["id"], tz)
@@ -1910,7 +1924,7 @@ def personal_api_keys(
     with db.connect() as conn:
         tokens = db.list_api_keys_for_owner(conn, user["id"])
     return {
-        "keys": [dict(k) for k in tokens],
+        "keys": [_public_api_key(k) for k in tokens],
         "can_view": can_view,
         "can_archive": can_archive,
     }
@@ -1937,14 +1951,7 @@ def personal_api_key_create(
     err = auth.validate_api_key_name(name)
     if err is not None:
         raise HTTPException(400, err)
-    if body.expiry in _API_KEY_EXPIRY_TTL:
-        ttl = _API_KEY_EXPIRY_TTL[body.expiry]
-    elif body.expiry == "custom":
-        if not (1 <= body.custom_days <= _MAX_API_KEY_CUSTOM_DAYS):
-            raise HTTPException(400, f"사용자 지정 만료는 1 ~ {_MAX_API_KEY_CUSTOM_DAYS}일 사이여야 합니다")
-        ttl = body.custom_days * 86400
-    else:
-        raise HTTPException(400, "알 수 없는 만료 선택")
+    ttl = _resolve_api_key_ttl(body)
     with db.connect() as conn:
         token = auth.issue_api_key(
             conn, name, can_view=can_view, can_archive=can_archive,

@@ -1461,6 +1461,17 @@ _EN.update({
     "확장 자격증명": "Extension credentials",
     "확장(브라우저) 캡처가 포함되어 스크린샷 비교는 제공하지 않습니다 (렌더 환경 차이).": "Includes extension (browser) capture, so screenshot comparison isn't available (rendering-environment differences).",
     "회원 가입 허용": "Allow sign-up",
+    # 알림 토스트(run(fn, ok) 의 ok 인자 — t(변수)로 번역)
+    "표시 이름을 변경했습니다.": "Display name updated.",
+    "인증 앱에 등록한 뒤 코드를 입력하세요.": "Register it in your authenticator app, then enter the code.",
+    "2단계 인증을 켰습니다.": "Two-factor authentication enabled.",
+    "2단계 인증을 껐습니다.": "Two-factor authentication disabled.",
+    "패스키를 삭제했습니다.": "Passkey deleted.",
+    # 아카이빙 상태 라벨(STATUS_LABELS — t(변수)로 번역)
+    "새 스냅샷": "New snapshot",
+    "변경됨": "Changed",
+    "변경 없음": "Unchanged",
+    "강제 저장": "Forced save",
 })
 
 CATALOGS: dict[str, dict[str, str]] = {"en": _EN}

@@ -131,6 +131,9 @@ def test_personal_api_key_permission_clamp(tmp_db):
     assert r.json()["token"]
     keys = c.get("/api/web/settings/api-keys").json()["keys"]
     assert len(keys) == 1 and keys[0]["name"] == "mykey"
+    # token_hash 등 비밀·내부 컬럼은 응답에 노출되지 않는다 (원칙 6)
+    assert "token_hash" not in keys[0]
+    assert "owner_user_id" not in keys[0]
 
 
 def test_personal_api_key_idor(tmp_db):

@@ -24,6 +24,7 @@
 	let newPw2 = $state('');
 
 	let withdrawConfirm = $state('');
+	let withdrawPw = $state('');
 
 	async function run(fn: () => Promise<void>, ok: string) {
 		busy = true;
@@ -178,7 +179,7 @@
 			await api('/settings/account/withdraw', {
 				method: 'POST',
 				body: JSON.stringify(
-					d.has_password ? { password: curPw } : { confirm: withdrawConfirm }
+					d.has_password ? { password: withdrawPw } : { confirm: withdrawConfirm }
 				)
 			});
 			if (typeof window !== 'undefined') window.location.href = '/login';
@@ -350,7 +351,7 @@
 		<p class="muted">{t('탈퇴하면 모든 세션이 종료되고 같은 이메일로 재가입할 수 없습니다 (관리자 삭제 전까지).')}</p>
 		<div class="form">
 			{#if d.has_password}
-				<input type="password" bind:value={curPw} placeholder={t('현재 패스워드')} autocomplete="current-password" />
+				<input type="password" bind:value={withdrawPw} placeholder={t('현재 패스워드')} autocomplete="current-password" />
 			{:else}
 				<input type="text" bind:value={withdrawConfirm} placeholder={t('확인을 위해 이메일 입력')} />
 			{/if}
