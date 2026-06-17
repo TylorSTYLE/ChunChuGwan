@@ -161,6 +161,10 @@ async def auth_gate(request: Request, call_next):
         first_run = False
         token = request.cookies.get(config.SESSION_COOKIE, "")
         with db.connect() as conn:
+            # 역할 프리셋 캐시 워밍 — conn 없는 web.permissions/_auth_context 가
+            # 이 요청에서 최신 프리셋을 보도록 요청 앞단에서 한 번 갱신한다
+            # (settings 버전 비교라 변동 없으면 SELECT 1행으로 끝, 멀티프로세스 안전).
+            db.role_presets(conn)
             if db.count_users(conn) == 0:
                 first_run = not auth.bootstrap_admin_from_env(conn)
             if not first_run and token:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 import uuid
@@ -27,9 +28,16 @@ _schema_lock = threading.Lock()
 
 
 def invalidate_schema_cache() -> None:
-    """스키마 보장 캐시 무효화 — DB 파일을 교체(복원 등)한 뒤 호출."""
+    """스키마 보장 캐시 무효화 — DB 파일을 교체(복원 등)한 뒤 호출.
+
+    역할 프리셋 캐시도 함께 무효화한다 — 복원은 같은 경로에 다른 내용의 DB 를
+    넣어 (경로, 버전) 키가 우연히 겹칠 수 있으므로 강제로 다음 호출에서 재로드.
+    """
+    global _presets_version, _presets_cache_path
     with _schema_lock:
         _schema_ready.clear()
+    _presets_version = _PRESETS_UNSET
+    _presets_cache_path = None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS network_tags (
@@ -368,6 +376,15 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS permission_groups (
+    name        TEXT PRIMARY KEY,            -- users.role 에 저장되는 정규화 키 ([a-z0-9_])
+    label       TEXT NOT NULL,               -- 표시 라벨 (커스텀은 i18n 폴백으로 원문 출력)
+    permissions TEXT NOT NULL DEFAULT '[]',  -- JSON 배열, db.PERMISSIONS 부분집합
+    is_builtin  INTEGER NOT NULL DEFAULT 0,  -- admin/archiver/viewer = 1 (삭제·개명 불가)
+    sort_order  INTEGER NOT NULL DEFAULT 100,
+    created_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS oidc_states (
     state       TEXT PRIMARY KEY,
     nonce       TEXT NOT NULL,
@@ -561,7 +578,29 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE crawls ADD COLUMN requested_by INTEGER REFERENCES users(id)"
         )
+    _seed_permission_groups(conn)
     _backfill_sites(conn)
+
+
+def _seed_permission_groups(conn: sqlite3.Connection) -> None:
+    """빌트인 권한 그룹(admin/archiver/viewer) 시드 — 멱등(INSERT OR IGNORE).
+
+    permission_groups 테이블은 SCHEMA(executescript)가 먼저 만든다. 빌트인의
+    permissions 는 시드 후 관리자가 편집할 수 있고(권한 묶음 조정), label·name 은
+    잠긴다. pending/blocked/withdrawn 은 권한묶음이 아니라 접근 게이트 상태라
+    이 테이블에 넣지 않는다 (코드 상수 STATE_ROLES).
+    """
+    for name, label, perms, order in (
+        ("admin", "관리자", list(PERMISSIONS), 10),
+        ("archiver", "아카이브", ["view", "archive", "delete"], 20),
+        ("viewer", "보기 전용", ["view"], 30),
+    ):
+        conn.execute(
+            "INSERT OR IGNORE INTO permission_groups "
+            "(name, label, permissions, is_builtin, sort_order, created_at) "
+            "VALUES (?, ?, ?, 1, ?, ?)",
+            (name, label, json.dumps(perms), order, _utcnow()),
+        )
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -3202,21 +3241,22 @@ def claim_crawl_schedule(
 # 주의: SCHEMA 는 CREATE IF NOT EXISTS 라 새 테이블 추가는 자동이지만
 # 기존 테이블에 컬럼을 추가하는 변경은 별도 마이그레이션이 필요하다.
 
-# 권한 역할. admin=관리자, archiver=아카이빙 가능, viewer=보기만,
+# 상태/게이트 역할 — 권한 묶음이 아니라 미들웨어(web.app)가 접근을 직접
+# 차단하는 상태 키워드. 커스텀 권한 그룹 대상이 아니며 삭제·프리셋 편집 불가.
 # pending=권한없음(가입 승인 대기 — 안내 페이지 외 접근 불가), blocked=차단,
 # withdrawn=탈퇴(본인 탈퇴로만 진입 — 로그인 거부, 관리자가 계정 정보를
 # 삭제해야 같은 이메일로 다시 가입/초대할 수 있다)
-ROLES = ("admin", "archiver", "viewer", "pending", "blocked", "withdrawn")
-# 관리자가 부여할 수 있는 역할 — 탈퇴는 본인 탈퇴로만 진입한다
-ASSIGNABLE_ROLES = ("admin", "archiver", "viewer", "pending", "blocked")
-ROLE_LABELS = {
-    "admin": "관리자",
-    "archiver": "아카이브",
-    "viewer": "보기 전용",
+STATE_ROLES = ("pending", "blocked", "withdrawn")
+STATE_ROLE_LABELS = {
     "pending": "권한없음",
     "blocked": "차단됨",
     "withdrawn": "탈퇴",
 }
+# 빌트인 권한 보유 역할 — permission_groups 에 is_builtin=1 로 시드된다.
+# 삭제·개명 불가, permissions 묶음만 편집 가능. admin 은 founder 잠김과 엮인다.
+BUILTIN_PERMISSION_ROLES = ("admin", "archiver", "viewer")
+# 커스텀 권한 그룹 이름으로 쓸 수 없는 예약어 — 상태 역할 + 빌트인 역할.
+RESERVED_ROLE_NAMES = frozenset(STATE_ROLES + BUILTIN_PERMISSION_ROLES)
 
 # 세분 권한 — 역할(role)은 아래 권한들의 묶음(프리셋)이고, 사용자별
 # permission_overrides 로 개별 가감한다. 실효 권한 = 프리셋 ± 오버라이드.
@@ -3240,19 +3280,81 @@ PERMISSION_LABELS = {
     "manage_users": "사용자 관리",
     "view_authenticated_all": "인증 스냅샷 전체 열람",
 }
-# 역할 프리셋 — 기존 역할 체계의 권한을 그대로 재현한다 (프리셋만으로는
-# 동작이 종전과 동일, 오버라이드를 줄 때만 달라진다).
-ROLE_PRESETS: dict[str, frozenset[str]] = {
+# 빌트인 역할의 기본 프리셋 — permission_groups 시드의 소스이자, 캐시가 아직
+# 워밍되지 않은 프로세스의 conn 없는 fallback. 런타임 편집·커스텀 그룹은 DB
+# permission_groups 가 정본이며 role_presets(conn) 가 버전 비교로 최신화한다.
+_BUILTIN_PRESETS: dict[str, frozenset[str]] = {
     "admin": frozenset(PERMISSIONS),
     "archiver": frozenset({"view", "archive", "delete"}),
     "viewer": frozenset({"view"}),
-    "pending": frozenset(),
-    "blocked": frozenset(),
-    "withdrawn": frozenset(),
 }
-# 오버라이드(가감) 조정을 허용하는 역할 — 로그인해 서비스를 쓸 수 있는 활성
-# 역할만. pending/blocked/withdrawn 은 미들웨어가 접근 자체를 막으므로 제외.
-PERMISSION_ROLES = ("admin", "archiver", "viewer")
+PERMISSION_GROUPS_VERSION_KEY = "permission_groups_version"
+
+# 역할 프리셋 캐시 — DB permission_groups 가 정본. settings 의 단조 버전과 비교해
+# 바뀌었을 때만 재로드(멀티프로세스 staleness 방지). conn 없는 호출처
+# (web.permissions → 템플릿 _auth_context)는 이 캐시를 fallback 으로 읽으므로,
+# 인증 미들웨어가 요청 앞단에서 role_presets(conn) 로 워밍한다.
+_PRESETS_UNSET = object()
+_presets_cache: dict[str, frozenset[str]] = dict(_BUILTIN_PRESETS)
+_presets_version: object = _PRESETS_UNSET
+_presets_cache_path: str | None = None
+_presets_lock = threading.Lock()
+
+
+def _parse_permission_list(raw: str | None) -> list[str]:
+    """permission_groups.permissions JSON 배열을 PERMISSIONS 부분집합으로 파싱(순서·중복 제거)."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    for p in data:
+        if p in PERMISSIONS and p not in out:
+            out.append(p)
+    return out
+
+
+def role_presets(conn: sqlite3.Connection) -> dict[str, frozenset[str]]:
+    """역할명→권한 프리셋 dict. DB permission_groups 가 정본.
+
+    settings 의 단조 버전(permission_groups_version)이 캐시와 다를 때만 재로드한다.
+    같은 프로세스의 후속 conn 없는 호출(effective_permissions)이 이 캐시를 읽으므로,
+    인증 미들웨어가 요청 앞단에서 1회 호출해 캐시를 최신화(워밍)한다.
+
+    캐시 유효성은 (DB 경로, 버전)으로 판정한다 — 버전은 DB 별 단조 증가라
+    복원(DB 파일 교체)·테스트(임시 DB)에서 다른 DB 의 같은 버전 번호와 겹칠
+    수 있어, 경로가 다르면 무조건 재로드한다.
+    """
+    global _presets_cache, _presets_version, _presets_cache_path
+    path = str(config.DB_PATH)
+    version = get_setting(conn, PERMISSION_GROUPS_VERSION_KEY)
+    if path == _presets_cache_path and version == _presets_version:
+        return _presets_cache
+    presets: dict[str, frozenset[str]] = {}
+    for row in conn.execute("SELECT name, permissions FROM permission_groups"):
+        presets[row["name"]] = frozenset(_parse_permission_list(row["permissions"]))
+    # 시드 전 호출 등으로 빌트인이 비어 있으면 기본 프리셋으로 보강(fail-safe).
+    for name, preset in _BUILTIN_PRESETS.items():
+        presets.setdefault(name, preset)
+    with _presets_lock:
+        _presets_cache = presets
+        _presets_version = version
+        _presets_cache_path = path
+    return presets
+
+
+def _bump_permission_groups_version(conn: sqlite3.Connection) -> None:
+    """프리셋 캐시 무효화용 단조 버전 +1 — 그룹 쓰기마다 호출, 멀티프로세스 재로드 신호."""
+    current = get_setting(conn, PERMISSION_GROUPS_VERSION_KEY)
+    try:
+        nxt = int(current) + 1 if current else 1
+    except (ValueError, TypeError):
+        nxt = 1
+    set_setting(conn, PERMISSION_GROUPS_VERSION_KEY, str(nxt))
 
 
 def parse_permission_overrides(raw: str | None) -> dict[str, bool]:
@@ -3268,9 +3370,20 @@ def parse_permission_overrides(raw: str | None) -> dict[str, bool]:
     return {k: bool(v) for k, v in data.items() if k in PERMISSIONS}
 
 
-def effective_permissions(role: str, overrides_raw: str | None = None) -> frozenset[str]:
-    """역할 프리셋에 사용자 오버라이드를 적용한 실효 권한 집합."""
-    perms = set(ROLE_PRESETS.get(role, frozenset()))
+def effective_permissions(
+    role: str,
+    overrides_raw: str | None = None,
+    *,
+    presets: dict[str, frozenset[str]] | None = None,
+) -> frozenset[str]:
+    """역할 프리셋에 사용자 오버라이드를 적용한 실효 권한 집합.
+
+    presets 가 주어지면 그 dict(conn 으로 막 로드한 최신, 또는 편집 시뮬레이션)를
+    쓰고, 없으면 모듈 프리셋 캐시를 fallback 으로 쓴다(conn 없는 web.permissions
+    경로). 캐시는 인증 미들웨어가 요청 앞단에서 role_presets(conn) 로 워밍한다.
+    """
+    source = presets if presets is not None else _presets_cache
+    perms = set(source.get(role, frozenset()))
     for perm, granted in parse_permission_overrides(overrides_raw).items():
         if granted:
             perms.add(perm)
@@ -3291,24 +3404,192 @@ def set_permission_overrides(
 
 
 def count_active_users_with_permission(
-    conn: sqlite3.Connection, permission: str, *, exclude_user_id: int | None = None
+    conn: sqlite3.Connection,
+    permission: str,
+    *,
+    exclude_user_id: int | None = None,
+    presets: dict[str, frozenset[str]] | None = None,
 ) -> int:
     """해당 권한을 실효로 가진 활성 사용자 수 — 라스트-관리자 잠김 방지용.
 
-    활성 = 로그인해 쓸 수 있는 역할(PERMISSION_ROLES). pending/blocked/withdrawn 은
-    오버라이드가 있어도 접근이 막혀 있으므로 세지 않는다.
+    활성 = 권한 보유 역할(=permission_groups 의 그룹명). STATE_ROLES(pending/blocked/
+    withdrawn)는 오버라이드가 있어도 접근이 막혀 있으므로 세지 않는다. presets 를
+    넘기면(그룹 권한 편집 시뮬레이션 등) 그 프리셋으로 실효 권한을 계산한다.
     """
+    if presets is None:
+        presets = role_presets(conn)
+    active_roles = set(presets) - set(STATE_ROLES)
     n = 0
     for u in conn.execute(
         "SELECT id, role, permission_overrides FROM users"
     ).fetchall():
         if exclude_user_id is not None and u["id"] == exclude_user_id:
             continue
-        if u["role"] not in PERMISSION_ROLES:
+        if u["role"] not in active_roles:
             continue
-        if permission in effective_permissions(u["role"], u["permission_overrides"]):
+        if permission in effective_permissions(
+            u["role"], u["permission_overrides"], presets=presets
+        ):
             n += 1
     return n
+
+
+# ---- 권한 그룹 동적 접근자 (코드 상수였던 역할 목록을 DB 기반으로) ----
+
+def permission_group_names(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """권한 보유 역할(빌트인+커스텀 그룹) 이름 — sort_order 순.
+
+    종전의 PERMISSION_ROLES 를 대체. 세분 권한 오버라이드 조정·확장 토큰이
+    허용되는 역할 집합이다.
+    """
+    return tuple(
+        r["name"]
+        for r in conn.execute(
+            "SELECT name FROM permission_groups ORDER BY sort_order, name"
+        )
+    )
+
+
+def role_labels(conn: sqlite3.Connection) -> dict[str, str]:
+    """역할명→표시 라벨 (그룹 label + STATE_ROLES 라벨). 종전 ROLE_LABELS 대체."""
+    labels = dict(STATE_ROLE_LABELS)
+    for r in conn.execute("SELECT name, label FROM permission_groups"):
+        labels[r["name"]] = r["label"]
+    return labels
+
+
+def assignable_roles(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """관리자가 부여할 수 있는 역할 — 그룹 전체 + pending/blocked (withdrawn 제외)."""
+    return permission_group_names(conn) + ("pending", "blocked")
+
+
+def invitable_roles(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """초대로 부여할 수 있는 역할 — 권한 보유 그룹 전체."""
+    return permission_group_names(conn)
+
+
+def signup_roles(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """가입 초기 권한으로 쓸 수 있는 역할 — pending + admin 외 권한 보유 그룹.
+
+    admin 자동 가입은 막는다(종전 SIGNUP_ROLES 가 admin 을 뺀 의도 유지).
+    """
+    groups = tuple(n for n in permission_group_names(conn) if n != "admin")
+    return ("pending",) + groups
+
+
+def all_valid_roles(conn: sqlite3.Connection) -> frozenset[str]:
+    """users.role 에 저장 가능한 모든 역할 — 권한 보유 그룹 + 상태 역할."""
+    return frozenset(permission_group_names(conn)) | frozenset(STATE_ROLES)
+
+
+# ---- 권한 그룹 CRUD (쓰기는 버전 스탬프로 캐시 무효화) ----
+
+_GROUP_NAME_RE = re.compile(r"^[a-z0-9_]{1,32}$")
+
+
+def normalize_group_name(raw: str) -> str:
+    """그룹 이름 정규화·검증 — 영문 소문자·숫자·밑줄 1~32자, 예약어 금지.
+
+    공백·하이픈은 밑줄로, 대문자는 소문자로 접는다. 형식 위반·예약어면 ValueError.
+    `.badge.role-<name>` CSS 합성에 안전한 문자만 허용한다.
+    """
+    name = (raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if not _GROUP_NAME_RE.match(name):
+        raise ValueError("이름은 영문 소문자·숫자·밑줄 1~32자여야 합니다.")
+    if name in RESERVED_ROLE_NAMES:
+        raise ValueError(f"예약된 이름입니다: {name}")
+    return name
+
+
+def get_permission_group(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    """그룹 1행 (없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM permission_groups WHERE name = ?", (name,)
+    ).fetchone()
+
+
+def list_permission_groups(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """모든 그룹 — sort_order 순(화면 목록용)."""
+    return conn.execute(
+        "SELECT * FROM permission_groups ORDER BY sort_order, name"
+    ).fetchall()
+
+
+def count_users_with_role(conn: sqlite3.Connection, role: str) -> int:
+    """해당 역할(그룹)에 속한 사용자 수 — 그룹 삭제 가드."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM users WHERE role = ?", (role,)
+    ).fetchone()[0]
+
+
+def create_permission_group(
+    conn: sqlite3.Connection, name: str, label: str, permissions: Sequence[str]
+) -> str:
+    """커스텀 권한 그룹 생성 — name 정규화·중복 검사, permissions 는 PERMISSIONS 부분집합.
+
+    반환: 저장된 정규화 name. 형식 위반·예약어·중복이면 ValueError.
+    """
+    name = normalize_group_name(name)
+    if get_permission_group(conn, name) is not None:
+        raise ValueError(f"이미 있는 그룹입니다: {name}")
+    label = (label or "").strip() or name
+    perms = [p for p in permissions if p in PERMISSIONS]
+    order = conn.execute(
+        "SELECT COALESCE(MAX(sort_order), 100) + 10 FROM permission_groups"
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO permission_groups "
+        "(name, label, permissions, is_builtin, sort_order, created_at) "
+        "VALUES (?, ?, ?, 0, ?, ?)",
+        (name, label, json.dumps(perms), order, _utcnow()),
+    )
+    _bump_permission_groups_version(conn)
+    return name
+
+
+def update_permission_group(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    label: str | None = None,
+    permissions: Sequence[str] | None = None,
+) -> bool:
+    """그룹 권한·라벨 갱신. 빌트인은 permissions 만 바뀌고 label 은 잠긴다.
+
+    반환: 갱신 성공 여부(그룹이 없으면 False).
+    """
+    group = get_permission_group(conn, name)
+    if group is None:
+        return False
+    if permissions is None:
+        new_perms = group["permissions"]
+    else:
+        new_perms = json.dumps([p for p in permissions if p in PERMISSIONS])
+    if group["is_builtin"] or label is None:
+        new_label = group["label"]  # 빌트인 라벨 잠금 / 미지정이면 유지
+    else:
+        new_label = (label or "").strip() or group["label"]
+    conn.execute(
+        "UPDATE permission_groups SET label = ?, permissions = ? WHERE name = ?",
+        (new_label, new_perms, name),
+    )
+    _bump_permission_groups_version(conn)
+    return True
+
+
+def delete_permission_group(conn: sqlite3.Connection, name: str) -> bool:
+    """커스텀 그룹 삭제. 빌트인이면 False. 호출부가 소속 사용자 0 을 먼저 보장한다.
+
+    반환: 삭제 성공 여부.
+    """
+    group = get_permission_group(conn, name)
+    if group is None or group["is_builtin"]:
+        return False
+    conn.execute(
+        "DELETE FROM permission_groups WHERE name = ? AND is_builtin = 0", (name,)
+    )
+    _bump_permission_groups_version(conn)
+    return True
 
 
 def _later(seconds: int) -> str:
@@ -3339,7 +3620,7 @@ def create_user(
     role 기본값은 보기 전용(viewer)이지만, 회원 가입·SSO 자동 생성 경로는
     signup_default_role() 설정값(기본 pending)을 명시적으로 넘긴다.
     """
-    if role not in ROLES:
+    if role not in all_valid_roles(conn):
         raise ValueError(f"알 수 없는 역할: {role!r}")
     cur = conn.execute(
         "INSERT INTO users (email, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
@@ -3390,7 +3671,7 @@ def list_users(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 def set_role(conn: sqlite3.Connection, user_id: int, role: str) -> bool:
     """사용자 권한 변경. 최초 관리자(is_founder)는 변경 불가 — False 반환."""
-    if role not in ROLES:
+    if role not in all_valid_roles(conn):
         raise ValueError(f"알 수 없는 역할: {role!r}")
     cur = conn.execute(
         "UPDATE users SET role = ? WHERE id = ? AND is_founder = 0", (role, user_id)
@@ -3514,9 +3795,7 @@ def set_totp_last_used(conn: sqlite3.Connection, user_id: int, window: str) -> N
 
 
 # ---- 초대 ----
-
-# 초대로 부여할 수 있는 권한 (차단 계정을 초대하는 것은 의미가 없다)
-INVITABLE_ROLES = ("admin", "archiver", "viewer")
+# 초대로 부여할 수 있는 역할은 db.invitable_roles(conn) (권한 보유 그룹 전체).
 
 
 def create_invite(
@@ -3528,7 +3807,7 @@ def create_invite(
     ttl_seconds: int,
 ) -> int:
     """초대 생성 후 id 반환. 같은 이메일의 기존 초대는 교체된다 (이전 링크 무효화)."""
-    if role not in INVITABLE_ROLES:
+    if role not in invitable_roles(conn):
         raise ValueError(f"초대할 수 없는 역할: {role!r}")
     conn.execute("DELETE FROM invites WHERE email = ?", (email,))
     cur = conn.execute(
@@ -3752,9 +4031,9 @@ SMTP_PASSWORD_KEY = "smtp_password"  # crypto.encrypt 암호문 (평문·해시 
 SMTP_FROM_KEY = "smtp_from"
 SMTP_TLS_KEY = "smtp_tls"  # 'starttls' | 'ssl' | 'off'
 
-# 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한.
-# 기본은 권한없음(pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.
-SIGNUP_ROLES = ("pending", "viewer", "archiver")
+# 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한은
+# db.signup_roles(conn) (pending + admin 외 권한 보유 그룹). 기본은 권한없음
+# (pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.
 
 
 def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
@@ -3786,9 +4065,9 @@ def signup_enabled(conn: sqlite3.Connection) -> bool:
 
 
 def signup_default_role(conn: sqlite3.Connection) -> str:
-    """회원 가입으로 생성되는 계정의 초기 권한 (기본·값 오염 시 pending)."""
+    """회원 가입으로 생성되는 계정의 초기 권한 (기본·값 오염·삭제된 그룹이면 pending)."""
     role = get_setting(conn, SIGNUP_DEFAULT_ROLE_KEY)
-    return role if role in SIGNUP_ROLES else "pending"
+    return role if role in signup_roles(conn) else "pending"
 
 
 def email_verification_enabled(conn: sqlite3.Connection) -> bool:

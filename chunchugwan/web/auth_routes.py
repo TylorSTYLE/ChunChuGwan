@@ -582,12 +582,13 @@ def _account_ctx(
         email_verification_on = (
             db.email_verification_enabled(conn) and mailer.mail_enabled(conn)
         )
+        role_label = db.role_labels(conn).get(user["role"], user["role"])
     return {
         "display_name": user["display_name"] or "",
         "has_password": user["password_hash"] is not None,
         "email": user["email"],
         "role": user["role"],
-        "role_label": db.ROLE_LABELS.get(user["role"], user["role"]),
+        "role_label": role_label,
         "totp_enabled": user["totp_secret"] is not None,
         "passkey_count": passkey_count,
         "email_verified": bool(user["email_verified"]),
@@ -1121,11 +1122,15 @@ def verify_email_resend(request: Request, next: str = Form("/")):
 
 
 def _invite_ctx(invite, token: str, *, email: str = "", error: str | None = None) -> dict:
+    role_label = None
+    if invite is not None:
+        with db.connect() as conn:
+            role_label = db.role_labels(conn).get(invite["role"])
     return {
         "invite": invite,
         "token": token,
         "email": email or (invite["email"] if invite is not None else ""),
-        "role_label": db.ROLE_LABELS.get(invite["role"]) if invite is not None else None,
+        "role_label": role_label,
         "error": error,
     }
 

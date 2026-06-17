@@ -187,13 +187,35 @@ _EN: dict[str, str] = {
         "If you pick an interval, the entire site is re-crawled periodically "
         "with the same options (change or remove it on the Schedules screen).",
     "스케줄 없음": "Schedule not found",
-    # ---- 역할 라벨 (db.ROLE_LABELS) ----
+    # ---- 역할 라벨 (빌트인 그룹 + db.STATE_ROLE_LABELS — 커스텀은 원문 폴백) ----
     "관리자": "Admin",
     "아카이브": "Archiver",
     "보기 전용": "Viewer",
     "권한없음": "No access",
     "차단됨": "Blocked",
     "탈퇴": "Withdrawn",
+    # ---- 권한 그룹 화면 (groups.html) ----
+    "권한 그룹": "Permission groups",
+    "역할은 세분 권한의 묶음(프리셋)입니다. 여기서 각 역할의 기본 권한을 편집하거나 새 권한 그룹을 추가·삭제할 수 있습니다. 기본 그룹(관리자·아카이브·보기 전용)은 권한 묶음만 바꿀 수 있고 이름은 잠겨 있습니다. 사용자별 가감은 사용자 관리의 '세분 권한'에서 합니다.":
+        "Roles are bundles (presets) of granular permissions. Here you can edit each "
+        "role's default permissions or add and remove custom permission groups. The "
+        "built-in groups (Admin, Archiver, Viewer) can only have their permission "
+        "bundle changed — their names are locked. Per-user adjustments are made under "
+        "'Granular permissions' in user management.",
+    "그룹의 권한을 바꾸면 그 그룹에 속한 모든 사용자에게 즉시 반영됩니다(개별 오버라이드는 유지). 소속 사용자가 있는 그룹은 삭제할 수 없습니다 — 먼저 사용자 역할을 옮기세요.":
+        "Changing a group's permissions takes effect immediately for every user in "
+        "that group (individual overrides are kept). A group with members cannot be "
+        "deleted — move those users to another role first.",
+    "소속 사용자": "Members",
+    "기본": "Built-in",
+    "표시 이름": "Display name",
+    "그룹 삭제": "Delete group",
+    "소속 사용자가 있어 삭제할 수 없습니다": "Cannot delete — group has members",
+    "새 권한 그룹": "New permission group",
+    "이름(영문 소문자·숫자·밑줄)": "Name (lowercase letters, digits, underscore)",
+    "편집자": "Editor",
+    "그룹 추가": "Add group",
+    "권한 그룹 {name} 을(를) 삭제할까요?": "Delete permission group {name}?",
     # ---- 세분 권한 라벨 (db.PERMISSION_LABELS, ctx=perm) ----
     "perm|보기·검색": "View & search",
     "perm|아카이빙": "Archiving",
