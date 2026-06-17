@@ -84,6 +84,28 @@
   <p class="muted">{{ _("SSO 로그인은 IdP(Authentik)의 2FA 를 사용합니다.") }}</p>
   {% endif %}
 
+  {% if has_password %}
+  <h3>{{ _("이메일 본인 인증") }}</h3>
+  <p style="font-size:13px; margin:4px 0">
+    {{ email }}
+    {% if email_verified %}<span class="badge new">{{ _("인증됨") }}</span>
+    {% else %}<span class="badge changed">{{ _("미인증") }}</span>{% endif %}
+  </p>
+  {% if not email_verified %}
+  {% if email_verification_on %}
+  <form method="post" action="/verify-email/resend">
+    <input type="hidden" name="next" value="/settings/account">
+    <button type="submit">{{ _("인증 코드 받기") }}</button>
+    <p class="muted" style="font-size:12px">{{ _("코드를 메일로 보낸 뒤 인증 화면으로 이동합니다.") }}</p>
+  </form>
+  {% else %}
+  <p class="muted" style="font-size:12px">
+    {{ _("이메일 본인 인증이 켜져 있지 않거나 메일(SMTP) 설정이 없어 지금은 인증할 수 없습니다.") }}
+  </p>
+  {% endif %}
+  {% endif %}
+  {% endif %}
+
   <h3>{{ _("개인 API Key") }}</h3>
   <p style="font-size:13px; margin:4px 0">
     {{ _("크롬 확장 등 외부 도구가 쓰는 본인 전용 API Key 는 별도 화면에서 관리합니다.") }}

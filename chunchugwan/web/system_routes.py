@@ -63,6 +63,8 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         }
         signup_enabled = db.signup_enabled(conn)
         signup_default_role = db.signup_default_role(conn)
+        email_verification_enabled = db.email_verification_enabled(conn)
+        email_verification_ttl_minutes = db.email_verification_ttl_minutes(conn)
         crawl_defaults = crawler.crawl_defaults(conn)
         crawl_backoff = crawler.retry_backoff(conn)
         network_tags = db.list_network_tags(conn)
@@ -80,6 +82,12 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "signup_enabled": signup_enabled,
             "signup_default_role": signup_default_role,
             "signup_roles": db.SIGNUP_ROLES,
+            "email_verification_enabled": email_verification_enabled,
+            "email_verification_ttl_minutes": email_verification_ttl_minutes,
+            "email_verification_ttl_limits": {
+                "min": config.EMAIL_VERIFICATION_TTL_MINUTES_MIN,
+                "max": config.EMAIL_VERIFICATION_TTL_MINUTES_MAX,
+            },
             "role_labels": db.ROLE_LABELS,
             "crawl_defaults": crawl_defaults,
             "crawl_retry_backoff": ", ".join(str(v) for v in crawl_backoff),
@@ -390,6 +398,40 @@ def system_settings(
         "허용" if signup_enabled else "차단", signup_default_role,
     )
     return _system_redirect(notice=t(request, "가입 설정을 저장했습니다."))
+
+
+@router.post("/email-verification-settings")
+def system_email_verification_settings(
+    request: Request,
+    email_verification_enabled: bool = Form(False),
+    email_verification_ttl_minutes: int = Form(...),
+):
+    """이메일 본인 인증 설정 저장 — 사용 여부와 코드 만료 시간(분).
+
+    SMTP 가 설정되지 않으면 켜더라도 동작하지 않는다 (로그인 게이트가 무시).
+    """
+    lo = config.EMAIL_VERIFICATION_TTL_MINUTES_MIN
+    hi = config.EMAIL_VERIFICATION_TTL_MINUTES_MAX
+    if not (lo <= email_verification_ttl_minutes <= hi):
+        return _system_redirect(
+            error=t(request, "인증 코드 만료 시간은 {lo} ~ {hi}분 사이여야 합니다.",
+                    lo=lo, hi=hi)
+        )
+    with db.connect() as conn:
+        db.set_setting(
+            conn, db.EMAIL_VERIFICATION_ENABLED_KEY,
+            "on" if email_verification_enabled else "off",
+        )
+        db.set_setting(
+            conn, db.EMAIL_VERIFICATION_TTL_MINUTES_KEY,
+            str(email_verification_ttl_minutes),
+        )
+    audit.log(
+        request, "이메일 본인 인증 설정 변경: %s, 코드 만료 %d분",
+        "사용" if email_verification_enabled else "사용 안 함",
+        email_verification_ttl_minutes,
+    )
+    return _system_redirect(notice=t(request, "이메일 본인 인증 설정을 저장했습니다."))
 
 
 @router.post("/crawl-settings")

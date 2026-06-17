@@ -313,8 +313,9 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   새 크롤을 등록(source=schedule)하되, 같은 URL 의 크롤이 진행 중이면 끝날
   때까지 미룬다. serve 크롤러 스레드·`wccg worker`·`wccg schedule run`/
   `crawl run` 이 실행하며 next_run_at 갱신은 원자적 클레임이라 동시 실행에 안전
-- `users` / `identities` / `sessions` / `oidc_states` — 인증 (사용자, OIDC 연결,
-  서버사이드 세션, OIDC state 1회용 기록). `users.role` 은
+- `users` / `identities` / `sessions` / `oidc_states` /
+  `email_verifications` — 인증 (사용자, OIDC 연결, 서버사이드 세션, OIDC
+  state 1회용 기록, 이메일 인증 코드). `users.role` 은
   admin(관리자)/archiver(아카이빙 가능)/viewer(보기 전용)/pending(권한없음 —
   가입 승인 대기, 로그인은 되지만 `/pending` 안내 페이지 외 접근 불가)/
   blocked(차단)/withdrawn(탈퇴 — 본인 탈퇴로만 진입, 로그인 거부.
@@ -333,10 +334,23 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   역할을 바꾸면 오버라이드는 새 프리셋으로 초기화되고, `manage_users` 마지막
   활성 보유자에게서는 그 권한을 떼거나 역할을 낮출 수 없다(잠김 방지 —
   `db.count_active_users_with_permission`). 개인 API Key 권한도 실효 권한에서
-  파생된다. CLI 는 권한 체계 밖(로컬 신뢰), 큐·스케줄·크롤은 등록 시점에만 검사
+  파생된다. CLI 는 권한 체계 밖(로컬 신뢰), 큐·스케줄·크롤은 등록 시점에만 검사.
+  `users.email_verified` 는 이메일 본인 인증 완료 여부 — 기능(`settings` 의
+  `email_verification_enabled`)이 켜지고 SMTP 가 설정됐을 때, 패스워드 계정은
+  로그인 마무리 전에 메일로 받은 코드로 이메일을 검증해야 한다 (SSO 계정은
+  IdP 신뢰로 제외). 인증 전 세션은 `pending_email_verify` 상태(2FA 의
+  `pending_totp` 와 같은 방식)로 머무르고, 코드 확인 시 active 로 승격된다.
+  강제는 `auth_routes._email_verification_required` 가 로그인·가입·2FA 마무리
+  지점에서 하고, 기존 사용자는 개인 설정에서 직접 인증한다 (소급 차단 없음)
+- `email_verifications` — 이메일 인증 코드 (user_id PK = 사용자당 1개,
+  재발송 시 교체). 코드 원문은 메일로만 보내고 SHA-256 해시만 저장(만료
+  시각 포함, 세션·API 키와 같은 단방향 — 원칙 6). 인증 완료·계정 삭제 시 삭제.
+  재생성 가능한 휘발성 데이터라 `export` 제외
 - `settings` — 대시보드에서 변경하는 key-value 런타임 설정. 가입 설정
   (`signup_enabled` on/off 기본 on — off 면 `/signup` 차단 + 로그인 화면
-  가입 링크 숨김(초대 가입은 허용), `signup_default_role`)과 사이트 아카이브
+  가입 링크 숨김(초대 가입은 허용), `signup_default_role`)과 이메일 본인 인증
+  설정 (`email_verification_enabled` on/off 기본 off, `email_verification_ttl_minutes`
+  — 코드 만료 분, SMTP 미설정이면 켜도 무시)과 사이트 아카이브
   설정 (`crawl_default_max_pages`/`crawl_default_max_depth`/
   `crawl_default_delay_seconds` — 새 크롤 옵션 기본값,
   `crawl_retry_backoff_seconds` — 실패 재시도 대기 쉼표 목록(초), 최대 시도

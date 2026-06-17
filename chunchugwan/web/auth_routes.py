@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import secrets
+import smtplib
 import sqlite3
 import zoneinfo
 from urllib.parse import quote
@@ -18,7 +20,7 @@ from fastapi.responses import (
     Response,
 )
 
-from .. import auth, config, db, oidc
+from .. import auth, config, db, mailer, oidc
 from . import audit, i18n, permissions
 from .i18n import t
 from .templating import templates
@@ -115,6 +117,79 @@ def _login_redirect(token: str, next_url: str | None) -> RedirectResponse:
     res = RedirectResponse(url=safe_next(next_url), status_code=303)
     set_session_cookie(res, token)
     return res
+
+
+# ---- 이메일 본인 인증 ----
+# 켜져 있고 SMTP 가 설정된 경우, 패스워드 계정은 메일로 받은 코드로 이메일을
+# 검증해야 한다 (SSO 계정은 IdP 가 검증하므로 제외). 인증 전에는 로그인이
+# pending_email_verify 세션에 머무르고, 코드 확인 시 active 로 승격된다.
+
+
+def _email_verification_required(conn: sqlite3.Connection, user) -> bool:
+    """이 사용자가 로그인 마무리 전에 이메일 인증을 거쳐야 하는지."""
+    return (
+        user["password_hash"] is not None  # SSO 계정은 IdP 신뢰
+        and not user["email_verified"]
+        and db.email_verification_enabled(conn)
+        and mailer.mail_enabled(conn)
+    )
+
+
+def _issue_and_send_code(conn: sqlite3.Connection, user) -> bool:
+    """인증 코드를 발급·저장하고 메일로 보낸다. 발송 실패해도 코드는 저장된다.
+
+    반환값은 메일 발송 성공 여부 (화면 안내용 — 실패해도 사용자는 코드를
+    재요청할 수 있다).
+    """
+    code = auth.generate_email_code()
+    ttl = db.email_verification_ttl_minutes(conn) * 60
+    db.create_email_verification(conn, user["id"], auth.hash_token(code), ttl)
+    smtp = mailer.resolve_config(conn)
+    if not smtp.enabled:
+        return False
+    try:
+        mailer.send_verification_code(smtp, user["email"], code, ttl // 60)
+        return True
+    except (smtplib.SMTPException, OSError) as e:
+        logger.warning("이메일 인증 코드 발송 실패 (%s): %s", user["email"], e)
+        return False
+
+
+def _post_password_login(
+    conn: sqlite3.Connection, user, next_url: str | None
+) -> RedirectResponse:
+    """2FA 가 없는 패스워드 로그인 마무리 — 이메일 인증이 필요하면 그 화면으로."""
+    if _email_verification_required(conn, user):
+        _issue_and_send_code(conn, user)
+        ttl = db.email_verification_ttl_minutes(conn) * 60
+        token = auth.issue_session(
+            conn, user["id"], state="pending_email_verify", ttl_seconds=ttl
+        )
+        res = RedirectResponse(
+            url=f"/verify-email?next={quote(safe_next(next_url), safe='')}",
+            status_code=303,
+        )
+        set_session_cookie(res, token, max_age=ttl)
+        return res
+    token = auth.issue_session(conn, user["id"])
+    return _login_redirect(token, next_url)
+
+
+def _two_factor_target(
+    conn: sqlite3.Connection, token_hash: str, user, next_url: str | None
+) -> str:
+    """2FA 통과 후 세션을 마무리하고 이동할 경로 — 이메일 인증 필요 시 그 화면.
+
+    세션 row 자체를 갱신한다 (active 승격 또는 pending_email_verify 전환). 쿠키는
+    호출부가 그대로 다시 심는다 (서버사이드 만료가 실질 기준).
+    """
+    if _email_verification_required(conn, user):
+        _issue_and_send_code(conn, user)
+        ttl = db.email_verification_ttl_minutes(conn) * 60
+        db.set_session_state(conn, token_hash, "pending_email_verify", ttl)
+        return f"/verify-email?next={quote(safe_next(next_url), safe='')}"
+    db.activate_session(conn, token_hash, config.SESSION_TTL_DAYS * 86400)
+    return safe_next(next_url)
 
 
 # ---- 최초 구동 관리자 등록 ----
@@ -216,8 +291,7 @@ def login(
             )
             set_session_cookie(res, token, max_age=config.PENDING_TOTP_TTL_SECONDS)
             return res
-        token = auth.issue_session(conn, user["id"])
-    return _login_redirect(token, next)
+        return _post_password_login(conn, user, next)
 
 
 # ---- 2단계 로그인 (TOTP / 패스키) ----
@@ -240,13 +314,6 @@ def _second_factor_ctx(conn: sqlite3.Connection, user_id: int, next_url: str | N
         "has_totp": user["totp_secret"] is not None,
         "has_passkey": db.count_passkeys(conn, user_id) > 0,
     }
-
-
-def _activate_and_redirect(request: Request, next_url: str) -> RedirectResponse:
-    """2단계 통과 — 쿠키 수명을 정식 세션으로 연장하고 목적지로."""
-    res = RedirectResponse(url=safe_next(next_url), status_code=303)
-    set_session_cookie(res, request.cookies[config.SESSION_COOKIE])
-    return res
 
 
 @router.get("/login/totp", response_class=HTMLResponse)
@@ -276,10 +343,10 @@ def totp_login(request: Request, code: str = Form(...), next: str = Form("/")):
                 request, "totp.html", ctx, status_code=401
             )
         db.set_totp_last_used(conn, user["id"], window)
-        db.activate_session(
-            conn, sess["token_hash"], ttl_seconds=config.SESSION_TTL_DAYS * 86400
-        )
-    return _activate_and_redirect(request, next)
+        target = _two_factor_target(conn, sess["token_hash"], user, next)
+    res = RedirectResponse(url=target, status_code=303)
+    set_session_cookie(res, request.cookies[config.SESSION_COOKIE])
+    return res
 
 
 @router.post("/login/passkey/options")
@@ -322,10 +389,9 @@ async def passkey_login(request: Request):
         if new_count is None:
             raise HTTPException(401, t(request, "패스키 인증에 실패했습니다"))
         db.touch_passkey(conn, cred["id"], new_count)
-        db.activate_session(
-            conn, sess["token_hash"], ttl_seconds=config.SESSION_TTL_DAYS * 86400
-        )
-    res = JSONResponse({"ok": True, "next": safe_next(body.get("next"))})
+        user = db.get_user_by_id(conn, sess["user_id"])
+        target = _two_factor_target(conn, sess["token_hash"], user, body.get("next"))
+    res = JSONResponse({"ok": True, "next": target})
     set_session_cookie(res, request.cookies[config.SESSION_COOKIE])
     return res
 
@@ -512,6 +578,10 @@ def _account_ctx(
 ) -> dict:
     with db.connect() as conn:
         passkey_count = db.count_passkeys(conn, user["id"])
+        # 이메일 인증 — 기능이 켜져 있고 SMTP 가 설정됐을 때만 의미가 있다
+        email_verification_on = (
+            db.email_verification_enabled(conn) and mailer.mail_enabled(conn)
+        )
     return {
         "display_name": user["display_name"] or "",
         "has_password": user["password_hash"] is not None,
@@ -520,6 +590,8 @@ def _account_ctx(
         "role_label": db.ROLE_LABELS.get(user["role"], user["role"]),
         "totp_enabled": user["totp_secret"] is not None,
         "passkey_count": passkey_count,
+        "email_verified": bool(user["email_verified"]),
+        "email_verification_on": email_verification_on,
         "timezone": user["timezone"] or "UTC",
         "timezone_groups": TIMEZONE_GROUPS,
         "locale": user["locale"] or i18n.DEFAULT_LOCALE,
@@ -558,6 +630,7 @@ def account_page(request: Request, ok: str | None = None):
         "password": "패스워드를 변경했습니다. 다른 기기의 세션은 로그아웃되었습니다.",
         "timezone": "시간대를 변경했습니다.",
         "language": "언어를 변경했습니다.",
+        "email_verified": "이메일 본인 인증을 완료했습니다.",
     }.get(ok or "")
     if notice:
         notice = t(request, notice)
@@ -888,9 +961,9 @@ def signup(request: Request, email: str = Form(...), password: str = Form(...)):
                     conn, email, auth.hash_password(password),
                     role=db.signup_default_role(conn),
                 )
-                token = auth.issue_session(conn, user_id)
-        if error is None:
-            return _login_redirect(token, "/")
+                # 이메일 인증이 켜져 있으면 인증 화면으로, 아니면 바로 로그인
+                user = db.get_user_by_id(conn, user_id)
+                return _post_password_login(conn, user, "/")
     return templates.TemplateResponse(
         request, "signup.html", {"error": t(request, error), "email": email},
         status_code=400,
@@ -907,6 +980,139 @@ def pending_page(request: Request):
         return RedirectResponse(url="/", status_code=302)
     return templates.TemplateResponse(
         request, "pending.html", {"email": user["email"]}
+    )
+
+
+# ---- 이메일 본인 인증 화면 ----
+# 두 경로가 같은 화면을 쓴다: ① 로그인 도중(pending_email_verify 세션 — 아직
+# active 사용자가 아님) ② 이미 로그인한 기존 사용자가 개인 설정에서 직접 인증.
+# 그래서 /verify-email* 은 공개 경로로 두되 핸들러가 두 상태를 직접 판별한다.
+
+
+def _verify_target(request: Request, conn: sqlite3.Connection):
+    """이 요청의 인증 대상 사용자와 세션을 돌려준다 (없으면 (None, None)).
+
+    active 로그인 사용자(개인 설정 인증)가 우선이고, 없으면 인증 대기 세션을 본다.
+    """
+    user = getattr(request.state, "user", None)
+    if user is not None:
+        return user, getattr(request.state, "session", None)
+    sess = getattr(request.state, "session", None)
+    if sess is not None and sess["state"] == "pending_email_verify":
+        return db.get_user_by_id(conn, sess["user_id"]), sess
+    return None, None
+
+
+def _is_pending_verify(sess) -> bool:
+    """로그인 도중(인증 대기) 세션인지 — 인증 완료 시 active 로 승격할 대상."""
+    return sess is not None and sess["state"] == "pending_email_verify"
+
+
+def _verify_done_redirect(sess, next_url: str | None) -> str:
+    """인증 완료 후 이동 경로 — 로그인 도중이면 원래 목적지, 아니면 계정 설정."""
+    if _is_pending_verify(sess):
+        return safe_next(next_url)
+    return "/settings/account?ok=email_verified"
+
+
+@router.get("/verify-email", response_class=HTMLResponse)
+def verify_email_page(
+    request: Request, next: str | None = None, sent: int = 0, error: str = ""
+):
+    """이메일 인증 화면 — 코드 입력 + 재발송. 로그인 도중·개인 설정 공용."""
+    with db.connect() as conn:
+        user, sess = _verify_target(request, conn)
+        if user is None:
+            return RedirectResponse(url="/login", status_code=302)
+        if user["email_verified"]:
+            return RedirectResponse(
+                url=_verify_done_redirect(sess, next), status_code=302
+            )
+        mail_on = mailer.mail_enabled(conn)
+        ttl_minutes = db.email_verification_ttl_minutes(conn)
+    notice = t(request, "인증 코드를 메일로 보냈습니다.") if sent else None
+    return templates.TemplateResponse(
+        request, "verify_email.html",
+        {
+            "email": user["email"],
+            "next": safe_next(next),
+            "pending": _is_pending_verify(sess),
+            "mail_enabled": mail_on,
+            "ttl_minutes": ttl_minutes,
+            "notice": notice,
+            "error": error or None,
+        },
+    )
+
+
+@router.post("/verify-email", response_class=HTMLResponse)
+def verify_email(request: Request, code: str = Form(...), next: str = Form("/")):
+    """입력한 코드 검증 → 인증 완료. 로그인 도중이면 세션을 active 로 승격한다."""
+    with db.connect() as conn:
+        user, sess = _verify_target(request, conn)
+        if user is None:
+            return RedirectResponse(url="/login", status_code=303)
+        if not user["email_verified"]:
+            record = db.get_email_verification(conn, user["id"])
+            ok = record is not None and hmac.compare_digest(
+                record["code_hash"], auth.hash_token(code.strip())
+            )
+            if not ok:
+                return templates.TemplateResponse(
+                    request, "verify_email.html",
+                    {
+                        "email": user["email"],
+                        "next": safe_next(next),
+                        "pending": _is_pending_verify(sess),
+                        "mail_enabled": mailer.mail_enabled(conn),
+                        "ttl_minutes": db.email_verification_ttl_minutes(conn),
+                        "notice": None,
+                        "error": t(request, "코드가 올바르지 않거나 만료되었습니다."),
+                    },
+                    status_code=401,
+                )
+            db.set_email_verified(conn, user["id"])
+            db.delete_email_verification(conn, user["id"])
+        # 로그인 도중이면 인증 대기 세션을 정식 세션으로 승격
+        if _is_pending_verify(sess):
+            db.activate_session(
+                conn, sess["token_hash"], ttl_seconds=config.SESSION_TTL_DAYS * 86400
+            )
+            res = RedirectResponse(url=safe_next(next), status_code=303)
+            set_session_cookie(res, request.cookies[config.SESSION_COOKIE])
+            return res
+    return RedirectResponse(
+        url="/settings/account?ok=email_verified", status_code=303
+    )
+
+
+@router.post("/verify-email/resend", response_class=HTMLResponse)
+def verify_email_resend(request: Request, next: str = Form("/")):
+    """인증 코드 재발송 (재요청). SMTP 미설정이면 안내만 한다."""
+    next_q = quote(safe_next(next), safe="")
+    with db.connect() as conn:
+        user, sess = _verify_target(request, conn)
+        if user is None:
+            return RedirectResponse(url="/login", status_code=303)
+        if user["email_verified"]:
+            return RedirectResponse(
+                url=_verify_done_redirect(sess, next), status_code=303
+            )
+        if not mailer.mail_enabled(conn):
+            return RedirectResponse(
+                url=f"/verify-email?next={next_q}&error="
+                + quote(t(request, "메일 발송이 설정되지 않아 코드를 보낼 수 없습니다."), safe=""),
+                status_code=303,
+            )
+        sent = _issue_and_send_code(conn, user)
+    if sent:
+        return RedirectResponse(
+            url=f"/verify-email?next={next_q}&sent=1", status_code=303
+        )
+    return RedirectResponse(
+        url=f"/verify-email?next={next_q}&error="
+        + quote(t(request, "코드 발송에 실패했습니다. 잠시 후 다시 시도하세요."), safe=""),
+        status_code=303,
     )
 
 

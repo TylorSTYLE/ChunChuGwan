@@ -1,0 +1,47 @@
+{% extends "auth_base.html" %}
+{% block title %}{{ _("이메일 본인 인증") }} — {{ _("춘추관") }}{% endblock %}
+{% block card %}
+<div class="auth-card">
+  <h2>{{ _("이메일 본인 인증") }}</h2>
+  {% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  {% if mail_enabled %}
+  <p class="muted">
+    {{ _("{email} (으)로 보낸 인증 코드를 입력하세요. 코드는 {n}분 후 만료됩니다.", email=email, n=ttl_minutes) }}
+  </p>
+  <form method="post" action="/verify-email">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>{{ _("인증 코드") }}
+      <input type="text" name="code" inputmode="numeric" pattern="[0-9]*"
+             maxlength="6" autocomplete="one-time-code" required autofocus class="mono">
+    </label>
+    <button type="submit">{{ _("확인") }}</button>
+  </form>
+
+  <div class="alt">
+    <p class="muted">{{ _("코드를 받지 못했나요?") }}</p>
+    <form method="post" action="/verify-email/resend">
+      <input type="hidden" name="next" value="{{ next }}">
+      <button type="submit">{{ _("인증 코드 다시 보내기") }}</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="error">
+    {{ _("메일 발송(SMTP)이 설정되지 않아 인증 코드를 보낼 수 없습니다. 관리자에게 문의하세요.") }}
+  </p>
+  {% endif %}
+
+  {% if pending %}
+  <div class="alt">
+    <form method="post" action="/logout">
+      <button type="submit">{{ _("로그아웃") }}</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="muted" style="margin-top:12px">
+    <a href="/settings/account">&larr; {{ _("계정 설정으로 돌아가기") }}</a>
+  </p>
+  {% endif %}
+</div>
+{% endblock %}
