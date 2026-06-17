@@ -18,9 +18,11 @@ from __future__ import annotations
 import dataclasses
 import json
 import sqlite3
+import zoneinfo
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
 from pydantic import BaseModel
 
@@ -1710,3 +1712,283 @@ def system_document_settings(
         db.set_setting(conn, db.DOCUMENT_FETCH_TIMEOUT_KEY, str(body.document_fetch_timeout))
     audit.log(request, "문서 아카이브 설정 변경")
     return {"ok": True}
+
+
+# ── 개인 설정 (계정·개인 API Key·내 아카이브) ────────────────────────────────
+# 헤더 개인설정 드롭다운의 세 화면. SSR auth_routes 의 /settings/* 와 같은 코어
+# 동작을 JSON 으로 제공한다 (원칙 1·6 — 인증 데이터는 단방향, 쓰기는 코어 경유).
+
+
+def _require_account(user: sqlite3.Row | None) -> sqlite3.Row:
+    """개인 계정 컨텍스트 강제 — 인증 off(loopback)에는 '본인'이 없어 404."""
+    if user is None:
+        raise HTTPException(404, "인증이 비활성화되어 개인 계정이 없습니다")
+    return user
+
+
+@router.get("/settings/account")
+def account(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """계정 설정 — 표시이름·언어·타임존·패스워드·2FA/패스키 상태. auth.account_page 의 JSON 판."""
+    user = _require_account(user)
+    with db.connect() as conn:
+        passkey_count = db.count_passkeys(conn, user["id"])
+        email_verification_on = (
+            db.email_verification_enabled(conn) and mailer.mail_enabled(conn)
+        )
+        role_label = db.role_labels(conn).get(user["role"], user["role"])
+    return {
+        "display_name": user["display_name"] or "",
+        "email": user["email"],
+        "role": user["role"],
+        "role_label": role_label,
+        "is_admin": user["role"] == "admin",
+        "has_password": user["password_hash"] is not None,
+        "totp_enabled": user["totp_secret"] is not None,
+        "passkey_count": passkey_count,
+        "email_verified": bool(user["email_verified"]),
+        "email_verification_on": email_verification_on,
+        "timezone": user["timezone"] or "UTC",
+        "timezones": sorted(zoneinfo.available_timezones()),
+        "locale": user["locale"] or i18n.DEFAULT_LOCALE,
+        "locales": list(i18n.SUPPORTED_LOCALES),
+        "locale_names": i18n.LOCALE_NAMES,
+    }
+
+
+class AccountNameReq(BaseModel):
+    display_name: str = ""
+
+
+@router.post("/settings/account/name")
+def account_name(
+    request: Request, body: AccountNameReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """표시 이름 변경 — 빈 입력이면 제거(이메일 표시로 복귀)."""
+    user = _require_account(user)
+    name = body.display_name.strip() or None
+    if name is not None:
+        err = auth.validate_display_name(name)
+        if err is not None:
+            raise HTTPException(400, err)
+    with db.connect() as conn:
+        db.set_display_name(conn, user["id"], name)
+    return {"ok": True, "display_name": name or ""}
+
+
+class AccountLocaleReq(BaseModel):
+    locale: str
+
+
+@router.post("/settings/account/language")
+def account_language(
+    request: Request, body: AccountLocaleReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """표시 언어 변경."""
+    user = _require_account(user)
+    lang = body.locale.strip()
+    if lang not in i18n.SUPPORTED_LOCALES:
+        raise HTTPException(400, "지원하지 않는 언어입니다")
+    with db.connect() as conn:
+        db.set_user_locale(conn, user["id"], lang)
+    return {"ok": True}
+
+
+class AccountTimezoneReq(BaseModel):
+    timezone: str
+
+
+@router.post("/settings/account/timezone")
+def account_timezone(
+    request: Request, body: AccountTimezoneReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """표시 타임존 변경."""
+    user = _require_account(user)
+    tz = body.timezone.strip()
+    if tz not in zoneinfo.available_timezones():
+        raise HTTPException(400, "지원하지 않는 타임존입니다")
+    with db.connect() as conn:
+        db.set_user_timezone(conn, user["id"], tz)
+    return {"ok": True}
+
+
+class PasswordChangeReq(BaseModel):
+    current_password: str
+    new_password: str
+    new_password2: str
+
+
+@router.post("/settings/account/password")
+def account_password(
+    request: Request, body: PasswordChangeReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """패스워드 변경 — 변경 후 현재 세션만 남기고 다른 기기 세션을 무효화한다."""
+    user = _require_account(user)
+    if user["password_hash"] is None:
+        raise HTTPException(400, "SSO 전용 계정은 패스워드가 없습니다. IdP(Authentik)에서 관리하세요.")
+    if not auth.verify_password(user["password_hash"], body.current_password):
+        raise HTTPException(401, "현재 패스워드가 올바르지 않습니다.")
+    if body.new_password != body.new_password2:
+        raise HTTPException(400, "새 패스워드가 서로 일치하지 않습니다.")
+    err = auth.validate_password(body.new_password)
+    if err is not None:
+        raise HTTPException(400, err)
+    with db.connect() as conn:
+        db.set_password_hash(conn, user["id"], auth.hash_password(body.new_password))
+        db.delete_other_sessions(
+            conn, user["id"], request.state.session["token_hash"]
+        )
+    return {"ok": True}
+
+
+class WithdrawReq(BaseModel):
+    password: str = ""
+    confirm: str = ""
+
+
+@router.post("/settings/account/withdraw")
+def account_withdraw(
+    request: Request, body: WithdrawReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> JSONResponse:
+    """본인 계정 탈퇴 (관리자 불가) — 권한을 탈퇴 상태로 바꾸고 전 세션을 무효화한다.
+
+    탈취된 세션으로 임의 탈퇴를 막기 위해 패스워드 계정은 패스워드 재입력,
+    SSO 전용 계정은 이메일 입력으로 본인을 재확인한다.
+    """
+    user = _require_account(user)
+    if user["role"] == "admin":
+        raise HTTPException(403, "관리자 계정은 탈퇴할 수 없습니다.")
+    if user["password_hash"] is not None:
+        if not auth.verify_password(user["password_hash"], body.password):
+            raise HTTPException(401, "패스워드가 올바르지 않습니다.")
+    elif body.confirm.strip().lower() != user["email"].lower():
+        raise HTTPException(400, "확인 이메일이 일치하지 않습니다.")
+    with db.connect() as conn:
+        db.withdraw_user(conn, user["id"])
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(config.SESSION_COOKIE)
+    return resp
+
+
+@router.get("/settings/api-keys")
+def personal_api_keys(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """개인 API Key(확장 토큰) 목록 — 본인 소유분만. use_api_keys 권한 전용."""
+    user = _require_account(user)
+    if not permissions.can_use_api_keys(user):
+        raise HTTPException(403, "개인 API Key 사용 권한이 없습니다.")
+    can_view, can_archive = permissions.token_permissions_for_user(user)
+    with db.connect() as conn:
+        tokens = db.list_api_keys_for_owner(conn, user["id"])
+    return {
+        "keys": [dict(k) for k in tokens],
+        "can_view": can_view,
+        "can_archive": can_archive,
+    }
+
+
+@router.post("/settings/api-keys")
+def personal_api_key_create(
+    request: Request, body: ApiKeyReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """본인 귀속 개인 API Key 발급 — 권한은 역할 범위로 클램프, 토큰 원문은 1회만 반환."""
+    user = _require_account(user)
+    if not permissions.can_use_api_keys(user):
+        raise HTTPException(403, "개인 API Key 사용 권한이 없습니다.")
+    allowed_view, allowed_archive = permissions.token_permissions_for_user(user)
+    if not (allowed_view or allowed_archive):
+        raise HTTPException(403, "현재 권한으로는 API Key 를 발급할 수 없습니다.")
+    # 선택 권한을 역할 허용 범위로 클램프 — 권한 상승 방지
+    can_view = body.can_view and allowed_view
+    can_archive = body.can_archive and allowed_archive
+    if not (can_view or can_archive):
+        raise HTTPException(400, "권한을 하나 이상 선택하세요.")
+    name = body.name.strip()
+    err = auth.validate_api_key_name(name)
+    if err is not None:
+        raise HTTPException(400, err)
+    if body.expiry in _API_KEY_EXPIRY_TTL:
+        ttl = _API_KEY_EXPIRY_TTL[body.expiry]
+    elif body.expiry == "custom":
+        if not (1 <= body.custom_days <= _MAX_API_KEY_CUSTOM_DAYS):
+            raise HTTPException(400, f"사용자 지정 만료는 1 ~ {_MAX_API_KEY_CUSTOM_DAYS}일 사이여야 합니다")
+        ttl = body.custom_days * 86400
+    else:
+        raise HTTPException(400, "알 수 없는 만료 선택")
+    with db.connect() as conn:
+        token = auth.issue_api_key(
+            conn, name, can_view=can_view, can_archive=can_archive,
+            created_by=user["id"], owner_user_id=user["id"], ttl_seconds=ttl,
+        )
+    perms = ", ".join(
+        label for flag, label in ((can_view, "보기"), (can_archive, "아카이브")) if flag
+    )
+    audit.log(request, "개인 API Key 발급: '%s' (권한: %s)", name, perms)
+    return {"ok": True, "token": token}
+
+
+@router.post("/settings/api-keys/{key_id}/delete")
+def personal_api_key_delete(
+    request: Request, key_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """본인 귀속 개인 API Key 폐기 — 본인 소유분만(IDOR 방어), 즉시 무효화."""
+    user = _require_account(user)
+    with db.connect() as conn:
+        key = db.get_api_key(conn, key_id)
+        # 본인 소유 토큰만 — 타인 토큰·시스템 키(owner=NULL)는 404 로 은폐
+        if key is None or key["owner_user_id"] != user["id"]:
+            raise HTTPException(404, "API Key 없음")
+        db.delete_api_key(conn, key_id)
+    audit.log(request, "개인 API Key 폐기: '%s'", key["name"])
+    return {"ok": True}
+
+
+@router.get("/settings/archives")
+def my_archives(
+    request: Request,
+    status: str | None = None,
+    page: int = 1,
+    limit: int = _LOG_PAGE_SIZE_DEFAULT,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """내 아카이브 — 본인이 직접 요청한(web·확장 토큰) 단발 아카이빙 이력. app.my_archives 의 JSON 판."""
+    from .app import _requester_id
+
+    requester = _requester_id(request)
+    if status not in _LOG_STATUSES:
+        status = None
+    if limit not in _LOG_PAGE_SIZES:
+        limit = _LOG_PAGE_SIZE_DEFAULT
+    page = max(1, page)
+    items: list[dict] = []
+    total = 0
+    total_pages = 1
+    if requester is not None:
+        with db.connect() as conn:
+            total = db.count_archive_logs(conn, requested_by=requester, status=status)
+            total_pages = max(1, -(-total // limit))
+            page = max(1, min(page, total_pages))
+            rows = db.list_archive_logs(
+                conn, requested_by=requester, status=status,
+                limit=limit, offset=(page - 1) * limit,
+            )
+        items = [{"log": dict(row)} for row in rows]
+    return {
+        "items": items,
+        "status": status or "",
+        "limit": limit,
+        "limits": list(_LOG_PAGE_SIZES),
+        "statuses": list(_LOG_STATUSES),
+        "total": total,
+        "total_pages": total_pages,
+        "page_num": page,
+    }

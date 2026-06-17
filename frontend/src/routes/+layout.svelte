@@ -64,7 +64,17 @@
 		<span class="spacer"></span>
 		<button type="button" onclick={cycleTheme}>{THEME_LABELS[themeMode]}</button>
 		{#if me.user}
-			<span class="mono muted nav-user">{me.user.display_name || me.user.email}</span>
+			<details class="user-menu">
+				<summary class="mono muted">{me.user.display_name || me.user.email}</summary>
+				<div class="user-menu-items">
+					<a href="{base}/settings/account">{t('계정')}</a>
+					{#if flags.can_use_api_keys}
+						<a href="{base}/settings/api-keys">{t('개인 API Key')}</a>
+					{/if}
+					<a href="{base}/settings/archives">{t('내 아카이브')}</a>
+					<form method="POST" action="/logout"><button type="submit">{t('로그아웃')}</button></form>
+				</div>
+			</details>
 		{/if}
 	</nav>
 </header>
@@ -100,8 +110,50 @@
 	header nav .spacer {
 		flex: 1;
 	}
-	.nav-user {
+	.user-menu {
+		position: relative;
 		font-size: 12px;
+	}
+	.user-menu summary {
+		cursor: pointer;
+		list-style: none;
+	}
+	.user-menu summary::-webkit-details-marker {
+		display: none;
+	}
+	.user-menu-items {
+		position: absolute;
+		right: 0;
+		top: 100%;
+		margin-top: 4px;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		padding: 4px;
+		display: flex;
+		flex-direction: column;
+		min-width: 150px;
+		z-index: 20;
+	}
+	.user-menu-items a,
+	.user-menu-items button {
+		font-size: 13px;
+		padding: 6px 8px;
+		text-align: left;
+		background: none;
+		border: none;
+		color: var(--fg);
+		text-decoration: none;
+		cursor: pointer;
+		width: 100%;
+		border-radius: 3px;
+	}
+	.user-menu-items a:hover,
+	.user-menu-items button:hover {
+		background: var(--bg-soft);
+	}
+	.user-menu-items form {
+		margin: 0;
 	}
 	#nav-toggle {
 		display: none;

@@ -366,3 +366,56 @@ export interface Dashboard {
 	recent_logs: RecentLog[];
 	version: string;
 }
+
+export interface AccountData {
+	display_name: string;
+	email: string;
+	role: string;
+	role_label: string;
+	is_admin: boolean;
+	has_password: boolean;
+	totp_enabled: boolean;
+	passkey_count: number;
+	email_verified: boolean;
+	email_verification_on: boolean;
+	timezone: string;
+	timezones: string[];
+	locale: string;
+	locales: string[];
+	locale_names: Record<string, string>;
+}
+
+export interface PersonalApiKeysData {
+	keys: (Record<string, unknown> & {
+		id: number;
+		name: string;
+		can_view: number;
+		can_archive: number;
+		expires_at: string | null;
+	})[];
+	can_view: boolean;
+	can_archive: boolean;
+}
+
+export interface MyArchiveItem {
+	log: Record<string, unknown> & {
+		started_at: string;
+		status: string;
+		url: string;
+		page_id: number | null;
+		snapshot_id: number | null;
+		duration_ms: number;
+		source: string;
+	};
+}
+
+export interface MyArchivesData {
+	items: MyArchiveItem[];
+	status: string;
+	limit: number;
+	limits: number[];
+	statuses: string[];
+	total: number;
+	total_pages: number;
+	page_num: number;
+}
