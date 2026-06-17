@@ -34,13 +34,29 @@ def _warn_if_migrating() -> bool:
     return False
 
 
+def _console_level(verbose: bool, quiet: bool, subcommand: str | None) -> int:
+    """콘솔(stderr) 로그 레벨 결정.
+
+    worker/serve 는 장시간 도는 데몬이라 운영 로그(INFO)가 기본으로 보여야
+    한다 — docker logs·터미널로 바로 상태를 확인할 수 있게. 그 외 단발 명령은
+    조용히(WARNING) 두고 -v 로 INFO 를 켠다. --quiet 는 데몬에서도 WARNING 으로
+    낮춘다 (-v 가 우선). 파일·DB(/system/logs) 적재는 이 레벨과 무관하게 INFO.
+    """
+    if verbose:
+        return logging.INFO
+    if quiet:
+        return logging.WARNING
+    return logging.INFO if subcommand in ("serve", "worker") else logging.WARNING
+
+
 @click.group()
 @click.version_option(__version__, "-V", "--version", message="춘추관 %(version)s")
-@click.option("-v", "--verbose", is_flag=True, help="단계별 상세 로그를 stderr 로 출력")
+@click.option("-v", "--verbose", is_flag=True, help="모든 명령에서 INFO 로그를 stderr 로 출력")
+@click.option("-q", "--quiet", is_flag=True, help="경고 이상만 출력 (worker/serve 의 기본 INFO 를 끈다)")
 @click.pass_context
-def main(ctx: click.Context, verbose: bool) -> None:
+def main(ctx: click.Context, verbose: bool, quiet: bool) -> None:
     """춘추관 — 개인 웹 아카이빙 시스템."""
-    level = logging.INFO if verbose else logging.WARNING
+    level = _console_level(verbose, quiet, ctx.invoked_subcommand)
     root = logging.getLogger()
     fresh = not root.handlers
     logging.basicConfig(

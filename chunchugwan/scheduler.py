@@ -195,6 +195,7 @@ def run_due(
         try:
             try:
                 outcome = pipeline.archive_url(url, source=source)
+                logger.info("스케줄 아카이빙: %s — %s", url, outcome.status)
                 results.append(DueResult(url=url, status=outcome.status))
             except Exception as e:
                 logger.exception("스케줄 아카이빙 실패: %s", url)

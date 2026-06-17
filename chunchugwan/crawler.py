@@ -331,6 +331,19 @@ def _handle_failure(item: sqlite3.Row, exc: Exception) -> CrawlStep:
             db.finish_crawl_if_done(conn, item["crawl_id"])
             if next_attempt_at is None else False
         )
+    # 재시도 예약인지 최종 실패인지 구분해 남긴다 (archive_worker 와 같은 형식 —
+    # 시도 횟수·전체 한도·다음 시도 시각). 전체 한도는 첫 시도 + 백오프 재시도 횟수.
+    max_attempts = len(backoff) + 1
+    if next_attempt_at:
+        logger.warning(
+            "크롤 페이지 실패: %s — %s (크롤 #%d, 시도 %d/%d, %s 재시도)",
+            item["url"], error, item["crawl_id"], attempts, max_attempts, next_attempt_at,
+        )
+    else:
+        logger.warning(
+            "크롤 페이지 최종 실패: %s — %s (크롤 #%d, 시도 %d/%d 소진)",
+            item["url"], error, item["crawl_id"], attempts, max_attempts,
+        )
     return CrawlStep(
         crawl_id=item["crawl_id"], url=item["url"],
         status="retry" if next_attempt_at else "failed",
@@ -407,13 +420,17 @@ def process_next(
             if release is not None:
                 release(url)
     except Exception as e:
-        logger.warning("크롤 페이지 실패: %s — %s", url, e)
+        # 실패 로그(재시도/최종 구분·시도 횟수)는 _handle_failure 가 남긴다.
         return _handle_failure(item, e)
 
     with db.connect() as conn:
         db.finish_crawl_page(conn, item["id"], outcome.snapshot_id)
         enqueued = _enqueue_links(conn, item, outcome.page_links)
         crawl_done = db.finish_crawl_if_done(conn, item["crawl_id"])
+    logger.info(
+        "크롤 페이지 완료: %s — %s (크롤 #%d, 링크 +%d)",
+        url, outcome.status, item["crawl_id"], enqueued,
+    )
     return CrawlStep(
         crawl_id=item["crawl_id"], url=url, status=outcome.status,
         enqueued=enqueued, crawl_done=crawl_done,

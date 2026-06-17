@@ -293,6 +293,34 @@ def test_failure_schedules_backoff_retry(archive_env):
         assert db.get_crawl(conn, row["id"])["status"] == "running"
 
 
+def test_process_next_logs_page_completion(archive_env, caplog):
+    """크롤 페이지 완료를 INFO 로 남긴다 (crawl_id·status·추가된 링크 수)."""
+    crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+    with caplog.at_level("INFO", logger="chunchugwan.crawler"):
+        crawler.process_next(
+            archive_fn=lambda url, source, link_rewriter: fake_outcome(
+                url, links=("https://example.com/docs/a",)
+            )
+        )
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("크롤 페이지 완료" in m and "링크 +1" in m for m in msgs)
+
+
+def test_failure_logs_attempt_context(archive_env, monkeypatch, caplog):
+    """크롤 페이지 재시도 실패는 시도 횟수·전체 한도와 함께 '재시도' 로 남긴다."""
+    monkeypatch.setattr(crawler, "retry_backoff", lambda conn: (300,))  # 한도 2
+    crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
+
+    def boom(url, source, link_rewriter):
+        raise RuntimeError("연결 실패")
+
+    with caplog.at_level("WARNING", logger="chunchugwan.crawler"):
+        step = crawler.process_next(archive_fn=boom)
+    assert step.status == "retry"
+    warn = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("크롤 페이지 실패" in m and "시도 1/2" in m and "재시도" in m for m in warn)
+
+
 def test_failure_exhausts_attempts_then_fails(archive_env):
     row, _ = crawler.start_crawl("https://example.com/docs/", delay_seconds=1)
     max_attempts = len(config.CRAWL_RETRY_BACKOFF_SECONDS) + 1
