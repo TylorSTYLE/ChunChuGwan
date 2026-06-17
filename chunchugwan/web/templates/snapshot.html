@@ -4,8 +4,12 @@
 {% block head %}
 <style>
 /* dvh = 모바일 주소창을 제외한 실제 보이는 높이 (미지원 브라우저는 vh 폴백) */
+/* color-scheme:light — 대시보드 다크 테마가 iframe 으로 상속돼 UA 기본 글자색이
+   흰색이 되면 흰 배경(아래)에 흰 글자가 되어 텍스트 탭(text/plain)이 안 보인다.
+   배경과 함께 라이트로 고정해 캡처 시점(headless chromium 기본=light)대로 보인다. */
 .viewer-frame { width: 100%; height: 80vh; height: 80dvh;
-                border: 1px solid var(--border); background: #fff; }
+                border: 1px solid var(--border); background: #fff;
+                color-scheme: light; }
 </style>
 {% endblock %}
 {% block content %}
