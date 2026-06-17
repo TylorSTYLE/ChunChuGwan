@@ -69,6 +69,7 @@
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | 대시보드 화면별 라우트·권한·세부 동작 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 개발 · PyCharm 구성 · 모듈 구성 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 완료된 구현 로드맵 히스토리 |
+| [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md) | 성능 최적화 분석 · 단계별 실행 계획(미구현) |
 | [CLAUDE.md](CLAUDE.md) | 아키텍처 원칙 · DB 스키마 · 코딩 컨벤션 |
 
 ## 설치
