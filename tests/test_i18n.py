@@ -75,6 +75,31 @@ def test_all_template_msgids_have_english():
     assert not missing, "en 카탈로그 누락:\n" + "\n".join(missing)
 
 
+def test_all_spa_msgids_have_english():
+    """SvelteKit SPA(.svelte/.ts)의 모든 t('...') 리터럴이 en 카탈로그에 있어야 한다.
+
+    누락되면 영어 화면에 한국어 원문이 그대로 노출된다. 변수 인자(t(label))는
+    정적으로 못 잡으므로 리터럴만 검사한다. (#10 i18n 추출 — dashboard 규칙)
+    """
+    pat_s = re.compile(r"\bt\(\s*'((?:[^'\\]|\\.)*)'")
+    pat_d = re.compile(r'\bt\(\s*"((?:[^"\\]|\\.)*)"')
+    catalog = i18n.CATALOGS["en"]
+    src = Path(i18n.__file__).resolve().parents[2] / "frontend" / "src"
+    if not src.exists():
+        pytest.skip("frontend 소스가 없습니다 (패키지 전용 환경)")
+    missing = []
+    for f in sorted(src.rglob("*")):
+        if f.suffix not in (".svelte", ".ts"):
+            continue
+        text = f.read_text(encoding="utf-8")
+        for pat, esc in ((pat_s, "\\'"), (pat_d, '\\"')):
+            for m in pat.finditer(text):
+                key = m.group(1).replace(esc, esc[-1])
+                if key not in catalog:
+                    missing.append(f"{f.name}: {key}")
+    assert not missing, "en 카탈로그 누락(SPA):\n" + "\n".join(missing)
+
+
 def test_no_tojson_in_double_quoted_attribute():
     """tojson 값을 큰따옴표 속성 안에 두면 안 된다.
 

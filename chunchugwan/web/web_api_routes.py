@@ -114,6 +114,18 @@ def me(request: Request, user: sqlite3.Row | None = Depends(require_session)) ->
     }
 
 
+@router.get("/i18n/{locale}")
+def i18n_catalog(locale: str) -> dict:
+    """SPA 번역 카탈로그 — i18n.py(_EN) 정본을 그대로 제공.
+
+    SPA 의 `t(msg)` 는 ctx 를 쓰지 않으므로 "ctx|원문" 키는 제외(평문만).
+    ko 는 빈 dict(원문 패스스루). 미인증 화면(로그인 등)도 쓸 수 있게 공개.
+    """
+    if locale not in i18n.SUPPORTED_LOCALES:
+        raise HTTPException(404, "지원하지 않는 로케일입니다")
+    return {k: v for k, v in i18n.CATALOGS.get(locale, {}).items() if "|" not in k}
+
+
 # 대시보드 현황 집계 기간 — app.dashboard 와 같은 정의 (기간별 용량 트렌드).
 _TREND_PERIODS = (
     ("today", "오늘"),
