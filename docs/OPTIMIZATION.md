@@ -347,10 +347,25 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires      ON sessions(expires_at);
 
 ### Phase 7 — 선택 (여유 시)
 
-- [ ] ingest 스트리밍 (순위 20, OOM 방어)
-- [ ] 문서 병렬 다운로드 (순위 23) — 대상 서버 부담(크롤 delay) 정합성 확인
-- [ ] 사이트 삭제 조인화 + `IN()` 한도 (순위 24)
-- [ ] `/documents` legacy 스캔 캐시, OIDC discovery/JWKS TTL, live_challenge 폴링 정리
+- [ ] ingest 스트리밍 (순위 20, OOM 방어) — **보류**
+- [ ] 문서 병렬 다운로드 (순위 23) — **보류** (대상 서버 부담 정합성)
+- [x] 사이트 삭제 `IN()` 한도 (순위 24, 조인화는 보류)
+- [x] `/documents` legacy 스캔 캐시 / OIDC discovery·JWKS 는 이미 모듈 캐시
+
+> **완료 (perf/phase-7) — 안전·유효 항목만.** ① `/documents` 의 `legacy_pending`
+> 배너가 매 로드마다 전체 스냅샷 디렉토리를 walk(구형 문서가 없으면 short-circuit 도
+> 안 됨)하던 것을 루트별 60초 TTL 캐시(`_legacy_documents_pending`)로 감쌌다(표시 전용
+> 힌트, compact 후 최대 TTL 지연 허용). ② 삭제 GC 후보 수집의 `IN(?,?,…)` 을
+> `_SQL_VAR_CHUNK`(900) 로 끊어, 스냅샷 수천 개 사이트 삭제에서 SQLite 변수 한도
+> (구버전 999) 초과('too many SQL variables')를 막는다 — 읽기 전용 union 이라 GC
+> 의미는 동일(전역 dedup). OIDC discovery/JWKS 는 `oidc.py` 가 이미 모듈 캐시
+> (`_discovery`·`_jwks_client`)라 요청마다 조회하지 않아 추가 작업 불필요.
+>
+> **보류.** 순위 20(ingest 멀티파트 스트리밍)은 업로드 본문 파싱을 바꾸는 큰 리팩터,
+> 순위 23(문서 병렬 다운로드)은 "대상 서버 부담 방지"(크롤 delay) 원칙과의 정합성
+> 검증이 필요해 둘 다 위험 대비 이득이 낮다. 사이트 삭제의 페이지별 `delete_page`
+> 루프 조인화는 파괴적 경로 + prune/GC 의미를 건드려 별도로 둔다. live_challenge 폴링
+> 정리는 라이브 세션 동작에 영향이 가능해 보류.
 
 ---
 

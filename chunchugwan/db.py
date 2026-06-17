@@ -1651,21 +1651,31 @@ def find_resource_by_url(conn: sqlite3.Connection, url: str) -> str | None:
     return row["name"] if row else None
 
 
+# IN(?,?,…) 파라미터는 SQLite 변수 한도(구버전 999) 아래로 끊는다 — 사이트 전체
+# 삭제처럼 스냅샷 수천 개의 GC 후보를 모을 때 'too many SQL variables' 를 막는다.
+_SQL_VAR_CHUNK = 900
+
+
+def _chunked(seq: list, n: int = _SQL_VAR_CHUNK):
+    """seq 를 길이 n 이하 조각으로 끊어 순서대로 내준다."""
+    for i in range(0, len(seq), n):
+        yield seq[i:i + n]
+
+
 def list_snapshot_resource_refs(
     conn: sqlite3.Connection, snapshot_ids: list[int]
 ) -> list[str]:
     """해당 스냅샷들이 참조하는 자원 CAS 이름 목록 (중복 제거) — 삭제 GC 용."""
-    if not snapshot_ids:
-        return []
-    marks = ", ".join("?" for _ in snapshot_ids)
-    return [
-        r["name"]
+    seen: dict[str, None] = {}  # 청크 간 전역 중복 제거 + 등장 순서 보존
+    for chunk in _chunked(snapshot_ids):
+        marks = ", ".join("?" for _ in chunk)
         for r in conn.execute(
             f"SELECT DISTINCT name FROM snapshot_resources "
             f"WHERE snapshot_id IN ({marks})",
-            snapshot_ids,
-        )
-    ]
+            chunk,
+        ):
+            seen.setdefault(r["name"])
+    return list(seen)
 
 
 def list_resource_refs_by_names(
@@ -2070,14 +2080,20 @@ def list_snapshot_document_refs(
     conn: sqlite3.Connection, snapshot_ids: list[int]
 ) -> list[sqlite3.Row]:
     """해당 스냅샷들이 참조하는 (sha256, file) 목록 (중복 제거) — 삭제 GC 용."""
-    if not snapshot_ids:
-        return []
-    marks = ", ".join("?" for _ in snapshot_ids)
-    return conn.execute(
-        f"SELECT DISTINCT sha256, file FROM snapshot_documents "
-        f"WHERE snapshot_id IN ({marks})",
-        snapshot_ids,
-    ).fetchall()
+    seen: set[tuple] = set()
+    out: list[sqlite3.Row] = []
+    for chunk in _chunked(snapshot_ids):
+        marks = ", ".join("?" for _ in chunk)
+        for r in conn.execute(
+            f"SELECT DISTINCT sha256, file FROM snapshot_documents "
+            f"WHERE snapshot_id IN ({marks})",
+            chunk,
+        ):
+            key = (r["sha256"], r["file"])
+            if key not in seen:
+                seen.add(key)
+                out.append(r)
+    return out
 
 
 def list_document_refs_by_shas(
