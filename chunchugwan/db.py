@@ -1882,9 +1882,25 @@ def delete_fts_rows(conn: sqlite3.Connection, rowids: list[int]) -> None:
     )
 
 
-# 검색 결과 행의 공통 투영 — FTS/LIKE 양쪽이 같은 형태를 돌려준다.
-# (url 은 pages.url 과 snapshot_fts.url 이 겹치므로 반드시 테이블로 한정한다.)
-_SEARCH_SELECT = """
+# 검색 결과 행의 공통 투영. url 은 pages.url 과 snapshot_fts.url 이 겹치므로
+# 반드시 테이블로 한정한다.
+#
+# FTS 경로는 FTS5 내장 snippet() 으로 DB 가 매치 주변만 잘라 준다 — 첨부 문서
+# 본문(최대 2MB/문서)을 행마다 통째로 Python 으로 가져오던 것을 없앤다(순위 7).
+# 인자: (테이블, content 컬럼=0, 시작/끝 마커 없음 — 강조는 템플릿 highlight 필터가
+# terms 로 한다, 생략기호 …, trigram 토큰 최대 64개 ≈ 매치 주변 ~60자).
+_SEARCH_SELECT_FTS = """
+    SELECT snapshot_fts.rowid AS snapshot_id, s.page_id, s.taken_at, s.changed,
+           p.url AS page_url, p.domain,
+           snippet(snapshot_fts, 0, '', '', '…', 64) AS snippet,
+           snapshot_fts.title AS title
+    FROM snapshot_fts
+    JOIN snapshots s ON s.id = snapshot_fts.rowid
+    JOIN pages p ON p.id = s.page_id
+"""
+# LIKE 폴백(1~2글자, 드물게)은 MATCH 가 없어 snippet() 을 못 쓴다 — content 를
+# 가져와 searchindex 가 매치 위치를 찾아 스니펫을 만든다.
+_SEARCH_SELECT_LIKE = """
     SELECT snapshot_fts.rowid AS snapshot_id, s.page_id, s.taken_at, s.changed,
            p.url AS page_url, p.domain,
            snapshot_fts.content AS content, snapshot_fts.title AS title
@@ -1909,7 +1925,7 @@ def search_snapshots_fts(
     offset: int = 0,
 ) -> list[sqlite3.Row]:
     """FTS MATCH 검색 (bm25 랭킹 순). match 는 searchindex 가 조립한 안전한 질의."""
-    sql = _SEARCH_SELECT + " WHERE snapshot_fts MATCH ?"
+    sql = _SEARCH_SELECT_FTS + " WHERE snapshot_fts MATCH ?"
     params: list[object] = [match]
     if domain:
         sql += " AND p.domain = ?"
@@ -1969,7 +1985,7 @@ def search_snapshots_like(
 ) -> list[sqlite3.Row]:
     """LIKE 부분일치 검색 (최신순) — trigram 이 못 잡는 1~2글자 쿼리 폴백."""
     clause, params = _like_where(patterns)
-    sql = _SEARCH_SELECT + " WHERE " + clause
+    sql = _SEARCH_SELECT_LIKE + " WHERE " + clause
     if domain:
         sql += " AND p.domain = ?"
         params.append(domain)
