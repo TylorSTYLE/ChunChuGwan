@@ -68,11 +68,11 @@ Pull 엔드포인트는 `.claude/rules/api-extension.md` 참조. `site_credentia
   `signup_default_role` (pending/viewer/archiver, 기본 pending — 관리자가
   사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
   관리자로 권한 변경 불가. **권한은 세분 권한(`db.PERMISSIONS` — view·archive·
-  delete·manage_credentials·manage_system·manage_users·view_authenticated_all,
-  고정 코드 상수)을 1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다. 역할 프리셋은
-  코드 상수가 아니라 DB `permission_groups` 테이블이 정본 — 관리자가 시스템 →
-  권한 그룹(`/system/groups`)에서 빌트인(admin/archiver/viewer) 권한 묶음을 편집하거나
-  커스텀 그룹을 추가·삭제할 수 있다(코드 배포 불필요). 코드에서는 `db.role_presets(conn)`
+  delete·manage_credentials·manage_system·manage_users·view_authenticated_all·
+  use_api_keys, 고정 코드 상수)을 1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다.
+  역할 프리셋은 코드 상수가 아니라 DB `permission_groups` 테이블이 정본 — 관리자가 시스템 →
+  권한 그룹(`/system/groups`)에서 빌트인(admin/archive_manager/archiver/viewer) 권한
+  묶음을 편집하거나 커스텀 그룹을 추가·삭제할 수 있다(코드 배포 불필요). 코드에서는 `db.role_presets(conn)`
   (모듈 캐시 + settings 단조 버전으로 멀티프로세스 staleness 방지, conn 없는
   `web.permissions` 는 인증 미들웨어가 워밍한 캐시를 읽음)으로 읽는다. 역할만
   쓰면 동작은 종전과 동일하고, `users.permission_overrides`(JSON {권한:bool},
@@ -83,8 +83,13 @@ Pull 엔드포인트는 `.claude/rules/api-extension.md` 참조. `site_credentia
   `permission_groups` 가 아닌 코드 상수(`db.STATE_ROLES`)로 남고 삭제·편집 불가다.
   역할을 바꾸면 오버라이드는 새 프리셋으로 초기화되고, `manage_users` 마지막
   활성 보유자에게서는 그 권한을 떼거나 역할을 낮출 수 없다(잠김 방지 —
-  `db.count_active_users_with_permission`). 개인 API Key 권한도 실효 권한에서
-  파생된다. CLI 는 권한 체계 밖(로컬 신뢰), 큐·스케줄·크롤은 등록 시점에만 검사.
+  `db.count_active_users_with_permission`). 개인 API Key(확장 토큰) 발급·사용은
+  세분 권한 `use_api_keys` 로 게이트한다 — 발급 화면(`/settings/api-keys` GET/POST,
+  `web.permissions.can_use_api_keys`)과 소유자 귀속 토큰의 `/api/v1` 사용
+  양쪽이며, `_api_auth` 가 매 요청 소유자 실효 권한을 재평가해 권한 회수 시 기존
+  토큰도 401 로 막는다. 빌트인 기본값은 admin·archive_manager·archiver 가 보유,
+  viewer 는 제외(크롬 확장 캡처가 이 토큰을 쓰므로 권한 없는 그룹은 확장도 불가).
+  CLI 는 권한 체계 밖(로컬 신뢰), 큐·스케줄·크롤은 등록 시점에만 검사.
   `users.email_verified` 는 이메일 본인 인증 완료 여부 — 기능(`settings` 의
   `email_verification_enabled`)이 켜지고 SMTP 가 설정됐을 때, 패스워드 계정은
   로그인 마무리 전에 메일로 받은 코드로 이메일을 검증해야 한다 (SSO 계정은
@@ -94,9 +99,13 @@ Pull 엔드포인트는 `.claude/rules/api-extension.md` 참조. `site_credentia
   지점에서 하고, 기존 사용자는 개인 설정에서 직접 인증한다 (소급 차단 없음)
 - `permission_groups` — 역할 프리셋(권한 묶음)의 정본 테이블. `name` PK(=`users.role`
   에 저장되는 정규화 키 `[a-z0-9_]`), `label`(표시 라벨), `permissions`(JSON 배열,
-  `db.PERMISSIONS` 부분집합), `is_builtin`(admin/archiver/viewer=1 — 삭제·개명 불가,
-  permissions 만 편집), `sort_order`. `_migrate` 가 빌트인 3개를 `INSERT OR IGNORE`
-  로 멱등 시드. 쓰기(CRUD — `db.create/update/delete_permission_group`)마다 settings
+  `db.PERMISSIONS` 부분집합), `is_builtin`(admin/archive_manager/archiver/viewer=1 —
+  삭제·개명 불가, permissions 만 편집), `sort_order`. `_migrate` 가 빌트인 4개를
+  `INSERT OR IGNORE` 로 멱등 시드 — 신규 설치 기본값은 archive_manager(아카이브 관리)
+  =보기·아카이빙·삭제·use_api_keys, archiver(아카이브)=보기·아카이빙·use_api_keys,
+  viewer=보기. use_api_keys 는 신규 추가 권한이라 기존 설치의 그룹 JSON 에는 없어
+  `_migrate_api_key_permission` 이 admin·archiver 에 멱등 보강하고(archive_manager 는
+  시드가 포함), 기존 archiver 의 삭제 권한은 그대로 둔다(신규 설치만 삭제 제외). 쓰기(CRUD — `db.create/update/delete_permission_group`)마다 settings
   의 `permission_groups_version` 을 +1 해 `db.role_presets` 캐시를 무효화한다. 관리자
   화면은 `/system/groups`. 역할 목록 접근자(`permission_group_names`/`assignable_roles`/
   `invitable_roles`/`signup_roles`/`role_labels`/`all_valid_roles`)가 이 테이블을 읽어

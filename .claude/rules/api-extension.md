@@ -42,9 +42,13 @@ setup 흐름은 `.claude/rules/authentication.md`·`.claude/rules/capture-crawl.
 - `api_keys` — 외부 소프트웨어용 API 키 (`/api/v1` REST API 인증).
   키마다 보기/아카이브 권한과 만료 시각(NULL=영구), 토큰은 SHA-256 해시만
   저장 (원문은 발급 시 1회 표시). `owner_user_id` NULL=관리자 발급 시스템
-  키(공동 관리, `/system/api-keys`), 값=그 사용자 귀속 개인 API Key(확장
-  토큰, 본인이 `/settings/api-keys` 에서 발급, 권한은 _api_auth 가 소유자
-  현재 역할로 매 요청 재평가). REST 쓰기 엔드포인트: `/archive`·`/crawl`·
+  키(공동 관리, `/system/api-keys`, `manage_users` 권한), 값=그 사용자 귀속 개인
+  API Key(확장 토큰, 본인이 `/settings/api-keys` 에서 발급, 권한은 _api_auth 가
+  소유자 현재 역할로 매 요청 재평가). 개인 API Key 의 발급·사용은 세분 권한
+  `use_api_keys` 가 게이트한다 — 발급 화면(GET/POST 403)과 토큰 사용(_api_auth 가
+  소유자에게 권한 없으면 401) 양쪽. 시스템 키(owner=NULL)는 이 권한과 무관하게
+  저장 컬럼만 본다. 빌트인 기본 보유는 admin·archive_manager·archiver, viewer 제외
+  (상세 → `.claude/rules/authentication.md`). REST 쓰기 엔드포인트: `/archive`·`/crawl`·
   `/auth-profiles`(모두 URL 만 받아 서버가 캡처)와 **`/ingest`**(확장이 브라우저에서
   직접 캡처한 멀티파트 산출물을 받아 `ingest.py` 가 서버 무요청으로 적재 — 사용자
   귀속 토큰 전용, 동기 응답, 사설 호스트 무태그면 422 `needs_network_tag`),

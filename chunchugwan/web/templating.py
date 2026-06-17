@@ -46,6 +46,7 @@ def _auth_context(request: Request) -> dict:
         "can_delete": permissions.can_delete(user),
         "can_view_logs": permissions.can_view_logs(user),
         "can_search": permissions.can_search(user),
+        "can_use_api_keys": permissions.can_use_api_keys(user),
         "needs_human_jobs": needs_human_jobs,
         "needs_human_count": len(needs_human_jobs),
     }

@@ -308,13 +308,17 @@ def test_web_site_delete_refused_while_archiving(client, archive):
         assert db.get_page_by_id(conn, archive["page_id"]) is not None
 
 
-# ---- 권한 (인증 on — 삭제는 admin/archiver 전용) ----
+# ---- 권한 (인증 on — 삭제는 admin/archive_manager 전용, archiver 는 삭제 불가) ----
 
 
 @pytest.fixture
 def role_client(archive):
     with db.connect() as conn:
         db.create_first_admin(conn, "boss@test.co", auth.hash_password("bosspass1234"))
+        db.create_user(
+            conn, "manager@test.co", auth.hash_password("password1234"),
+            role="archive_manager",
+        )
         db.create_user(
             conn, "archiver@test.co", auth.hash_password("password1234"), role="archiver"
         )
@@ -358,8 +362,8 @@ def test_archiver_can_export_site(role_client, archive):
     assert res.headers["content-type"] == "application/gzip"
 
 
-def test_archiver_can_delete(role_client, archive):
-    _login(role_client, "archiver@test.co", "password1234")
+def test_archive_manager_can_delete(role_client, archive):
+    _login(role_client, "manager@test.co", "password1234")
     # 버튼이 노출된다 (사이트 상세)
     assert (
         f'action="/page/{archive["page_id"]}/delete"'
@@ -369,10 +373,24 @@ def test_archiver_can_delete(role_client, archive):
     res = role_client.post(f"/snapshot/{snaps[0]['id']}/delete", follow_redirects=False)
     assert res.status_code == 303
     assert len(_snaps(archive["page_id"])) == 2
+    # 페이지 전체 삭제도 가능
     res = role_client.post(f"/page/{archive['page_id']}/delete", follow_redirects=False)
     assert res.status_code == 303
     with db.connect() as conn:
         assert db.get_page_by_id(conn, archive["page_id"]) is None
+
+
+def test_archiver_cannot_delete(role_client, archive):
+    """아카이브(archiver) 그룹은 삭제 권한이 없다 — 403, 버튼도 숨김 (신규 설치 기본값)."""
+    _login(role_client, "archiver@test.co", "password1234")
+    assert role_client.post(f"/page/{archive['page_id']}/delete").status_code == 403
+    snaps = _snaps(archive["page_id"])
+    assert role_client.post(f"/snapshot/{snaps[0]['id']}/delete").status_code == 403
+    assert f'action="/page/{archive["page_id"]}/delete"' not in role_client.get(
+        _site_url()
+    ).text
+    # 삭제되지 않았다 (스냅샷 3개 그대로)
+    assert len(_snaps(archive["page_id"])) == 3
 
 
 def test_admin_can_delete(role_client, archive):

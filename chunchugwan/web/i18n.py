@@ -189,6 +189,7 @@ _EN: dict[str, str] = {
     "스케줄 없음": "Schedule not found",
     # ---- 역할 라벨 (빌트인 그룹 + db.STATE_ROLE_LABELS — 커스텀은 원문 폴백) ----
     "관리자": "Admin",
+    "아카이브 관리": "Archive manager",
     "아카이브": "Archiver",
     "보기 전용": "Viewer",
     "권한없음": "No access",
@@ -196,12 +197,12 @@ _EN: dict[str, str] = {
     "탈퇴": "Withdrawn",
     # ---- 권한 그룹 화면 (groups.html) ----
     "권한 그룹": "Permission groups",
-    "역할은 세분 권한의 묶음(프리셋)입니다. 여기서 각 역할의 기본 권한을 편집하거나 새 권한 그룹을 추가·삭제할 수 있습니다. 기본 그룹(관리자·아카이브·보기 전용)은 권한 묶음만 바꿀 수 있고 이름은 잠겨 있습니다. 사용자별 가감은 사용자 관리의 '세분 권한'에서 합니다.":
+    "역할은 세분 권한의 묶음(프리셋)입니다. 여기서 각 역할의 기본 권한을 편집하거나 새 권한 그룹을 추가·삭제할 수 있습니다. 기본 그룹(관리자·아카이브 관리·아카이브·보기 전용)은 권한 묶음만 바꿀 수 있고 이름은 잠겨 있습니다. 사용자별 가감은 사용자 관리의 '세분 권한'에서 합니다.":
         "Roles are bundles (presets) of granular permissions. Here you can edit each "
         "role's default permissions or add and remove custom permission groups. The "
-        "built-in groups (Admin, Archiver, Viewer) can only have their permission "
-        "bundle changed — their names are locked. Per-user adjustments are made under "
-        "'Granular permissions' in user management.",
+        "built-in groups (Admin, Archive manager, Archiver, Viewer) can only have their "
+        "permission bundle changed — their names are locked. Per-user adjustments are "
+        "made under 'Granular permissions' in user management.",
     "그룹의 권한을 바꾸면 그 그룹에 속한 모든 사용자에게 즉시 반영됩니다(개별 오버라이드는 유지). 소속 사용자가 있는 그룹은 삭제할 수 없습니다 — 먼저 사용자 역할을 옮기세요.":
         "Changing a group's permissions takes effect immediately for every user in "
         "that group (individual overrides are kept). A group with members cannot be "
@@ -224,6 +225,7 @@ _EN: dict[str, str] = {
     "perm|시스템 관리": "Manage system",
     "perm|사용자 관리": "Manage users",
     "perm|인증 스냅샷 전체 열람": "View all authenticated snapshots",
+    "perm|개인 API Key": "Personal API Key",
     # ---- 목록 (index) ----
     "아카이브 목록": "Archived pages",
     "아카이빙이 백그라운드에서 시작되었습니다": "Archiving started in the background",
@@ -603,8 +605,9 @@ _EN: dict[str, str] = {
         "Role cannot be used as the initial sign-up role: {role}",
     # ---- 사용자 관리 (users) ----
     "사용자 관리": "User management",
-    "관리자=전체 관리, 아카이브=아카이빙 가능, 보기 전용=열람만, 권한없음=가입 승인 대기(안내 페이지 외 접근 불가), 차단됨=접근 불가. 권한없음 사용자는 권한을 부여해 승인합니다. 차단하면 해당 사용자의 모든 세션이 즉시 로그아웃됩니다. 최초 등록된 관리자의 권한은 변경할 수 없습니다.":
-        "Admin = full control, Archiver = can archive, Viewer = read-only, "
+    "관리자=전체 관리, 아카이브 관리=아카이빙·삭제, 아카이브=아카이빙 가능, 보기 전용=열람만, 권한없음=가입 승인 대기(안내 페이지 외 접근 불가), 차단됨=접근 불가. 권한없음 사용자는 권한을 부여해 승인합니다. 차단하면 해당 사용자의 모든 세션이 즉시 로그아웃됩니다. 최초 등록된 관리자의 권한은 변경할 수 없습니다.":
+        "Admin = full control, Archive manager = archive & delete, Archiver = can "
+        "archive, Viewer = read-only, "
         "No access = awaiting sign-up approval (nothing but the notice page), "
         "Blocked = no access. Approve a 'No access' user by granting them a role. "
         "Blocking logs out all of the user's sessions immediately. The "
@@ -896,6 +899,7 @@ _EN: dict[str, str] = {
     "발급한 API Key 가 없습니다.": "No API Keys issued yet.",
     "이름 (예: chrome-ext)": "Name (e.g. chrome-ext)",
     "현재 권한으로는 API Key 를 발급할 수 없습니다.": "Your current role can't issue API Keys.",
+    "개인 API Key 사용 권한이 없습니다.": "You do not have permission to use personal API Keys.",
     "{name} 키를 폐기할까요? 이 키를 쓰는 확장의 접근이 즉시 차단됩니다.":
         "Revoke the key '{name}'? The extension using it loses access immediately.",
     "개인 API Key 를 발급했습니다 — 아래 키를 지금 복사하세요. 다시 표시되지 않습니다.":

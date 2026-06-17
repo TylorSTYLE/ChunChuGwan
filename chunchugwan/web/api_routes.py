@@ -41,7 +41,8 @@ def _api_auth(request: Request) -> None:
     인증이 꺼진 환경은 키 없이 통과한다 (api_key=None = 전체 허용).
     사용자 귀속 확장 토큰(owner_user_id 보유)은 권한을 저장 컬럼이 아니라
     소유자의 *현재* 역할에서 매 요청 재평가한다 — 역할 강등·차단·탈퇴가
-    즉시 반영되고, 권한 없는 역할(pending/blocked/withdrawn)이면 401 로 막는다.
+    즉시 반영되고, 권한 없는 역할(pending/blocked/withdrawn)이거나 개인 API Key
+    사용 권한(use_api_keys)을 잃으면 401 로 막는다.
     """
     request.state.api_key = None
     if not config.AUTH_ENABLED:
@@ -63,6 +64,13 @@ def _api_auth(request: Request) -> None:
             if owner is None or owner["role"] not in db.role_presets(conn):
                 raise HTTPException(
                     401, "토큰 소유자의 권한이 없습니다",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            # 개인 API Key 사용 권한이 없으면(역할 강등·오버라이드 회수) 토큰 무효.
+            # role_presets 로 캐시가 워밍된 뒤라 effective_permissions 가 정확하다.
+            if not permissions.can_use_api_keys(owner):
+                raise HTTPException(
+                    401, "토큰 소유자에게 개인 API Key 사용 권한이 없습니다",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             can_view, can_archive = permissions.token_permissions_for_user(owner)

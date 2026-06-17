@@ -77,6 +77,15 @@ def can_view_authenticated_all(user: sqlite3.Row | None) -> bool:
     return has_permission(user, "view_authenticated_all")
 
 
+def can_use_api_keys(user: sqlite3.Row | None) -> bool:
+    """개인 API Key(확장 토큰) 발급·사용 가능 여부 — 크롬 확장 캡처도 이 권한.
+
+    발급(`/settings/api-keys`)과 사용(소유자 귀속 토큰의 `/api/v1` 인증) 양쪽을
+    같은 권한으로 게이트한다. 권한을 잃으면 _api_auth 가 기존 토큰도 거부한다.
+    """
+    return has_permission(user, "use_api_keys")
+
+
 def system_allowed(user: sqlite3.Row | None) -> bool:
     """관리자 영역(시스템·사용자·자격증명) 중 하나라도 접근 가능한지.
 

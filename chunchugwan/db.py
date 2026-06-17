@@ -579,20 +579,28 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE crawls ADD COLUMN requested_by INTEGER REFERENCES users(id)"
         )
     _seed_permission_groups(conn)
+    _migrate_api_key_permission(conn)
     _backfill_sites(conn)
 
 
 def _seed_permission_groups(conn: sqlite3.Connection) -> None:
-    """빌트인 권한 그룹(admin/archiver/viewer) 시드 — 멱등(INSERT OR IGNORE).
+    """빌트인 권한 그룹(admin/archive_manager/archiver/viewer) 시드 — 멱등(INSERT OR IGNORE).
 
     permission_groups 테이블은 SCHEMA(executescript)가 먼저 만든다. 빌트인의
     permissions 는 시드 후 관리자가 편집할 수 있고(권한 묶음 조정), label·name 은
     잠긴다. pending/blocked/withdrawn 은 권한묶음이 아니라 접근 게이트 상태라
     이 테이블에 넣지 않는다 (코드 상수 STATE_ROLES).
+
+    신규 설치 기본값: 아카이브(archiver)는 보기·아카이빙, 아카이브 관리
+    (archive_manager)는 +삭제. 기존 설치는 INSERT OR IGNORE 로 archiver 가 그대로
+    유지되고(이미 삭제 권한 보유), archive_manager 만 새로 추가된다. use_api_keys 는
+    viewer 외 빌트인에 기본 부여 — 기존 설치 보강은 _migrate_api_key_permission.
     """
     for name, label, perms, order in (
         ("admin", "관리자", list(PERMISSIONS), 10),
-        ("archiver", "아카이브", ["view", "archive", "delete"], 20),
+        ("archive_manager", "아카이브 관리",
+         ["view", "archive", "delete", "use_api_keys"], 15),
+        ("archiver", "아카이브", ["view", "archive", "use_api_keys"], 20),
         ("viewer", "보기 전용", ["view"], 30),
     ):
         conn.execute(
@@ -601,6 +609,36 @@ def _seed_permission_groups(conn: sqlite3.Connection) -> None:
             "VALUES (?, ?, ?, 1, ?, ?)",
             (name, label, json.dumps(perms), order, _utcnow()),
         )
+
+
+def _migrate_api_key_permission(conn: sqlite3.Connection) -> None:
+    """기존 빌트인 그룹 admin·archiver 에 use_api_keys 권한 보강 — 멱등.
+
+    use_api_keys 는 신규 추가 권한이라 기존 설치의 그룹 permissions JSON 에는
+    없다. admin(전체 보유 불변)·archiver(아카이빙 그룹)에 추가하고 viewer 는
+    제외한다(개인 API Key·크롬 확장 사용 불가가 기본). archive_manager 는
+    _seed_permission_groups 가 use_api_keys 를 포함해 시드하므로 별도 보강이
+    필요 없다. 신규 설치는 시드가 이미 넣어 이 함수는 no-op 이 된다.
+    """
+    changed = False
+    for name in ("admin", "archiver"):
+        row = conn.execute(
+            "SELECT permissions FROM permission_groups "
+            "WHERE name = ? AND is_builtin = 1",
+            (name,),
+        ).fetchone()
+        if row is None:
+            continue
+        perms = _parse_permission_list(row["permissions"])
+        if "use_api_keys" not in perms:
+            perms.append("use_api_keys")
+            conn.execute(
+                "UPDATE permission_groups SET permissions = ? WHERE name = ?",
+                (json.dumps(perms), name),
+            )
+            changed = True
+    if changed:
+        _bump_permission_groups_version(conn)
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -3254,7 +3292,9 @@ STATE_ROLE_LABELS = {
 }
 # 빌트인 권한 보유 역할 — permission_groups 에 is_builtin=1 로 시드된다.
 # 삭제·개명 불가, permissions 묶음만 편집 가능. admin 은 founder 잠김과 엮인다.
-BUILTIN_PERMISSION_ROLES = ("admin", "archiver", "viewer")
+# archive_manager(아카이브 관리)=아카이브 데이터 전권(보기·아카이빙·삭제),
+# archiver(아카이브)=보기·아카이빙. 둘 다 개인 API Key 사용 가능(use_api_keys).
+BUILTIN_PERMISSION_ROLES = ("admin", "archive_manager", "archiver", "viewer")
 # 커스텀 권한 그룹 이름으로 쓸 수 없는 예약어 — 상태 역할 + 빌트인 역할.
 RESERVED_ROLE_NAMES = frozenset(STATE_ROLES + BUILTIN_PERMISSION_ROLES)
 
@@ -3270,6 +3310,7 @@ PERMISSIONS = (
     "manage_system",           # 시스템 설정·백업·복원·네트워크 태그·시스템 로그
     "manage_users",            # 사용자·초대·시스템 API 키 관리
     "view_authenticated_all",  # 다른 사용자가 로그인 캡처한 인증 스냅샷 열람
+    "use_api_keys",            # 개인 API Key(확장 토큰) 발급·사용 (크롬 확장 캡처)
 )
 PERMISSION_LABELS = {
     "view": "보기·검색",
@@ -3279,13 +3320,15 @@ PERMISSION_LABELS = {
     "manage_system": "시스템 관리",
     "manage_users": "사용자 관리",
     "view_authenticated_all": "인증 스냅샷 전체 열람",
+    "use_api_keys": "개인 API Key",
 }
 # 빌트인 역할의 기본 프리셋 — permission_groups 시드의 소스이자, 캐시가 아직
 # 워밍되지 않은 프로세스의 conn 없는 fallback. 런타임 편집·커스텀 그룹은 DB
 # permission_groups 가 정본이며 role_presets(conn) 가 버전 비교로 최신화한다.
 _BUILTIN_PRESETS: dict[str, frozenset[str]] = {
     "admin": frozenset(PERMISSIONS),
-    "archiver": frozenset({"view", "archive", "delete"}),
+    "archive_manager": frozenset({"view", "archive", "delete", "use_api_keys"}),
+    "archiver": frozenset({"view", "archive", "use_api_keys"}),
     "viewer": frozenset({"view"}),
 }
 PERMISSION_GROUPS_VERSION_KEY = "permission_groups_version"

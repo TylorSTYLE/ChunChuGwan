@@ -249,15 +249,28 @@ def test_api_ingest_requires_user_token(client):
 
 
 def test_api_ingest_requires_archive_perm(client):
-    """사용자 토큰 권한은 소유자 현재 역할에서 재평가 — viewer 는 아카이브 불가(403)."""
+    """사용자 토큰 권한은 소유자 현재 역할에서 재평가 — 아카이브 권한 없으면 403.
+
+    개인 API Key 사용 권한(use_api_keys)은 줘서 토큰 자체는 유효하게 하되,
+    아카이브 권한이 없는 viewer 라 아카이빙(ingest)만 막힌다.
+    """
     with db.connect() as conn:
         uid = db.create_user(conn, "viewer@test.co", password_hash="x", role="viewer")
+        db.set_permission_overrides(conn, uid, {"use_api_keys": True})
     token = _issue(owner_user_id=uid, created_by=uid)
     r = client.post(
         "/api/v1/ingest", data={"url": "https://example.com/x"},
         files=_ingest_files(), headers=_headers(token),
     )
     assert r.status_code == 403
+
+
+def test_api_token_requires_use_api_keys_permission(client):
+    """개인 API Key 사용 권한이 없는 소유자의 토큰은 401 (사용 자체가 차단)."""
+    with db.connect() as conn:
+        uid = db.create_user(conn, "noapi@test.co", password_hash="x", role="viewer")
+    token = _issue(owner_user_id=uid, created_by=uid)
+    assert client.get("/api/v1/pages", headers=_headers(token)).status_code == 401
 
 
 def test_api_ingest_size_cap(client, monkeypatch):

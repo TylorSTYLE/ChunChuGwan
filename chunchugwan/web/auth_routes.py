@@ -726,8 +726,13 @@ def account_page(request: Request, ok: str | None = None):
 
 @router.get("/settings/api-keys", response_class=HTMLResponse)
 def api_keys_page(request: Request, ok: str | None = None, new_token: str = ""):
-    """개인 API Key(확장 토큰) 관리 화면 — 발급/폐기. 본인 토큰만 노출."""
+    """개인 API Key(확장 토큰) 관리 화면 — 발급/폐기. 본인 토큰만 노출.
+
+    use_api_keys 권한이 없으면 403 (메뉴도 숨김). 발급/사용 모두 이 권한이 게이트.
+    """
     user = request.state.user
+    if not permissions.can_use_api_keys(user):
+        raise HTTPException(403, t(request, "개인 API Key 사용 권한이 없습니다."))
     notice = {
         "token_issued": "개인 API Key 를 발급했습니다 — 아래 키를 지금 복사하세요. 다시 표시되지 않습니다.",
         "token_revoked": "개인 API Key 를 폐기했습니다.",
@@ -829,6 +834,8 @@ def create_extension_token(
     세션 인증 + 같은 출처 폼 POST 라 CSRF Origin 검사를 정상 통과한다.
     """
     user = request.state.user
+    if not permissions.can_use_api_keys(user):
+        raise HTTPException(403, t(request, "개인 API Key 사용 권한이 없습니다."))
     allowed_view, allowed_archive = permissions.token_permissions_for_user(user)
     if not (allowed_view or allowed_archive):
         ctx = _api_keys_ctx(

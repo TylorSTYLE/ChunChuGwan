@@ -323,7 +323,7 @@ button.primary:hover { background: #15803d; }
       <summary class="mono">{{ user['display_name'] or user['email'] }}</summary>
       <div class="nav-menu nav-menu-right">
         <a href="/settings/account">{{ _("계정") }}</a>
-        <a href="/settings/api-keys">{{ _("개인 API Key") }}</a>
+        {% if can_use_api_keys %}<a href="/settings/api-keys">{{ _("개인 API Key") }}</a>{% endif %}
         <a href="/settings/archives">{{ _("내 아카이브") }}</a>
         <form class="inline" method="post" action="/logout"><button>{{ _("로그아웃") }}</button></form>
       </div>
