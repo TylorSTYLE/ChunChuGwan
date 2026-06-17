@@ -115,11 +115,14 @@ def me(request: Request, user: sqlite3.Row | None = Depends(require_session)) ->
 
 
 @router.get("/i18n/{locale}")
-def i18n_catalog(locale: str) -> dict:
+def i18n_catalog(
+    locale: str, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
     """SPA 번역 카탈로그 — i18n.py(_EN) 정본을 그대로 제공.
 
     SPA 의 `t(msg)` 는 ctx 를 쓰지 않으므로 "ctx|원문" 키는 제외(평문만).
-    ko 는 빈 dict(원문 패스스루). 미인증 화면(로그인 등)도 쓸 수 있게 공개.
+    ko 는 빈 dict(원문 패스스루). 인증된 SPA 가 /me 직후 로케일별로 1회 받는다
+    (미인증 로그인 화면용 공개화는 #13 컷오버에서).
     """
     if locale not in i18n.SUPPORTED_LOCALES:
         raise HTTPException(404, "지원하지 않는 로케일입니다")
