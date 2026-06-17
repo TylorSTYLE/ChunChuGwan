@@ -252,6 +252,29 @@ export interface LogsData {
 	page_num: number;
 }
 
+export interface SystemLogsData {
+	logs: (Record<string, unknown> & {
+		id: number;
+		created_at: string;
+		level: string;
+		source: string;
+		logger: string;
+		message: string;
+		traceback: string | null;
+	})[];
+	level: string;
+	source: string;
+	date_from: string;
+	date_to: string;
+	levels: string[];
+	sources: string[];
+	limit: number;
+	limits: number[];
+	total: number;
+	total_pages: number;
+	page_num: number;
+}
+
 export interface Dashboard {
 	total_pages: number;
 	total_sites: number;

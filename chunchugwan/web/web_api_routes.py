@@ -25,8 +25,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from .. import (
-    __version__, config, crawler, db, deletion, differ, documents, resources,
-    scheduler, searchindex, storage,
+    __version__, config, crawler, db, deletion, differ, documents, mailer,
+    resources, scheduler, searchindex, storage,
 )
 from . import i18n, permissions
 from .templating import _auth_context
@@ -965,4 +965,153 @@ def site_delete(
         "site_key": getattr(result, "site_key", None),
         "pages_deleted": getattr(result, "pages_deleted", None),
         "snapshots_deleted": getattr(result, "snapshots_deleted", None),
+    }
+
+
+# ── 관리 영역 (system_routes 의 JSON 판) ─────────────────────────────────────
+# system_routes 는 _require_admin(manage_system) 라우터 가드를 쓰지만, 사용자·
+# API 키 관리는 manage_users 권한이라 엔드포인트별로 가드를 명시한다.
+
+
+def _require_manage_system(user: sqlite3.Row | None) -> None:
+    if not permissions.can_manage_system(user):
+        raise HTTPException(403, "시스템 관리 권한이 없습니다")
+
+
+def _require_manage_users(user: sqlite3.Row | None) -> None:
+    if not permissions.can_manage_users(user):
+        raise HTTPException(403, "사용자 관리 권한이 없습니다")
+
+
+@router.get("/system/users")
+def system_users(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """사용자 목록 + 권한·초대 — system_routes.users_view 의 JSON 판."""
+    _require_manage_users(user)
+    with db.connect() as conn:
+        db.delete_expired_invites(conn)
+        users = db.list_users(conn)
+        invites = db.list_invites(conn)
+        mail_on = mailer.mail_enabled(conn)
+        presets = db.role_presets(conn)
+        assignable = db.assignable_roles(conn)
+        invitable = db.invitable_roles(conn)
+        role_labels = db.role_labels(conn)
+        permission_role_names = db.permission_group_names(conn)
+    user_perms = {
+        u["id"]: {
+            "effective": sorted(
+                db.effective_permissions(
+                    u["role"], u["permission_overrides"], presets=presets
+                )
+            ),
+            "overridden": sorted(
+                db.parse_permission_overrides(u["permission_overrides"])
+            ),
+        }
+        for u in users
+    }
+    return {
+        "users": [dict(u) for u in users],
+        "invites": [dict(i) for i in invites],
+        "me_id": user["id"] if user else None,
+        "roles": list(assignable),
+        "invitable_roles": list(invitable),
+        "role_labels": dict(role_labels),
+        "permission_roles": list(permission_role_names),
+        "permissions_catalog": list(db.PERMISSIONS),
+        "permission_labels": dict(db.PERMISSION_LABELS),
+        "user_perms": user_perms,
+        "mail_enabled": mail_on,
+        "invite_ttl_days": config.INVITE_TTL_DAYS,
+    }
+
+
+@router.get("/system/groups")
+def system_groups(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """권한 그룹 목록 — system_routes.groups_view 의 JSON 판."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        groups = [
+            {
+                "name": r["name"],
+                "label": r["label"],
+                "is_builtin": bool(r["is_builtin"]),
+                "permissions": sorted(db._parse_permission_list(r["permissions"])),
+                "member_count": db.count_users_with_role(conn, r["name"]),
+            }
+            for r in db.list_permission_groups(conn)
+        ]
+    return {
+        "groups": groups,
+        "permissions_catalog": list(db.PERMISSIONS),
+        "permission_labels": dict(db.PERMISSION_LABELS),
+    }
+
+
+@router.get("/system/api-keys")
+def system_api_keys(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """시스템 API 키 목록(owner=NULL) — system_routes.api_keys_view 의 JSON 판."""
+    _require_manage_users(user)
+    with db.connect() as conn:
+        keys = db.list_system_api_keys(conn)
+    return {"keys": [dict(k) for k in keys]}
+
+
+_SYSLOG_PAGE_SIZES = (25, 50, 100, 200)
+_SYSLOG_PAGE_SIZE_DEFAULT = 50
+
+
+@router.get("/system/logs")
+def system_logs(
+    request: Request,
+    level: str | None = None,
+    source: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    page: int = 1,
+    limit: int = _SYSLOG_PAGE_SIZE_DEFAULT,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """시스템 로그(필터·페이징) — system_routes.system_logs_view 의 JSON 판."""
+    _require_manage_system(user)
+    if limit not in _SYSLOG_PAGE_SIZES:
+        limit = _SYSLOG_PAGE_SIZE_DEFAULT
+    if level not in db.SYSTEM_LOG_LEVELS:
+        level = None
+    if source not in db.SYSTEM_LOG_SOURCES:
+        source = None
+    date_from = _clean_date(date_from)
+    date_to = _clean_date(date_to)
+    if date_from and date_to and date_from > date_to:
+        date_from, date_to = date_to, date_from
+    filters = {
+        "level": level, "source": source,
+        "date_from": date_from, "date_to": date_to,
+    }
+    with db.connect() as conn:
+        total = db.count_system_logs(conn, **filters)
+        total_pages = max(1, -(-total // limit))
+        page = max(1, min(page, total_pages))
+        rows = db.list_system_logs(
+            conn, **filters, limit=limit, offset=(page - 1) * limit
+        )
+    return {
+        "logs": [dict(r) for r in rows],
+        "level": level or "",
+        "source": source or "",
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "levels": list(db.SYSTEM_LOG_LEVELS),
+        "sources": list(db.SYSTEM_LOG_SOURCES),
+        "limit": limit,
+        "limits": list(_SYSLOG_PAGE_SIZES),
+        "total": total,
+        "total_pages": total_pages,
+        "page_num": page,
     }
