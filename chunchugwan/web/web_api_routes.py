@@ -25,10 +25,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from .. import (
-    __version__, config, crawler, db, deletion, differ, documents, mailer,
+    __version__, auth, config, crawler, db, deletion, differ, documents, mailer,
     resources, scheduler, searchindex, storage,
 )
-from . import i18n, permissions
+from . import audit, i18n, permissions
 from .templating import _auth_context
 
 router = APIRouter(prefix="/api/web")
@@ -1115,3 +1115,349 @@ def system_logs(
         "total_pages": total_pages,
         "page_num": page,
     }
+
+
+# ── 관리 변경 액션 (system_routes 변경 POST 의 JSON 판) ──────────────────────
+import secrets  # noqa: E402
+import smtplib  # noqa: E402
+
+
+class RoleReq(BaseModel):
+    role: str
+
+
+@router.post("/system/users/{user_id}/role")
+def system_user_role(
+    request: Request, user_id: int, body: RoleReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사용자 역할 변경 — system_routes.users_set_role 의 JSON 판(라스트-관리자 잠김 방지)."""
+    _require_manage_users(user)
+    with db.connect() as conn:
+        if body.role not in db.assignable_roles(conn):
+            raise HTTPException(400, "부여할 수 없는 역할")
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, "사용자 없음")
+        if target["is_founder"]:
+            raise HTTPException(400, "최초 관리자의 권한은 변경할 수 없습니다")
+        if target["role"] == "withdrawn":
+            raise HTTPException(400, "탈퇴한 계정의 권한은 변경할 수 없습니다")
+        presets = db.role_presets(conn)
+        if "manage_users" not in presets.get(body.role, frozenset()):
+            if db.count_active_users_with_permission(
+                conn, "manage_users", exclude_user_id=user_id, presets=presets
+            ) == 0:
+                raise HTTPException(400, "사용자 관리 권한을 가진 마지막 계정입니다")
+        db.set_role(conn, user_id, body.role)
+        db.set_permission_overrides(conn, user_id, {})
+        if body.role == "blocked":
+            db.delete_user_sessions(conn, user_id)
+    audit.log(request, "사용자 권한 변경: %s → %s", target["email"], body.role)
+    return {"ok": True}
+
+
+class PermsReq(BaseModel):
+    permissions: list[str]
+
+
+@router.post("/system/users/{user_id}/permissions")
+def system_user_perms(
+    request: Request, user_id: int, body: PermsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사용자 세분 권한 오버라이드 — granted 목록을 받아 프리셋과 다른 항목만 저장."""
+    _require_manage_users(user)
+    with db.connect() as conn:
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, "사용자 없음")
+        if target["is_founder"]:
+            raise HTTPException(400, "최초 관리자의 권한은 변경할 수 없습니다")
+        presets = db.role_presets(conn)
+        if target["role"] not in db.permission_group_names(conn):
+            raise HTTPException(400, "이 계정 상태에서는 세분 권한을 조정할 수 없습니다")
+        preset = presets.get(target["role"], frozenset())
+        granted = set(body.permissions)
+        overrides = {}
+        for perm in db.PERMISSIONS:
+            g = perm in granted
+            if g != (perm in preset):
+                overrides[perm] = g
+        new_eff = db.effective_permissions(
+            target["role"], json.dumps(overrides), presets=presets
+        )
+        if "manage_users" not in new_eff:
+            if db.count_active_users_with_permission(
+                conn, "manage_users", exclude_user_id=user_id, presets=presets
+            ) == 0:
+                raise HTTPException(400, "사용자 관리 권한을 가진 마지막 계정입니다")
+        db.set_permission_overrides(conn, user_id, overrides)
+    audit.log(request, "사용자 세분 권한 변경: %s", target["email"])
+    return {"ok": True}
+
+
+class DeleteUserReq(BaseModel):
+    email: str = ""
+
+
+@router.post("/system/users/{user_id}/delete")
+def system_user_delete(
+    request: Request, user_id: int, body: DeleteUserReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """계정 정보 하드 삭제 — 확인 이메일 일치 요구. 최초 관리자·본인 불가."""
+    _require_manage_users(user)
+    with db.connect() as conn:
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, "사용자 없음")
+        if target["is_founder"]:
+            raise HTTPException(400, "최초 관리자는 삭제할 수 없습니다")
+        if user is not None and target["id"] == user["id"]:
+            raise HTTPException(400, "본인 계정은 여기서 삭제할 수 없습니다")
+        if body.email.strip().lower() != target["email"].lower():
+            raise HTTPException(400, "확인 이메일이 일치하지 않습니다")
+        db.delete_user(conn, target["id"])
+    audit.log(request, "사용자 계정 정보 삭제: %s", target["email"])
+    return {"ok": True}
+
+
+class NameReq(BaseModel):
+    display_name: str = ""
+
+
+@router.post("/system/users/{user_id}/name")
+def system_user_name(
+    request: Request, user_id: int, body: NameReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사용자 표시 이름 변경 (빈 입력 = 제거)."""
+    _require_manage_users(user)
+    name = body.display_name.strip() or None
+    if name is not None:
+        err = auth.validate_display_name(name)
+        if err is not None:
+            raise HTTPException(400, err)
+    with db.connect() as conn:
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, "사용자 없음")
+        db.set_display_name(conn, user_id, name)
+    audit.log(request, "사용자 이름 변경: %s", target["email"])
+    return {"ok": True}
+
+
+@router.post("/system/users/{user_id}/logout")
+def system_user_logout(
+    request: Request, user_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사용자 전체 세션 강제 로그아웃."""
+    _require_manage_users(user)
+    with db.connect() as conn:
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, "사용자 없음")
+        db.delete_user_sessions(conn, user_id)
+    audit.log(request, "사용자 강제 로그아웃: %s", target["email"])
+    return {"ok": True}
+
+
+def _invite_link(request: Request, token: str) -> str:
+    base = config.PUBLIC_URL or str(request.base_url).rstrip("/")
+    return f"{base}/invite/{token}"
+
+
+class InviteReq(BaseModel):
+    email: str
+    role: str = "viewer"
+
+
+@router.post("/system/users/invite")
+def system_user_invite(
+    request: Request, body: InviteReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """이메일 초대 발급 — 메일 미설정이면 링크를 반환해 직접 전달."""
+    _require_manage_users(user)
+    email = body.email.strip()
+    err = auth.validate_email(email)
+    if err is not None:
+        raise HTTPException(400, err)
+    token = secrets.token_urlsafe(32)
+    with db.connect() as conn:
+        if body.role not in db.invitable_roles(conn):
+            raise HTTPException(400, "초대할 수 없는 역할")
+        role_label = db.role_labels(conn).get(body.role, body.role)
+        if db.get_user_by_email(conn, email) is not None:
+            raise HTTPException(400, "이미 가입된 이메일입니다")
+        db.create_invite(
+            conn, email, auth.hash_token(token), body.role,
+            invited_by=user["id"] if user else None,
+            ttl_seconds=config.INVITE_TTL_DAYS * 86400,
+        )
+    audit.log(request, "사용자 초대 발급: %s (권한 %s)", email, role_label)
+    link = _invite_link(request, token)
+    with db.connect() as conn:
+        smtp = mailer.resolve_config(conn)
+    mailed = False
+    if smtp.enabled:
+        inviter = user["email"] if user else "관리자"
+        try:
+            mailer.send_invite(smtp, email, link, inviter, role_label)
+            mailed = True
+        except (smtplib.SMTPException, OSError):
+            mailed = False
+    return {"ok": True, "email": email, "link": link, "mailed": mailed}
+
+
+@router.post("/system/users/invite/{invite_id}/delete")
+def system_invite_delete(
+    request: Request, invite_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """초대 취소."""
+    _require_manage_users(user)
+    with db.connect() as conn:
+        if not db.delete_invite(conn, invite_id):
+            raise HTTPException(404, "초대 없음")
+    audit.log(request, "초대 취소: #%d", invite_id)
+    return {"ok": True}
+
+
+class GroupAddReq(BaseModel):
+    name: str
+    label: str = ""
+    permissions: list[str] = []
+
+
+@router.post("/system/groups")
+def system_group_add(
+    request: Request, body: GroupAddReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """커스텀 권한 그룹 생성 — system_routes.groups_add 의 JSON 판."""
+    _require_manage_system(user)
+    perms = [p for p in db.PERMISSIONS if p in set(body.permissions)]
+    with db.connect() as conn:
+        try:
+            created = db.create_permission_group(conn, body.name.strip(), body.label.strip(), perms)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    audit.log(request, "권한 그룹 생성: %s", created)
+    return {"ok": True, "name": created}
+
+
+class GroupEditReq(BaseModel):
+    label: str = ""
+    permissions: list[str] = []
+
+
+@router.post("/system/groups/{name}")
+def system_group_edit(
+    request: Request, name: str, body: GroupEditReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """그룹 세분 권한(+커스텀 라벨) 갱신 — 라스트-관리자 잠김 방지."""
+    _require_manage_system(user)
+    perms = [p for p in db.PERMISSIONS if p in set(body.permissions)]
+    with db.connect() as conn:
+        group = db.get_permission_group(conn, name)
+        if group is None:
+            raise HTTPException(404, "권한 그룹 없음")
+        simulated = dict(db.role_presets(conn))
+        simulated[name] = frozenset(perms)
+        if db.count_active_users_with_permission(
+            conn, "manage_users", presets=simulated
+        ) == 0:
+            raise HTTPException(400, "사용자 관리 권한을 가진 활성 계정이 모두 사라집니다")
+        db.update_permission_group(
+            conn, name,
+            label=None if group["is_builtin"] else body.label.strip(),
+            permissions=perms,
+        )
+    audit.log(request, "권한 그룹 편집: %s", name)
+    return {"ok": True}
+
+
+@router.post("/system/groups/{name}/delete")
+def system_group_delete(
+    request: Request, name: str,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """권한 그룹 삭제 — 빌트인·소속 사용자 있는 그룹은 거부."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        group = db.get_permission_group(conn, name)
+        if group is None:
+            raise HTTPException(404, "권한 그룹 없음")
+        if group["is_builtin"]:
+            raise HTTPException(400, "기본 권한 그룹은 삭제할 수 없습니다")
+        members = db.count_users_with_role(conn, name)
+        if members > 0:
+            raise HTTPException(400, f"{members}명이 이 그룹에 속해 있습니다")
+        db.delete_permission_group(conn, name)
+    audit.log(request, "권한 그룹 삭제: %s", name)
+    return {"ok": True}
+
+
+_API_KEY_EXPIRY_TTL: dict[str, int | None] = {
+    "permanent": None, "1d": 86400, "1m": 30 * 86400, "1y": 365 * 86400,
+}
+_MAX_API_KEY_CUSTOM_DAYS = 3650
+
+
+class ApiKeyReq(BaseModel):
+    name: str
+    can_view: bool = False
+    can_archive: bool = False
+    expiry: str = "permanent"
+    custom_days: int = 0
+
+
+@router.post("/system/api-keys")
+def system_api_key_create(
+    request: Request, body: ApiKeyReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """시스템 API 키 발급 — 토큰 원문은 이 응답에서만 1회 반환."""
+    _require_manage_users(user)
+    name = body.name.strip()
+    err = auth.validate_api_key_name(name)
+    if err is not None:
+        raise HTTPException(400, err)
+    if not (body.can_view or body.can_archive):
+        raise HTTPException(400, "권한을 하나 이상 선택하세요")
+    if body.expiry in _API_KEY_EXPIRY_TTL:
+        ttl = _API_KEY_EXPIRY_TTL[body.expiry]
+    elif body.expiry == "custom":
+        if not (1 <= body.custom_days <= _MAX_API_KEY_CUSTOM_DAYS):
+            raise HTTPException(400, f"사용자 지정 만료는 1 ~ {_MAX_API_KEY_CUSTOM_DAYS}일 사이여야 합니다")
+        ttl = body.custom_days * 86400
+    else:
+        raise HTTPException(400, "알 수 없는 만료 선택")
+    with db.connect() as conn:
+        token = auth.issue_api_key(
+            conn, name, can_view=body.can_view, can_archive=body.can_archive,
+            created_by=user["id"] if user else None,
+            ttl_seconds=ttl, owner_user_id=None,
+        )
+    audit.log(request, "API 키 발급: '%s'", name)
+    return {"ok": True, "token": token}
+
+
+@router.post("/system/api-keys/{key_id}/delete")
+def system_api_key_delete(
+    request: Request, key_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """시스템 API 키 폐기 (owner=NULL 만)."""
+    _require_manage_users(user)
+    with db.connect() as conn:
+        key = db.get_api_key(conn, key_id)
+        if key is None or key["owner_user_id"] is not None:
+            raise HTTPException(404, "API 키 없음")
+        db.delete_api_key(conn, key_id)
+    audit.log(request, "API 키 폐기: #%d", key_id)
+    return {"ok": True}

@@ -56,6 +56,9 @@
 		{#if flags.can_archive}<a href="{base}/archive/new">{t('새 아카이빙')}</a>{/if}
 		<a href="{base}/schedules">{t('스케줄')}</a>
 		{#if flags.can_view_logs}<a href="{base}/logs">{t('아카이빙 로그')}</a>{/if}
+		{#if flags.can_manage_users}<a href="{base}/system/users">{t('사용자')}</a>{/if}
+		{#if flags.can_manage_system}<a href="{base}/system/groups">{t('권한 그룹')}</a>{/if}
+		{#if flags.can_manage_users}<a href="{base}/system/api-keys">{t('API 키')}</a>{/if}
 		{#if flags.can_manage_system}<a href="{base}/system/logs">{t('시스템 로그')}</a>{/if}
 		<span class="spacer"></span>
 		<button type="button" onclick={cycleTheme}>{THEME_LABELS[themeMode]}</button>

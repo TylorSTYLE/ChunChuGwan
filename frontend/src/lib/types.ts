@@ -275,6 +275,54 @@ export interface SystemLogsData {
 	page_num: number;
 }
 
+export interface SystemUser {
+	id: number;
+	email: string;
+	display_name: string | null;
+	role: string;
+	is_founder: number;
+	[key: string]: unknown;
+}
+
+export interface SystemUsersData {
+	users: SystemUser[];
+	invites: (Record<string, unknown> & { id: number; email: string; role: string })[];
+	me_id: number | null;
+	roles: string[];
+	invitable_roles: string[];
+	role_labels: Record<string, string>;
+	permission_roles: string[];
+	permissions_catalog: string[];
+	permission_labels: Record<string, string>;
+	user_perms: Record<string, { effective: string[]; overridden: string[] }>;
+	mail_enabled: boolean;
+	invite_ttl_days: number;
+}
+
+export interface SystemGroup {
+	name: string;
+	label: string;
+	is_builtin: boolean;
+	permissions: string[];
+	member_count: number;
+}
+
+export interface SystemGroupsData {
+	groups: SystemGroup[];
+	permissions_catalog: string[];
+	permission_labels: Record<string, string>;
+}
+
+export interface SystemApiKeysData {
+	keys: (Record<string, unknown> & {
+		id: number;
+		name: string;
+		can_view: number;
+		can_archive: number;
+		expires_at: string | null;
+	})[];
+}
+
 export interface Dashboard {
 	total_pages: number;
 	total_sites: number;
