@@ -119,16 +119,14 @@
       {{ _("탈퇴하면 즉시 로그아웃되고 다시 로그인할 수 없습니다. 계정 정보 삭제(같은 이메일 재가입)는 관리자에게 요청하세요.") }}
     </p>
     <form method="post" action="/settings/account/withdraw"
-          onsubmit='return confirm({{ _('정말 탈퇴할까요? 다시 로그인할 수 없습니다.')|tojson }})'>
+          onsubmit='{% if has_password %}return confirm({{ _('정말 탈퇴할까요? 다시 로그인할 수 없습니다.')|tojson }}){% else %}var e=prompt({{ _('정말 탈퇴하려면 이메일({email})을 입력하세요. 탈퇴하면 즉시 로그아웃되고 다시 로그인할 수 없습니다.', email=email)|tojson }}); if(!e||!e.trim()){return false;} this.confirm.value=e; return true;{% endif %}'>
       {% if has_password %}
       <label>{{ _("패스워드 확인") }}
         <input type="password" name="password" required
                autocomplete="current-password">
       </label>
       {% else %}
-      <label>{{ _("확인을 위해 이메일({email})을 입력", email=email) }}
-        <input type="text" name="confirm" required autocomplete="off">
-      </label>
+      <input type="hidden" name="confirm">
       {% endif %}
       <button type="submit" class="danger">{{ _("계정 탈퇴") }}</button>
     </form>

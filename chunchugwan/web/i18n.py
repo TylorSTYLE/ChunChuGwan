@@ -938,7 +938,9 @@ _EN: dict[str, str] = {
     "정말 탈퇴할까요? 다시 로그인할 수 없습니다.":
         "Really close your account? You will not be able to log in again.",
     "패스워드 확인": "Confirm password",
-    "확인을 위해 이메일({email})을 입력": "Type the email ({email}) to confirm",
+    "정말 탈퇴하려면 이메일({email})을 입력하세요. 탈퇴하면 즉시 로그아웃되고 다시 로그인할 수 없습니다.":
+        "To close your account, type the email ({email}). Withdrawing logs you "
+        "out immediately and you cannot log in again.",
     "계정 탈퇴": "Close account",
     "계정 삭제": "Delete account",
     "사용자 이름을 변경했습니다.": "Display name updated.",
