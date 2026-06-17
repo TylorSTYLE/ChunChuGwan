@@ -211,4 +211,4 @@ def test_i18n_catalog(tmp_db):
     assert cat["현황"] == "Overview"
     assert "perm|보기" not in cat  # ctx 키는 제외(평문만)
     assert c.get("/api/web/i18n/xx").status_code == 404
-    assert client_for().get("/api/web/i18n/en").status_code == 401  # 미인증
+    assert client_for().get("/api/web/i18n/en").status_code == 200  # 공개(미인증 로그인 화면용)
