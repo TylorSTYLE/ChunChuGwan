@@ -9,6 +9,11 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
+
+try:
+    import fcntl  # POSIX(리눅스·macOS) 전용 — 프로세스 간 마이그레이션 직렬화에 쓴다
+except ImportError:  # pragma: no cover - Windows. 도커(리눅스) 멀티프로세스 시나리오엔 무관
+    fcntl = None  # type: ignore[assignment]
 from datetime import datetime, timedelta, timezone
 from typing import Iterator, Sequence
 
@@ -775,6 +780,26 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+@contextmanager
+def _migration_lock(db_path) -> Iterator[None]:
+    """스키마 생성·마이그레이션을 프로세스 간 직렬화하는 advisory 파일 락.
+
+    serve·worker 가 같은 DB 를 동시에 처음 열 때 한 프로세스만 스키마를 준비하게
+    한다. fcntl(POSIX)이 없는 환경(Windows)에서는 멀티프로세스 동시 마이그레이션이
+    상정되지 않으므로 락 없이 진행한다.
+    """
+    if fcntl is None:  # pragma: no cover - Windows
+        yield
+        return
+    lock_path = f"{db_path}.migrate.lock"
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
 def _ensure_schema(conn: sqlite3.Connection, db_path) -> None:
     """프로세스에서 처음 보는 DB 파일이면 WAL 전환 + 스키마 생성·마이그레이션.
 
@@ -786,20 +811,19 @@ def _ensure_schema(conn: sqlite3.Connection, db_path) -> None:
     with _schema_lock:
         if key in _schema_ready:
             return
-        # journal_mode 는 DB 파일에 영구 저장된다 — 이후 커넥션은 자동 WAL
-        conn.execute("PRAGMA journal_mode = WAL")
-        # SCHEMA 는 CREATE ... IF NOT EXISTS 라 멱등 — 락 없이 동시 실행해도 안전.
-        conn.executescript(SCHEMA)
-        # 마이그레이션은 쓰기 락으로 직렬화한다. serve·worker 가 같은 DB 를 동시에
-        # 처음 열면 _migrate 의 'cols 읽기 → 가드 → ALTER' 가 프로세스 간 겹쳐, 두
-        # 프로세스가 같은 컬럼을 모두 추가하려다 'duplicate column' 으로 죽는다.
-        # BEGIN IMMEDIATE 로 한 프로세스만 마이그레이션하고, 다른 쪽은 busy_timeout
-        # 동안 대기했다 들어와 컬럼이 이미 있는 것을 보고 가드를 전부 스킵한다.
-        # (대형 DB 의 최초 백필이 busy_timeout 을 넘기면 대기하던 프로세스는 락
-        #  타임아웃으로 한 번 실패할 수 있으나, 재시작 시 이미 끝난 스키마로 정상 기동한다.)
-        conn.execute("BEGIN IMMEDIATE")
-        _migrate(conn)
-        conn.commit()
+        # serve·worker 가 같은 DB 를 동시에 처음 열면 스키마 준비가 프로세스 간
+        # 겹쳐 깨진다 — WAL 전환·executescript 경합은 'database is locked',
+        # _migrate 의 'cols 읽기 → 가드 → ALTER' 레이스는 'duplicate column' 을 낸다.
+        # sqlite 쓰기 락(BEGIN IMMEDIATE)은 executescript 의 자동 커밋과 busy_timeout
+        # 신뢰성 문제로 이 구간을 온전히 감싸지 못하므로, advisory 파일 락으로 스키마
+        # 준비 전체(WAL 전환 포함)를 프로세스 간 직렬화한다. 한 프로세스가 끝낸 뒤
+        # 다른 쪽이 들어오면 테이블·컬럼이 이미 있어 CREATE IF NOT EXISTS·가드가 스킵한다.
+        with _migration_lock(db_path):
+            # journal_mode 는 DB 파일에 영구 저장된다 — 이후 커넥션은 자동 WAL
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.executescript(SCHEMA)
+            _migrate(conn)
+            conn.commit()
         _schema_ready.add(key)
         # 새 DB 파일을 이 프로세스가 처음 쓰기 시작했다 — 최초 구동 판정 래치는
         # 이전 DB 기준이라 무효다. 풀어서 first_run_needed 가 새 DB 로 재평가하게
