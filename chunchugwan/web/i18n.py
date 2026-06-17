@@ -1248,6 +1248,80 @@ _EN: dict[str, str] = {
         "Search index is unavailable — this SQLite build lacks FTS5.",
     "검색 인덱스 전체 다시 색인 완료 — 스냅샷 {n}개":
         "Search index rebuilt — {n} snapshot(s)",
+
+    # ---- 최초 설정(setup.html) ----
+    "최초 설정": "Initial setup",
+    "최초 구동입니다. 새 관리자 계정을 만들거나, 백업 파일에서 복원하거나, 다른 춘추관에서 네트워크로 데이터를 가져올 수 있습니다.":
+        "This is the first run. You can create a new admin account, restore from a "
+        "backup file, or pull all data over the network from another ChunChuGwan.",
+    "네트워크 이전": "Network migration",
+    "받는 중": "Receiving",
+    "⚠ 평문 http 연결입니다 — 토큰이 노출될 수 있습니다.":
+        "⚠ Plain http connection — the token may be exposed.",
+    "일부 파일을 받지 못했습니다 ({n}개). 전체 재시도하거나, 무시하고 이전을 마무리할 수 있습니다(빠진 스냅샷 파일은 표시되지 않을 수 있습니다).":
+        "Some files could not be received ({n}). You can retry them all, or ignore "
+        "and finish the migration (missing snapshot files may not display).",
+    "실패한 파일 목록": "Failed files",
+    "전체 재시도": "Retry all",
+    "빠진 파일을 무시하고 이전을 마무리할까요? 받은 데이터로 서비스를 시작합니다.":
+        "Ignore missing files and finish the migration? The service starts with the "
+        "received data.",
+    "무시하고 이전 종료": "Ignore and finish",
+    "관리자 계정 생성": "Create admin account",
+    "백업 파일에서 복원": "Restore from backup file",
+    "전체 백업(tar.gz)을 올려 그 시점 상태로 복원합니다. 복원 후에는 백업의 계정으로 로그인합니다.":
+        "Upload a full backup (tar.gz) to restore to that point. After restoring, log "
+        "in with the account from the backup.",
+    "다른 춘추관에서 이전": "Migrate from another ChunChuGwan",
+    "이전(마이그레이션) 모드를 켠 다른 춘추관의 주소와 발급된 토큰을 입력하면 모든 데이터를 가져옵니다. 받는 쪽은 같은 WCCG_SECRET_KEY 를 써야 외부 사이트 자격증명을 복호화할 수 있습니다.":
+        "Enter the address and issued token of another ChunChuGwan that has migration "
+        "mode on to pull all its data. The receiving side must use the same "
+        "WCCG_SECRET_KEY to decrypt external site credentials.",
+    "소스 주소": "Source address",
+    "(예: https://NAS주소:8765)": "(e.g. https://NAS-address:8765)",
+    "이전 토큰": "Migration token",
+    "이전 시작": "Start migration",
+
+    # ---- 이전 모드(system.html) ----
+    "다른 춘추관으로 이전": "Migrate to another ChunChuGwan",
+    "이전(마이그레이션) 모드": "Migration mode",
+    "켜짐": "On",
+    "꺼짐": "Off",
+    "이전 모드를 켜면 인증 토큰을 발급하고, 새로 설치한 춘추관의 최초 설정 화면에서 이 서버의 주소와 토큰을 입력하면 모든 데이터(아카이브·인증 포함)를 네트워크로 가져갑니다. 이전 모드인 동안에는 이 서버의 모든 스크래핑·스케줄·크롤이 중단됩니다.":
+        "Turning on migration mode issues an auth token; on a newly installed "
+        "ChunChuGwan's initial setup screen, entering this server's address and token "
+        "pulls all data (archive and auth included) over the network. While in "
+        "migration mode, all scraping, schedules, and crawls on this server are halted.",
+    "토큰은 전체 데이터 접근 권한을 가지므로 안전한 채널로 전달하세요. 받는 쪽이 평문 http 로 접속하면 토큰이 노출될 수 있습니다(https 권장). 받는 쪽은 같은 WCCG_SECRET_KEY 를 써야 외부 사이트 로그인 자격증명을 복호화할 수 있습니다.":
+        "The token grants full data access, so deliver it over a secure channel. If "
+        "the receiver connects over plain http the token may be exposed (https "
+        "recommended). The receiver must use the same WCCG_SECRET_KEY to decrypt "
+        "external site login credentials.",
+    "발급된 토큰 — 지금만 표시됩니다. 안전하게 복사하세요.":
+        "Issued token — shown only now. Copy it securely.",
+    "소스 주소는 받는 쪽이 이 서버에 접근할 수 있는 URL 입니다 (예: http://NAS주소:8765). WCCG_PUBLIC_URL 을 설정하면 여기에 표시됩니다.":
+        "The source address is the URL the receiver can reach this server at (e.g. "
+        "http://NAS-address:8765). It shows here when WCCG_PUBLIC_URL is set.",
+    "토큰 발급 시각": "Token issued at",
+    "토큰 재발급": "Reissue token",
+    "이전 모드를 끄고 스크래핑·스케줄·크롤을 재개할까요? 발급된 토큰은 무효화됩니다.":
+        "Turn off migration mode and resume scraping, schedules, and crawls? The "
+        "issued token will be invalidated.",
+    "이전 모드 끄기 (스크래핑 재개)": "Turn off migration mode (resume scraping)",
+    "이전 모드를 켜면 이 서버의 스크래핑·스케줄·크롤이 모두 중단됩니다. 계속할까요?":
+        "Turning on migration mode halts all scraping, schedules, and crawls on this "
+        "server. Continue?",
+    "이전 모드 켜기 + 토큰 발급": "Turn on migration mode + issue token",
+
+    # ---- 이전 관련 라우트 메시지 ----
+    "이미 설정이 완료되었습니다": "Setup is already complete",
+    "이전 모드가 켜졌습니다 — 스크래핑·스케줄·크롤이 중단됩니다.":
+        "Migration mode is on — scraping, schedules, and crawls are halted.",
+    "이전 모드를 껐습니다 — 스크래핑·스케줄·크롤이 재개됩니다.":
+        "Migration mode is off — scraping, schedules, and crawls resume.",
+    "이전(마이그레이션) 모드입니다 — 데이터 이전 중에는 아카이빙할 수 없습니다. 시스템 설정에서 이전 모드를 끄세요.":
+        "Migration mode is on — you cannot archive during data migration. Turn off "
+        "migration mode in system settings.",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

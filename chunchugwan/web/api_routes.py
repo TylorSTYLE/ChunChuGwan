@@ -83,10 +83,18 @@ def _require_view(request: Request) -> None:
 
 
 def _require_archive(request: Request) -> None:
-    """아카이빙 권한 가드. 키가 없는 경우(인증 off)는 전체 허용."""
+    """아카이빙 권한 가드. 키가 없는 경우(인증 off)는 전체 허용.
+
+    이전(마이그레이션) 모드면 아카이빙·적재 쓰기를 모두 막는다(데이터 이전 중).
+    """
     key = request.state.api_key
     if key is not None and not key["can_archive"]:
         raise HTTPException(403, "이 키에는 아카이브 권한이 없습니다")
+    with db.connect() as conn:
+        if db.migration_mode_enabled(conn):
+            raise HTTPException(
+                409, "이전(마이그레이션) 모드입니다 — 데이터 이전 중에는 아카이빙할 수 없습니다"
+            )
 
 
 def _require_user_token(request: Request) -> int | None:

@@ -42,7 +42,9 @@ from .. import (
     db, deletion, differ, documents, live_challenge, netcheck, resources, scheduler,
     searchindex, storage, system_log,
 )
-from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
+from . import (
+    api_routes, audit, auth_routes, i18n, migration_routes, permissions, system_routes,
+)
 from .i18n import t
 from .templating import templates
 
@@ -103,6 +105,7 @@ app = FastAPI(title="춘추관", lifespan=_lifespan)
 app.include_router(auth_routes.router)
 app.include_router(system_routes.router)
 app.include_router(api_routes.router)
+app.include_router(migration_routes.router)
 
 # 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)
 # /login/passkey* 는 패스워드 통과 후 pending 세션 단계라 user 가 아직 없다 —
@@ -186,7 +189,13 @@ async def auth_gate(request: Request, call_next):
                 return PlainTextResponse(
                     "최초 설정이 완료되지 않았습니다", status_code=401
                 )
-            if path not in ("/setup", "/healthz") and path not in _BROWSER_ICON_PATHS:
+            # /setup 과 그 하위(복원·네트워크 이전·진행 상태 폴링)는 최초 설정 흐름
+            if (
+                path != "/setup"
+                and not path.startswith("/setup/")
+                and path != "/healthz"
+                and path not in _BROWSER_ICON_PATHS
+            ):
                 return RedirectResponse("/setup", status_code=302)
         else:
             # 차단·탈퇴된 계정 — 로그아웃 외 모든 접근 거부 (세션은 차단/탈퇴
@@ -776,6 +785,7 @@ def site_crawl_failed_retry(request: Request, site_id: int, crawl_page_id: int):
     admin/archiver 전용. 끝난(done/cancelled) 크롤이면 다시 연다.
     """
     _require_archiver(request)
+    _require_not_migrating(request)
     with db.connect() as conn:
         row = db.get_site_failed_crawl_page(conn, site_id, crawl_page_id)
         if row is None:
@@ -795,6 +805,7 @@ def site_crawl_rerun(request: Request, site_id: int, crawl_id: int):
     중이면 crawler.start_crawl 이 그 크롤로 자동 병합한다(merged=1).
     """
     _require_archiver(request)
+    _require_not_migrating(request)
     with db.connect() as conn:
         crawl = db.get_crawl(conn, crawl_id)
         if crawl is None or crawl["site_id"] != site_id:
@@ -2014,6 +2025,21 @@ def _require_archiver(request: Request) -> None:
         raise HTTPException(403, t(request, "아카이빙 권한이 없습니다"))
 
 
+def _require_not_migrating(request: Request) -> None:
+    """이전(마이그레이션) 모드 가드 — 데이터 이전 중에는 새 아카이빙·재아카이빙을 막는다.
+
+    워커 게이트가 실제 처리를 이미 막지만(큐에 쌓여도 안 돌아감), 여기서 등록
+    자체를 막아 사용자에게 즉시 안내한다. 이전 모드는 시스템 설정에서 끈다.
+    """
+    with db.connect() as conn:
+        if db.migration_mode_enabled(conn):
+            raise HTTPException(
+                409,
+                t(request, "이전(마이그레이션) 모드입니다 — 데이터 이전 중에는 "
+                           "아카이빙할 수 없습니다. 시스템 설정에서 이전 모드를 끄세요."),
+            )
+
+
 def _require_deleter(request: Request) -> None:
     """삭제 권한 가드 (admin/archiver). 보기 전용·차단 계정은 403."""
     if not permissions.can_delete(request.state.user):
@@ -2297,6 +2323,7 @@ def archive_new(
     network_tag 는 로컬 네트워크(사설 IP) 대상일 때 필수 (루프백은 거부).
     """
     _require_archiver(request)
+    _require_not_migrating(request)
     try:
         seconds = _interval_from_form(interval, custom_value, custom_unit)
         if seconds:
@@ -2349,6 +2376,7 @@ def rearchive(
     force: bool = Form(False),
 ):
     _require_archiver(request)
+    _require_not_migrating(request)
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
     if page is None:
@@ -2374,6 +2402,7 @@ def log_retry(
     물려받는다 (_resolve_network_tag).
     """
     _require_archiver(request)
+    _require_not_migrating(request)
     with db.connect() as conn:
         log = db.get_archive_log(conn, log_id)
     if log is None:

@@ -21,6 +21,20 @@ from . import (
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
 
 
+def _warn_if_migrating() -> bool:
+    """이전(마이그레이션) 모드면 안내를 출력하고 True 를 반환한다.
+
+    이전 모드 동안 워커·스케줄러·크롤이 코어에서 no-op 이므로, CLI 도
+    사용자에게 명확히 알린다 (시스템 설정에서 이전 모드를 꺼야 재개).
+    """
+    with db.connect() as conn:
+        if db.migration_mode_enabled(conn):
+            click.echo("이전(마이그레이션) 모드입니다 — 데이터 이전 중에는 "
+                       "아카이빙·스케줄·크롤이 중단됩니다. 시스템 설정에서 이전 모드를 끄세요.")
+            return True
+    return False
+
+
 @click.group()
 @click.version_option(__version__, "-V", "--version", message="춘추관 %(version)s")
 @click.option("-v", "--verbose", is_flag=True, help="단계별 상세 로그를 stderr 로 출력")
@@ -75,6 +89,8 @@ def add(url: str, force: bool) -> None:
         norm = storage.normalize_url(url)
     except ValueError as e:
         raise click.ClickException(str(e))
+    if _warn_if_migrating():
+        return
     with db.connect() as conn:
         queued = db.enqueue_archive_job(conn, norm, force=force, source="cli")
     if queued:
@@ -103,6 +119,8 @@ def archive_run() -> None:
     `wccg crawl run`/`schedule run` 과 대칭. worker 를 상주시키지 않는 배포에서
     cron 으로 돌려 큐를 소비한다 (serve/worker 가 돌고 있으면 자동 처리되므로 불필요).
     """
+    if _warn_if_migrating():
+        return
     ran = 0
     while True:
         step = archive_worker.process_next()
@@ -372,6 +390,8 @@ def schedule_run() -> None:
     크롤 스케줄도 함께 새 크롤로 등록한다 — 등록된 크롤의 페이지 처리는
     `wccg crawl run` (또는 serve 의 크롤러)이 맡는다.
     """
+    if _warn_if_migrating():
+        return
     results = scheduler.run_due()
     crawl_steps = crawler.run_due_schedules()
     if not results and not crawl_steps:
@@ -434,6 +454,8 @@ def crawl_add(
     같은 시작 URL 의 크롤이 이미 진행 중이면 새로 만들지 않고 그 크롤에
     병합된다 (이번에 넘긴 옵션은 무시).
     """
+    if _warn_if_migrating():
+        return
     try:
         row, merged = crawler.start_crawl(
             url, max_pages=max_pages, max_depth=max_depth,
@@ -511,6 +533,8 @@ def crawl_run() -> None:
     간격이 강제되므로 한 번 실행에 크롤당 한 페이지꼴로 처리된다. 간격보다
     짧은 주기의 cron 으로 돌리면 큐가 계속 소비된다.
     """
+    if _warn_if_migrating():
+        return
     ran = _echo_crawl_schedule_steps(crawler.run_due_schedules())
     while True:
         step = crawler.process_next()

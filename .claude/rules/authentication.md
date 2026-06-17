@@ -8,6 +8,8 @@ paths:
   - "chunchugwan/mailer.py"
   - "chunchugwan/web/auth_routes.py"
   - "chunchugwan/web/permissions.py"
+  - "chunchugwan/migration.py"
+  - "chunchugwan/web/migration_routes.py"
   - "docs/AUTHENTICATION.md"
 ---
 
@@ -33,6 +35,24 @@ IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origi
 사이트 단위로 스코프한다. `backup` 에는 다른 인증 데이터처럼 포함하되
 `export` 에는 제외한다. 이것이 양방향(복원 가능) 저장을 허용하는
 **유일한** 예외이며, 사용자 인증 데이터에는 절대 적용하지 않는다.
+
+## 최초 설정 · 춘추관 간 이전
+
+최초 구동(사용자 0명 + `WCCG_ADMIN_*` 미설정)의 `/setup` 은 세 갈래 — 관리자
+생성 / 백업 업로드 복원(`POST /setup/restore`) / **다른 춘추관에서 네트워크 이전**.
+모두 `count_users==0` 일 때만 동작하고, `/setup/*` 흐름은 미들웨어 first_run
+게이트가 허용한다(`web/app.py`). 이전은 받는 쪽(목적지)이 소스 URL + 토큰으로
+Pull 하는 백그라운드 작업(`migration.start_pull`/`pull_status`/`retry_failed`/
+`finish_pull`, 재색인 패턴의 모듈 상태+스레드). 파일 단위 전송이라 파일별 3회
+재시도 후 실패 목록 → [전체 재시도]/[무시하고 종료]. 받은 DB 가 반영되면
+`backup.finalize_migration` 이 루트를 교체하고 **이전 모드를 끈다**(소스 DB 가
+켜진 채라 받는 쪽이 그대로 시작하지 않도록). 이전 토큰은 세션·API 키와 같이
+**SHA-256 해시만 저장**(원칙 6 단방향, `db.set_migration_mode`/`get_migration_token_hash`),
+원문은 발급 시 1회만 노출(소스 시스템 화면). 받는 쪽 워커는 토큰을 메모리에만
+두고 `pull_status` 에서 제외한다. 스크래핑 중단 게이트는 `.claude/rules/capture-crawl.md`,
+Pull 엔드포인트는 `.claude/rules/api-extension.md` 참조. `site_credentials` 는
+`WCCG_SECRET_KEY` 로 암호화돼 전송되나 키는 전송 안 되므로 받는 쪽이 같은 키를
+써야 복호화된다(다르면 그 기능만 비활성 — 기존 백업/복원과 동일).
 
 ## 관련 DB 테이블
 

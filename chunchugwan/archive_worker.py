@@ -110,6 +110,9 @@ def process_next(
     """
     now = _utcnow()
     with db.connect() as conn:
+        # 이전(마이그레이션) 모드 — 소스가 데이터 이전 중이면 스크래핑 전면 중단
+        if db.migration_mode_enabled(conn):
+            return None
         recovered = db.recover_stale_archive_jobs(
             conn, _iso(now - timedelta(seconds=config.CRAWL_STALE_CLAIM_SECONDS))
         )

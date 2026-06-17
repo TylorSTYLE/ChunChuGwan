@@ -10,9 +10,14 @@ import sqlite3
 import zoneinfo
 from urllib.parse import quote
 
+import shutil
+import tempfile
+import tarfile
+from pathlib import Path
+
 import httpx
 import jwt
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -20,7 +25,7 @@ from fastapi.responses import (
     Response,
 )
 
-from .. import auth, config, db, mailer, oidc
+from .. import auth, backup as backup_mod, config, db, mailer, migration, oidc
 from . import audit, i18n, permissions
 from .i18n import t
 from .templating import templates
@@ -195,15 +200,22 @@ def _two_factor_target(
 # ---- 최초 구동 관리자 등록 ----
 
 
+def _setup_ctx(error: str | None = None, email: str = "") -> dict:
+    """최초 설정 화면 컨텍스트 — 진행 중인 네트워크 이전 상태도 함께 넘긴다."""
+    return {"error": error, "email": email, "migration": migration.pull_status()}
+
+
 @router.get("/setup", response_class=HTMLResponse)
 def setup_page(request: Request):
-    """관리자 등록 페이지 — 사용자가 1명이라도 있으면 절대 표시하지 않는다."""
+    """최초 설정 — 관리자 등록 / 백업 복원 / 네트워크 이전 중 택1.
+
+    사용자가 1명이라도 있으면(설정 완료) 표시하지 않는다. 단, 네트워크 이전이
+    진행 중이면 그 상태를 마저 보여줘야 하므로 done 직전까지는 화면을 유지한다.
+    """
     with db.connect() as conn:
         if db.count_users(conn) > 0:
             return RedirectResponse(url="/", status_code=302)
-    return templates.TemplateResponse(
-        request, "setup.html", {"error": None, "email": ""}
-    )
+    return templates.TemplateResponse(request, "setup.html", _setup_ctx())
 
 
 @router.post("/setup", response_class=HTMLResponse)
@@ -220,9 +232,81 @@ def setup(request: Request, email: str = Form(...), password: str = Form(...)):
             token = auth.issue_session(conn, user_id)
         return _login_redirect(token, "/")
     return templates.TemplateResponse(
-        request, "setup.html", {"error": t(request, error), "email": email},
+        request, "setup.html", _setup_ctx(error=t(request, error), email=email),
         status_code=400,
     )
+
+
+# ---- 최초 설정: 백업 복원 / 네트워크 이전 ----
+
+
+def _require_first_run(request: Request) -> None:
+    """설정 작업은 사용자가 아직 없을 때(최초 구동)만 허용한다."""
+    with db.connect() as conn:
+        if db.count_users(conn) > 0:
+            raise HTTPException(403, t(request, "이미 설정이 완료되었습니다"))
+
+
+@router.post("/setup/restore")
+def setup_restore(request: Request, file: UploadFile = File(...)):
+    """최초 설정에서 전체 백업 업로드로 복원 — 복원되면 설정이 끝나 /login 으로 보낸다."""
+    _require_first_run(request)
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = Path(tmp.name)
+    try:
+        backup_mod.restore_backup(tmp_path)
+    except (ValueError, tarfile.TarError, OSError) as e:
+        return templates.TemplateResponse(
+            request, "setup.html",
+            _setup_ctx(error=t(request, "복원 실패: {e}", e=e)),
+            status_code=400,
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    # 백업이 이전 모드 중에 떠졌을 수 있다 — 복원본이 이전 모드로 시작하지 않게 끈다
+    with db.connect() as conn:
+        db.set_migration_mode(conn, False)
+    return RedirectResponse(url="/login?restored=1", status_code=303)
+
+
+@router.post("/setup/migrate")
+def setup_migrate(
+    request: Request,
+    source_url: str = Form(...),
+    token: str = Form(...),
+):
+    """다른 춘추관에서 네트워크로 데이터를 가져온다 (백그라운드 시작)."""
+    _require_first_run(request)
+    err = migration.start_pull(source_url, token)
+    if err is not None:
+        return templates.TemplateResponse(
+            request, "setup.html", _setup_ctx(error=t(request, err)),
+            status_code=400,
+        )
+    return RedirectResponse(url="/setup", status_code=303)
+
+
+@router.get("/setup/migrate/status")
+def setup_migrate_status(request: Request) -> JSONResponse:
+    """네트워크 이전 진행 상태 (폴링용)."""
+    return JSONResponse(migration.pull_status())
+
+
+@router.post("/setup/migrate/retry")
+def setup_migrate_retry(request: Request):
+    """실패한 파일만 다시 받는다 (전체 재시도)."""
+    _require_first_run(request)
+    migration.retry_failed()
+    return RedirectResponse(url="/setup", status_code=303)
+
+
+@router.post("/setup/migrate/finish")
+def setup_migrate_finish(request: Request):
+    """실패를 무시하고 이전을 마무리 — 받은 데이터로 서비스를 시작한다."""
+    _require_first_run(request)
+    migration.finish_pull()
+    return RedirectResponse(url="/setup", status_code=303)
 
 
 def _login_ctx(

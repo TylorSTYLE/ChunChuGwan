@@ -197,6 +197,50 @@ def restore_backup(src: Path) -> dict:
     return manifest
 
 
+def finalize_migration(staging: Path) -> None:
+    """춘추관 간 네트워크 이전(파일 단위 Pull)의 마무리 — 스테이징 디렉토리를
+    아카이브 루트로 합쳐 데이터를 교체한다.
+
+    `restore_backup` 과 같은 '아카이브 루트를 통째로 교체' 의미이나, 입력이
+    tar.gz 가 아니라 받는 쪽이 파일 단위로 받아 쌓은 스테이징 디렉토리다
+    (index.db + sites/resources/documents/rules.json, 일부 파일이 빠질 수 있음 —
+    빠진 스냅샷 파일은 뷰어에서 graceful 404). DB 는 항상 완전 전송된 전제.
+    staging 은 CACHE_DIR 밖(ARCHIVE_ROOT 직속)이어야 한다 — 캐시를 비울 때
+    스테이징이 함께 지워지지 않도록.
+    """
+    db_file = staging / "index.db"
+    if not db_file.is_file():
+        raise ValueError("이전 스테이징에 index.db 가 없습니다")
+    config.ensure_dirs()
+    _replace_db_file(db_file)
+
+    for name, target in (
+        ("sites", config.SITES_DIR),
+        ("resources", config.RESOURCES_DIR),
+        ("documents", config.DOCUMENTS_DIR),
+    ):
+        shutil.rmtree(target, ignore_errors=True)
+        src = staging / name
+        if src.is_dir():
+            shutil.move(str(src), str(target))
+        elif name == "sites":
+            target.mkdir(parents=True, exist_ok=True)
+
+    config.RULES_PATH.unlink(missing_ok=True)
+    rules_src = staging / "rules.json"
+    if rules_src.is_file():
+        shutil.move(str(rules_src), str(config.RULES_PATH))
+
+    # 소스 DB 는 이전 모드(migration_mode=on)·소스 토큰 해시를 담고 있다 —
+    # 받는 쪽이 그대로 켜진 채 시작하지 않도록 끈다 (정상 서비스로 시작).
+    with db.connect() as conn:
+        db.set_migration_mode(conn, False)
+
+    # 파생물 캐시는 새 데이터와 어긋날 수 있으므로 비운다 (staging 은 캐시 밖이라 안전)
+    shutil.rmtree(config.CACHE_DIR, ignore_errors=True)
+    shutil.rmtree(staging, ignore_errors=True)
+
+
 # ---- 아카이브 데이터 내보내기/가져오기 ----
 
 
