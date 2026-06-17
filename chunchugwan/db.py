@@ -788,7 +788,16 @@ def _ensure_schema(conn: sqlite3.Connection, db_path) -> None:
             return
         # journal_mode 는 DB 파일에 영구 저장된다 — 이후 커넥션은 자동 WAL
         conn.execute("PRAGMA journal_mode = WAL")
+        # SCHEMA 는 CREATE ... IF NOT EXISTS 라 멱등 — 락 없이 동시 실행해도 안전.
         conn.executescript(SCHEMA)
+        # 마이그레이션은 쓰기 락으로 직렬화한다. serve·worker 가 같은 DB 를 동시에
+        # 처음 열면 _migrate 의 'cols 읽기 → 가드 → ALTER' 가 프로세스 간 겹쳐, 두
+        # 프로세스가 같은 컬럼을 모두 추가하려다 'duplicate column' 으로 죽는다.
+        # BEGIN IMMEDIATE 로 한 프로세스만 마이그레이션하고, 다른 쪽은 busy_timeout
+        # 동안 대기했다 들어와 컬럼이 이미 있는 것을 보고 가드를 전부 스킵한다.
+        # (대형 DB 의 최초 백필이 busy_timeout 을 넘기면 대기하던 프로세스는 락
+        #  타임아웃으로 한 번 실패할 수 있으나, 재시작 시 이미 끝난 스키마로 정상 기동한다.)
+        conn.execute("BEGIN IMMEDIATE")
         _migrate(conn)
         conn.commit()
         _schema_ready.add(key)
