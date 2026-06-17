@@ -323,9 +323,27 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires      ON sessions(expires_at);
 
 ### Phase 6 — 백업/compact
 
-- [ ] 백업 재압축 회피 (순위 13) + optimize 2회 스캔 제거/패스 통합 (순위 18)
+- [x] 백업 재압축 회피 (순위 13)
+- [ ] optimize 2회 스캔 제거/패스 통합 (순위 18) — **보류**
 
 검증: `test_backup.py`·`test_optimize.py` — restore 라운드트립 동일성, compact 멱등성.
+
+> **완료 (perf/phase-6) — 순위 13.** `create_backup`·`export_archive` 의
+> `tarfile.open("w:gz")` 가 이미 압축된 자원(`page.html.gz`·`screenshot.webp`·CAS
+> gzip/webp·PDF/zip)을 기본 레벨(9)로 재압축해 CPU 만 쓰고 거의 못 줄이던 것을
+> `compresslevel=1`(`_BACKUP_COMPRESSLEVEL`)로 낮췄다. 출력은 여전히 표준 `.tar.gz`
+> 라 `restore_backup`/`import_archive` 의 `r:gz` 와 호환되고, 잘 압축되는 DB·JSON 도
+> 레벨 1 로 충분하다. 큰 아카이브(원격 NAS)의 백업 시간을 좌우한다. 기존
+> 백업/복원·내보내기/가져오기 라운드트립 테스트가 restorability 를 가드.
+>
+> **보류 — 순위 18(optimize 2회 스캔/패스 통합).** ① 절약 바이트 계산용 CAS 전체
+> 스캔은 "변경 전/후 총량"을 재는 것이라 한 패스로 줄이려면 추출 파일만 stat 해야
+> 하는데, 공유(dedup)된 CSS 는 신규 growth 가 아니라 정확히 귀속하기 어렵다(표시값
+> 부정확 위험). ② `_externalize_styles` 와 `_backfill_refs` 의 page.html.gz 중복
+> 해제는 두 패스가 **의존적**(backfill 이 externalize 가 새로 단 `/resource/*.css`
+> 참조를 잡아야 함)이고 서로 다른 스냅샷 집합을 돌며, 병합은 GC·자원 폴백의 근거인
+> `snapshot_resources` 인덱스를 건드려 **정합성 위험**이 있다. compact 는 드물게 도는
+> 1회성 정리라 이득 대비 위험이 커, 별도 PR 로 신중히 다룬다.
 
 ### Phase 7 — 선택 (여유 시)
 
