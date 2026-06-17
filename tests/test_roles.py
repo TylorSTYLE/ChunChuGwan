@@ -421,6 +421,30 @@ def test_users_page_admin_only(client):
     assert 'href="/system/users"' in client.get("/").text  # 헤더 메뉴 노출
 
 
+def test_admin_delete_uses_confirmation_popup(client):
+    """계정 삭제 폼은 항상 보이는 입력칸 없이 팝업(prompt)으로 이메일을 확인한다.
+
+    삭제 버튼을 누르면 이메일 입력 + 삭제 확인을 한 번에 묻는 prompt 팝업이
+    뜨고, 입력값은 hidden 필드에 담겨 제출된다 (서버가 이메일 일치를 검증).
+    """
+    _login(client, "boss@test.co", "bosspass1234")
+    page = client.get("/system/users").text
+    uid = _user("withdrawn@test.co")["id"]
+    assert f"/system/users/{uid}/delete" in page
+    # 확인은 prompt 팝업으로 — 항상 보이는 텍스트 입력칸은 없다
+    assert "prompt(" in page
+    assert '<input type="hidden" name="email">' in page
+    assert 'type="text" name="email"' not in page
+    # 팝업 안내문은 삭제 확인 + 이메일 재입력을 한 번에 묻는다. tojson 이
+    # 한글을 \uXXXX 로 이스케이프하므로 ASCII 인 영어 로케일에서 검증한다.
+    with db.connect() as conn:
+        db.set_user_locale(conn, _user("boss@test.co")["id"], "en")
+    en = client.get("/system/users").text
+    assert "re-enter the email" in en
+    # 옛 확인 문구(즉시 삭제)는 사라지고 새 안내문으로 교체됐다
+    assert "Permanently delete the account record" not in en
+
+
 def test_admin_changes_role(client):
     _login(client, "boss@test.co", "bosspass1234")
     uid = _user("viewer@test.co")["id"]

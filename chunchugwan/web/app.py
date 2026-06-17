@@ -42,7 +42,9 @@ from .. import (
     db, deletion, differ, documents, live_challenge, netcheck, resources, scheduler,
     searchindex, storage, system_log,
 )
-from . import api_routes, audit, auth_routes, i18n, permissions, system_routes
+from . import (
+    api_routes, audit, auth_routes, i18n, migration_routes, permissions, system_routes,
+)
 from .i18n import t
 from .templating import templates
 
@@ -103,6 +105,7 @@ app = FastAPI(title="춘추관", lifespan=_lifespan)
 app.include_router(auth_routes.router)
 app.include_router(system_routes.router)
 app.include_router(api_routes.router)
+app.include_router(migration_routes.router)
 
 # 인증 없이 접근 가능한 경로 (로그인 절차 자체 + 헬스체크)
 # /login/passkey* 는 패스워드 통과 후 pending 세션 단계라 user 가 아직 없다 —
@@ -111,6 +114,9 @@ app.include_router(api_routes.router)
 _PUBLIC_PATHS = {
     "/healthz", "/login", "/login/totp", "/signup",
     "/login/passkey/options", "/login/passkey",
+    # 이메일 인증 — 로그인 도중(pending_email_verify 세션)에는 아직 active
+    # 사용자가 아니라 핸들러가 세션을 직접 판별한다 (active 사용자도 같은 화면 사용).
+    "/verify-email", "/verify-email/resend",
 }
 
 # 브라우저가 주소만 보고 자동 요청하는 아이콘 경로 — /login·/setup 으로
@@ -158,6 +164,10 @@ async def auth_gate(request: Request, call_next):
         first_run = False
         token = request.cookies.get(config.SESSION_COOKIE, "")
         with db.connect() as conn:
+            # 역할 프리셋 캐시 워밍 — conn 없는 web.permissions/_auth_context 가
+            # 이 요청에서 최신 프리셋을 보도록 요청 앞단에서 한 번 갱신한다
+            # (settings 버전 비교라 변동 없으면 SELECT 1행으로 끝, 멀티프로세스 안전).
+            db.role_presets(conn)
             if db.count_users(conn) == 0:
                 first_run = not auth.bootstrap_admin_from_env(conn)
             if not first_run and token:
@@ -179,7 +189,13 @@ async def auth_gate(request: Request, call_next):
                 return PlainTextResponse(
                     "최초 설정이 완료되지 않았습니다", status_code=401
                 )
-            if path not in ("/setup", "/healthz") and path not in _BROWSER_ICON_PATHS:
+            # /setup 과 그 하위(복원·네트워크 이전·진행 상태 폴링)는 최초 설정 흐름
+            if (
+                path != "/setup"
+                and not path.startswith("/setup/")
+                and path != "/healthz"
+                and path not in _BROWSER_ICON_PATHS
+            ):
                 return RedirectResponse("/setup", status_code=302)
         else:
             # 차단·탈퇴된 계정 — 로그아웃 외 모든 접근 거부 (세션은 차단/탈퇴
@@ -299,7 +315,7 @@ def _needs_human_urls(request: Request) -> dict[str, int]:
     serve 의 env 가 다르거나 serve 에 그 플래그가 없어도 대기 작업이 누락 없이
     보이게, 대기 작업의 존재(DB)만으로 안내한다. 진행 중 챌린지 URL 은 관리자
     정보라 관리자일 때만 채운다 (그 외 사용자에겐 빈 dict → 기존처럼 '아카이빙 중')."""
-    if not permissions.system_allowed(getattr(request.state, "user", None)):
+    if not permissions.can_manage_system(getattr(request.state, "user", None)):
         return {}
     with db.connect() as conn:
         return {j["url"]: j["id"] for j in db.list_needs_human_jobs(conn)}
@@ -769,6 +785,7 @@ def site_crawl_failed_retry(request: Request, site_id: int, crawl_page_id: int):
     admin/archiver 전용. 끝난(done/cancelled) 크롤이면 다시 연다.
     """
     _require_archiver(request)
+    _require_not_migrating(request)
     with db.connect() as conn:
         row = db.get_site_failed_crawl_page(conn, site_id, crawl_page_id)
         if row is None:
@@ -788,6 +805,7 @@ def site_crawl_rerun(request: Request, site_id: int, crawl_id: int):
     중이면 crawler.start_crawl 이 그 크롤로 자동 병합한다(merged=1).
     """
     _require_archiver(request)
+    _require_not_migrating(request)
     with db.connect() as conn:
         crawl = db.get_crawl(conn, crawl_id)
         if crawl is None or crawl["site_id"] != site_id:
@@ -828,7 +846,7 @@ def site_certificate_pem(request: Request, site_id: int, cert_id: int):
 
 @app.post("/sites/{site_id}/export")
 def site_export(request: Request, site_id: int):
-    """사이트 아카이브 내보내기 — 소속 페이지·스냅샷과 참조 자원만 담은 tar.gz.
+    """사이트 아카이브 내보내기 — 소속 페이지·스냅샷과 참조 자원만 담은 .ccg.export 파일.
 
     파일 형식은 전체 내보내기(/system/export)와 같아 가져오기(웹 화면·
     wccg import)로 복원할 수 있다. admin/archiver 전용.
@@ -931,7 +949,7 @@ def site_credentials_view(
 
     비밀은 표시하지 않는다 (라벨·종류·등록 정보만). 캡처 연동은 다음 단계.
     """
-    _require_admin(request)
+    _require_credentials(request)
     with db.connect() as conn:
         site = db.get_site(conn, site_id)
         if site is None:
@@ -974,7 +992,7 @@ def site_credentials_create(
     아니라 검증 메시지(리다이렉트)로 처리한다. 세션 종류는 storage_state JSON
     대신 로그인 흐름을 기록한 HAR 파일을 올려 쿠키를 자동 추출할 수도 있다.
     """
-    _require_admin(request)
+    _require_credentials(request)
     if not crypto.is_configured():
         return _credentials_redirect(
             site_id,
@@ -1026,7 +1044,7 @@ def site_credentials_create(
 @app.post("/sites/{site_id}/credentials/{cred_id}/delete")
 def site_credentials_delete(request: Request, site_id: int, cred_id: int):
     """로그인 자격증명 삭제. 관리자 전용."""
-    _require_admin(request)
+    _require_credentials(request)
     with db.connect() as conn:
         cred = db.get_site_credential(conn, cred_id)
         if cred is None or cred["site_id"] != site_id:
@@ -1048,7 +1066,7 @@ def archive_active(request: Request) -> dict:
     폴링이 이 키의 변화를 보고 새로고침해 상태 배지를 '사람 확인 대기'로 갱신하고,
     전역 배너도 이 키를 읽는다. (serve 의 LIVE_CHALLENGE 설정과 무관 — DB 사실 기준.)"""
     data: dict = {"active": sorted(_active_snapshot())}
-    if permissions.system_allowed(getattr(request.state, "user", None)):
+    if permissions.can_manage_system(getattr(request.state, "user", None)):
         # url 기준 정렬 — 초기 needs_human_urls(=sorted(nh_urls))와 같은 파이썬
         # 코드포인트 순서로 내려보내, 폴링 JS 가 다시 정렬하지 않고 그대로 비교해
         # 비-BMP(이모지 IDN 등) 문자에서 정렬 순서가 어긋나 무한 새로고침 되는 걸 막는다
@@ -1379,7 +1397,7 @@ def _may_view_authenticated(request: Request, snap) -> bool:
         return True
     owner_id = snap["authenticated_by"]
     user = request.state.user
-    if user is not None and user["role"] == "admin":
+    if permissions.can_view_authenticated_all(user):
         return True
     if owner_id is not None:
         if user is not None and user["id"] == owner_id:
@@ -1400,7 +1418,7 @@ def _snapshot_viewer(request: Request) -> "tuple[int | None, bool] | None":
         return None
     user = request.state.user
     if user is not None:
-        return (user["id"], user["role"] == "admin")
+        return (user["id"], permissions.can_view_authenticated_all(user))
     key = getattr(request.state, "api_key", None)
     if key is not None:
         return (key["owner_user_id"], False)
@@ -1747,13 +1765,19 @@ def diff_view(
 
     d = differ.diff_text(texts[0], texts[1])
 
+    # 로컬(브라우저 확장) 캡처가 한쪽이라도 끼면 스크린샷 비교를 제공하지 않는다 —
+    # 실브라우저 렌더라 해상도·dpr·확대가 달라 픽셀 비교가 무의미하다. 본문 diff 는
+    # 제공하되 렌더 환경 차이 경고를 단다.
+    local_capture = old_snap["origin"] == "extension" or new_snap["origin"] == "extension"
+
     shot_ratio = None
-    old_shot_path, new_shot_path = _screenshot_paths(page, old_snap, new_snap)
-    if old_shot_path is not None and new_shot_path is not None:
-        shot_ratio, _ = differ.cached_screenshot_diff(
-            old_shot_path, new_shot_path,
-            f"shotdiff-{old_snap['id']}-{new_snap['id']}",
-        )
+    if not local_capture:
+        old_shot_path, new_shot_path = _screenshot_paths(page, old_snap, new_snap)
+        if old_shot_path is not None and new_shot_path is not None:
+            shot_ratio, _ = differ.cached_screenshot_diff(
+                old_shot_path, new_shot_path,
+                f"shotdiff-{old_snap['id']}-{new_snap['id']}",
+            )
 
     return templates.TemplateResponse(
         request, "diff.html",
@@ -1763,6 +1787,7 @@ def diff_view(
             "rows": _collapse_equal(request, d.rows),
             "from_idx": from_idx, "to_idx": to_idx, "total": len(snaps),
             "old_snap": old_snap, "new_snap": new_snap,
+            "local_capture": local_capture,
             "old_shot": f"/snapshot/{old_snap['id']}/file/screenshot",
             "new_shot": f"/snapshot/{new_snap['id']}/file/screenshot",
             "shot_ratio": shot_ratio,
@@ -2000,16 +2025,37 @@ def _require_archiver(request: Request) -> None:
         raise HTTPException(403, t(request, "아카이빙 권한이 없습니다"))
 
 
+def _require_not_migrating(request: Request) -> None:
+    """이전(마이그레이션) 모드 가드 — 데이터 이전 중에는 새 아카이빙·재아카이빙을 막는다.
+
+    워커 게이트가 실제 처리를 이미 막지만(큐에 쌓여도 안 돌아감), 여기서 등록
+    자체를 막아 사용자에게 즉시 안내한다. 이전 모드는 시스템 설정에서 끈다.
+    """
+    with db.connect() as conn:
+        if db.migration_mode_enabled(conn):
+            raise HTTPException(
+                409,
+                t(request, "이전(마이그레이션) 모드입니다 — 데이터 이전 중에는 "
+                           "아카이빙할 수 없습니다. 시스템 설정에서 이전 모드를 끄세요."),
+            )
+
+
 def _require_deleter(request: Request) -> None:
     """삭제 권한 가드 (admin/archiver). 보기 전용·차단 계정은 403."""
     if not permissions.can_delete(request.state.user):
         raise HTTPException(403, t(request, "삭제 권한이 없습니다"))
 
 
+def _require_credentials(request: Request) -> None:
+    """자격증명 관리 가드 (manage_credentials). 사이트 로그인 자격증명 CRUD·연결용."""
+    if not permissions.can_manage_credentials(request.state.user):
+        raise HTTPException(403, t(request, "자격증명 관리 권한이 없습니다"))
+
+
 def _require_admin(request: Request) -> None:
-    """관리자 가드 — 시스템 관리 동작(로그인 자격증명 등). 그 외 계정은 403."""
-    if not permissions.system_allowed(request.state.user):
-        raise HTTPException(403, t(request, "관리자만 접근할 수 있습니다"))
+    """시스템 관리 가드 (manage_system) — 라이브 챌린지 등 시스템 운영 동작."""
+    if not permissions.can_manage_system(request.state.user):
+        raise HTTPException(403, t(request, "시스템 관리 권한이 없습니다"))
 
 
 @app.get("/archive/new", response_class=HTMLResponse)
@@ -2194,7 +2240,7 @@ def _resolve_archive_credential(
     - "__new__" : 새 자격증명을 만들어 그 id 를 연결
     - 숫자       : 그 기존 자격증명을 연결 (URL 도메인 소속인지 검증)
     """
-    if not permissions.system_allowed(request.state.user):
+    if not permissions.can_manage_credentials(request.state.user):
         return None, None
     existing_id = existing_id.strip()
     if not existing_id:
@@ -2228,7 +2274,7 @@ def archive_credentials(request: Request, url: str = "") -> dict:
     내려보내지 않는다 — id·라벨·종류만. URL 이 비었거나 잘못됐거나 사이트가
     없으면 빈 목록.
     """
-    _require_admin(request)
+    _require_credentials(request)
     try:
         site_key = storage.site_key(storage.normalize_url(url)) if url.strip() else ""
     except ValueError:
@@ -2277,6 +2323,7 @@ def archive_new(
     network_tag 는 로컬 네트워크(사설 IP) 대상일 때 필수 (루프백은 거부).
     """
     _require_archiver(request)
+    _require_not_migrating(request)
     try:
         seconds = _interval_from_form(interval, custom_value, custom_unit)
         if seconds:
@@ -2329,6 +2376,7 @@ def rearchive(
     force: bool = Form(False),
 ):
     _require_archiver(request)
+    _require_not_migrating(request)
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
     if page is None:
@@ -2354,6 +2402,7 @@ def log_retry(
     물려받는다 (_resolve_network_tag).
     """
     _require_archiver(request)
+    _require_not_migrating(request)
     with db.connect() as conn:
         log = db.get_archive_log(conn, log_id)
     if log is None:

@@ -61,6 +61,15 @@ def validate_credentials(email: str, password: str) -> str | None:
     return validate_email(email) or validate_password(password)
 
 
+def generate_email_code() -> str:
+    """이메일 본인 인증용 숫자 코드 생성 (앞자리 0 보존, 균등 난수).
+
+    코드 자체는 메일로만 보내고 DB 에는 SHA-256(hash_token) 만 저장한다.
+    """
+    upper = 10 ** config.EMAIL_VERIFICATION_CODE_LENGTH
+    return str(secrets.randbelow(upper)).zfill(config.EMAIL_VERIFICATION_CODE_LENGTH)
+
+
 def validate_password(password: str) -> str | None:
     """패스워드 정책 검증 (가입·변경 공용). 문제 있으면 한국어 오류 메시지."""
     if len(password) < config.MIN_PASSWORD_LENGTH:

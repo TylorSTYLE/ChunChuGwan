@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ _("권한 그룹") }} — {{ _("춘추관") }}{% endblock %}
+{% block head %}
+<style>
+.grp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 12px; }
+.grp-card { border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px;
+            display: flex; flex-direction: column; gap: 10px; }
+.grp-card h4 { margin: 0; font-size: 13px; display: flex; gap: 8px;
+               align-items: center; flex-wrap: wrap; }
+.grp-card .meta { font-size: 12px; color: var(--muted); }
+.grp-perms { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.grp-perms label { font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.grp-card .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+                     margin-top: 4px; }
+.grp-card .name-in { font: inherit; }
+.grp-card.add-card { border-style: dashed; }
+</style>
+{% endblock %}
+{% block content %}
+<h2>{{ _("권한 그룹") }}</h2>
+{% if notice %}<div class="notice">{{ notice }}</div>{% endif %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<p class="muted" style="font-size:12px; max-width:760px">
+  {{ _("역할은 세분 권한의 묶음(프리셋)입니다. 여기서 각 역할의 기본 권한을 편집하거나 새 권한 그룹을 추가·삭제할 수 있습니다. 기본 그룹(관리자·아카이브 관리·아카이브·보기 전용)은 권한 묶음만 바꿀 수 있고 이름은 잠겨 있습니다. 사용자별 가감은 사용자 관리의 '세분 권한'에서 합니다.") }}
+  {{ _("그룹의 권한을 바꾸면 그 그룹에 속한 모든 사용자에게 즉시 반영됩니다(개별 오버라이드는 유지). 소속 사용자가 있는 그룹은 삭제할 수 없습니다 — 먼저 사용자 역할을 옮기세요.") }}
+</p>
+
+<div class="grp-grid">
+  {% for g in groups %}
+  <div class="grp-card">
+    <h4>
+      <span class="badge role-{{ g.name }}">{{ _(g.label) }}</span>
+      <span class="mono muted">{{ g.name }}</span>
+      {% if g.is_builtin %}<span class="badge same">{{ _("기본") }}</span>{% endif %}
+    </h4>
+    <div class="meta">
+      {{ _("소속 사용자") }}: {{ g.member_count }}
+    </div>
+    <form method="post" action="/system/groups/{{ g.name }}"
+          style="display:flex; flex-direction:column; gap:10px">
+      {% if not g.is_builtin %}
+      <label class="meta">{{ _("표시 이름") }}
+        <input type="text" name="label" value="{{ g.label }}" maxlength="50"
+               size="18" style="margin-left:6px">
+      </label>
+      {% endif %}
+      <fieldset class="grp-perms" style="border:0; padding:0; margin:0">
+        {% for perm in permissions_catalog %}
+        <label>
+          <input type="checkbox" name="perm_{{ perm }}"
+                 {% if perm in g.permissions %}checked{% endif %}>
+          {{ _(permission_labels[perm], ctx="perm") }}
+        </label>
+        {% endfor %}
+      </fieldset>
+      <div class="actions">
+        <button type="submit">{{ _("저장") }}</button>
+      </div>
+    </form>
+    {% if not g.is_builtin %}
+    <div class="actions">
+      {% if g.member_count == 0 %}
+      <form method="post" action="/system/groups/{{ g.name }}/delete"
+            onsubmit='return confirm({{ _('권한 그룹 {name} 을(를) 삭제할까요?', name=g.name)|tojson }})'>
+        <button type="submit" class="danger">{{ _("그룹 삭제") }}</button>
+      </form>
+      {% else %}
+      <span class="muted" style="font-size:12px">{{ _("소속 사용자가 있어 삭제할 수 없습니다") }}</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <div class="grp-card add-card">
+    <h4>{{ _("새 권한 그룹") }}</h4>
+    <form method="post" action="/system/groups"
+          style="display:flex; flex-direction:column; gap:10px">
+      <label class="meta">{{ _("이름(영문 소문자·숫자·밑줄)") }}
+        <input type="text" name="name" class="name-in mono" required
+               pattern="[a-z0-9_]{1,32}" maxlength="32" size="16"
+               placeholder="editor" style="margin-left:6px">
+      </label>
+      <label class="meta">{{ _("표시 이름") }}
+        <input type="text" name="label" maxlength="50" size="18"
+               placeholder="{{ _('편집자') }}" style="margin-left:6px">
+      </label>
+      <fieldset class="grp-perms" style="border:0; padding:0; margin:0">
+        {% for perm in permissions_catalog %}
+        <label>
+          <input type="checkbox" name="perm_{{ perm }}">
+          {{ _(permission_labels[perm], ctx="perm") }}
+        </label>
+        {% endfor %}
+      </fieldset>
+      <div class="actions">
+        <button type="submit">{{ _("그룹 추가") }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

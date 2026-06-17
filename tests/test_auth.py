@@ -670,6 +670,19 @@ def test_withdraw_account_rejects_admin(client):
         assert db.get_user_by_email(conn, "admin@test.co")["role"] == "admin"
 
 
+def test_account_page_sso_withdraw_uses_email_prompt(client):
+    """SSO 전용 계정 탈퇴는 인라인 이메일 필드 대신 팝업(prompt)으로 확인한다."""
+    with db.connect() as conn:
+        uid = db.create_user(conn, "sso@b.co")  # password_hash NULL = SSO 전용
+        db.create_identity(conn, uid, "authentik", "sub-1")
+        token = auth.issue_session(conn, uid)
+    client.cookies.set(config.SESSION_COOKIE, token)
+    page = client.get("/settings/account").text
+    assert "prompt(" in page  # 버튼 클릭 시 팝업으로 이메일을 받는다
+    assert 'type="hidden" name="confirm"' in page
+    assert 'type="text" name="confirm"' not in page  # 화면 노출 입력 필드 제거
+
+
 def test_withdraw_account_sso_only_confirms_email(client):
     """SSO 전용 계정은 패스워드가 없으므로 이메일 입력으로 확인한다."""
     with db.connect() as conn:

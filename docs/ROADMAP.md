@@ -91,3 +91,16 @@
       서버 `/api/v1/auth-profiles`·`/crawl` 에 `jwt` 필드 추가 +
       `_ephemeral_credential` 이 jwt/session 1회성 자격증명 생성(캡처가 jwt 는
       대상 origin Authorization: Bearer 로 주입). 토글에 감지 방식 미리보기 표시.
+- [x] **A14 브라우저 클라이언트 캡처**: 크롬 확장이 서버를 거치지 않고 현재
+      페이지를 브라우저에서 직접 캡처(`chrome.debugger` CDP 풀페이지 +
+      자원·문서 재요청, `cache:'force-cache'`)해 인라인 완성한 산출물을
+      `POST /api/v1/ingest`(멀티파트, 동기) 로 올리면, 서버 `ingest.py` 가 대상
+      URL 을 다시 가져오지 않고(capture 미실행) 기존 코어(extract·resources·
+      storage·db·searchindex)로 적재. 업로드 바이트는 자원 미디어 타입·문서
+      확장자 화이트리스트로 재검증, 자격증명 미저장. `snapshots.origin/incomplete`·
+      `pages.client_captured` 컬럼, "브라우저 캡처"·"불완전" 뱃지, 로컬 캡처가
+      낀 diff 는 스크린샷 비교 비활성+경고. 적재 페이지는 서버 재요청 차단
+      (`pipeline._archive_url` 백스톱 + `enqueue_archive_job` 가드). 사설 호스트는
+      `/api/v1/network-tags` 로 태그 선택/추가(생성 `manage_system`). 설계:
+      `docs/EXTENSION_CLIENT_CAPTURE_PLAN.md`. 서버측은 테스트로 검증(test_ingest·
+      test_extension_api), 확장 런타임(CDP·업로드)은 언팩 로드 후 수동 테스트 필요.

@@ -2,10 +2,12 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import auth, config, db, storage
+from chunchugwan import __version__, auth, config, db, netcheck, storage
 from chunchugwan.web import app as web_app
 
 URL = "https://example.com/post"
+ING_PAGE = "<!DOCTYPE html><html><body><h1>적재 제목</h1><p>본문입니다.</p></body></html>"
+ING_RAW = "<html><body><h1>적재 제목</h1><p>본문입니다.</p></body></html>"
 
 
 @pytest.fixture
@@ -54,6 +56,20 @@ def _login_admin(client):
         "/login", data={"email": "boss@test.co", "password": "bosspass1234"},
         follow_redirects=False,
     )
+
+
+# ---- GET /api/v1/version ----
+
+
+def test_api_version_returns_server_version(client):
+    token = _issue(can_view=False, can_archive=False)  # 권한 없는 토큰도 가능
+    r = client.get("/api/v1/version", headers=_headers(token))
+    assert r.status_code == 200
+    assert r.json() == {"version": __version__}
+
+
+def test_api_version_requires_token(client):
+    assert client.get("/api/v1/version").status_code == 401
 
 
 # ---- POST /api/v1/crawl ----
@@ -196,3 +212,123 @@ def test_go_requires_session(client):
     r = client.get("/go", params={"url": URL}, follow_redirects=False)
     assert r.status_code in (302, 307)
     assert "/login" in r.headers["location"]
+
+
+# ---- POST /api/v1/ingest (확장 클라이언트 캡처 적재) ----
+
+
+def _admin_id() -> int:
+    with db.connect() as conn:
+        return db.get_user_by_email(conn, "boss@test.co")["id"]
+
+
+def _user_token(**kwargs) -> str:
+    """admin 에게 귀속된 사용자 확장 토큰 (ingest 요구사항)."""
+    return _issue(owner_user_id=_admin_id(), created_by=_admin_id(), **kwargs)
+
+
+def _ingest_files():
+    return {
+        "page_html": ("page.html", ING_PAGE, "text/html"),
+        "raw_html": ("raw.html", ING_RAW, "text/html"),
+    }
+
+
+def test_api_ingest_creates_extension_snapshot(client):
+    token = _user_token()
+    r = client.post(
+        "/api/v1/ingest", data={"url": "https://example.com/ingested"},
+        files=_ingest_files(), headers=_headers(token),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "new" and body["snapshot_id"] is not None
+    with db.connect() as conn:
+        snap = conn.execute(
+            "SELECT * FROM snapshots WHERE id=?", (body["snapshot_id"],)).fetchone()
+        page = conn.execute("SELECT * FROM pages WHERE id=?", (body["page_id"],)).fetchone()
+        log = conn.execute("SELECT * FROM archive_logs ORDER BY id DESC LIMIT 1").fetchone()
+    assert snap["origin"] == "extension" and page["client_captured"] == 1
+    assert log["source"] == "extension" and log["requested_by"] == _admin_id()
+
+
+def test_api_ingest_requires_user_token(client):
+    """시스템 키(owner=NULL)로는 적재 불가 — 403."""
+    token = _issue()  # created_by/owner_user_id 없음 = 시스템 키
+    r = client.post(
+        "/api/v1/ingest", data={"url": "https://example.com/x"},
+        files=_ingest_files(), headers=_headers(token),
+    )
+    assert r.status_code == 403
+
+
+def test_api_ingest_requires_archive_perm(client):
+    """사용자 토큰 권한은 소유자 현재 역할에서 재평가 — 아카이브 권한 없으면 403.
+
+    개인 API Key 사용 권한(use_api_keys)은 줘서 토큰 자체는 유효하게 하되,
+    아카이브 권한이 없는 viewer 라 아카이빙(ingest)만 막힌다.
+    """
+    with db.connect() as conn:
+        uid = db.create_user(conn, "viewer@test.co", password_hash="x", role="viewer")
+        db.set_permission_overrides(conn, uid, {"use_api_keys": True})
+    token = _issue(owner_user_id=uid, created_by=uid)
+    r = client.post(
+        "/api/v1/ingest", data={"url": "https://example.com/x"},
+        files=_ingest_files(), headers=_headers(token),
+    )
+    assert r.status_code == 403
+
+
+def test_api_token_requires_use_api_keys_permission(client):
+    """개인 API Key 사용 권한이 없는 소유자의 토큰은 401 (사용 자체가 차단)."""
+    with db.connect() as conn:
+        uid = db.create_user(conn, "noapi@test.co", password_hash="x", role="viewer")
+    token = _issue(owner_user_id=uid, created_by=uid)
+    assert client.get("/api/v1/pages", headers=_headers(token)).status_code == 401
+
+
+def test_api_ingest_size_cap(client, monkeypatch):
+    monkeypatch.setattr(config, "INGEST_MAX_BYTES", 10)  # 작은 상한 → 정상 업로드도 초과
+    monkeypatch.setattr(config, "INGEST_MAX_MB", 0)
+    token = _user_token()
+    r = client.post(
+        "/api/v1/ingest", data={"url": "https://example.com/x"},
+        files=_ingest_files(), headers=_headers(token),
+    )
+    assert r.status_code == 413
+
+
+def test_api_ingest_private_needs_tag(client, monkeypatch):
+    monkeypatch.setattr(netcheck, "classify_host", lambda h: netcheck.PRIVATE)
+    token = _user_token()
+    r = client.post(
+        "/api/v1/ingest", data={"url": "https://intranet.example/x"},
+        files=_ingest_files(), headers=_headers(token),
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"]["needs_network_tag"] is True
+
+
+def test_api_network_tags_list_and_create(client):
+    token = _user_token()  # admin → manage_system 보유
+    created = client.post(
+        "/api/v1/network-tags", json={"name": "사무실", "description": "본사"},
+        headers=_headers(token),
+    )
+    assert created.status_code == 201
+    tag_id = created.json()["id"]
+    listed = client.get("/api/v1/network-tags", headers=_headers(token))
+    assert listed.status_code == 200
+    assert any(t["id"] == tag_id and t["name"] == "사무실" for t in listed.json()["tags"])
+
+
+def test_api_network_tags_create_requires_manage_system(client):
+    """archiver 는 태그 생성 불가(403)이나 목록 조회는 가능(아카이브 권한)."""
+    with db.connect() as conn:
+        uid = db.create_user(conn, "arch@test.co", password_hash="x", role="archiver")
+    token = _issue(owner_user_id=uid, created_by=uid)
+    r = client.post(
+        "/api/v1/network-tags", json={"name": "데이터센터"}, headers=_headers(token)
+    )
+    assert r.status_code == 403
+    assert client.get("/api/v1/network-tags", headers=_headers(token)).status_code == 200

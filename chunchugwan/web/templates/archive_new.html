@@ -63,7 +63,7 @@
     {{ interval_field(allow_off=True) }}
     <span class="hint">{{ _("주기를 선택하면 아카이빙 완료 후 자동 재아카이빙이 등록됩니다. 직접 입력은 1시간~1개월 범위, 1일 단위 주기는 실행 시각(서버 시간)도 지정할 수 있습니다. 타임라인 화면에서 언제든 변경/해제할 수 있습니다.") }}</span>
   </label>
-  {% if system_allowed %}
+  {% if can_manage_credentials %}
   <label>{{ _("로그인 자격증명") }}
     <select name="cred_existing_id" id="cred-select">
       <option value="">{{ _("연결 안 함") }}</option>

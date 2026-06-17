@@ -187,13 +187,45 @@ _EN: dict[str, str] = {
         "If you pick an interval, the entire site is re-crawled periodically "
         "with the same options (change or remove it on the Schedules screen).",
     "스케줄 없음": "Schedule not found",
-    # ---- 역할 라벨 (db.ROLE_LABELS) ----
+    # ---- 역할 라벨 (빌트인 그룹 + db.STATE_ROLE_LABELS — 커스텀은 원문 폴백) ----
     "관리자": "Admin",
+    "아카이브 관리": "Archive manager",
     "아카이브": "Archiver",
     "보기 전용": "Viewer",
     "권한없음": "No access",
     "차단됨": "Blocked",
     "탈퇴": "Withdrawn",
+    # ---- 권한 그룹 화면 (groups.html) ----
+    "권한 그룹": "Permission groups",
+    "역할은 세분 권한의 묶음(프리셋)입니다. 여기서 각 역할의 기본 권한을 편집하거나 새 권한 그룹을 추가·삭제할 수 있습니다. 기본 그룹(관리자·아카이브 관리·아카이브·보기 전용)은 권한 묶음만 바꿀 수 있고 이름은 잠겨 있습니다. 사용자별 가감은 사용자 관리의 '세분 권한'에서 합니다.":
+        "Roles are bundles (presets) of granular permissions. Here you can edit each "
+        "role's default permissions or add and remove custom permission groups. The "
+        "built-in groups (Admin, Archive manager, Archiver, Viewer) can only have their "
+        "permission bundle changed — their names are locked. Per-user adjustments are "
+        "made under 'Granular permissions' in user management.",
+    "그룹의 권한을 바꾸면 그 그룹에 속한 모든 사용자에게 즉시 반영됩니다(개별 오버라이드는 유지). 소속 사용자가 있는 그룹은 삭제할 수 없습니다 — 먼저 사용자 역할을 옮기세요.":
+        "Changing a group's permissions takes effect immediately for every user in "
+        "that group (individual overrides are kept). A group with members cannot be "
+        "deleted — move those users to another role first.",
+    "소속 사용자": "Members",
+    "기본": "Built-in",
+    "표시 이름": "Display name",
+    "그룹 삭제": "Delete group",
+    "소속 사용자가 있어 삭제할 수 없습니다": "Cannot delete — group has members",
+    "새 권한 그룹": "New permission group",
+    "이름(영문 소문자·숫자·밑줄)": "Name (lowercase letters, digits, underscore)",
+    "편집자": "Editor",
+    "그룹 추가": "Add group",
+    "권한 그룹 {name} 을(를) 삭제할까요?": "Delete permission group {name}?",
+    # ---- 세분 권한 라벨 (db.PERMISSION_LABELS, ctx=perm) ----
+    "perm|보기·검색": "View & search",
+    "perm|아카이빙": "Archiving",
+    "perm|삭제": "Delete",
+    "perm|자격증명 관리": "Manage credentials",
+    "perm|시스템 관리": "Manage system",
+    "perm|사용자 관리": "Manage users",
+    "perm|인증 스냅샷 전체 열람": "View all authenticated snapshots",
+    "perm|개인 API Key": "Personal API Key",
     # ---- 목록 (index) ----
     "아카이브 목록": "Archived pages",
     "아카이빙이 백그라운드에서 시작되었습니다": "Archiving started in the background",
@@ -373,6 +405,21 @@ _EN: dict[str, str] = {
     "이전 스크린샷": "Before screenshot",
     "이후 스크린샷": "After screenshot",
     "픽셀 diff 하이라이트": "Pixel diff highlight",
+    # ---- 브라우저(확장) 클라이언트 캡처 ----
+    "브라우저 캡처": "Browser capture",
+    "불완전": "Incomplete",
+    "브라우저 확장으로 캡처": "Captured via browser extension",
+    "브라우저 확장으로 캡처된 스냅샷입니다. 로그인 상태로 캡처되어 민감 정보가 포함될 수 있으며 모든 사용자에게 보입니다.":
+        "Captured by the browser extension. It may have been captured while logged in, "
+        "so it can contain sensitive information and is visible to all users.",
+    "일부 자원·프레임·스크린샷 수집이 실패한 불완전 캡처입니다.":
+        "Incomplete capture — some resources, frames, or the screenshot failed to be collected.",
+    "로컬(브라우저) 캡처 스냅샷이 포함된 비교입니다 — 브라우저 렌더 환경(해상도·dpr·확대) 차이로 변경이 과장될 수 있습니다.":
+        "This comparison includes a local (browser) capture — differences may be exaggerated "
+        "due to browser rendering environment (resolution, dpr, zoom).",
+    "로컬(브라우저) 캡처 스냅샷은 해상도가 달라 스크린샷 비교를 제공하지 않습니다.":
+        "Screenshot comparison is not available for local (browser) captures because their "
+        "resolution differs.",
     # ---- 로그 (logs / system logs) ----
     "로그 열람 권한이 없습니다": "You do not have permission to view logs",
     # "action|재시도" 는 사이트 상세(실패한 작업) 절에 이미 있다
@@ -443,10 +490,10 @@ _EN: dict[str, str] = {
         "resources? With many snapshots this can take a while.",
     "최적화 실행": "Run optimization",
     "전체 백업": "Full backup",
-    "DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 tar.gz 를 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.":
-        "Downloads a tar.gz containing the entire DB (including auth data such as "
-        "users and sessions), snapshot files, and rules.json. It can be restored "
-        "as-is via Full restore below.",
+    "DB(사용자·세션 등 인증 데이터 포함)와 스냅샷 파일, rules.json 을 통째로 담은 .ccg.backup 파일을 내려받습니다. 아래 전체 복원에서 그대로 되돌릴 수 있습니다.":
+        "Downloads a .ccg.backup file containing the entire DB (including auth data "
+        "such as users and sessions), snapshot files, and rules.json. It can be "
+        "restored as-is via Full restore below.",
     "전체 백업 다운로드": "Download full backup",
     "전체 복원": "Full restore",
     "현재 데이터(인증 포함)를 모두 지우고 업로드한 전체 백업 시점으로 되돌립니다. 되돌릴 수 없습니다. 세션도 백업 시점으로 돌아가므로 복원 후 다시 로그인해야 할 수 있습니다.":
@@ -484,9 +531,13 @@ _EN: dict[str, str] = {
         "backfilled {indexed} reference(s) · cleaned {swept} orphaned "
         "resource(s) (saved {saved})",
     "복원 실패: {e}": "Restore failed: {e}",
+    "복원은 .ccg.backup 확장자 파일만 받습니다.":
+        "Restore only accepts files with the .ccg.backup extension.",
     "복원 완료 (백업: {created_at}, 페이지 {pages}개, 스냅샷 {snapshots}개)":
         "Restore complete (backup: {created_at}, {pages} pages, {snapshots} snapshots)",
     "가져오기 실패: {e}": "Import failed: {e}",
+    "가져오기는 .ccg.export 확장자 파일만 받습니다.":
+        "Import only accepts files with the .ccg.export extension.",
     "가져오기 완료 [{mode}]: 페이지 +{pages}, 스냅샷 +{snapshots} (스킵 {skipped}), 확인 기록 +{checks}, 크롤 +{crawls}, 인증서 +{certs}, 로그 +{logs}":
         "Import complete [{mode}]: pages +{pages}, snapshots +{snapshots} "
         "(skipped {skipped}), checks +{checks}, crawls +{crawls}, "
@@ -505,6 +556,45 @@ _EN: dict[str, str] = {
     "사이트 아카이브 설정을 저장했습니다.": "Site archive settings saved.",
     "재시도 대기는 쉼표로 구분한 초 단위 숫자 목록이어야 합니다 (예: 300, 900)":
         "Retry waits must be a comma-separated list of seconds (e.g. 300, 900)",
+    # ---- 이메일 본인 인증 ----
+    "이메일 본인 인증": "Email verification",
+    "회원 가입(패스워드 계정)으로 만든 계정이 메일로 받은 코드로 이메일 소유를 확인하게 합니다. SSO(OIDC) 계정은 IdP 가 검증하므로 제외됩니다.":
+        "Require accounts created via sign-up (password accounts) to confirm "
+        "ownership of their email with a code sent by mail. SSO (OIDC) accounts "
+        "are excluded since the IdP verifies them.",
+    "메일(SMTP) 설정이 없어 이 기능은 켜더라도 동작하지 않습니다 — 아래 메일(SMTP) 설정을 먼저 채우세요.":
+        "This feature does nothing even when enabled because mail (SMTP) is not "
+        "configured — fill in the Mail (SMTP) settings below first.",
+    "이메일 본인 인증 사용": "Enable email verification",
+    "인증 코드 만료 시간(분)": "Verification code expiry (minutes)",
+    "이메일 본인 인증 설정을 저장했습니다.": "Email verification settings saved.",
+    "인증 코드 만료 시간은 {lo} ~ {hi}분 사이여야 합니다.":
+        "The verification code expiry must be between {lo} and {hi} minutes.",
+    "{email} (으)로 보낸 인증 코드를 입력하세요. 코드는 {n}분 후 만료됩니다.":
+        "Enter the verification code sent to {email}. The code expires in {n} minutes.",
+    "인증 코드": "Verification code",
+    "코드를 받지 못했나요?": "Didn't get the code?",
+    "인증 코드 다시 보내기": "Resend verification code",
+    "메일 발송(SMTP)이 설정되지 않아 인증 코드를 보낼 수 없습니다. 관리자에게 문의하세요.":
+        "Mail (SMTP) is not configured, so no verification code can be sent. "
+        "Please contact your administrator.",
+    "계정 설정으로 돌아가기": "Back to account settings",
+    "인증 코드를 메일로 보냈습니다.": "A verification code has been emailed.",
+    "코드가 올바르지 않거나 만료되었습니다.": "The code is incorrect or has expired.",
+    "메일 발송이 설정되지 않아 코드를 보낼 수 없습니다.":
+        "Mail is not configured, so the code cannot be sent.",
+    "코드 발송에 실패했습니다. 잠시 후 다시 시도하세요.":
+        "Failed to send the code. Please try again later.",
+    "이메일 본인 인증을 완료했습니다.": "Email verification complete.",
+    "이메일 인증": "Email verified",
+    "SSO 계정은 IdP 가 이메일을 검증합니다.": "SSO accounts have their email verified by the IdP.",
+    "미인증": "Unverified",
+    "인증 코드 받기": "Get a verification code",
+    "코드를 메일로 보낸 뒤 인증 화면으로 이동합니다.":
+        "Sends a code by email and takes you to the verification screen.",
+    "이메일 본인 인증이 켜져 있지 않거나 메일(SMTP) 설정이 없어 지금은 인증할 수 없습니다.":
+        "Email verification is off or mail (SMTP) is not configured, so you "
+        "cannot verify right now.",
     # ---- 가입 설정 (system) ----
     "가입 설정": "Sign-up settings",
     "로그인 화면의 회원 가입 기능과 가입 계정의 초기 권한을 설정합니다 (SSO 자동 생성 계정에도 적용). '권한없음'으로 가입한 사용자는 관리자가 사용자 관리에서 권한을 부여할 때까지 서비스를 이용할 수 없습니다.":
@@ -519,8 +609,9 @@ _EN: dict[str, str] = {
         "Role cannot be used as the initial sign-up role: {role}",
     # ---- 사용자 관리 (users) ----
     "사용자 관리": "User management",
-    "관리자=전체 관리, 아카이브=아카이빙 가능, 보기 전용=열람만, 권한없음=가입 승인 대기(안내 페이지 외 접근 불가), 차단됨=접근 불가. 권한없음 사용자는 권한을 부여해 승인합니다. 차단하면 해당 사용자의 모든 세션이 즉시 로그아웃됩니다. 최초 등록된 관리자의 권한은 변경할 수 없습니다.":
-        "Admin = full control, Archiver = can archive, Viewer = read-only, "
+    "관리자=전체 관리, 아카이브 관리=아카이빙·삭제, 아카이브=아카이빙 가능, 보기 전용=열람만, 권한없음=가입 승인 대기(안내 페이지 외 접근 불가), 차단됨=접근 불가. 권한없음 사용자는 권한을 부여해 승인합니다. 차단하면 해당 사용자의 모든 세션이 즉시 로그아웃됩니다. 최초 등록된 관리자의 권한은 변경할 수 없습니다.":
+        "Admin = full control, Archive manager = archive & delete, Archiver = can "
+        "archive, Viewer = read-only, "
         "No access = awaiting sign-up approval (nothing but the notice page), "
         "Blocked = no access. Approve a 'No access' user by granting them a role. "
         "Blocking logs out all of the user's sessions immediately. The "
@@ -529,6 +620,24 @@ _EN: dict[str, str] = {
         "Withdrawn = the user closed their own account (cannot log in) — the role "
         "cannot be restored; deleting the account record frees the email for "
         "sign-up or invites again.",
+    "역할은 권한 묶음(프리셋)입니다 — 아래 '세분 권한'에서 사용자별로 개별 권한을 더하거나 뺄 수 있습니다 (별표 = 프리셋과 다름). 역할을 바꾸면 세분 권한은 프리셋으로 초기화됩니다.":
+        "A role is a preset bundle of permissions — under 'Permissions' below you "
+        "can add or remove individual permissions per user (asterisk = differs from "
+        "the preset). Changing the role resets permissions to that preset.",
+    "세분 권한": "Permissions",
+    "프리셋과 다름": "Differs from preset",
+    "{email} 의 세분 권한을 저장했습니다.": "Saved permissions for {email}.",
+    "이 계정 상태에서는 세분 권한을 조정할 수 없습니다 — 먼저 역할을 부여하세요.":
+        "Permissions cannot be adjusted in this account state — assign a role first.",
+    "사용자 관리 권한을 가진 마지막 계정입니다 — 역할을 바꿀 수 없습니다.":
+        "This is the last account with user-management permission — its role "
+        "cannot be changed.",
+    "사용자 관리 권한을 가진 마지막 계정입니다 — 이 권한은 뗄 수 없습니다.":
+        "This is the last account with user-management permission — that "
+        "permission cannot be removed.",
+    "사용자 관리 권한이 없습니다": "You do not have user-management permission",
+    "시스템 관리 권한이 없습니다": "You do not have system-management permission",
+    "자격증명 관리 권한이 없습니다": "You do not have credential-management permission",
     "활성 세션": "Active sessions",
     "가입일": "Joined",
     "권한 변경": "Change role",
@@ -537,9 +646,10 @@ _EN: dict[str, str] = {
     "패스키": "Passkey",
     "변경 불가": "Locked",
     "탈퇴 — 삭제만 가능": "Withdrawn — delete only",
-    "{email} 계정 정보를 완전히 삭제할까요? 되돌릴 수 없으며, 같은 이메일로 다시 가입하거나 초대할 수 있게 됩니다.":
-        "Permanently delete the account record of {email}? This cannot be undone, "
-        "and the email becomes available for sign-up or invites again.",
+    "{email} 계정 정보를 완전히 삭제하려면 이메일 주소를 다시 입력하세요. 삭제하면 되돌릴 수 없으며, 같은 이메일로 다시 가입하거나 초대할 수 있게 됩니다.":
+        "To permanently delete the account record of {email}, re-enter the email "
+        "address. This cannot be undone, and the email becomes available for "
+        "sign-up or invites again.",
     "본인 계정의 모든 세션을 로그아웃합니다. 지금 이 로그인도 종료됩니다. 계속할까요?":
         "Log out all sessions of your own account? This login ends too. Continue?",
     "{email} 의 모든 세션을 로그아웃할까요?": "Log out all sessions of {email}?",
@@ -793,6 +903,7 @@ _EN: dict[str, str] = {
     "발급한 API Key 가 없습니다.": "No API Keys issued yet.",
     "이름 (예: chrome-ext)": "Name (e.g. chrome-ext)",
     "현재 권한으로는 API Key 를 발급할 수 없습니다.": "Your current role can't issue API Keys.",
+    "개인 API Key 사용 권한이 없습니다.": "You do not have permission to use personal API Keys.",
     "{name} 키를 폐기할까요? 이 키를 쓰는 확장의 접근이 즉시 차단됩니다.":
         "Revoke the key '{name}'? The extension using it loses access immediately.",
     "개인 API Key 를 발급했습니다 — 아래 키를 지금 복사하세요. 다시 표시되지 않습니다.":
@@ -835,7 +946,9 @@ _EN: dict[str, str] = {
     "정말 탈퇴할까요? 다시 로그인할 수 없습니다.":
         "Really close your account? You will not be able to log in again.",
     "패스워드 확인": "Confirm password",
-    "확인을 위해 이메일({email})을 입력": "Type the email ({email}) to confirm",
+    "정말 탈퇴하려면 이메일({email})을 입력하세요. 탈퇴하면 즉시 로그아웃되고 다시 로그인할 수 없습니다.":
+        "To close your account, type the email ({email}). Withdrawing logs you "
+        "out immediately and you cannot log in again.",
     "계정 탈퇴": "Close account",
     "계정 삭제": "Delete account",
     "사용자 이름을 변경했습니다.": "Display name updated.",
@@ -1058,9 +1171,9 @@ _EN: dict[str, str] = {
     "실패한 페이지만 큐로 되돌려 다시 시도합니다 (성공한 페이지는 그대로).":
         "Re-queue and retry only the failed pages (successful ones are left as is).",
     "사이트 내보내기": "Export site",
-    "소속 페이지·스냅샷을 아카이브 내보내기 파일(tar.gz)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.":
+    "소속 페이지·스냅샷을 아카이브 내보내기 파일(.ccg.export)로 다운로드합니다 — 가져오기로 복원할 수 있습니다.":
         "Download this site's pages and snapshots as an archive export file "
-        "(tar.gz) — it can be restored via import.",
+        "(.ccg.export) — it can be restored via import.",
     "사이트 삭제": "Delete site",
     "페이지 {p}개와 크롤 회차 {c}개를 포함한 사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
         "This deletes the entire site archive including {p} page(s) and {c} "
@@ -1145,6 +1258,80 @@ _EN: dict[str, str] = {
         "Search index is unavailable — this SQLite build lacks FTS5.",
     "검색 인덱스 전체 다시 색인 완료 — 스냅샷 {n}개":
         "Search index rebuilt — {n} snapshot(s)",
+
+    # ---- 최초 설정(setup.html) ----
+    "최초 설정": "Initial setup",
+    "최초 구동입니다. 새 관리자 계정을 만들거나, 백업 파일에서 복원하거나, 다른 춘추관에서 네트워크로 데이터를 가져올 수 있습니다.":
+        "This is the first run. You can create a new admin account, restore from a "
+        "backup file, or pull all data over the network from another ChunChuGwan.",
+    "네트워크 이전": "Network migration",
+    "받는 중": "Receiving",
+    "⚠ 평문 http 연결입니다 — 토큰이 노출될 수 있습니다.":
+        "⚠ Plain http connection — the token may be exposed.",
+    "일부 파일을 받지 못했습니다 ({n}개). 전체 재시도하거나, 무시하고 이전을 마무리할 수 있습니다(빠진 스냅샷 파일은 표시되지 않을 수 있습니다).":
+        "Some files could not be received ({n}). You can retry them all, or ignore "
+        "and finish the migration (missing snapshot files may not display).",
+    "실패한 파일 목록": "Failed files",
+    "전체 재시도": "Retry all",
+    "빠진 파일을 무시하고 이전을 마무리할까요? 받은 데이터로 서비스를 시작합니다.":
+        "Ignore missing files and finish the migration? The service starts with the "
+        "received data.",
+    "무시하고 이전 종료": "Ignore and finish",
+    "관리자 계정 생성": "Create admin account",
+    "백업 파일에서 복원": "Restore from backup file",
+    "전체 백업(tar.gz)을 올려 그 시점 상태로 복원합니다. 복원 후에는 백업의 계정으로 로그인합니다.":
+        "Upload a full backup (tar.gz) to restore to that point. After restoring, log "
+        "in with the account from the backup.",
+    "다른 춘추관에서 이전": "Migrate from another ChunChuGwan",
+    "이전(마이그레이션) 모드를 켠 다른 춘추관의 주소와 발급된 토큰을 입력하면 모든 데이터를 가져옵니다. 받는 쪽은 같은 WCCG_SECRET_KEY 를 써야 외부 사이트 자격증명을 복호화할 수 있습니다.":
+        "Enter the address and issued token of another ChunChuGwan that has migration "
+        "mode on to pull all its data. The receiving side must use the same "
+        "WCCG_SECRET_KEY to decrypt external site credentials.",
+    "소스 주소": "Source address",
+    "(예: https://NAS주소:8765)": "(e.g. https://NAS-address:8765)",
+    "이전 토큰": "Migration token",
+    "이전 시작": "Start migration",
+
+    # ---- 이전 모드(system.html) ----
+    "다른 춘추관으로 이전": "Migrate to another ChunChuGwan",
+    "이전(마이그레이션) 모드": "Migration mode",
+    "켜짐": "On",
+    "꺼짐": "Off",
+    "이전 모드를 켜면 인증 토큰을 발급하고, 새로 설치한 춘추관의 최초 설정 화면에서 이 서버의 주소와 토큰을 입력하면 모든 데이터(아카이브·인증 포함)를 네트워크로 가져갑니다. 이전 모드인 동안에는 이 서버의 모든 스크래핑·스케줄·크롤이 중단됩니다.":
+        "Turning on migration mode issues an auth token; on a newly installed "
+        "ChunChuGwan's initial setup screen, entering this server's address and token "
+        "pulls all data (archive and auth included) over the network. While in "
+        "migration mode, all scraping, schedules, and crawls on this server are halted.",
+    "토큰은 전체 데이터 접근 권한을 가지므로 안전한 채널로 전달하세요. 받는 쪽이 평문 http 로 접속하면 토큰이 노출될 수 있습니다(https 권장). 받는 쪽은 같은 WCCG_SECRET_KEY 를 써야 외부 사이트 로그인 자격증명을 복호화할 수 있습니다.":
+        "The token grants full data access, so deliver it over a secure channel. If "
+        "the receiver connects over plain http the token may be exposed (https "
+        "recommended). The receiver must use the same WCCG_SECRET_KEY to decrypt "
+        "external site login credentials.",
+    "발급된 토큰 — 지금만 표시됩니다. 안전하게 복사하세요.":
+        "Issued token — shown only now. Copy it securely.",
+    "소스 주소는 받는 쪽이 이 서버에 접근할 수 있는 URL 입니다 (예: http://NAS주소:8765). WCCG_PUBLIC_URL 을 설정하면 여기에 표시됩니다.":
+        "The source address is the URL the receiver can reach this server at (e.g. "
+        "http://NAS-address:8765). It shows here when WCCG_PUBLIC_URL is set.",
+    "토큰 발급 시각": "Token issued at",
+    "토큰 재발급": "Reissue token",
+    "이전 모드를 끄고 스크래핑·스케줄·크롤을 재개할까요? 발급된 토큰은 무효화됩니다.":
+        "Turn off migration mode and resume scraping, schedules, and crawls? The "
+        "issued token will be invalidated.",
+    "이전 모드 끄기 (스크래핑 재개)": "Turn off migration mode (resume scraping)",
+    "이전 모드를 켜면 이 서버의 스크래핑·스케줄·크롤이 모두 중단됩니다. 계속할까요?":
+        "Turning on migration mode halts all scraping, schedules, and crawls on this "
+        "server. Continue?",
+    "이전 모드 켜기 + 토큰 발급": "Turn on migration mode + issue token",
+
+    # ---- 이전 관련 라우트 메시지 ----
+    "이미 설정이 완료되었습니다": "Setup is already complete",
+    "이전 모드가 켜졌습니다 — 스크래핑·스케줄·크롤이 중단됩니다.":
+        "Migration mode is on — scraping, schedules, and crawls are halted.",
+    "이전 모드를 껐습니다 — 스크래핑·스케줄·크롤이 재개됩니다.":
+        "Migration mode is off — scraping, schedules, and crawls resume.",
+    "이전(마이그레이션) 모드입니다 — 데이터 이전 중에는 아카이빙할 수 없습니다. 시스템 설정에서 이전 모드를 끄세요.":
+        "Migration mode is on — you cannot archive during data migration. Turn off "
+        "migration mode in system settings.",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

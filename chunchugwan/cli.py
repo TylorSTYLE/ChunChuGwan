@@ -21,6 +21,20 @@ from . import (
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
 
 
+def _warn_if_migrating() -> bool:
+    """이전(마이그레이션) 모드면 안내를 출력하고 True 를 반환한다.
+
+    이전 모드 동안 워커·스케줄러·크롤이 코어에서 no-op 이므로, CLI 도
+    사용자에게 명확히 알린다 (시스템 설정에서 이전 모드를 꺼야 재개).
+    """
+    with db.connect() as conn:
+        if db.migration_mode_enabled(conn):
+            click.echo("이전(마이그레이션) 모드입니다 — 데이터 이전 중에는 "
+                       "아카이빙·스케줄·크롤이 중단됩니다. 시스템 설정에서 이전 모드를 끄세요.")
+            return True
+    return False
+
+
 @click.group()
 @click.version_option(__version__, "-V", "--version", message="춘추관 %(version)s")
 @click.option("-v", "--verbose", is_flag=True, help="단계별 상세 로그를 stderr 로 출력")
@@ -75,6 +89,8 @@ def add(url: str, force: bool) -> None:
         norm = storage.normalize_url(url)
     except ValueError as e:
         raise click.ClickException(str(e))
+    if _warn_if_migrating():
+        return
     with db.connect() as conn:
         queued = db.enqueue_archive_job(conn, norm, force=force, source="cli")
     if queued:
@@ -103,6 +119,8 @@ def archive_run() -> None:
     `wccg crawl run`/`schedule run` 과 대칭. worker 를 상주시키지 않는 배포에서
     cron 으로 돌려 큐를 소비한다 (serve/worker 가 돌고 있으면 자동 처리되므로 불필요).
     """
+    if _warn_if_migrating():
+        return
     ran = 0
     while True:
         step = archive_worker.process_next()
@@ -372,6 +390,8 @@ def schedule_run() -> None:
     크롤 스케줄도 함께 새 크롤로 등록한다 — 등록된 크롤의 페이지 처리는
     `wccg crawl run` (또는 serve 의 크롤러)이 맡는다.
     """
+    if _warn_if_migrating():
+        return
     results = scheduler.run_due()
     crawl_steps = crawler.run_due_schedules()
     if not results and not crawl_steps:
@@ -434,6 +454,8 @@ def crawl_add(
     같은 시작 URL 의 크롤이 이미 진행 중이면 새로 만들지 않고 그 크롤에
     병합된다 (이번에 넘긴 옵션은 무시).
     """
+    if _warn_if_migrating():
+        return
     try:
         row, merged = crawler.start_crawl(
             url, max_pages=max_pages, max_depth=max_depth,
@@ -511,6 +533,8 @@ def crawl_run() -> None:
     간격이 강제되므로 한 번 실행에 크롤당 한 페이지꼴로 처리된다. 간격보다
     짧은 주기의 cron 으로 돌리면 큐가 계속 소비된다.
     """
+    if _warn_if_migrating():
+        return
     ran = _echo_crawl_schedule_steps(crawler.run_due_schedules())
     while True:
         step = crawler.process_next()
@@ -785,7 +809,7 @@ def _counts_label(manifest: dict) -> str:
 @main.command()
 @click.argument("dest", type=click.Path(path_type=Path), default=".", required=False)
 def backup(dest: Path) -> None:
-    """전체 백업 tar.gz 생성 — DB(인증 포함)·스냅샷 파일·rules.json."""
+    """전체 백업 파일(.ccg.backup) 생성 — DB(인증 포함)·스냅샷 파일·rules.json."""
     try:
         out = backup_mod.create_backup(dest)
     except OSError as e:
@@ -798,6 +822,10 @@ def backup(dest: Path) -> None:
 @click.option("--yes", is_flag=True, help="확인 없이 진행")
 def restore(src: Path, yes: bool) -> None:
     """전체 백업에서 복원 — 현재 아카이브 루트를 백업 시점 상태로 교체."""
+    if not backup_mod.is_backup_filename(src.name):
+        raise click.ClickException(
+            f"복원은 {backup_mod.BACKUP_SUFFIX} 확장자 파일만 받습니다: {src.name}"
+        )
     try:
         manifest = backup_mod.read_manifest(src)
     except (ValueError, tarfile.TarError, OSError) as e:
@@ -840,6 +868,10 @@ def export(dest: Path) -> None:
 @click.option("--yes", is_flag=True, help="overwrite 확인 없이 진행")
 def import_cmd(src: Path, mode: str, yes: bool) -> None:
     """내보낸 아카이브 데이터 가져오기 (인증 데이터는 건드리지 않음)."""
+    if not backup_mod.is_export_filename(src.name):
+        raise click.ClickException(
+            f"가져오기는 {backup_mod.EXPORT_SUFFIX} 확장자 파일만 받습니다: {src.name}"
+        )
     if mode == "overwrite" and not yes:
         click.confirm(
             "기존 아카이브 데이터(페이지·스냅샷·확인 기록·파일)를 모두 지우고 가져옵니다. "

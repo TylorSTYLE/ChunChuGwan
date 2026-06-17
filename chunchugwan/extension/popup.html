@@ -78,6 +78,12 @@
     <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text" data-i18n="header_not_connected"></span></div>
   </header>
 
+  <!-- 업데이트 안내 (서버가 더 최신일 때만 노출 — popup.js 가 표시) -->
+  <div class="note warn" id="update-banner" style="display:none;border-radius:0;margin-top:0">
+    <span id="update-text"></span>
+    <button class="btn primary" id="update-reinstall" style="margin-top:6px" data-i18n="update_reinstall"></button>
+  </div>
+
   <nav>
     <button data-tab="connect" data-i18n="tab_connect" class="active"></button>
     <button data-tab="archive" data-i18n="tab_archive"></button>
@@ -113,8 +119,27 @@
   <section class="tab" id="tab-archive">
     <h3 data-i18n="tab_archive"></h3>
     <p class="muted" data-i18n="archive_intro"></p>
+
+    <!-- 브라우저 캡처 (서버 무요청 — 지금 보고 있는 화면을 그대로) -->
+    <button class="btn primary" id="capture-browser" data-i18n="capture_btn"></button>
+    <p class="muted" data-i18n="capture_hint"></p>
+    <div class="note warn" id="capture-notice" data-i18n="capture_notice"></div>
+    <!-- 사설 호스트 네트워크 태그 (서버가 태그를 요구하면 노출) -->
+    <div id="tag-picker" style="display:none">
+      <label data-i18n="tag_pick_label"></label>
+      <select id="tag-select"></select>
+      <button class="btn" id="tag-use" data-i18n="tag_use"></button>
+      <label data-i18n="tag_new_label"></label>
+      <div class="row">
+        <input type="text" id="tag-new" placeholder="사무실">
+        <button class="btn" id="tag-add" data-i18n="tag_add"></button>
+      </div>
+    </div>
+
+    <hr style="border:0;border-top:1px solid var(--border);margin:12px 0">
+    <p class="muted" data-i18n="archive_server_intro"></p>
     <div class="row">
-      <button class="btn primary" id="archive-page" data-i18n="archive_page_btn"></button>
+      <button class="btn" id="archive-page" data-i18n="archive_page_btn"></button>
       <button class="btn" id="archive-site" data-i18n="archive_site_btn"></button>
     </div>
     <label class="consent"><input type="checkbox" id="force"><span data-i18n="archive_force"></span></label>

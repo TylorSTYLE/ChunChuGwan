@@ -150,19 +150,34 @@ def test_backup_download_and_restore_upload(client, tmp_path, monkeypatch):
     res = client.post("/system/backup")
     assert res.status_code == 200
     assert res.headers["content-type"] == "application/gzip"
-    assert "chunchugwan-backup-" in res.headers["content-disposition"]
+    cd = res.headers["content-disposition"]
+    assert "chunchugwan-backup-" in cd and ".ccg.backup" in cd
     payload = res.content
 
     _patch_root(monkeypatch, tmp_path / "b")  # 빈 루트로 전환 후 복원
     assert _page_count() == 0
     res = client.post(
         "/system/restore",
-        files={"file": ("b.tar.gz", io.BytesIO(payload), "application/gzip")},
+        files={"file": ("b.ccg.backup", io.BytesIO(payload), "application/gzip")},
         follow_redirects=False,
     )
     assert res.status_code == 303
     assert "/system?notice=" in res.headers["location"]
     assert _page_count() == 1
+
+
+def test_restore_rejects_non_backup_extension(client, tmp_path, monkeypatch):
+    """복원 업로드 파일명이 .ccg.backup 가 아니면 내용을 읽기 전에 거부한다."""
+    payload = client.post("/system/backup").content
+    _patch_root(monkeypatch, tmp_path / "b")
+    res = client.post(
+        "/system/restore",
+        files={"file": ("b.tar.gz", io.BytesIO(payload), "application/gzip")},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert "error=" in res.headers["location"]
+    assert _page_count() == 0
 
 
 def test_export_download_and_import_upload(client, tmp_path, monkeypatch):
@@ -172,7 +187,7 @@ def test_export_download_and_import_upload(client, tmp_path, monkeypatch):
     for _ in range(2):  # 두 번째는 멱등 스킵
         res = client.post(
             "/system/import", data={"mode": "merge"},
-            files={"file": ("e.tar.gz", io.BytesIO(payload), "application/gzip")},
+            files={"file": ("e.ccg.export", io.BytesIO(payload), "application/gzip")},
             follow_redirects=False,
         )
         assert res.status_code == 303
@@ -190,12 +205,13 @@ def test_site_export_download_and_import(client, tmp_path, monkeypatch):
     res = client.post(f"/sites/{site_id}/export")
     assert res.status_code == 200
     assert res.headers["content-type"] == "application/gzip"
-    assert "chunchugwan-export-example.com-" in res.headers["content-disposition"]
+    cd = res.headers["content-disposition"]
+    assert "chunchugwan-export-example.com-" in cd and ".ccg.export" in cd
 
     _patch_root(monkeypatch, tmp_path / "b")
     up = client.post(
         "/system/import", data={"mode": "merge"},
-        files={"file": ("e.tar.gz", io.BytesIO(res.content), "application/gzip")},
+        files={"file": ("e.ccg.export", io.BytesIO(res.content), "application/gzip")},
         follow_redirects=False,
     )
     assert up.status_code == 303 and "notice=" in up.headers["location"]
@@ -211,9 +227,10 @@ def test_site_export_unknown_site_404(client):
 def test_restore_rejects_export_file(client, tmp_path, monkeypatch):
     payload = client.post("/system/export").content
     _patch_root(monkeypatch, tmp_path / "b")
+    # 확장자 게이트는 통과(.ccg.backup)시키되 내용이 내보내기라 거부돼야 한다
     res = client.post(
         "/system/restore",
-        files={"file": ("e.tar.gz", io.BytesIO(payload), "application/gzip")},
+        files={"file": ("e.ccg.backup", io.BytesIO(payload), "application/gzip")},
         follow_redirects=False,
     )
     assert res.status_code == 303
@@ -224,7 +241,19 @@ def test_restore_rejects_export_file(client, tmp_path, monkeypatch):
 def test_import_rejects_garbage(client):
     res = client.post(
         "/system/import", data={"mode": "merge"},
-        files={"file": ("x.tar.gz", io.BytesIO(b"not a tar"), "application/gzip")},
+        files={"file": ("x.ccg.export", io.BytesIO(b"not a tar"), "application/gzip")},
+        follow_redirects=False,
+    )
+    assert res.status_code == 303
+    assert "error=" in res.headers["location"]
+
+
+def test_import_rejects_non_export_extension(client):
+    """업로드 파일명이 .ccg.export 가 아니면 내용을 읽기 전에 거부한다."""
+    payload = client.post("/system/export").content
+    res = client.post(
+        "/system/import", data={"mode": "merge"},
+        files={"file": ("e.tar.gz", io.BytesIO(payload), "application/gzip")},
         follow_redirects=False,
     )
     assert res.status_code == 303

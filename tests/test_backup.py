@@ -85,6 +85,7 @@ def test_backup_restore_roundtrip(roots, tmp_path, monkeypatch):
     root_a, root_b = roots
     out = backup.create_backup(tmp_path)
     assert out.name.startswith("chunchugwan-backup-")
+    assert out.name.endswith(".ccg.backup")
 
     _patch_root(monkeypatch, root_b)
     backup.restore_backup(out)
@@ -130,6 +131,34 @@ def test_export_import_includes_documents(roots, tmp_path, monkeypatch):
     assert n == 1
 
 
+def test_export_import_preserves_provenance(roots, tmp_path, monkeypatch):
+    """확장 캡처 출처(origin/incomplete)와 client_captured 표식이 라운드트립된다."""
+    root_a, root_b = roots
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE snapshots SET origin = 'extension', incomplete = 1 WHERE dir_name = ?",
+            ("2026-06-02T00-00-00",),
+        )
+        conn.execute("UPDATE pages SET client_captured = 1 WHERE url = ?", (URL_A,))
+        conn.commit()
+    out = backup.export_archive(tmp_path / "e.tar.gz")
+
+    _patch_root(monkeypatch, root_b)
+    backup.import_archive(out, mode="merge")
+    with db.connect() as conn:
+        assert db.get_page(conn, URL_A)["client_captured"] == 1
+        ext = conn.execute(
+            "SELECT origin, incomplete FROM snapshots WHERE dir_name = ?",
+            ("2026-06-02T00-00-00",),
+        ).fetchone()
+        assert ext["origin"] == "extension" and ext["incomplete"] == 1
+        srv = conn.execute(
+            "SELECT origin, incomplete FROM snapshots WHERE dir_name = ?",
+            ("2026-06-01T00-00-00",),
+        ).fetchone()
+        assert srv["origin"] == "server" and srv["incomplete"] == 0
+
+
 def test_export_site_only(roots, tmp_path, monkeypatch):
     """site_id 한정 내보내기 — 소속 페이지·스냅샷·참조 CAS 만 담긴다."""
     root_a, root_b = roots
@@ -145,6 +174,7 @@ def test_export_site_only(roots, tmp_path, monkeypatch):
 
     out = backup.export_archive(tmp_path, site_id=site_id)
     assert out.name.startswith("chunchugwan-export-example.com-")
+    assert out.name.endswith(".ccg.export")
     with tarfile.open(out) as tar:
         names = tar.getnames()
     assert any(n.startswith("sites/example.com/") for n in names)
@@ -359,6 +389,7 @@ def test_export_import_into_empty_root(roots, tmp_path, monkeypatch):
     root_a, root_b = roots
     out = backup.export_archive(tmp_path)
     assert out.name.startswith("chunchugwan-export-")
+    assert out.name.endswith(".ccg.export")
 
     _patch_root(monkeypatch, root_b)
     with db.connect() as conn:
@@ -461,49 +492,70 @@ def test_import_rejects_path_traversal_components(roots, tmp_path, monkeypatch):
 def test_cli_backup_and_restore(roots, tmp_path, monkeypatch):
     root_a, root_b = roots
     runner = CliRunner()
-    result = runner.invoke(cli.main, ["backup", str(tmp_path / "out.tar.gz")])
+    out = tmp_path / "out.ccg.backup"
+    result = runner.invoke(cli.main, ["backup", str(out)])
     assert result.exit_code == 0, result.output
     assert "백업 생성" in result.output
 
     _patch_root(monkeypatch, root_b)
     # 확인 프롬프트에서 거부하면 중단
-    result = runner.invoke(cli.main, ["restore", str(tmp_path / "out.tar.gz")], input="n\n")
+    result = runner.invoke(cli.main, ["restore", str(out)], input="n\n")
     assert result.exit_code != 0
     assert _counts()["pages"] == 0
 
-    result = runner.invoke(cli.main, ["restore", str(tmp_path / "out.tar.gz"), "--yes"])
+    result = runner.invoke(cli.main, ["restore", str(out), "--yes"])
     assert result.exit_code == 0, result.output
     assert "복원 완료" in result.output
     assert _counts()["pages"] == 2
 
 
+def test_cli_restore_rejects_non_backup_extension(roots, tmp_path):
+    """복원은 .ccg.backup 확장자가 아니면 거부한다."""
+    out = backup.create_backup(tmp_path)  # 기본 .ccg.backup 파일
+    wrong = out.rename(tmp_path / "renamed.tar.gz")
+    result = CliRunner().invoke(cli.main, ["restore", str(wrong), "--yes"])
+    assert result.exit_code != 0
+    assert ".ccg.backup" in result.output
+
+
 def test_cli_export_and_import(roots, tmp_path, monkeypatch):
     root_a, root_b = roots
     runner = CliRunner()
-    result = runner.invoke(cli.main, ["export", str(tmp_path / "e.tar.gz")])
+    src = tmp_path / "e.ccg.export"
+    result = runner.invoke(cli.main, ["export", str(src)])
     assert result.exit_code == 0, result.output
 
     _patch_root(monkeypatch, root_b)
-    result = runner.invoke(cli.main, ["import", str(tmp_path / "e.tar.gz")])
+    result = runner.invoke(cli.main, ["import", str(src)])
     assert result.exit_code == 0, result.output
     assert "페이지 +2" in result.output
 
     # overwrite 는 --yes 없이 프롬프트, 거부 시 중단
     result = runner.invoke(
-        cli.main, ["import", str(tmp_path / "e.tar.gz"), "--mode", "overwrite"], input="n\n"
+        cli.main, ["import", str(src), "--mode", "overwrite"], input="n\n"
     )
     assert result.exit_code != 0
 
     result = runner.invoke(
-        cli.main, ["import", str(tmp_path / "e.tar.gz"), "--mode", "overwrite", "--yes"]
+        cli.main, ["import", str(src), "--mode", "overwrite", "--yes"]
     )
     assert result.exit_code == 0, result.output
     assert "스킵 0" in result.output  # overwrite 후라 전부 새로 들어감
 
 
+def test_cli_import_rejects_non_export_extension(roots, tmp_path):
+    """가져오기는 .ccg.export 확장자가 아니면 거부한다."""
+    src = backup.export_archive(tmp_path)  # 기본 .ccg.export 파일
+    wrong = src.rename(tmp_path / "renamed.tar.gz")
+    result = CliRunner().invoke(cli.main, ["import", str(wrong)])
+    assert result.exit_code != 0
+    assert ".ccg.export" in result.output
+
+
 def test_cli_restore_rejects_export_file(roots, tmp_path, monkeypatch):
     root_a, root_b = roots
-    out = backup.export_archive(tmp_path / "e.tar.gz")
+    # 확장자 게이트는 통과시키되(.ccg.backup) 내용이 내보내기(kind=archive)라 거부
+    out = backup.export_archive(tmp_path / "e.ccg.backup")
     _patch_root(monkeypatch, root_b)
     result = CliRunner().invoke(cli.main, ["restore", str(out), "--yes"])
     assert result.exit_code != 0

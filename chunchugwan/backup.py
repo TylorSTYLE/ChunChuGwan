@@ -39,6 +39,13 @@ FORMAT_VERSION = 4
 MANIFEST_NAME = "manifest.json"
 ARCHIVE_DATA_NAME = "archive.json"
 
+# 아카이브 내보내기 파일 확장자 — 내용은 tar.gz 지만 가져오기는 이 확장자만
+# 인식한다(전체 백업 .ccg.backup 와 구분). 강제는 사용자 경계(CLI import·웹 업로드).
+EXPORT_SUFFIX = ".ccg.export"
+# 전체 백업 파일 확장자 — 내용은 tar.gz 지만 복원은 이 확장자만 인식한다.
+# 강제는 사용자 경계(CLI restore·웹 업로드).
+BACKUP_SUFFIX = ".ccg.backup"
+
 # DB 값 → 파일시스템 경로 조립 시 path traversal 방지용 형식 검증
 _DOMAIN_RE = re.compile(r"^[a-z0-9.-]+(:[0-9]+)?$")
 _SLUG_RE = re.compile(r"^[a-z0-9-]+$")
@@ -62,12 +69,22 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _resolve_dest(dest: Path, prefix: str) -> Path:
+def _resolve_dest(dest: Path, prefix: str, ext: str = ".tar.gz") -> Path:
     """dest 가 디렉토리면 시각 붙은 기본 파일명을 만들고, 아니면 그대로 쓴다."""
     if dest.is_dir():
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        return dest / f"{prefix}-{stamp}.tar.gz"
+        return dest / f"{prefix}-{stamp}{ext}"
     return dest
+
+
+def is_export_filename(name: str) -> bool:
+    """가져오기 입력 파일명이 내보내기 확장자(.ccg.export)인지 — 대소문자 무시."""
+    return name.lower().endswith(EXPORT_SUFFIX)
+
+
+def is_backup_filename(name: str) -> bool:
+    """복원 입력 파일명이 전체 백업 확장자(.ccg.backup)인지 — 대소문자 무시."""
+    return name.lower().endswith(BACKUP_SUFFIX)
 
 
 def _consistent_db_copy(out: Path) -> None:
@@ -113,7 +130,7 @@ def read_manifest(src: Path) -> dict:
 def create_backup(dest: Path) -> Path:
     """전체 백업 tar.gz 생성 후 경로 반환. DB(인증 포함)·sites·rules.json 포함."""
     config.ensure_dirs()
-    out = _resolve_dest(dest, "chunchugwan-backup")
+    out = _resolve_dest(dest, "chunchugwan-backup", ext=BACKUP_SUFFIX)
     with db.connect() as conn:
         counts = _archive_counts(conn)
     manifest = {
@@ -197,6 +214,50 @@ def restore_backup(src: Path) -> dict:
     return manifest
 
 
+def finalize_migration(staging: Path) -> None:
+    """춘추관 간 네트워크 이전(파일 단위 Pull)의 마무리 — 스테이징 디렉토리를
+    아카이브 루트로 합쳐 데이터를 교체한다.
+
+    `restore_backup` 과 같은 '아카이브 루트를 통째로 교체' 의미이나, 입력이
+    tar.gz 가 아니라 받는 쪽이 파일 단위로 받아 쌓은 스테이징 디렉토리다
+    (index.db + sites/resources/documents/rules.json, 일부 파일이 빠질 수 있음 —
+    빠진 스냅샷 파일은 뷰어에서 graceful 404). DB 는 항상 완전 전송된 전제.
+    staging 은 CACHE_DIR 밖(ARCHIVE_ROOT 직속)이어야 한다 — 캐시를 비울 때
+    스테이징이 함께 지워지지 않도록.
+    """
+    db_file = staging / "index.db"
+    if not db_file.is_file():
+        raise ValueError("이전 스테이징에 index.db 가 없습니다")
+    config.ensure_dirs()
+    _replace_db_file(db_file)
+
+    for name, target in (
+        ("sites", config.SITES_DIR),
+        ("resources", config.RESOURCES_DIR),
+        ("documents", config.DOCUMENTS_DIR),
+    ):
+        shutil.rmtree(target, ignore_errors=True)
+        src = staging / name
+        if src.is_dir():
+            shutil.move(str(src), str(target))
+        elif name == "sites":
+            target.mkdir(parents=True, exist_ok=True)
+
+    config.RULES_PATH.unlink(missing_ok=True)
+    rules_src = staging / "rules.json"
+    if rules_src.is_file():
+        shutil.move(str(rules_src), str(config.RULES_PATH))
+
+    # 소스 DB 는 이전 모드(migration_mode=on)·소스 토큰 해시를 담고 있다 —
+    # 받는 쪽이 그대로 켜진 채 시작하지 않도록 끈다 (정상 서비스로 시작).
+    with db.connect() as conn:
+        db.set_migration_mode(conn, False)
+
+    # 파생물 캐시는 새 데이터와 어긋날 수 있으므로 비운다 (staging 은 캐시 밖이라 안전)
+    shutil.rmtree(config.CACHE_DIR, ignore_errors=True)
+    shutil.rmtree(staging, ignore_errors=True)
+
+
 # ---- 아카이브 데이터 내보내기/가져오기 ----
 
 
@@ -222,7 +283,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 raise ValueError(f"사이트 없음: {site_id}")
             prefix += "-" + site["site_key"].replace(":", "_")
         pages = [
-            {k: r[k] for k in ("url", "domain", "slug", "created_at")}
+            {k: r[k] for k in ("url", "domain", "slug", "client_captured", "created_at")}
             for r in conn.execute(f"SELECT * FROM pages p{where} ORDER BY p.id", args)
         ]
         snapshots = [
@@ -231,6 +292,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 for k in (
                     "page_url", "domain", "slug", "taken_at", "dir_name",
                     "content_hash", "final_url", "http_status", "changed", "note",
+                    "origin", "incomplete",
                 )
             }
             for r in conn.execute(
@@ -371,7 +433,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
             )
         ]
 
-    out = _resolve_dest(dest, prefix)
+    out = _resolve_dest(dest, prefix, ext=EXPORT_SUFFIX)
     counts = {"pages": len(pages), "snapshots": len(snapshots), "checks": len(checks)}
     manifest = {
         "kind": "archive",
@@ -579,11 +641,12 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     site_id = db.get_or_create_site(conn, storage.site_key(p["url"]))
                     cur = conn.execute(
                         """
-                        INSERT INTO pages (url, domain, slug, site_id, created_at)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO pages
+                            (url, domain, slug, site_id, client_captured, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         (p["url"], p["domain"], p["slug"], site_id,
-                         p["created_at"] or _utcnow()),
+                         int(p.get("client_captured", 0)), p["created_at"] or _utcnow()),
                     )
                     page_ids[p["url"]] = cur.lastrowid
                     page_paths[p["url"]] = (p["domain"], p["slug"])
@@ -611,6 +674,8 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     content_hash=s["content_hash"], final_url=s["final_url"],
                     http_status=s.get("http_status"),
                     changed=int(s.get("changed", 1)), note=s.get("note"),
+                    origin=s.get("origin", "server"),
+                    incomplete=int(s.get("incomplete", 0)),
                 )
                 result.snapshots_added += 1
 

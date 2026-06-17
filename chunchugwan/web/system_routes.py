@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 import shutil
@@ -34,16 +35,29 @@ logger = logging.getLogger(__name__)
 
 
 def _require_admin(request: Request) -> None:
-    """관리자 게이트. 로그인 자체는 미들웨어가 보장한다."""
-    if not permissions.system_allowed(request.state.user):
-        raise HTTPException(403, t(request, "관리자만 접근할 수 있습니다"))
+    """/system 영역 게이트 — 경로에 따라 사용자 관리(manage_users) 또는
+    시스템 관리(manage_system) 권한을 요구한다. 로그인 자체는 미들웨어가 보장.
+
+    /system/users·/system/api-keys 는 사용자 관리, 그 외 시스템 설정·백업·복원·
+    네트워크·로그 등은 시스템 관리 권한이다. 두 권한은 세분 권한 오버라이드로
+    분리 부여할 수 있어 한 관리자에게만 사용자 관리를 맡기는 식이 가능하다.
+    """
+    path = request.url.path
+    if path.startswith("/system/users") or path.startswith("/system/api-keys"):
+        if not permissions.can_manage_users(request.state.user):
+            raise HTTPException(403, t(request, "사용자 관리 권한이 없습니다"))
+    else:
+        if not permissions.can_manage_system(request.state.user):
+            raise HTTPException(403, t(request, "시스템 관리 권한이 없습니다"))
 
 
 router = APIRouter(prefix="/system", dependencies=[Depends(_require_admin)])
 
 
 @router.get("", response_class=HTMLResponse)
-def system_view(request: Request, notice: str = "", error: str = ""):
+def system_view(
+    request: Request, notice: str = "", error: str = "", migration_token: str = ""
+):
     with db.connect() as conn:
         counts = {
             t: conn.execute(f"SELECT COUNT(*) AS c FROM {t}").fetchone()["c"]
@@ -51,6 +65,10 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         }
         signup_enabled = db.signup_enabled(conn)
         signup_default_role = db.signup_default_role(conn)
+        signup_role_choices = db.signup_roles(conn)
+        role_labels = db.role_labels(conn)
+        email_verification_enabled = db.email_verification_enabled(conn)
+        email_verification_ttl_minutes = db.email_verification_ttl_minutes(conn)
         crawl_defaults = crawler.crawl_defaults(conn)
         crawl_backoff = crawler.retry_backoff(conn)
         network_tags = db.list_network_tags(conn)
@@ -59,6 +77,10 @@ def system_view(request: Request, notice: str = "", error: str = ""):
         doc_limits = documents.limits(conn)
         smtp = mailer.resolve_config(conn)
         smtp_has_password = db.get_setting(conn, db.SMTP_PASSWORD_KEY) not in (None, "")
+        migration_mode = db.migration_mode_enabled(conn)
+        migration_token_created_at = db.get_setting(
+            conn, db.MIGRATION_TOKEN_CREATED_AT_KEY
+        )
     usage = storage.archive_disk_usage()
     return templates.TemplateResponse(
         request, "system.html",
@@ -67,8 +89,14 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "counts": counts,
             "signup_enabled": signup_enabled,
             "signup_default_role": signup_default_role,
-            "signup_roles": db.SIGNUP_ROLES,
-            "role_labels": db.ROLE_LABELS,
+            "signup_roles": signup_role_choices,
+            "email_verification_enabled": email_verification_enabled,
+            "email_verification_ttl_minutes": email_verification_ttl_minutes,
+            "email_verification_ttl_limits": {
+                "min": config.EMAIL_VERIFICATION_TTL_MINUTES_MIN,
+                "max": config.EMAIL_VERIFICATION_TTL_MINUTES_MAX,
+            },
+            "role_labels": role_labels,
             "crawl_defaults": crawl_defaults,
             "crawl_retry_backoff": ", ".join(str(v) for v in crawl_backoff),
             "crawl_max_attempts": len(crawl_backoff) + 1,
@@ -122,6 +150,10 @@ def system_view(request: Request, notice: str = "", error: str = ""):
             "optimize_pending": sum(optimize.pending_counts()),
             "search": searchindex.verify(),
             "search_reindex": reindex_status(),
+            "migration_mode": migration_mode,
+            "migration_token_created_at": migration_token_created_at,
+            "migration_token": migration_token,
+            "public_url": config.PUBLIC_URL,
             "notice": notice, "error": error,
         },
     )
@@ -222,7 +254,7 @@ def tar_download(make: Callable[[Path], Path], prefix: str) -> FileResponse:
 
 @router.post("/backup")
 def system_backup(request: Request) -> FileResponse:
-    """전체 백업 tar.gz 다운로드 (DB·인증 데이터·스냅샷 파일·rules.json)."""
+    """전체 백업 파일(.ccg.backup) 다운로드 (DB·인증 데이터·스냅샷 파일·rules.json)."""
     audit.log(request, "전체 백업 다운로드")
     return tar_download(backup_mod.create_backup, "backup")
 
@@ -363,12 +395,12 @@ def system_settings(
     signup_default_role: str = Form("pending"),
 ):
     """가입 설정 저장 — 회원 가입 허용 여부와 가입 계정의 초기 권한."""
-    if signup_default_role not in db.SIGNUP_ROLES:
-        raise HTTPException(
-            400, t(request, "가입 초기 권한으로 쓸 수 없는 역할: {role}",
-                   role=repr(signup_default_role))
-        )
     with db.connect() as conn:
+        if signup_default_role not in db.signup_roles(conn):
+            raise HTTPException(
+                400, t(request, "가입 초기 권한으로 쓸 수 없는 역할: {role}",
+                       role=repr(signup_default_role))
+            )
         db.set_setting(
             conn, db.SIGNUP_ENABLED_KEY, "on" if signup_enabled else "off"
         )
@@ -378,6 +410,40 @@ def system_settings(
         "허용" if signup_enabled else "차단", signup_default_role,
     )
     return _system_redirect(notice=t(request, "가입 설정을 저장했습니다."))
+
+
+@router.post("/email-verification-settings")
+def system_email_verification_settings(
+    request: Request,
+    email_verification_enabled: bool = Form(False),
+    email_verification_ttl_minutes: int = Form(...),
+):
+    """이메일 본인 인증 설정 저장 — 사용 여부와 코드 만료 시간(분).
+
+    SMTP 가 설정되지 않으면 켜더라도 동작하지 않는다 (로그인 게이트가 무시).
+    """
+    lo = config.EMAIL_VERIFICATION_TTL_MINUTES_MIN
+    hi = config.EMAIL_VERIFICATION_TTL_MINUTES_MAX
+    if not (lo <= email_verification_ttl_minutes <= hi):
+        return _system_redirect(
+            error=t(request, "인증 코드 만료 시간은 {lo} ~ {hi}분 사이여야 합니다.",
+                    lo=lo, hi=hi)
+        )
+    with db.connect() as conn:
+        db.set_setting(
+            conn, db.EMAIL_VERIFICATION_ENABLED_KEY,
+            "on" if email_verification_enabled else "off",
+        )
+        db.set_setting(
+            conn, db.EMAIL_VERIFICATION_TTL_MINUTES_KEY,
+            str(email_verification_ttl_minutes),
+        )
+    audit.log(
+        request, "이메일 본인 인증 설정 변경: %s, 코드 만료 %d분",
+        "사용" if email_verification_enabled else "사용 안 함",
+        email_verification_ttl_minutes,
+    )
+    return _system_redirect(notice=t(request, "이메일 본인 인증 설정을 저장했습니다."))
 
 
 @router.post("/crawl-settings")
@@ -682,6 +748,10 @@ def system_restore(request: Request, file: UploadFile = File(...)):
     복원되면 세션 테이블도 백업 시점으로 돌아가므로 현재 로그인은 무효가
     될 수 있다 (미들웨어가 /login 으로 보낸다).
     """
+    if not backup_mod.is_backup_filename(file.filename or ""):
+        return _system_redirect(
+            error=t(request, "복원은 .ccg.backup 확장자 파일만 받습니다.")
+        )
     tmp = _save_upload(file)
     try:
         manifest = backup_mod.restore_backup(tmp)
@@ -702,6 +772,52 @@ def system_restore(request: Request, file: UploadFile = File(...)):
     )
 
 
+# ---- 춘추관 간 데이터 이전(마이그레이션) ----
+
+
+def _issue_migration_token(request: Request) -> RedirectResponse:
+    """이전 토큰을 발급(또는 재발급)하고 모드를 켠다. 토큰 원문은 1회만 노출한다.
+
+    토큰은 SHA-256 해시만 저장한다 (원칙 6 단방향, API 키와 동일). 원문은
+    API 키 발급과 같은 방식으로 리다이렉트 쿼리에 실어 시스템 화면에서 1회 표시.
+    """
+    token = secrets.token_urlsafe(32)
+    with db.connect() as conn:
+        db.set_migration_mode(conn, True, auth.hash_token(token))
+    query = urlencode({
+        "migration_token": token,
+        "notice": t(request, "이전 모드가 켜졌습니다 — 스크래핑·스케줄·크롤이 중단됩니다."),
+    })
+    return RedirectResponse(f"/system?{query}", status_code=303)
+
+
+@router.post("/migration/enable")
+def migration_enable(request: Request):
+    """이전 모드 ON + 토큰 발급. 받는 쪽이 이 토큰으로 데이터를 가져간다."""
+    audit.log(request, "이전(마이그레이션) 모드 켬 — 토큰 발급")
+    return _issue_migration_token(request)
+
+
+@router.post("/migration/regenerate")
+def migration_regenerate(request: Request):
+    """이전 토큰 재발급 (이전 토큰은 무효화). 모드는 켜진 채로 둔다."""
+    audit.log(request, "이전(마이그레이션) 토큰 재발급")
+    return _issue_migration_token(request)
+
+
+@router.post("/migration/disable")
+def migration_disable(request: Request):
+    """이전 모드 OFF + 토큰 무효화 — 스크래핑·스케줄·크롤을 재개한다."""
+    from .. import migration as migration_mod
+    with db.connect() as conn:
+        db.set_migration_mode(conn, False)
+    migration_mod.cleanup_source()
+    audit.log(request, "이전(마이그레이션) 모드 끔 — 스크래핑 재개")
+    return _system_redirect(
+        notice=t(request, "이전 모드를 껐습니다 — 스크래핑·스케줄·크롤이 재개됩니다.")
+    )
+
+
 # ---- 사용자 관리 ----
 
 
@@ -714,15 +830,38 @@ def users_view(request: Request, notice: str = "", error: str = ""):
         users = db.list_users(conn)
         invites = db.list_invites(conn)
         mail_on = mailer.mail_enabled(conn)
+        presets = db.role_presets(conn)
+        assignable = db.assignable_roles(conn)
+        invitable = db.invitable_roles(conn)
+        role_labels = db.role_labels(conn)
+        permission_role_names = db.permission_group_names(conn)
+    # 세분 권한 편집기용 — 사용자별 실효 권한 + 프리셋과 다른(오버라이드된) 항목
+    user_perms = {
+        u["id"]: {
+            "effective": sorted(
+                db.effective_permissions(
+                    u["role"], u["permission_overrides"], presets=presets
+                )
+            ),
+            "overridden": sorted(
+                db.parse_permission_overrides(u["permission_overrides"])
+            ),
+        }
+        for u in users
+    }
     return templates.TemplateResponse(
         request, "users.html",
         {
             "users": users,
             "invites": invites,
             "me_id": me["id"] if me else None,
-            "roles": db.ASSIGNABLE_ROLES,
-            "invitable_roles": db.INVITABLE_ROLES,
-            "role_labels": db.ROLE_LABELS,
+            "roles": assignable,
+            "invitable_roles": invitable,
+            "role_labels": role_labels,
+            "permission_roles": permission_role_names,
+            "permissions_catalog": db.PERMISSIONS,
+            "permission_labels": db.PERMISSION_LABELS,
+            "user_perms": user_perms,
             "mail_enabled": mail_on,
             "invite_ttl_days": config.INVITE_TTL_DAYS,
             "notice": notice, "error": error,
@@ -742,9 +881,12 @@ def users_set_role(request: Request, user_id: int, role: str = Form(...)):
     탈퇴(withdrawn)는 본인 탈퇴로만 진입하므로 부여할 수 없고, 탈퇴한
     계정의 권한도 되돌릴 수 없다 — 계정 정보 삭제 후 재가입/초대가 경로다.
     """
-    if role not in db.ASSIGNABLE_ROLES:
-        raise HTTPException(400, t(request, "부여할 수 없는 역할: {role}", role=repr(role)))
     with db.connect() as conn:
+        if role not in db.assignable_roles(conn):
+            raise HTTPException(
+                400, t(request, "부여할 수 없는 역할: {role}", role=repr(role))
+            )
+        labels = db.role_labels(conn)
         target = db.get_user_by_id(conn, user_id)
         if target is None:
             raise HTTPException(404, t(request, "사용자 없음"))
@@ -757,16 +899,76 @@ def users_set_role(request: Request, user_id: int, role: str = Form(...)):
                 error=t(request,
                         "탈퇴한 계정의 권한은 변경할 수 없습니다 — 계정 정보를 삭제하세요.")
             )
+        # 라스트-관리자 잠김 방지: 새 역할 프리셋에 manage_users 가 없고, 이 권한을
+        # 가진 다른 활성 사용자가 없으면 거부 (역할 변경은 오버라이드를 초기화한다)
+        presets = db.role_presets(conn)
+        if "manage_users" not in presets.get(role, frozenset()):
+            others = db.count_active_users_with_permission(
+                conn, "manage_users", exclude_user_id=user_id, presets=presets
+            )
+            if others == 0:
+                return _users_redirect(
+                    error=t(request,
+                            "사용자 관리 권한을 가진 마지막 계정입니다 — 역할을 바꿀 수 없습니다.")
+                )
         db.set_role(conn, user_id, role)
+        # 역할 변경 = 새 역할 프리셋으로 초기화 (이전 세분 권한 오버라이드는 비운다)
+        db.set_permission_overrides(conn, user_id, {})
         if role == "blocked":
             db.delete_user_sessions(conn, user_id)
-    audit.log(
-        request, "사용자 권한 변경: %s → %s",
-        target["email"], db.ROLE_LABELS[role],
-    )
+    label = labels.get(role, role)
+    audit.log(request, "사용자 권한 변경: %s → %s", target["email"], label)
     return _users_redirect(
         notice=t(request, "{email} 권한을 '{label}'(으)로 변경했습니다.",
-                 email=target["email"], label=t(request, db.ROLE_LABELS[role]))
+                 email=target["email"], label=t(request, label))
+    )
+
+
+@router.post("/users/{user_id}/permissions")
+async def users_set_permissions(request: Request, user_id: int):
+    """사용자 세분 권한 오버라이드 저장 — 역할 프리셋과 다른 항목만 저장한다.
+
+    폼은 권한별 체크박스(perm_<키>)로, 체크 상태와 프리셋이 다른 권한만
+    오버라이드로 남긴다. 최초 관리자·비활성(탈퇴/차단/대기) 계정은 조정 불가.
+    """
+    form = await request.form()
+    with db.connect() as conn:
+        target = db.get_user_by_id(conn, user_id)
+        if target is None:
+            raise HTTPException(404, t(request, "사용자 없음"))
+        if target["is_founder"]:
+            return _users_redirect(
+                error=t(request, "최초 관리자의 권한은 변경할 수 없습니다.")
+            )
+        presets = db.role_presets(conn)
+        if target["role"] not in db.permission_group_names(conn):
+            return _users_redirect(
+                error=t(request,
+                        "이 계정 상태에서는 세분 권한을 조정할 수 없습니다 — 먼저 역할을 부여하세요.")
+            )
+        preset = presets.get(target["role"], frozenset())
+        overrides = {}
+        for perm in db.PERMISSIONS:
+            granted = form.get(f"perm_{perm}") is not None
+            if granted != (perm in preset):
+                overrides[perm] = granted
+        # 라스트-관리자 잠김 방지: manage_users 를 마지막 보유자에게서 떼면 거부
+        new_eff = db.effective_permissions(
+            target["role"], json.dumps(overrides), presets=presets
+        )
+        if "manage_users" not in new_eff:
+            others = db.count_active_users_with_permission(
+                conn, "manage_users", exclude_user_id=user_id, presets=presets
+            )
+            if others == 0:
+                return _users_redirect(
+                    error=t(request,
+                            "사용자 관리 권한을 가진 마지막 계정입니다 — 이 권한은 뗄 수 없습니다.")
+                )
+        db.set_permission_overrides(conn, user_id, overrides)
+    audit.log(request, "사용자 세분 권한 변경: %s", target["email"])
+    return _users_redirect(
+        notice=t(request, "{email} 의 세분 권한을 저장했습니다.", email=target["email"])
     )
 
 
@@ -860,10 +1062,13 @@ def users_invite(request: Request, email: str = Form(...), role: str = Form("vie
     error = auth.validate_email(email)
     if error is not None:
         return _users_redirect(error=t(request, error))
-    if role not in db.INVITABLE_ROLES:
-        raise HTTPException(400, t(request, "초대할 수 없는 역할: {role}", role=repr(role)))
     token = secrets.token_urlsafe(32)
     with db.connect() as conn:
+        if role not in db.invitable_roles(conn):
+            raise HTTPException(
+                400, t(request, "초대할 수 없는 역할: {role}", role=repr(role))
+            )
+        role_label = db.role_labels(conn).get(role, role)
         if db.get_user_by_email(conn, email) is not None:
             return _users_redirect(
                 error=t(request, "{email} 은 이미 가입된 이메일입니다.", email=email)
@@ -873,9 +1078,7 @@ def users_invite(request: Request, email: str = Form(...), role: str = Form("vie
             invited_by=request.state.user["id"] if request.state.user else None,
             ttl_seconds=config.INVITE_TTL_DAYS * 86400,
         )
-    audit.log(
-        request, "사용자 초대 발급: %s (권한 %s)", email, db.ROLE_LABELS[role]
-    )
+    audit.log(request, "사용자 초대 발급: %s (권한 %s)", email, role_label)
     link = _invite_link(request, token)
     with db.connect() as conn:
         smtp = mailer.resolve_config(conn)
@@ -885,7 +1088,7 @@ def users_invite(request: Request, email: str = Form(...), role: str = Form("vie
             else t(request, "관리자")
         )
         try:
-            mailer.send_invite(smtp, email, link, inviter, db.ROLE_LABELS[role])
+            mailer.send_invite(smtp, email, link, inviter, role_label)
         except (smtplib.SMTPException, OSError) as e:
             logger.warning("초대 메일 발송 실패 (%s): %s", email, e)
             return _users_redirect(
@@ -915,6 +1118,121 @@ def users_invite_delete(request: Request, invite_id: int):
         request, "초대 취소: %s", invite["email"] if invite else f"#{invite_id}"
     )
     return _users_redirect(notice=t(request, "초대를 취소했습니다."))
+
+
+# ---- 권한 그룹 ----
+# 역할(권한 묶음)을 코드 배포 없이 정의·편집한다. 빌트인(admin/archiver/viewer)은
+# permissions 묶음만 편집 가능(삭제·개명 불가), 커스텀 그룹은 추가·삭제할 수 있다.
+# pending/blocked/withdrawn 은 권한묶음이 아니라 접근 게이트 상태라 여기서 다루지
+# 않는다. 라우터 의존성(_require_admin)이 manage_system 권한을 요구한다.
+
+
+def _groups_redirect(*, notice: str = "", error: str = "") -> RedirectResponse:
+    query = (
+        f"error={quote(error, safe='')}" if error
+        else f"notice={quote(notice, safe='')}"
+    )
+    return RedirectResponse(f"/system/groups?{query}", status_code=303)
+
+
+@router.get("/groups", response_class=HTMLResponse)
+def groups_view(request: Request, notice: str = "", error: str = ""):
+    """권한 그룹 관리 화면 — 그룹별 세분 권한 편집 + 커스텀 그룹 추가/삭제."""
+    with db.connect() as conn:
+        groups = [
+            {
+                "name": r["name"],
+                "label": r["label"],
+                "is_builtin": bool(r["is_builtin"]),
+                "permissions": set(db._parse_permission_list(r["permissions"])),
+                "member_count": db.count_users_with_role(conn, r["name"]),
+            }
+            for r in db.list_permission_groups(conn)
+        ]
+    return templates.TemplateResponse(
+        request, "groups.html",
+        {
+            "groups": groups,
+            "permissions_catalog": db.PERMISSIONS,
+            "permission_labels": db.PERMISSION_LABELS,
+            "notice": notice, "error": error,
+        },
+    )
+
+
+@router.post("/groups")
+async def groups_add(request: Request):
+    """커스텀 권한 그룹 생성 — name 정규화·중복은 코어(create_permission_group)가 검증."""
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    label = (form.get("label") or "").strip()
+    perms = [p for p in db.PERMISSIONS if form.get(f"perm_{p}") is not None]
+    with db.connect() as conn:
+        try:
+            created = db.create_permission_group(conn, name, label, perms)
+        except ValueError as e:
+            return _groups_redirect(error=t(request, str(e)))
+    audit.log(request, "권한 그룹 생성: %s", created)
+    return _groups_redirect(
+        notice=t(request, "권한 그룹 '{name}' 을(를) 만들었습니다.", name=created)
+    )
+
+
+@router.post("/groups/{name}/delete")
+def groups_delete(request: Request, name: str):
+    """권한 그룹 삭제 — 빌트인·소속 사용자 있는 그룹은 거부(참조 거부 정책)."""
+    with db.connect() as conn:
+        group = db.get_permission_group(conn, name)
+        if group is None:
+            raise HTTPException(404, t(request, "권한 그룹 없음"))
+        if group["is_builtin"]:
+            return _groups_redirect(
+                error=t(request, "기본 권한 그룹은 삭제할 수 없습니다.")
+            )
+        members = db.count_users_with_role(conn, name)
+        if members > 0:
+            return _groups_redirect(
+                error=t(request,
+                        "{n}명이 이 그룹에 속해 있습니다 — 먼저 사용자 역할을 옮기세요.",
+                        n=members)
+            )
+        db.delete_permission_group(conn, name)
+    audit.log(request, "권한 그룹 삭제: %s", name)
+    return _groups_redirect(
+        notice=t(request, "권한 그룹 '{name}' 을(를) 삭제했습니다.", name=name)
+    )
+
+
+@router.post("/groups/{name}")
+async def groups_edit(request: Request, name: str):
+    """그룹 세분 권한(+커스텀은 라벨) 갱신. 라스트-manage_users 잠김을 시뮬레이션으로 방지."""
+    form = await request.form()
+    label = (form.get("label") or "").strip()
+    perms = [p for p in db.PERMISSIONS if form.get(f"perm_{p}") is not None]
+    with db.connect() as conn:
+        group = db.get_permission_group(conn, name)
+        if group is None:
+            raise HTTPException(404, t(request, "권한 그룹 없음"))
+        # 라스트-관리자 잠김 방지 — 이 그룹의 새 권한으로 프리셋을 시뮬레이션해
+        # manage_users 보유 활성 사용자가 0 이 되면 거부 (오버라이드는 반영됨)
+        simulated = dict(db.role_presets(conn))
+        simulated[name] = frozenset(perms)
+        if db.count_active_users_with_permission(
+            conn, "manage_users", presets=simulated
+        ) == 0:
+            return _groups_redirect(
+                error=t(request,
+                        "이 변경은 사용자 관리 권한을 가진 활성 계정을 모두 없앱니다 — 거부했습니다.")
+            )
+        db.update_permission_group(
+            conn, name,
+            label=None if group["is_builtin"] else label,
+            permissions=perms,
+        )
+    audit.log(request, "권한 그룹 편집: %s", name)
+    return _groups_redirect(
+        notice=t(request, "권한 그룹 '{name}' 을(를) 저장했습니다.", name=name)
+    )
 
 
 # ---- API 키 ----
@@ -1048,6 +1366,10 @@ def system_import(
     """내보낸 아카이브 데이터 업로드로 가져오기 (인증 데이터는 건드리지 않음)."""
     if mode not in ("merge", "overwrite"):
         raise HTTPException(400, t(request, "알 수 없는 모드: {mode}", mode=repr(mode)))
+    if not backup_mod.is_export_filename(file.filename or ""):
+        return _system_redirect(
+            error=t(request, "가져오기는 .ccg.export 확장자 파일만 받습니다.")
+        )
     tmp = _save_upload(file)
     try:
         result = backup_mod.import_archive(tmp, mode=mode)

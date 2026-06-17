@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import sqlite3
 import threading
 import uuid
@@ -26,9 +28,16 @@ _schema_lock = threading.Lock()
 
 
 def invalidate_schema_cache() -> None:
-    """스키마 보장 캐시 무효화 — DB 파일을 교체(복원 등)한 뒤 호출."""
+    """스키마 보장 캐시 무효화 — DB 파일을 교체(복원 등)한 뒤 호출.
+
+    역할 프리셋 캐시도 함께 무효화한다 — 복원은 같은 경로에 다른 내용의 DB 를
+    넣어 (경로, 버전) 키가 우연히 겹칠 수 있으므로 강제로 다음 호출에서 재로드.
+    """
+    global _presets_version, _presets_cache_path
     with _schema_lock:
         _schema_ready.clear()
+    _presets_version = _PRESETS_UNSET
+    _presets_cache_path = None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS network_tags (
@@ -285,9 +294,11 @@ CREATE TABLE IF NOT EXISTS users (
     totp_secret         TEXT,               -- NULL = 2FA 미설정
     totp_pending_secret TEXT,               -- 등록 확인 전 임시 시크릿
     totp_last_used_at   TEXT,               -- 마지막으로 사용된 코드의 시간창 (재사용 방지)
-    role                TEXT NOT NULL DEFAULT 'viewer',  -- admin|archiver|viewer|pending|blocked
+    role                TEXT NOT NULL DEFAULT 'viewer',  -- admin|archiver|viewer|pending|blocked (권한 프리셋)
+    permission_overrides TEXT NOT NULL DEFAULT '{}',  -- 프리셋과 다른 세분 권한 가감 (JSON {권한: bool})
     is_founder          INTEGER NOT NULL DEFAULT 0,  -- 최초 등록 관리자 (권한 변경 불가)
     display_name        TEXT,               -- 표시용 이름 (NULL = 이메일로 표시)
+    email_verified      INTEGER NOT NULL DEFAULT 0,  -- 이메일 본인 인증 완료 여부 (SSO 계정은 IdP 가 검증)
     created_at          TEXT NOT NULL
 );
 
@@ -365,11 +376,27 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS permission_groups (
+    name        TEXT PRIMARY KEY,            -- users.role 에 저장되는 정규화 키 ([a-z0-9_])
+    label       TEXT NOT NULL,               -- 표시 라벨 (커스텀은 i18n 폴백으로 원문 출력)
+    permissions TEXT NOT NULL DEFAULT '[]',  -- JSON 배열, db.PERMISSIONS 부분집합
+    is_builtin  INTEGER NOT NULL DEFAULT 0,  -- admin/archiver/viewer = 1 (삭제·개명 불가)
+    sort_order  INTEGER NOT NULL DEFAULT 100,
+    created_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS oidc_states (
     state       TEXT PRIMARY KEY,
     nonce       TEXT NOT NULL,
     redirect_to TEXT NOT NULL DEFAULT '/',
     created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS email_verifications (
+    user_id     INTEGER PRIMARY KEY REFERENCES users(id),  -- 사용자당 1개 (재발송 시 교체)
+    code_hash   TEXT NOT NULL,           -- 인증 코드의 SHA-256 (원문은 메일에만 존재)
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL
 );
 """
 
@@ -398,10 +425,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
             WHERE id = (SELECT MIN(id) FROM users WHERE role = 'admin')
             """
         )
+    if cols and "permission_overrides" not in cols:
+        # 역할 프리셋과 다른 세분 권한 가감 — 기본은 빈 dict(프리셋 그대로)
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN permission_overrides TEXT NOT NULL DEFAULT '{}'"
+        )
     if cols and "timezone" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'")
     if cols and "locale" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN locale TEXT NOT NULL DEFAULT 'ko'")
+    # 이메일 본인 인증 여부 — 기존 사용자는 미인증(0)으로 시작한다. 관리자가
+    # 기능을 켜면 다음 로그인부터 인증을 요구받고, 개인 설정에서도 인증할 수 있다.
+    if cols and "email_verified" not in cols:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0"
+        )
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
     if cols and "webauthn_challenge" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN webauthn_challenge TEXT")
@@ -450,6 +488,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN authenticated_by INTEGER REFERENCES users(id)"
         )
+    # 캡처 출처 — 'server'(서버 캡처, 기본) | 'extension'(브라우저 확장 클라이언트
+    # 캡처). 확장 캡처는 실브라우저 렌더라 해상도·dpr 가 달라 스크린샷 비교를
+    # 제공하지 않고 본문 diff 에 경고를 단다.
+    if cols and "origin" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN origin TEXT NOT NULL DEFAULT 'server'"
+        )
+    # 불완전 캡처 표식 — 일부 자원·프레임·스크린샷 수집이 실패해도 저장하되 표시한다
+    if cols and "incomplete" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0"
+        )
     _ensure_search_index(conn)
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
@@ -461,6 +511,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # site_id 인덱스는 컬럼 추가 후에만 만들 수 있다 (SCHEMA 주의 주석 참조)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_crawls_site ON crawls(site_id)")
+    # 확장(브라우저 클라이언트) 캡처 페이지 표식 — 1 이면 서버가 그 URL 을 다시
+    # 가져오지 않는다(스케줄·크롤·재시도·재아카이빙 차단). 갱신은 확장 재캡처로만.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(pages)")}
+    if cols and "client_captured" not in cols:
+        conn.execute(
+            "ALTER TABLE pages ADD COLUMN client_captured INTEGER NOT NULL DEFAULT 0"
+        )
     # API 키 소유자 — NULL=관리자 발급 시스템 키(공동관리), 값=그 사용자 귀속
     # 확장 토큰. 기존 키는 전부 시스템 키이므로 NULL 그대로가 정확한 의미(백필 없음).
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(api_keys)")}
@@ -521,7 +578,67 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE crawls ADD COLUMN requested_by INTEGER REFERENCES users(id)"
         )
+    _seed_permission_groups(conn)
+    _migrate_api_key_permission(conn)
     _backfill_sites(conn)
+
+
+def _seed_permission_groups(conn: sqlite3.Connection) -> None:
+    """빌트인 권한 그룹(admin/archive_manager/archiver/viewer) 시드 — 멱등(INSERT OR IGNORE).
+
+    permission_groups 테이블은 SCHEMA(executescript)가 먼저 만든다. 빌트인의
+    permissions 는 시드 후 관리자가 편집할 수 있고(권한 묶음 조정), label·name 은
+    잠긴다. pending/blocked/withdrawn 은 권한묶음이 아니라 접근 게이트 상태라
+    이 테이블에 넣지 않는다 (코드 상수 STATE_ROLES).
+
+    신규 설치 기본값: 아카이브(archiver)는 보기·아카이빙, 아카이브 관리
+    (archive_manager)는 +삭제. 기존 설치는 INSERT OR IGNORE 로 archiver 가 그대로
+    유지되고(이미 삭제 권한 보유), archive_manager 만 새로 추가된다. use_api_keys 는
+    viewer 외 빌트인에 기본 부여 — 기존 설치 보강은 _migrate_api_key_permission.
+    """
+    for name, label, perms, order in (
+        ("admin", "관리자", list(PERMISSIONS), 10),
+        ("archive_manager", "아카이브 관리",
+         ["view", "archive", "delete", "use_api_keys"], 15),
+        ("archiver", "아카이브", ["view", "archive", "use_api_keys"], 20),
+        ("viewer", "보기 전용", ["view"], 30),
+    ):
+        conn.execute(
+            "INSERT OR IGNORE INTO permission_groups "
+            "(name, label, permissions, is_builtin, sort_order, created_at) "
+            "VALUES (?, ?, ?, 1, ?, ?)",
+            (name, label, json.dumps(perms), order, _utcnow()),
+        )
+
+
+def _migrate_api_key_permission(conn: sqlite3.Connection) -> None:
+    """기존 빌트인 그룹 admin·archiver 에 use_api_keys 권한 보강 — 멱등.
+
+    use_api_keys 는 신규 추가 권한이라 기존 설치의 그룹 permissions JSON 에는
+    없다. admin(전체 보유 불변)·archiver(아카이빙 그룹)에 추가하고 viewer 는
+    제외한다(개인 API Key·크롬 확장 사용 불가가 기본). archive_manager 는
+    _seed_permission_groups 가 use_api_keys 를 포함해 시드하므로 별도 보강이
+    필요 없다. 신규 설치는 시드가 이미 넣어 이 함수는 no-op 이 된다.
+    """
+    changed = False
+    for name in ("admin", "archiver"):
+        row = conn.execute(
+            "SELECT permissions FROM permission_groups "
+            "WHERE name = ? AND is_builtin = 1",
+            (name,),
+        ).fetchone()
+        if row is None:
+            continue
+        perms = _parse_permission_list(row["permissions"])
+        if "use_api_keys" not in perms:
+            perms.append("use_api_keys")
+            conn.execute(
+                "UPDATE permission_groups SET permissions = ? WHERE name = ?",
+                (json.dumps(perms), name),
+            )
+            changed = True
+    if changed:
+        _bump_permission_groups_version(conn)
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -894,6 +1011,15 @@ def get_or_create_page(
     return cur.lastrowid
 
 
+def set_page_client_captured(conn: sqlite3.Connection, page_id: int) -> None:
+    """페이지를 확장(브라우저 클라이언트) 캡처로 표시 — 서버 재요청을 막는다.
+
+    한번 1 이 되면 스케줄·크롤·재시도·대시보드 재아카이빙이 그 URL 을 서버
+    캡처하지 않는다(불변식). 갱신은 확장 재캡처로만. 멱등.
+    """
+    conn.execute("UPDATE pages SET client_captured = 1 WHERE id = ?", (page_id,))
+
+
 def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
     """해당 페이지의 가장 최근 스냅샷 row (없으면 None)."""
     return conn.execute(
@@ -905,7 +1031,7 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
      "note", "resources_indexed", "css_externalized", "search_indexed",
-     "authenticated", "authenticated_by"}
+     "authenticated", "authenticated_by", "origin", "incomplete"}
 )
 
 
@@ -2273,7 +2399,15 @@ def enqueue_archive_job(
     IGNORE 가 활성 중복이면 0행을 넣고 False 를 반환한다 (현재 _register_job 의
     중복-방지 역할 대체). requested_by 는 요청 사용자(web/확장 토큰) — 작업이
     실행돼 archive_logs 한 행이 될 때 그대로 이어진다('내 아카이브' 귀속).
+
+    확장(브라우저) 캡처 페이지(pages.client_captured=1)는 서버가 다시 가져오지
+    않는다(불변식) — 큐에 넣지 않고 False 를 반환한다. 갱신은 확장 재캡처로만.
     """
+    page = conn.execute(
+        "SELECT client_captured FROM pages WHERE url = ?", (url,)
+    ).fetchone()
+    if page is not None and page["client_captured"]:
+        return False
     cur = conn.execute(
         """
         INSERT OR IGNORE INTO archive_jobs
@@ -3145,21 +3279,360 @@ def claim_crawl_schedule(
 # 주의: SCHEMA 는 CREATE IF NOT EXISTS 라 새 테이블 추가는 자동이지만
 # 기존 테이블에 컬럼을 추가하는 변경은 별도 마이그레이션이 필요하다.
 
-# 권한 역할. admin=관리자, archiver=아카이빙 가능, viewer=보기만,
+# 상태/게이트 역할 — 권한 묶음이 아니라 미들웨어(web.app)가 접근을 직접
+# 차단하는 상태 키워드. 커스텀 권한 그룹 대상이 아니며 삭제·프리셋 편집 불가.
 # pending=권한없음(가입 승인 대기 — 안내 페이지 외 접근 불가), blocked=차단,
 # withdrawn=탈퇴(본인 탈퇴로만 진입 — 로그인 거부, 관리자가 계정 정보를
 # 삭제해야 같은 이메일로 다시 가입/초대할 수 있다)
-ROLES = ("admin", "archiver", "viewer", "pending", "blocked", "withdrawn")
-# 관리자가 부여할 수 있는 역할 — 탈퇴는 본인 탈퇴로만 진입한다
-ASSIGNABLE_ROLES = ("admin", "archiver", "viewer", "pending", "blocked")
-ROLE_LABELS = {
-    "admin": "관리자",
-    "archiver": "아카이브",
-    "viewer": "보기 전용",
+STATE_ROLES = ("pending", "blocked", "withdrawn")
+STATE_ROLE_LABELS = {
     "pending": "권한없음",
     "blocked": "차단됨",
     "withdrawn": "탈퇴",
 }
+# 빌트인 권한 보유 역할 — permission_groups 에 is_builtin=1 로 시드된다.
+# 삭제·개명 불가, permissions 묶음만 편집 가능. admin 은 founder 잠김과 엮인다.
+# archive_manager(아카이브 관리)=아카이브 데이터 전권(보기·아카이빙·삭제),
+# archiver(아카이브)=보기·아카이빙. 둘 다 개인 API Key 사용 가능(use_api_keys).
+BUILTIN_PERMISSION_ROLES = ("admin", "archive_manager", "archiver", "viewer")
+# 커스텀 권한 그룹 이름으로 쓸 수 없는 예약어 — 상태 역할 + 빌트인 역할.
+RESERVED_ROLE_NAMES = frozenset(STATE_ROLES + BUILTIN_PERMISSION_ROLES)
+
+# 세분 권한 — 역할(role)은 아래 권한들의 묶음(프리셋)이고, 사용자별
+# permission_overrides 로 개별 가감한다. 실효 권한 = 프리셋 ± 오버라이드.
+# 모든 라우트 가드는 web.permissions.has_permission(=실효 권한)으로 판정하므로,
+# 오버라이드가 한 곳에서 전 경로에 반영된다.
+PERMISSIONS = (
+    "view",                    # 아카이브 열람 + 전문 검색 + 아카이빙 로그 (viewer 이상)
+    "archive",                 # 아카이빙 추가·재아카이브·스케줄·크롤·재시도
+    "delete",                  # 스냅샷·페이지·사이트 삭제
+    "manage_credentials",      # 사이트 로그인 자격증명 관리 + 자격증명 연결 아카이빙
+    "manage_system",           # 시스템 설정·백업·복원·네트워크 태그·시스템 로그
+    "manage_users",            # 사용자·초대·시스템 API 키 관리
+    "view_authenticated_all",  # 다른 사용자가 로그인 캡처한 인증 스냅샷 열람
+    "use_api_keys",            # 개인 API Key(확장 토큰) 발급·사용 (크롬 확장 캡처)
+)
+PERMISSION_LABELS = {
+    "view": "보기·검색",
+    "archive": "아카이빙",
+    "delete": "삭제",
+    "manage_credentials": "자격증명 관리",
+    "manage_system": "시스템 관리",
+    "manage_users": "사용자 관리",
+    "view_authenticated_all": "인증 스냅샷 전체 열람",
+    "use_api_keys": "개인 API Key",
+}
+# 빌트인 역할의 기본 프리셋 — permission_groups 시드의 소스이자, 캐시가 아직
+# 워밍되지 않은 프로세스의 conn 없는 fallback. 런타임 편집·커스텀 그룹은 DB
+# permission_groups 가 정본이며 role_presets(conn) 가 버전 비교로 최신화한다.
+_BUILTIN_PRESETS: dict[str, frozenset[str]] = {
+    "admin": frozenset(PERMISSIONS),
+    "archive_manager": frozenset({"view", "archive", "delete", "use_api_keys"}),
+    "archiver": frozenset({"view", "archive", "use_api_keys"}),
+    "viewer": frozenset({"view"}),
+}
+PERMISSION_GROUPS_VERSION_KEY = "permission_groups_version"
+
+# 역할 프리셋 캐시 — DB permission_groups 가 정본. settings 의 단조 버전과 비교해
+# 바뀌었을 때만 재로드(멀티프로세스 staleness 방지). conn 없는 호출처
+# (web.permissions → 템플릿 _auth_context)는 이 캐시를 fallback 으로 읽으므로,
+# 인증 미들웨어가 요청 앞단에서 role_presets(conn) 로 워밍한다.
+_PRESETS_UNSET = object()
+_presets_cache: dict[str, frozenset[str]] = dict(_BUILTIN_PRESETS)
+_presets_version: object = _PRESETS_UNSET
+_presets_cache_path: str | None = None
+_presets_lock = threading.Lock()
+
+
+def _parse_permission_list(raw: str | None) -> list[str]:
+    """permission_groups.permissions JSON 배열을 PERMISSIONS 부분집합으로 파싱(순서·중복 제거)."""
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    for p in data:
+        if p in PERMISSIONS and p not in out:
+            out.append(p)
+    return out
+
+
+def role_presets(conn: sqlite3.Connection) -> dict[str, frozenset[str]]:
+    """역할명→권한 프리셋 dict. DB permission_groups 가 정본.
+
+    settings 의 단조 버전(permission_groups_version)이 캐시와 다를 때만 재로드한다.
+    같은 프로세스의 후속 conn 없는 호출(effective_permissions)이 이 캐시를 읽으므로,
+    인증 미들웨어가 요청 앞단에서 1회 호출해 캐시를 최신화(워밍)한다.
+
+    캐시 유효성은 (DB 경로, 버전)으로 판정한다 — 버전은 DB 별 단조 증가라
+    복원(DB 파일 교체)·테스트(임시 DB)에서 다른 DB 의 같은 버전 번호와 겹칠
+    수 있어, 경로가 다르면 무조건 재로드한다.
+    """
+    global _presets_cache, _presets_version, _presets_cache_path
+    path = str(config.DB_PATH)
+    version = get_setting(conn, PERMISSION_GROUPS_VERSION_KEY)
+    if path == _presets_cache_path and version == _presets_version:
+        return _presets_cache
+    presets: dict[str, frozenset[str]] = {}
+    for row in conn.execute("SELECT name, permissions FROM permission_groups"):
+        presets[row["name"]] = frozenset(_parse_permission_list(row["permissions"]))
+    # 시드 전 호출 등으로 빌트인이 비어 있으면 기본 프리셋으로 보강(fail-safe).
+    for name, preset in _BUILTIN_PRESETS.items():
+        presets.setdefault(name, preset)
+    with _presets_lock:
+        _presets_cache = presets
+        _presets_version = version
+        _presets_cache_path = path
+    return presets
+
+
+def _bump_permission_groups_version(conn: sqlite3.Connection) -> None:
+    """프리셋 캐시 무효화용 단조 버전 +1 — 그룹 쓰기마다 호출, 멀티프로세스 재로드 신호."""
+    current = get_setting(conn, PERMISSION_GROUPS_VERSION_KEY)
+    try:
+        nxt = int(current) + 1 if current else 1
+    except (ValueError, TypeError):
+        nxt = 1
+    set_setting(conn, PERMISSION_GROUPS_VERSION_KEY, str(nxt))
+
+
+def parse_permission_overrides(raw: str | None) -> dict[str, bool]:
+    """permission_overrides JSON 을 {권한: 허용여부} dict 로 파싱 (오염·미지정 권한은 무시)."""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: bool(v) for k, v in data.items() if k in PERMISSIONS}
+
+
+def effective_permissions(
+    role: str,
+    overrides_raw: str | None = None,
+    *,
+    presets: dict[str, frozenset[str]] | None = None,
+) -> frozenset[str]:
+    """역할 프리셋에 사용자 오버라이드를 적용한 실효 권한 집합.
+
+    presets 가 주어지면 그 dict(conn 으로 막 로드한 최신, 또는 편집 시뮬레이션)를
+    쓰고, 없으면 모듈 프리셋 캐시를 fallback 으로 쓴다(conn 없는 web.permissions
+    경로). 캐시는 인증 미들웨어가 요청 앞단에서 role_presets(conn) 로 워밍한다.
+    """
+    source = presets if presets is not None else _presets_cache
+    perms = set(source.get(role, frozenset()))
+    for perm, granted in parse_permission_overrides(overrides_raw).items():
+        if granted:
+            perms.add(perm)
+        else:
+            perms.discard(perm)
+    return frozenset(perms)
+
+
+def set_permission_overrides(
+    conn: sqlite3.Connection, user_id: int, overrides: dict[str, bool]
+) -> None:
+    """사용자 세분 권한 오버라이드 저장 (프리셋과 다른 항목만). 최초 관리자는 변경 불가."""
+    clean = {k: bool(v) for k, v in overrides.items() if k in PERMISSIONS}
+    conn.execute(
+        "UPDATE users SET permission_overrides = ? WHERE id = ? AND is_founder = 0",
+        (json.dumps(clean, sort_keys=True), user_id),
+    )
+
+
+def count_active_users_with_permission(
+    conn: sqlite3.Connection,
+    permission: str,
+    *,
+    exclude_user_id: int | None = None,
+    presets: dict[str, frozenset[str]] | None = None,
+) -> int:
+    """해당 권한을 실효로 가진 활성 사용자 수 — 라스트-관리자 잠김 방지용.
+
+    활성 = 권한 보유 역할(=permission_groups 의 그룹명). STATE_ROLES(pending/blocked/
+    withdrawn)는 오버라이드가 있어도 접근이 막혀 있으므로 세지 않는다. presets 를
+    넘기면(그룹 권한 편집 시뮬레이션 등) 그 프리셋으로 실효 권한을 계산한다.
+    """
+    if presets is None:
+        presets = role_presets(conn)
+    active_roles = set(presets) - set(STATE_ROLES)
+    n = 0
+    for u in conn.execute(
+        "SELECT id, role, permission_overrides FROM users"
+    ).fetchall():
+        if exclude_user_id is not None and u["id"] == exclude_user_id:
+            continue
+        if u["role"] not in active_roles:
+            continue
+        if permission in effective_permissions(
+            u["role"], u["permission_overrides"], presets=presets
+        ):
+            n += 1
+    return n
+
+
+# ---- 권한 그룹 동적 접근자 (코드 상수였던 역할 목록을 DB 기반으로) ----
+
+def permission_group_names(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """권한 보유 역할(빌트인+커스텀 그룹) 이름 — sort_order 순.
+
+    종전의 PERMISSION_ROLES 를 대체. 세분 권한 오버라이드 조정·확장 토큰이
+    허용되는 역할 집합이다.
+    """
+    return tuple(
+        r["name"]
+        for r in conn.execute(
+            "SELECT name FROM permission_groups ORDER BY sort_order, name"
+        )
+    )
+
+
+def role_labels(conn: sqlite3.Connection) -> dict[str, str]:
+    """역할명→표시 라벨 (그룹 label + STATE_ROLES 라벨). 종전 ROLE_LABELS 대체."""
+    labels = dict(STATE_ROLE_LABELS)
+    for r in conn.execute("SELECT name, label FROM permission_groups"):
+        labels[r["name"]] = r["label"]
+    return labels
+
+
+def assignable_roles(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """관리자가 부여할 수 있는 역할 — 그룹 전체 + pending/blocked (withdrawn 제외)."""
+    return permission_group_names(conn) + ("pending", "blocked")
+
+
+def invitable_roles(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """초대로 부여할 수 있는 역할 — 권한 보유 그룹 전체."""
+    return permission_group_names(conn)
+
+
+def signup_roles(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """가입 초기 권한으로 쓸 수 있는 역할 — pending + admin 외 권한 보유 그룹.
+
+    admin 자동 가입은 막는다(종전 SIGNUP_ROLES 가 admin 을 뺀 의도 유지).
+    """
+    groups = tuple(n for n in permission_group_names(conn) if n != "admin")
+    return ("pending",) + groups
+
+
+def all_valid_roles(conn: sqlite3.Connection) -> frozenset[str]:
+    """users.role 에 저장 가능한 모든 역할 — 권한 보유 그룹 + 상태 역할."""
+    return frozenset(permission_group_names(conn)) | frozenset(STATE_ROLES)
+
+
+# ---- 권한 그룹 CRUD (쓰기는 버전 스탬프로 캐시 무효화) ----
+
+_GROUP_NAME_RE = re.compile(r"^[a-z0-9_]{1,32}$")
+
+
+def normalize_group_name(raw: str) -> str:
+    """그룹 이름 정규화·검증 — 영문 소문자·숫자·밑줄 1~32자, 예약어 금지.
+
+    공백·하이픈은 밑줄로, 대문자는 소문자로 접는다. 형식 위반·예약어면 ValueError.
+    `.badge.role-<name>` CSS 합성에 안전한 문자만 허용한다.
+    """
+    name = (raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if not _GROUP_NAME_RE.match(name):
+        raise ValueError("이름은 영문 소문자·숫자·밑줄 1~32자여야 합니다.")
+    if name in RESERVED_ROLE_NAMES:
+        raise ValueError(f"예약된 이름입니다: {name}")
+    return name
+
+
+def get_permission_group(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    """그룹 1행 (없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM permission_groups WHERE name = ?", (name,)
+    ).fetchone()
+
+
+def list_permission_groups(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """모든 그룹 — sort_order 순(화면 목록용)."""
+    return conn.execute(
+        "SELECT * FROM permission_groups ORDER BY sort_order, name"
+    ).fetchall()
+
+
+def count_users_with_role(conn: sqlite3.Connection, role: str) -> int:
+    """해당 역할(그룹)에 속한 사용자 수 — 그룹 삭제 가드."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM users WHERE role = ?", (role,)
+    ).fetchone()[0]
+
+
+def create_permission_group(
+    conn: sqlite3.Connection, name: str, label: str, permissions: Sequence[str]
+) -> str:
+    """커스텀 권한 그룹 생성 — name 정규화·중복 검사, permissions 는 PERMISSIONS 부분집합.
+
+    반환: 저장된 정규화 name. 형식 위반·예약어·중복이면 ValueError.
+    """
+    name = normalize_group_name(name)
+    if get_permission_group(conn, name) is not None:
+        raise ValueError(f"이미 있는 그룹입니다: {name}")
+    label = (label or "").strip() or name
+    perms = [p for p in permissions if p in PERMISSIONS]
+    order = conn.execute(
+        "SELECT COALESCE(MAX(sort_order), 100) + 10 FROM permission_groups"
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO permission_groups "
+        "(name, label, permissions, is_builtin, sort_order, created_at) "
+        "VALUES (?, ?, ?, 0, ?, ?)",
+        (name, label, json.dumps(perms), order, _utcnow()),
+    )
+    _bump_permission_groups_version(conn)
+    return name
+
+
+def update_permission_group(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    label: str | None = None,
+    permissions: Sequence[str] | None = None,
+) -> bool:
+    """그룹 권한·라벨 갱신. 빌트인은 permissions 만 바뀌고 label 은 잠긴다.
+
+    반환: 갱신 성공 여부(그룹이 없으면 False).
+    """
+    group = get_permission_group(conn, name)
+    if group is None:
+        return False
+    if permissions is None:
+        new_perms = group["permissions"]
+    else:
+        new_perms = json.dumps([p for p in permissions if p in PERMISSIONS])
+    if group["is_builtin"] or label is None:
+        new_label = group["label"]  # 빌트인 라벨 잠금 / 미지정이면 유지
+    else:
+        new_label = (label or "").strip() or group["label"]
+    conn.execute(
+        "UPDATE permission_groups SET label = ?, permissions = ? WHERE name = ?",
+        (new_label, new_perms, name),
+    )
+    _bump_permission_groups_version(conn)
+    return True
+
+
+def delete_permission_group(conn: sqlite3.Connection, name: str) -> bool:
+    """커스텀 그룹 삭제. 빌트인이면 False. 호출부가 소속 사용자 0 을 먼저 보장한다.
+
+    반환: 삭제 성공 여부.
+    """
+    group = get_permission_group(conn, name)
+    if group is None or group["is_builtin"]:
+        return False
+    conn.execute(
+        "DELETE FROM permission_groups WHERE name = ? AND is_builtin = 0", (name,)
+    )
+    _bump_permission_groups_version(conn)
+    return True
 
 
 def _later(seconds: int) -> str:
@@ -3190,7 +3663,7 @@ def create_user(
     role 기본값은 보기 전용(viewer)이지만, 회원 가입·SSO 자동 생성 경로는
     signup_default_role() 설정값(기본 pending)을 명시적으로 넘긴다.
     """
-    if role not in ROLES:
+    if role not in all_valid_roles(conn):
         raise ValueError(f"알 수 없는 역할: {role!r}")
     cur = conn.execute(
         "INSERT INTO users (email, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
@@ -3241,7 +3714,7 @@ def list_users(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 def set_role(conn: sqlite3.Connection, user_id: int, role: str) -> bool:
     """사용자 권한 변경. 최초 관리자(is_founder)는 변경 불가 — False 반환."""
-    if role not in ROLES:
+    if role not in all_valid_roles(conn):
         raise ValueError(f"알 수 없는 역할: {role!r}")
     cur = conn.execute(
         "UPDATE users SET role = ? WHERE id = ? AND is_founder = 0", (role, user_id)
@@ -3299,6 +3772,7 @@ def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
     conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM identities WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM webauthn_credentials WHERE user_id = ?", (user_id,))
+    conn.execute("DELETE FROM email_verifications WHERE user_id = ?", (user_id,))
     conn.execute("DELETE FROM api_keys WHERE owner_user_id = ?", (user_id,))
     conn.execute(
         "UPDATE api_keys SET created_by = NULL WHERE created_by = ?", (user_id,)
@@ -3364,9 +3838,7 @@ def set_totp_last_used(conn: sqlite3.Connection, user_id: int, window: str) -> N
 
 
 # ---- 초대 ----
-
-# 초대로 부여할 수 있는 권한 (차단 계정을 초대하는 것은 의미가 없다)
-INVITABLE_ROLES = ("admin", "archiver", "viewer")
+# 초대로 부여할 수 있는 역할은 db.invitable_roles(conn) (권한 보유 그룹 전체).
 
 
 def create_invite(
@@ -3378,7 +3850,7 @@ def create_invite(
     ttl_seconds: int,
 ) -> int:
     """초대 생성 후 id 반환. 같은 이메일의 기존 초대는 교체된다 (이전 링크 무효화)."""
-    if role not in INVITABLE_ROLES:
+    if role not in invitable_roles(conn):
         raise ValueError(f"초대할 수 없는 역할: {role!r}")
     conn.execute("DELETE FROM invites WHERE email = ?", (email,))
     cur = conn.execute(
@@ -3572,6 +4044,12 @@ def merge_network_tags(
 SIGNUP_ENABLED_KEY = "signup_enabled"            # 'on' | 'off' (기본 on)
 SIGNUP_DEFAULT_ROLE_KEY = "signup_default_role"  # SIGNUP_ROLES 중 하나 (기본 pending)
 
+# 이메일 본인 인증 — 켜면 패스워드 가입·로그인 시 메일로 받은 코드로 이메일을
+# 검증한다 (SMTP 미설정이면 동작하지 않음, SSO 계정은 IdP 가 검증하므로 제외).
+# 코드 만료 시간은 분 단위로 설정한다. 해석·클램핑은 email_verification_ttl_minutes.
+EMAIL_VERIFICATION_ENABLED_KEY = "email_verification_enabled"        # 'on' | 'off' (기본 off)
+EMAIL_VERIFICATION_TTL_MINUTES_KEY = "email_verification_ttl_minutes"  # 분 (기본·오염 시 config 기본값)
+
 # 사이트 전체 아카이브 기본 옵션·실패 재시도 대기. 값 해석과 범위 검증은
 # crawler.crawl_defaults / crawler.retry_backoff 가 맡는다 (오염 시 config 기본값).
 CRAWL_DEFAULT_MAX_PAGES_KEY = "crawl_default_max_pages"
@@ -3596,9 +4074,17 @@ SMTP_PASSWORD_KEY = "smtp_password"  # crypto.encrypt 암호문 (평문·해시 
 SMTP_FROM_KEY = "smtp_from"
 SMTP_TLS_KEY = "smtp_tls"  # 'starttls' | 'ssl' | 'off'
 
-# 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한.
-# 기본은 권한없음(pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.
-SIGNUP_ROLES = ("pending", "viewer", "archiver")
+# 춘추관 간 데이터 이전(마이그레이션). 소스(보내는 쪽)가 이전 모드를 켜면
+# 인증 토큰을 발급하고, 그 동안 모든 스크래핑·스케줄·크롤이 중단된다.
+# 받는 쪽은 토큰으로 소스의 /api/migration/* 에서 전체 데이터를 Pull 한다.
+# 토큰은 세션·API 키와 같이 SHA-256 해시만 저장한다 (원칙 6 단방향).
+MIGRATION_MODE_KEY = "migration_mode"               # 'on' | 'off' (기본 off)
+MIGRATION_TOKEN_HASH_KEY = "migration_token_hash"   # 발급 토큰의 SHA-256 (모드 끄면 삭제)
+MIGRATION_TOKEN_CREATED_AT_KEY = "migration_token_created_at"  # 발급 시각 (표시용)
+
+# 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한은
+# db.signup_roles(conn) (pending + admin 외 권한 보유 그룹). 기본은 권한없음
+# (pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.
 
 
 def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
@@ -3630,9 +4116,92 @@ def signup_enabled(conn: sqlite3.Connection) -> bool:
 
 
 def signup_default_role(conn: sqlite3.Connection) -> str:
-    """회원 가입으로 생성되는 계정의 초기 권한 (기본·값 오염 시 pending)."""
+    """회원 가입으로 생성되는 계정의 초기 권한 (기본·값 오염·삭제된 그룹이면 pending)."""
     role = get_setting(conn, SIGNUP_DEFAULT_ROLE_KEY)
-    return role if role in SIGNUP_ROLES else "pending"
+    return role if role in signup_roles(conn) else "pending"
+
+
+def email_verification_enabled(conn: sqlite3.Connection) -> bool:
+    """이메일 본인 인증 사용 여부 (기본 off — 옵트인). SMTP 미설정이면 호출부가 무시한다."""
+    return get_setting(conn, EMAIL_VERIFICATION_ENABLED_KEY) == "on"
+
+
+def migration_mode_enabled(conn: sqlite3.Connection) -> bool:
+    """이전(마이그레이션) 모드 여부 (기본 off). 켜진 동안 스크래핑·스케줄·크롤 중단."""
+    return get_setting(conn, MIGRATION_MODE_KEY) == "on"
+
+
+def get_migration_token_hash(conn: sqlite3.Connection) -> str | None:
+    """발급된 이전 토큰의 SHA-256 해시 (없으면 None)."""
+    return get_setting(conn, MIGRATION_TOKEN_HASH_KEY)
+
+
+def set_migration_mode(
+    conn: sqlite3.Connection, on: bool, token_hash: str | None = None
+) -> None:
+    """이전 모드를 켜고/끈다. 켜면 토큰 해시를 저장하고, 끄면 토큰을 무효화(삭제)한다."""
+    if on:
+        set_setting(conn, MIGRATION_MODE_KEY, "on")
+        if token_hash is not None:
+            set_setting(conn, MIGRATION_TOKEN_HASH_KEY, token_hash)
+            set_setting(conn, MIGRATION_TOKEN_CREATED_AT_KEY, _utcnow())
+    else:
+        set_setting(conn, MIGRATION_MODE_KEY, "off")
+        delete_setting(conn, MIGRATION_TOKEN_HASH_KEY)
+        delete_setting(conn, MIGRATION_TOKEN_CREATED_AT_KEY)
+
+
+def email_verification_ttl_minutes(conn: sqlite3.Connection) -> int:
+    """이메일 인증 코드 만료 시간(분) — 기본·오염·범위 밖이면 config 기본값으로 클램핑."""
+    raw = get_setting(conn, EMAIL_VERIFICATION_TTL_MINUTES_KEY)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return config.EMAIL_VERIFICATION_TTL_MINUTES_DEFAULT
+    return max(
+        config.EMAIL_VERIFICATION_TTL_MINUTES_MIN,
+        min(config.EMAIL_VERIFICATION_TTL_MINUTES_MAX, value),
+    )
+
+
+def set_email_verified(conn: sqlite3.Connection, user_id: int) -> None:
+    """이메일 본인 인증 완료 표시."""
+    conn.execute(
+        "UPDATE users SET email_verified = 1 WHERE id = ?", (user_id,)
+    )
+
+
+def create_email_verification(
+    conn: sqlite3.Connection, user_id: int, code_hash: str, ttl_seconds: int
+) -> None:
+    """이메일 인증 코드 발급 — 사용자당 1개, 재발송 시 교체. 해시만 저장한다."""
+    conn.execute(
+        """
+        INSERT INTO email_verifications (user_id, code_hash, created_at, expires_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET code_hash = excluded.code_hash,
+                                           created_at = excluded.created_at,
+                                           expires_at = excluded.expires_at
+        """,
+        (user_id, code_hash, _utcnow(), _later(ttl_seconds)),
+    )
+
+
+def get_email_verification(
+    conn: sqlite3.Connection, user_id: int
+) -> sqlite3.Row | None:
+    """만료되지 않은 이메일 인증 코드 행 조회 (없거나 만료면 None)."""
+    return conn.execute(
+        "SELECT * FROM email_verifications WHERE user_id = ? AND expires_at > ?",
+        (user_id, _utcnow()),
+    ).fetchone()
+
+
+def delete_email_verification(conn: sqlite3.Connection, user_id: int) -> None:
+    """이메일 인증 코드 삭제 (인증 완료·취소)."""
+    conn.execute(
+        "DELETE FROM email_verifications WHERE user_id = ?", (user_id,)
+    )
 
 
 MOBILE_SCREENSHOT_ENABLED_KEY = "mobile_screenshot_enabled"  # 'on' | 'off' (기본 off)
@@ -4047,6 +4616,16 @@ def activate_session(
     conn.execute(
         "UPDATE sessions SET state = 'active', expires_at = ? WHERE token_hash = ?",
         (_later(ttl_seconds), token_hash),
+    )
+
+
+def set_session_state(
+    conn: sqlite3.Connection, token_hash: str, state: str, ttl_seconds: int
+) -> None:
+    """세션 상태를 바꾸고 만료를 갱신 (예: 2FA 통과 → pending_email_verify)."""
+    conn.execute(
+        "UPDATE sessions SET state = ?, expires_at = ? WHERE token_hash = ?",
+        (state, _later(ttl_seconds), token_hash),
     )
 
 
