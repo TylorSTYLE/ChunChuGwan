@@ -101,6 +101,37 @@ def system_allowed(user: sqlite3.Row | None) -> bool:
     )
 
 
+def menu_flags(user: sqlite3.Row | None) -> dict[str, bool]:
+    """헤더 메뉴/버튼 노출 플래그 일괄 — 실효 권한을 1회만 계산한다.
+
+    _auth_context 가 HTML 렌더마다 can_* 를 9회 호출하면 effective_permissions
+    (오버라이드 JSON 파싱)도 9회 돈다. 한 번 계산한 집합에서 모두 파생한다.
+    인증 off(loopback)면 전부 허용 — has_permission 과 같은 의미.
+    """
+    auth_off = not config.AUTH_ENABLED
+    perms = effective_permissions(user)
+
+    def has(permission: str) -> bool:
+        return auth_off or permission in perms
+
+    can_manage_system = has("manage_system")
+    can_manage_users = has("manage_users")
+    can_manage_credentials = has("manage_credentials")
+    return {
+        "system_allowed": (
+            can_manage_system or can_manage_users or can_manage_credentials
+        ),
+        "can_manage_system": can_manage_system,
+        "can_manage_users": can_manage_users,
+        "can_manage_credentials": can_manage_credentials,
+        "can_archive": has("archive"),
+        "can_delete": has("delete"),
+        "can_view_logs": has("view"),
+        "can_search": has("view"),
+        "can_use_api_keys": has("use_api_keys"),
+    }
+
+
 def token_permissions_for_role(role: str) -> tuple[bool, bool]:
     """역할 프리셋에서 확장 토큰 권한(can_view, can_archive)을 파생 (오버라이드 미반영).
 

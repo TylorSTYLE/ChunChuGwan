@@ -134,6 +134,32 @@ def test_api_updates_last_used(client):
         assert key["last_used_at"] is not None
 
 
+def test_touch_api_key_throttles_within_window(tmp_db):
+    """스로틀 창 이내의 두 번째 touch 는 last_used_at 을 다시 쓰지 않는다."""
+    token = _issue()
+    with db.connect() as conn:
+        key = auth.resolve_api_key(conn, token)
+        db.touch_api_key(conn, key["id"])
+    with db.connect() as conn:
+        first = auth.resolve_api_key(conn, token)["last_used_at"]
+    assert first is not None
+    # 곧바로 다시 touch — 창 이내라 값이 그대로다 (쓰기 생략)
+    with db.connect() as conn:
+        db.touch_api_key(conn, key["id"])
+        second = auth.resolve_api_key(conn, token)["last_used_at"]
+    assert second == first
+
+    # 마지막 사용 시각을 창 밖(과거)으로 돌리면 다시 갱신된다
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE api_keys SET last_used_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+            (key["id"],),
+        )
+        db.touch_api_key(conn, key["id"])
+        refreshed = auth.resolve_api_key(conn, token)["last_used_at"]
+    assert refreshed != "2000-01-01T00:00:00+00:00"
+
+
 def test_api_open_when_auth_disabled(client, monkeypatch):
     monkeypatch.setattr(config, "AUTH_ENABLED", False)
     assert client.get("/api/v1/pages").status_code == 200

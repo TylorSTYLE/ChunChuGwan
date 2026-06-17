@@ -272,11 +272,28 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires      ON sessions(expires_at);
 
 ### Phase 4 — 요청 단위 커넥션 + 권한 1회 계산
 
-- [ ] `request.state` 커넥션 공유, `_require_archive`/`migration_mode` 통합 (순위 6)
-- [ ] `_api_auth` 권한 중복 제거 + `touch_api_key` 스로틀 (순위 10)
-- [ ] `_auth_context` 권한 캐시 + needs_human 커넥션 재사용 (순위 12)
+- [ ] `request.state` 커넥션 공유, `_require_archive`/`migration_mode` 통합 (순위 6) — **보류**
+- [x] `_api_auth` 권한 중복 제거 + `touch_api_key` 스로틀 (순위 10)
+- [x] `_auth_context` 권한 캐시 (순위 12, needs_human 커넥션 재사용은 순위 6 의존이라 보류)
 
 위험: 트랜잭션 경계 변경 → 쓰기 핸들러 커밋 시점 점검. 인증/권한 테스트 전수 통과 필수.
+
+> **완료 (perf/phase-4) — 저위험 국소 최적화만.** 순위 10: `_api_auth` 가 owner 토큰
+> 검증에서 `can_use_api_keys` + `token_permissions_for_user` 로 오버라이드 JSON 을 두 번
+> 파싱하던 것을 `effective_permissions(owner)` 1회 계산 후 멤버십으로 파생. `touch_api_key`
+> 는 `config.API_KEY_TOUCH_THROTTLE_SECONDS`(60s) 이내면 조건부 UPDATE 로 행을 건드리지
+> 않아 읽기 API 폴링의 매 요청 쓰기 트랜잭션을 없앴다. 순위 12: `_auth_context` 가 렌더마다
+> `can_*` 를 9회(= `effective_permissions` 9회) 호출하던 것을 `permissions.menu_flags(user)`
+> 의 1회 계산으로 모두 파생. 테스트: touch 스로틀(`test_api_keys.py`), 권한 게이트 회귀는
+> 기존 인증/권한 스위트 전수 통과(1187).
+>
+> **보류 — 순위 6(요청 단위 커넥션 공유) + 순위 12 의 needs_human 커넥션 재사용.**
+> 한 요청에 커넥션 1개를 `request.state` 로 공유하는 것은 미들웨어·의존성·핸들러·템플릿
+> 렌더(컨텍스트 프로세서)에 걸쳐 커넥션 수명과 **트랜잭션 경계(commit/rollback 시점)** 를
+> 재정의하는 앱 전역 변경이다. 코어의 "쓰기는 `with db.connect()` 단위로 원자 커밋"
+> (아키텍처 원칙 1) 전제를 흔들 수 있어, 트랜잭션 검토를 포함한 **독립 PR** 로 신중히 다루는
+> 편이 안전하다. Phase 0 의 PRAGMA(커넥션마다 콜드 시작)와 결합 시 이득이 크다는 점은
+> 유효하므로 후속으로 남긴다.
 
 ### Phase 5 — 검색/색인 메모리
 
