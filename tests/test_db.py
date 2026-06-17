@@ -161,6 +161,26 @@ def test_backfill_snapshot_titles_from_meta(conn):
     assert got[ids["2026-06-02T00-00-00"]] is None
 
 
+def test_snapshot_resource_refs_chunks_large_id_lists(conn, monkeypatch):
+    """IN() 파라미터를 청크로 끊어도 청크 경계 넘어 전역 중복 제거된다 (순위 24)."""
+    monkeypatch.setattr(db, "_SQL_VAR_CHUNK", 2)  # 5개 id → 3청크 강제
+    page_id = db.get_or_create_page(conn, "https://e.com/", "e.com", "root-abcd1234")
+    name_a, name_b = "a" * 64 + ".png", "b" * 64 + ".png"
+    ids = []
+    for i in range(5):
+        sid = db.insert_snapshot(
+            conn, page_id, taken_at=f"2026-06-0{i + 1}T00:00:00+00:00",
+            dir_name=f"d{i}", content_hash=f"h{i}", final_url="https://e.com/",
+            http_status=200, changed=1,
+        )
+        ids.append(sid)
+        # 앞 3개는 자원 A, 뒤 2개는 자원 B 참조 — 청크마다 중복이 섞인다
+        db.insert_snapshot_resources(conn, sid, [{"name": name_a if i < 3 else name_b}])
+    names = db.list_snapshot_resource_refs(conn, ids)
+    assert sorted(names) == sorted({name_a, name_b})  # 전역 dedup
+    assert db.list_snapshot_resource_refs(conn, []) == []  # 빈 입력
+
+
 def test_migrate_creates_perf_indexes(conn):
     """핫패스·삭제·정리 경로 인덱스 묶음이 _migrate 로 생성된다 (멱등)."""
     have = {

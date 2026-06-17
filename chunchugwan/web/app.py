@@ -19,6 +19,7 @@ import io
 import json
 import logging
 import threading
+import time
 import zipfile
 from contextlib import asynccontextmanager
 import zoneinfo
@@ -1528,6 +1529,26 @@ def snapshot_document(request: Request, snapshot_id: int, name: str):
 _DOCUMENTS_PER_PAGE = 100
 
 
+# 구형(files/) 문서 잔존 여부 — /documents 의 "compact 안내" 배너용 파생 힌트.
+# 전체 스냅샷 디렉토리를 walk 하므로(legacy 가 없으면 short-circuit 도 안 됨)
+# 루트별 짧은 TTL 로 캐시한다. compact 후 배너가 사라지기까지 최대 TTL 지연은 허용.
+_LEGACY_DOCS_TTL_SECONDS = 60
+_legacy_docs_cache: "tuple[float, str, bool] | None" = None
+
+
+def _legacy_documents_pending() -> bool:
+    """구형 files/ 문서가 남아 있는지 (배너용, 루트별 TTL 캐시)."""
+    global _legacy_docs_cache
+    root = str(config.ARCHIVE_ROOT)
+    now = time.monotonic()
+    cached = _legacy_docs_cache
+    if cached is not None and cached[1] == root and now - cached[0] < _LEGACY_DOCS_TTL_SECONDS:
+        return cached[2]
+    pending = any(documents.has_legacy_documents(d) for d in resources.snapshot_dirs())
+    _legacy_docs_cache = (now, root, pending)
+    return pending
+
+
 @app.get("/documents", response_class=HTMLResponse)
 def documents_view(request: Request, page: int = Query(1, ge=1)):
     """아카이브된 페이지들의 문서 파일 통합 목록.
@@ -1543,9 +1564,7 @@ def documents_view(request: Request, page: int = Query(1, ge=1)):
             conn, limit=_DOCUMENTS_PER_PAGE + 1, offset=offset
         )
     has_next = len(groups) > _DOCUMENTS_PER_PAGE
-    legacy_pending = any(
-        documents.has_legacy_documents(d) for d in resources.snapshot_dirs()
-    )
+    legacy_pending = _legacy_documents_pending()
     return templates.TemplateResponse(
         request, "documents.html",
         {
