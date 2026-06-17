@@ -406,7 +406,26 @@ async function fetchDocuments(urls) {
   return out;
 }
 
-// CDP 풀페이지 스크린샷 (captureBeyondViewport) — base64 PNG 또는 null.
+// CDP 렌더러가 한 번에 합성할 수 있는 표면 높이 상한 (지나치게 긴 페이지 보호).
+const MAX_SCREENSHOT_HEIGHT = 16384;
+
+// 현재 레이아웃의 콘텐츠 크기(CSS px)를 읽는다 — { width, height } 또는 null.
+async function getContentSize(target) {
+  try {
+    const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+    const cs = metrics && (metrics.cssContentSize || metrics.contentSize);
+    if (cs && cs.width > 0 && cs.height > 0) {
+      return { width: Math.ceil(cs.width), height: Math.ceil(cs.height) };
+    }
+  } catch (e) { /* 메트릭 실패 */ }
+  return null;
+}
+
+// CDP 풀페이지 스크린샷 — base64 PNG 또는 null.
+// captureBeyondViewport + clip 만으로는 일부 페이지(내부 스크롤 컨테이너·고정 헤더,
+// Xvfb 헤드풀 표면)에서 스크롤이 반영되지 않아 첫 뷰포트가 타일처럼 반복 합성되는
+// CDP 버그가 있다. 그래서 캡처 전에 디바이스 메트릭을 전체 콘텐츠 높이로 덮어써
+// 실제 리레이아웃을 강제한 뒤 찍는다 (Playwright/Puppeteer 와 같은 방식).
 async function captureFullPage(tabId) {
   const target = { tabId };
   try {
@@ -414,20 +433,41 @@ async function captureFullPage(tabId) {
   } catch (e) {
     return null; // 부착 실패 (제약 페이지·이미 부착됨)
   }
+  let metricsOverridden = false;
   try {
-    let clip = null;
-    try {
-      const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
-      const cs = metrics && (metrics.cssContentSize || metrics.contentSize);
-      if (cs) clip = { x: 0, y: 0, width: Math.ceil(cs.width), height: Math.ceil(cs.height), scale: 1 };
-    } catch (e) { /* 메트릭 실패 — clip 없이 시도 */ }
+    const size = await getContentSize(target);
+    if (size) {
+      const height = Math.min(size.height, MAX_SCREENSHOT_HEIGHT);
+      try {
+        // deviceScaleFactor 0 = 디바이스 기본값 유지(dpr 보존), mobile false.
+        await chrome.debugger.sendCommand(target, "Emulation.setDeviceMetricsOverride", {
+          width: size.width, height, deviceScaleFactor: 0, mobile: false,
+        });
+        metricsOverridden = true;
+      } catch (e) { /* 오버라이드 실패 — 폴백으로 진행 */ }
+    }
+
+    // 오버라이드 후 리레이아웃으로 크기가 바뀔 수 있어 clip 은 다시 측정한다.
+    const clipSize = (metricsOverridden ? await getContentSize(target) : null) || size;
     const params = { format: "png", captureBeyondViewport: true, fromSurface: true };
-    if (clip) params.clip = clip;
+    if (clipSize) {
+      params.clip = {
+        x: 0, y: 0,
+        width: clipSize.width,
+        height: Math.min(clipSize.height, MAX_SCREENSHOT_HEIGHT),
+        scale: 1,
+      };
+    }
     const shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", params);
     return shot && shot.data ? shot.data : null;
   } catch (e) {
     return null;
   } finally {
+    if (metricsOverridden) {
+      try {
+        await chrome.debugger.sendCommand(target, "Emulation.clearDeviceMetricsOverride");
+      } catch (e) { /* 무시 */ }
+    }
     try { await chrome.debugger.detach(target); } catch (e) { /* 무시 */ }
   }
 }
