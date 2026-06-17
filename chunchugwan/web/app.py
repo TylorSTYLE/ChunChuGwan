@@ -19,6 +19,7 @@ import io
 import json
 import logging
 import threading
+import time
 import zipfile
 from contextlib import asynccontextmanager
 import zoneinfo
@@ -168,7 +169,7 @@ async def auth_gate(request: Request, call_next):
             # 이 요청에서 최신 프리셋을 보도록 요청 앞단에서 한 번 갱신한다
             # (settings 버전 비교라 변동 없으면 SELECT 1행으로 끝, 멀티프로세스 안전).
             db.role_presets(conn)
-            if db.count_users(conn) == 0:
+            if db.first_run_needed(conn):
                 first_run = not auth.bootstrap_admin_from_env(conn)
             if not first_run and token:
                 sess = auth.resolve_session(conn, token)
@@ -375,36 +376,15 @@ def extension_download(request: Request) -> Response:
     )
 
 
-def _snapshot_dir_size(domain: str, slug: str, dir_name: str) -> int:
-    """스냅샷 디렉토리의 파일 용량 합 (바이트). 디렉토리가 없으면 0."""
-    snap_dir = storage.page_dir(domain, slug) / dir_name
-    return sum(f["bytes"] for f in storage.snapshot_files(snap_dir))
-
-
-def _snapshot_title(domain: str, slug: str, dir_name: str) -> str | None:
-    """스냅샷 meta.json 의 title (없거나 읽기 실패 시 None)."""
-    path = storage.page_dir(domain, slug) / dir_name / "meta.json"
-    try:
-        return json.loads(path.read_text(encoding="utf-8")).get("title") or None
-    except (OSError, ValueError):
-        return None
-
-
-# 사이트 타이틀 탐색 시 거슬러 올라가는 최신 스냅샷 수 한도
-_TITLE_LOOKBACK = 5
-
-
 def _site_title(snap_rows) -> str | None:
-    """사이트 스냅샷 중 최신 것부터 meta.json title 을 찾는다 (현재 타이틀).
+    """사이트 스냅샷 중 최신 것부터 비정규화된 title 을 찾는다 (현재 타이틀).
 
-    오류 페이지 캡처 등 title 없는 스냅샷이 끼어도 직전 제목으로 폴백하되,
-    파일 IO 를 한정하기 위해 _TITLE_LOOKBACK 개까지만 본다.
+    오류 페이지 캡처 등 title 없는 스냅샷이 끼면 직전 제목으로 폴백한다.
+    snapshots.title 컬럼을 쓰므로 파일 IO 가 없다 — lookback 한도가 불필요하다.
     """
-    recent = sorted(snap_rows, key=lambda r: r["taken_at"], reverse=True)
-    for row in recent[:_TITLE_LOOKBACK]:
-        title = _snapshot_title(row["domain"], row["slug"], row["dir_name"])
-        if title:
-            return title
+    for row in sorted(snap_rows, key=lambda r: r["taken_at"], reverse=True):
+        if row["title"]:
+            return row["title"]
     return None
 
 
@@ -433,9 +413,7 @@ def index(request: Request, queued: str = "", error: str = "", notice: str = "")
     site_bytes: dict[int, int] = {}
     site_snaps: dict[int, list] = {}
     for row in snap_dirs:
-        site_bytes[row["site_id"]] = site_bytes.get(row["site_id"], 0) + (
-            _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
-        )
+        site_bytes[row["site_id"]] = site_bytes.get(row["site_id"], 0) + row["bytes"]
         site_snaps.setdefault(row["site_id"], []).append(row)
     titles = {sid: _site_title(rows) for sid, rows in site_snaps.items()}
     active_keys = {storage.site_key(u) for u in active}
@@ -656,9 +634,7 @@ def site_view(
     # 페이지별·사이트 전체 저장 용량 — 스냅샷 디렉토리 용량 합산
     page_bytes: dict[int, int] = {}
     for row in snap_dirs:
-        page_bytes[row["page_id"]] = page_bytes.get(row["page_id"], 0) + (
-            _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
-        )
+        page_bytes[row["page_id"]] = page_bytes.get(row["page_id"], 0) + row["bytes"]
     running_crawls = [
         {"id": c["id"],
          "counts": {"done": c["done_count"], "failed": c["failed_count"],
@@ -1117,7 +1093,7 @@ def dashboard(request: Request):
     counts = {k: 0 for k in starts}
     period_bytes = {k: 0 for k in starts}
     for row in snap_dirs:
-        size = _snapshot_dir_size(row["domain"], row["slug"], row["dir_name"])
+        size = row["bytes"]
         sizes[row["id"]] = size
         for key, start in starts.items():
             if row["taken_at"] >= start:
@@ -1488,7 +1464,9 @@ def snapshot_file(request: Request, snapshot_id: int, name: str):
             break
     else:
         raise HTTPException(404, t(request, "파일 없음"))
-    headers = {}
+    # 스냅샷은 불변(원칙 2) — snapshot_id+name 은 항상 같은 바이트를 가리키므로
+    # 브라우저가 무기한 캐시하게 둔다 (인증 뒤라 private). 매번 재전송 방지.
+    headers = {"Cache-Control": "private, max-age=31536000, immutable"}
     if filename.endswith(".gz"):
         headers["Content-Encoding"] = "gzip"
     if name == "page.html":
@@ -1551,6 +1529,26 @@ def snapshot_document(request: Request, snapshot_id: int, name: str):
 _DOCUMENTS_PER_PAGE = 100
 
 
+# 구형(files/) 문서 잔존 여부 — /documents 의 "compact 안내" 배너용 파생 힌트.
+# 전체 스냅샷 디렉토리를 walk 하므로(legacy 가 없으면 short-circuit 도 안 됨)
+# 루트별 짧은 TTL 로 캐시한다. compact 후 배너가 사라지기까지 최대 TTL 지연은 허용.
+_LEGACY_DOCS_TTL_SECONDS = 60
+_legacy_docs_cache: "tuple[float, str, bool] | None" = None
+
+
+def _legacy_documents_pending() -> bool:
+    """구형 files/ 문서가 남아 있는지 (배너용, 루트별 TTL 캐시)."""
+    global _legacy_docs_cache
+    root = str(config.ARCHIVE_ROOT)
+    now = time.monotonic()
+    cached = _legacy_docs_cache
+    if cached is not None and cached[1] == root and now - cached[0] < _LEGACY_DOCS_TTL_SECONDS:
+        return cached[2]
+    pending = any(documents.has_legacy_documents(d) for d in resources.snapshot_dirs())
+    _legacy_docs_cache = (now, root, pending)
+    return pending
+
+
 @app.get("/documents", response_class=HTMLResponse)
 def documents_view(request: Request, page: int = Query(1, ge=1)):
     """아카이브된 페이지들의 문서 파일 통합 목록.
@@ -1566,9 +1564,7 @@ def documents_view(request: Request, page: int = Query(1, ge=1)):
             conn, limit=_DOCUMENTS_PER_PAGE + 1, offset=offset
         )
     has_next = len(groups) > _DOCUMENTS_PER_PAGE
-    legacy_pending = any(
-        documents.has_legacy_documents(d) for d in resources.snapshot_dirs()
-    )
+    legacy_pending = _legacy_documents_pending()
     return templates.TemplateResponse(
         request, "documents.html",
         {

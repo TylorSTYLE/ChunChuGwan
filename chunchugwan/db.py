@@ -25,6 +25,8 @@ _BUSY_TIMEOUT_SECONDS = 30
 # DB 파일 자체를 교체하는 코드는 invalidate_schema_cache() 를 호출할 것.
 _schema_ready: set[str] = set()
 _schema_lock = threading.Lock()
+# 최초 구동(사용자 0명) 판정 래치 — first_run_needed 가 1회 확인 후 세팅한다.
+_users_exist_latch = False
 
 
 def invalidate_schema_cache() -> None:
@@ -33,11 +35,12 @@ def invalidate_schema_cache() -> None:
     역할 프리셋 캐시도 함께 무효화한다 — 복원은 같은 경로에 다른 내용의 DB 를
     넣어 (경로, 버전) 키가 우연히 겹칠 수 있으므로 강제로 다음 호출에서 재로드.
     """
-    global _presets_version, _presets_cache_path
+    global _presets_version, _presets_cache_path, _users_exist_latch
     with _schema_lock:
         _schema_ready.clear()
     _presets_version = _PRESETS_UNSET
     _presets_cache_path = None
+    _users_exist_latch = False  # 복원이 DB 를 비울 수 있으므로 최초 구동 판정도 재평가
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS network_tags (
@@ -103,8 +106,14 @@ CREATE TABLE IF NOT EXISTS snapshots (
                                                   --   0 이면 저장공간 최적화의 백필 대상
     css_externalized INTEGER NOT NULL DEFAULT 0,  -- 인라인 <style> 의 CAS 추출 여부.
                                                   --   0 이면 저장공간 최적화의 추출 대상
-    search_indexed INTEGER NOT NULL DEFAULT 0     -- 텍스트 검색 인덱스(snapshot_fts) 반영 여부.
+    search_indexed INTEGER NOT NULL DEFAULT 0,    -- 텍스트 검색 인덱스(snapshot_fts) 반영 여부.
                                                   --   0 이면 'wccg search reindex' 백필 대상
+    bytes         INTEGER NOT NULL DEFAULT 0,     -- 스냅샷 디렉토리 파일 용량 합(비정규화).
+                                                  --   캡처/compact 시 1회 기록, 용량 집계가
+                                                  --   파일시스템 stat 대신 SUM(bytes) 를 쓴다
+    title         TEXT                            -- 캡처 당시 페이지 제목(meta.json 사본).
+                                                  --   목록·상세의 현재 제목 표시가 meta.json
+                                                  --   반복 파싱 대신 이 컬럼을 쓴다
 );
 
 CREATE TABLE IF NOT EXISTS checks (
@@ -500,6 +509,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0"
         )
+    # 스냅샷 디렉토리 용량 비정규화 — 용량 집계가 매번 파일시스템을 stat 하지 않게
+    # 한다. 컬럼을 처음 추가하는 업그레이드에서만 기존 스냅샷을 파일시스템에서 1회
+    # 백필한다 (신규 스냅샷은 캡처 시점에 기록, compact 가 형태를 바꾸면 갱신).
+    if cols and "bytes" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0"
+        )
+        n = backfill_snapshot_bytes(conn)
+        if n:
+            logger.info("스냅샷 용량(bytes) 백필: %d개", n)
+    # 페이지 제목 비정규화 — 목록·상세가 meta.json 을 반복 파싱하지 않게 한다.
+    # 컬럼 최초 추가 시에만 기존 스냅샷의 meta.json 에서 1회 백필한다.
+    if cols and "title" not in cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN title TEXT")
+        n = backfill_snapshot_titles(conn)
+        if n:
+            logger.info("스냅샷 제목(title) 백필: %d개", n)
     _ensure_search_index(conn)
     # 사이트(서브도메인 단위) — sites 테이블은 SCHEMA 가 먼저 만든다
     for table in ("pages", "crawls", "crawl_schedules"):
@@ -578,6 +604,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE crawls ADD COLUMN requested_by INTEGER REFERENCES users(id)"
         )
+    # 핫패스·삭제·정리 경로의 인덱스 묶음 (멱등). crawl_pages·archive_logs 는
+    # 데이터 증가에 가장 크게 자라는 테이블이라, 인덱스가 없으면 아카이빙마다
+    # 전체 스캔하거나 삭제·로그 화면이 행 수에 비례해 느려진다. 대상 컬럼은
+    # 모두 SCHEMA 또는 위 ALTER 로 이 시점에 존재가 보장된다.
+    for ddl in (
+        # 아카이빙 핫패스 (pipeline 이 아카이빙마다 url 로 조회)
+        "CREATE INDEX IF NOT EXISTS idx_crawl_pages_url ON crawl_pages(url)",
+        "CREATE INDEX IF NOT EXISTS idx_crawls_start_url ON crawls(start_url)",
+        # 삭제 경로 (스냅샷 삭제 시 참조 해제 — 현재 전체 스캔)
+        "CREATE INDEX IF NOT EXISTS idx_crawl_pages_snapshot ON crawl_pages(snapshot_id)",
+        "CREATE INDEX IF NOT EXISTS idx_archive_logs_snapshot ON archive_logs(snapshot_id)",
+        # 자격증명 삭제 시 참조 NULL 처리 / 조회
+        "CREATE INDEX IF NOT EXISTS idx_pages_credential ON pages(credential_id)",
+        "CREATE INDEX IF NOT EXISTS idx_crawls_credential ON crawls(credential_id)",
+        "CREATE INDEX IF NOT EXISTS idx_crawl_schedules_credential "
+        "ON crawl_schedules(credential_id)",
+        # 로그 목록 무필터 정렬 / 만료 세션 정리
+        "CREATE INDEX IF NOT EXISTS idx_archive_logs_started ON archive_logs(started_at)",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)",
+    ):
+        conn.execute(ddl)
     _seed_permission_groups(conn)
     _migrate_api_key_permission(conn)
     _backfill_sites(conn)
@@ -715,6 +762,11 @@ def connect() -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA synchronous = NORMAL")
+    # 런타임 PRAGMA — 커넥션마다 적용(영구 저장 아님), WAL+NORMAL 과 충돌 없음.
+    # 커넥션을 매 요청·작업마다 새로 여는 구조라 모든 쿼리에 깔리는 고정 비용을 낮춘다.
+    conn.execute("PRAGMA cache_size = -16000")    # ~16MB 페이지 캐시 (기본 ~2MB)
+    conn.execute("PRAGMA mmap_size = 268435456")  # 256MB — read() 대신 메모리 매핑
+    conn.execute("PRAGMA temp_store = MEMORY")    # ORDER BY/GROUP BY 임시정렬을 메모리에서
     _ensure_schema(conn, db_path)
     try:
         yield conn
@@ -729,16 +781,30 @@ def _ensure_schema(conn: sqlite3.Connection, db_path) -> None:
     db_path 는 conn 을 연 경로 — config.DB_PATH 를 다시 읽으면 다른 스레드가
     경로를 바꿨을 때(테스트 등) 엉뚱한 키가 '준비됨'으로 오염될 수 있다.
     """
+    global _users_exist_latch
     key = str(db_path)
     with _schema_lock:
         if key in _schema_ready:
             return
         # journal_mode 는 DB 파일에 영구 저장된다 — 이후 커넥션은 자동 WAL
         conn.execute("PRAGMA journal_mode = WAL")
+        # SCHEMA 는 CREATE ... IF NOT EXISTS 라 멱등 — 락 없이 동시 실행해도 안전.
         conn.executescript(SCHEMA)
+        # 마이그레이션은 쓰기 락으로 직렬화한다. serve·worker 가 같은 DB 를 동시에
+        # 처음 열면 _migrate 의 'cols 읽기 → 가드 → ALTER' 가 프로세스 간 겹쳐, 두
+        # 프로세스가 같은 컬럼을 모두 추가하려다 'duplicate column' 으로 죽는다.
+        # BEGIN IMMEDIATE 로 한 프로세스만 마이그레이션하고, 다른 쪽은 busy_timeout
+        # 동안 대기했다 들어와 컬럼이 이미 있는 것을 보고 가드를 전부 스킵한다.
+        # (대형 DB 의 최초 백필이 busy_timeout 을 넘기면 대기하던 프로세스는 락
+        #  타임아웃으로 한 번 실패할 수 있으나, 재시작 시 이미 끝난 스키마로 정상 기동한다.)
+        conn.execute("BEGIN IMMEDIATE")
         _migrate(conn)
         conn.commit()
         _schema_ready.add(key)
+        # 새 DB 파일을 이 프로세스가 처음 쓰기 시작했다 — 최초 구동 판정 래치는
+        # 이전 DB 기준이라 무효다. 풀어서 first_run_needed 가 새 DB 로 재평가하게
+        # 한다 (복원·테스트의 DB 교체가 이 경로를 탄다).
+        _users_exist_latch = False
 
 
 def _utcnow() -> str:
@@ -1030,8 +1096,8 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed", "css_externalized", "search_indexed",
-     "authenticated", "authenticated_by", "origin", "incomplete"}
+     "note", "resources_indexed", "css_externalized", "search_indexed", "bytes",
+     "title", "authenticated", "authenticated_by", "origin", "incomplete"}
 )
 
 
@@ -1047,6 +1113,58 @@ def insert_snapshot(conn: sqlite3.Connection, page_id: int, **fields) -> int:
         (page_id, *fields.values()),
     )
     return cur.lastrowid
+
+
+def update_snapshot_bytes(conn: sqlite3.Connection, snapshot_id: int, n: int) -> None:
+    """스냅샷의 비정규화 용량(bytes)을 갱신 — compact 가 저장 형태를 바꾼 뒤 호출."""
+    conn.execute("UPDATE snapshots SET bytes = ? WHERE id = ?", (n, snapshot_id))
+
+
+def backfill_snapshot_bytes(
+    conn: sqlite3.Connection, *, only_missing: bool = False
+) -> int:
+    """스냅샷 bytes 를 파일시스템에서 재계산해 갱신하고 갱신 건수 반환.
+
+    only_missing=True 면 bytes=0 인 행만(마이그레이션 후 lazy 보정), False 면
+    전체(컬럼 최초 추가·compact 후 형태 변경 반영). 디렉토리가 없는 스냅샷은
+    0 으로 둔다 (로그만 남고 파일이 지워진 경우).
+    """
+    where = " WHERE s.bytes = 0" if only_missing else ""
+    rows = conn.execute(
+        f"SELECT s.id, p.domain, p.slug, s.dir_name "
+        f"FROM snapshots s JOIN pages p ON p.id = s.page_id{where}"
+    ).fetchall()
+    n = 0
+    for r in rows:
+        snap_dir = storage.page_dir(r["domain"], r["slug"]) / r["dir_name"]
+        conn.execute(
+            "UPDATE snapshots SET bytes = ? WHERE id = ?",
+            (storage.snapshot_dir_bytes(snap_dir), r["id"]),
+        )
+        n += 1
+    return n
+
+
+def backfill_snapshot_titles(conn: sqlite3.Connection) -> int:
+    """모든 스냅샷의 title 을 meta.json 에서 채우고 갱신 건수 반환 (컬럼 최초 추가용).
+
+    meta.json 이 없거나 title 키가 없으면 NULL 로 둔다 (오류 페이지·구형 등).
+    """
+    rows = conn.execute(
+        "SELECT s.id, p.domain, p.slug, s.dir_name "
+        "FROM snapshots s JOIN pages p ON p.id = s.page_id"
+    ).fetchall()
+    n = 0
+    for r in rows:
+        meta = storage.page_dir(r["domain"], r["slug"]) / r["dir_name"] / "meta.json"
+        try:
+            title = json.loads(meta.read_text(encoding="utf-8")).get("title") or None
+        except (OSError, ValueError):
+            title = None
+        if title is not None:
+            conn.execute("UPDATE snapshots SET title = ? WHERE id = ?", (title, r["id"]))
+            n += 1
+    return n
 
 
 def _adjacent_snapshot(
@@ -1466,13 +1584,16 @@ def count_pages(conn: sqlite3.Connection) -> int:
 
 
 def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """모든 스냅샷의 시각·디렉토리 위치 (id, taken_at, site_id, domain, slug, dir_name).
+    """모든 스냅샷의 시각·위치·용량·제목 (id, taken_at, site_id, domain, slug,
+    dir_name, bytes, title).
 
-    현황 대시보드의 기간별 집계와 아카이브 목록의 사이트별 용량 합산에 쓴다.
+    현황 대시보드의 기간별 집계와 아카이브 목록의 사이트별 용량 합산·제목
+    표시에 쓴다 (bytes·title 비정규화로 파일시스템·meta.json 접근 없음).
     """
     return conn.execute(
         """
-        SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name
+        SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name,
+               s.bytes, s.title
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         """
     ).fetchall()
@@ -1539,21 +1660,31 @@ def find_resource_by_url(conn: sqlite3.Connection, url: str) -> str | None:
     return row["name"] if row else None
 
 
+# IN(?,?,…) 파라미터는 SQLite 변수 한도(구버전 999) 아래로 끊는다 — 사이트 전체
+# 삭제처럼 스냅샷 수천 개의 GC 후보를 모을 때 'too many SQL variables' 를 막는다.
+_SQL_VAR_CHUNK = 900
+
+
+def _chunked(seq: list, n: int = _SQL_VAR_CHUNK):
+    """seq 를 길이 n 이하 조각으로 끊어 순서대로 내준다."""
+    for i in range(0, len(seq), n):
+        yield seq[i:i + n]
+
+
 def list_snapshot_resource_refs(
     conn: sqlite3.Connection, snapshot_ids: list[int]
 ) -> list[str]:
     """해당 스냅샷들이 참조하는 자원 CAS 이름 목록 (중복 제거) — 삭제 GC 용."""
-    if not snapshot_ids:
-        return []
-    marks = ", ".join("?" for _ in snapshot_ids)
-    return [
-        r["name"]
+    seen: dict[str, None] = {}  # 청크 간 전역 중복 제거 + 등장 순서 보존
+    for chunk in _chunked(snapshot_ids):
+        marks = ", ".join("?" for _ in chunk)
         for r in conn.execute(
             f"SELECT DISTINCT name FROM snapshot_resources "
             f"WHERE snapshot_id IN ({marks})",
-            snapshot_ids,
-        )
-    ]
+            chunk,
+        ):
+            seen.setdefault(r["name"])
+    return list(seen)
 
 
 def list_resource_refs_by_names(
@@ -1770,9 +1901,25 @@ def delete_fts_rows(conn: sqlite3.Connection, rowids: list[int]) -> None:
     )
 
 
-# 검색 결과 행의 공통 투영 — FTS/LIKE 양쪽이 같은 형태를 돌려준다.
-# (url 은 pages.url 과 snapshot_fts.url 이 겹치므로 반드시 테이블로 한정한다.)
-_SEARCH_SELECT = """
+# 검색 결과 행의 공통 투영. url 은 pages.url 과 snapshot_fts.url 이 겹치므로
+# 반드시 테이블로 한정한다.
+#
+# FTS 경로는 FTS5 내장 snippet() 으로 DB 가 매치 주변만 잘라 준다 — 첨부 문서
+# 본문(최대 2MB/문서)을 행마다 통째로 Python 으로 가져오던 것을 없앤다(순위 7).
+# 인자: (테이블, content 컬럼=0, 시작/끝 마커 없음 — 강조는 템플릿 highlight 필터가
+# terms 로 한다, 생략기호 …, trigram 토큰 최대 64개 ≈ 매치 주변 ~60자).
+_SEARCH_SELECT_FTS = """
+    SELECT snapshot_fts.rowid AS snapshot_id, s.page_id, s.taken_at, s.changed,
+           p.url AS page_url, p.domain,
+           snippet(snapshot_fts, 0, '', '', '…', 64) AS snippet,
+           snapshot_fts.title AS title
+    FROM snapshot_fts
+    JOIN snapshots s ON s.id = snapshot_fts.rowid
+    JOIN pages p ON p.id = s.page_id
+"""
+# LIKE 폴백(1~2글자, 드물게)은 MATCH 가 없어 snippet() 을 못 쓴다 — content 를
+# 가져와 searchindex 가 매치 위치를 찾아 스니펫을 만든다.
+_SEARCH_SELECT_LIKE = """
     SELECT snapshot_fts.rowid AS snapshot_id, s.page_id, s.taken_at, s.changed,
            p.url AS page_url, p.domain,
            snapshot_fts.content AS content, snapshot_fts.title AS title
@@ -1797,7 +1944,7 @@ def search_snapshots_fts(
     offset: int = 0,
 ) -> list[sqlite3.Row]:
     """FTS MATCH 검색 (bm25 랭킹 순). match 는 searchindex 가 조립한 안전한 질의."""
-    sql = _SEARCH_SELECT + " WHERE snapshot_fts MATCH ?"
+    sql = _SEARCH_SELECT_FTS + " WHERE snapshot_fts MATCH ?"
     params: list[object] = [match]
     if domain:
         sql += " AND p.domain = ?"
@@ -1857,7 +2004,7 @@ def search_snapshots_like(
 ) -> list[sqlite3.Row]:
     """LIKE 부분일치 검색 (최신순) — trigram 이 못 잡는 1~2글자 쿼리 폴백."""
     clause, params = _like_where(patterns)
-    sql = _SEARCH_SELECT + " WHERE " + clause
+    sql = _SEARCH_SELECT_LIKE + " WHERE " + clause
     if domain:
         sql += " AND p.domain = ?"
         params.append(domain)
@@ -1942,14 +2089,20 @@ def list_snapshot_document_refs(
     conn: sqlite3.Connection, snapshot_ids: list[int]
 ) -> list[sqlite3.Row]:
     """해당 스냅샷들이 참조하는 (sha256, file) 목록 (중복 제거) — 삭제 GC 용."""
-    if not snapshot_ids:
-        return []
-    marks = ", ".join("?" for _ in snapshot_ids)
-    return conn.execute(
-        f"SELECT DISTINCT sha256, file FROM snapshot_documents "
-        f"WHERE snapshot_id IN ({marks})",
-        snapshot_ids,
-    ).fetchall()
+    seen: set[tuple] = set()
+    out: list[sqlite3.Row] = []
+    for chunk in _chunked(snapshot_ids):
+        marks = ", ".join("?" for _ in chunk)
+        for r in conn.execute(
+            f"SELECT DISTINCT sha256, file FROM snapshot_documents "
+            f"WHERE snapshot_id IN ({marks})",
+            chunk,
+        ):
+            key = (r["sha256"], r["file"])
+            if key not in seen:
+                seen.add(key)
+                out.append(r)
+    return out
 
 
 def list_document_refs_by_shas(
@@ -2937,14 +3090,15 @@ def site_page_totals(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row:
 def list_site_snapshot_dirs(
     conn: sqlite3.Connection, site_id: int
 ) -> list[sqlite3.Row]:
-    """사이트 소속 스냅샷의 시각·디렉토리 위치 (page_id, taken_at, domain, slug, dir_name).
+    """사이트 소속 스냅샷의 시각·위치·용량·제목 (page_id, taken_at, domain, slug,
+    dir_name, bytes, title).
 
-    사이트 상세가 페이지별·사이트 전체 저장 용량 합산과 최신 스냅샷의
-    타이틀 조회에 쓴다.
+    사이트 상세가 페이지별·사이트 전체 저장 용량 합산과 현재 제목 표시에 쓴다
+    (bytes·title 비정규화로 파일시스템·meta.json 접근 없음).
     """
     return conn.execute(
         """
-        SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name
+        SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name, s.bytes, s.title
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         WHERE p.site_id = ?
         """,
@@ -3677,6 +3831,22 @@ def count_users(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
 
 
+def first_run_needed(conn: sqlite3.Connection) -> bool:
+    """최초 구동(사용자 0명) 여부 — 매 요청 COUNT(*) 를 피하려 프로세스 전역 래치.
+
+    auth_gate 가 모든 요청에서 호출한다. 사용자가 한 명이라도 생기면 영원히
+    0 이 아니므로, 한 번 확인하면 래치해 이후 COUNT(*) 를 건너뛴다. 복원으로
+    DB 가 비는 경로는 invalidate_schema_cache() 가 래치를 함께 풀어 보존한다.
+    """
+    global _users_exist_latch
+    if _users_exist_latch:
+        return False
+    if count_users(conn) > 0:
+        _users_exist_latch = True
+        return False
+    return True
+
+
 def create_first_admin(
     conn: sqlite3.Connection, email: str, password_hash: str
 ) -> int | None:
@@ -4334,9 +4504,20 @@ def list_api_keys_for_owner(
 
 
 def touch_api_key(conn: sqlite3.Connection, key_id: int) -> None:
-    """API 키 마지막 사용 시각 갱신."""
+    """API 키 마지막 사용 시각 갱신 — 스로틀 창 이내면 생략(조건부 UPDATE).
+
+    읽기 API 폴링(확장 버전 체크·상태 조회 등)이 매 요청 쓰기 트랜잭션을
+    일으키지 않게, last_used_at 이 config.API_KEY_TOUCH_THROTTLE_SECONDS 이내면
+    행을 건드리지 않는다. last_used_at 은 표시용 근사값이라 이 정도 지연은 무방.
+    """
+    cutoff = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=config.API_KEY_TOUCH_THROTTLE_SECONDS)
+    ).isoformat(timespec="seconds")
     conn.execute(
-        "UPDATE api_keys SET last_used_at = ? WHERE id = ?", (_utcnow(), key_id)
+        "UPDATE api_keys SET last_used_at = ? WHERE id = ? "
+        "AND (last_used_at IS NULL OR last_used_at < ?)",
+        (_utcnow(), key_id, cutoff),
     )
 
 

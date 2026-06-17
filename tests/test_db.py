@@ -1,6 +1,8 @@
 """db.py 쿼리 함수 테스트. 임시 디렉토리에 격리된 DB 사용."""
+import contextlib
 import os
 import sqlite3
+import threading
 
 import pytest
 
@@ -14,6 +16,70 @@ def conn(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
     with db.connect() as c:
         yield c
+
+
+class _NeverReady:
+    """프로세스 내 스키마 준비 캐시를 무력화 — 두 스레드 모두 _migrate 에 진입시킨다."""
+
+    def __contains__(self, key) -> bool:
+        return False
+
+    def add(self, key) -> None:
+        pass
+
+
+def test_ensure_schema_concurrent_processes(tmp_path, monkeypatch):
+    """serve·worker 가 같은 DB 를 동시에 처음 열어도 'duplicate column' 으로 죽지 않는다.
+
+    _migrate 의 'cols 읽기 → 가드 → ALTER' 는 프로세스 간 비원자라, 쓰기 락
+    (BEGIN IMMEDIATE)으로 직렬화하지 않으면 두 프로세스가 같은 신규 컬럼을 모두
+    추가하려다 깨진다. 프로세스 내 직렬화 장치(_schema_lock·_schema_ready)를 풀어
+    두 스레드가 동시에 _ensure_schema 를 타게 해 프로세스 간 동시 기동을 재현한다.
+    (회귀: serve·worker 동시 기동 시 snapshots.title duplicate column)
+    """
+    db_path = tmp_path / "index.db"
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", db_path)
+
+    # 신규 컬럼(title)이 빠진 구버전 DB 를 흉내 — 마이그레이션 후 컬럼을 떨군다
+    raw = sqlite3.connect(db_path)
+    raw.row_factory = sqlite3.Row
+    raw.executescript(db.SCHEMA)
+    db._migrate(raw)
+    raw.execute("ALTER TABLE snapshots DROP COLUMN title")
+    raw.commit()
+    raw.close()
+
+    # 프로세스 내 직렬화를 풀어 두 스레드가 동시에 _ensure_schema(→_migrate) 진입
+    monkeypatch.setattr(db, "_schema_ready", _NeverReady())
+    monkeypatch.setattr(db, "_schema_lock", contextlib.nullcontext())
+
+    barrier = threading.Barrier(2)
+    errors: list[str] = []
+
+    def worker() -> None:
+        c = sqlite3.connect(db_path, timeout=30)
+        c.row_factory = sqlite3.Row
+        try:
+            barrier.wait()
+            db._ensure_schema(c, db_path)
+        except Exception as e:  # noqa: BLE001 — 어떤 예외든 회귀로 본다
+            errors.append(repr(e))
+        finally:
+            c.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, errors
+    check = sqlite3.connect(db_path)
+    cols = {r[1] for r in check.execute("PRAGMA table_info(snapshots)")}
+    check.close()
+    assert "title" in cols
 
 
 def test_get_or_create_page_idempotent(conn):
@@ -96,6 +162,148 @@ def test_list_pages_counts(conn):
 def test_connect_uses_wal(conn):
     """WAL 저널 모드 — 쓰기가 대시보드 읽기를 막지 않게 한다."""
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_connect_applies_runtime_pragmas(conn):
+    """커넥션마다 cache_size·mmap_size·temp_store 런타임 PRAGMA 가 적용된다."""
+    assert conn.execute("PRAGMA cache_size").fetchone()[0] == -16000
+    assert conn.execute("PRAGMA mmap_size").fetchone()[0] == 268435456
+    # temp_store: 0=DEFAULT, 1=FILE, 2=MEMORY
+    assert conn.execute("PRAGMA temp_store").fetchone()[0] == 2
+
+
+def test_backfill_snapshot_bytes_from_filesystem(conn):
+    """backfill_snapshot_bytes 가 디렉토리 파일 합으로 snapshots.bytes 를 채운다."""
+    from chunchugwan import storage
+
+    page_id = db.get_or_create_page(conn, "https://example.com/", "example.com", "root-abcd1234")
+    dir_name = "2026-06-01T00-00-00"
+    snap_id = db.insert_snapshot(
+        conn, page_id, taken_at="2026-06-01T00:00:00+00:00", dir_name=dir_name,
+        content_hash="0" * 64, final_url="https://example.com/", http_status=200, changed=1,
+    )
+    assert conn.execute("SELECT bytes FROM snapshots WHERE id=?", (snap_id,)).fetchone()[0] == 0
+
+    snap_dir = storage.page_dir("example.com", "root-abcd1234") / dir_name
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "content.md").write_text("본문 텍스트", encoding="utf-8")
+    (snap_dir / "meta.json").write_text('{"x": 1}', encoding="utf-8")
+    expected = storage.snapshot_dir_bytes(snap_dir)
+    assert expected > 0
+
+    assert db.backfill_snapshot_bytes(conn) == 1
+    assert conn.execute("SELECT bytes FROM snapshots WHERE id=?", (snap_id,)).fetchone()[0] == expected
+
+    # only_missing=True 는 이미 채워진 행을 건드리지 않는다
+    (snap_dir / "extra.bin").write_bytes(b"x" * 100)  # 파일이 늘어도
+    assert db.backfill_snapshot_bytes(conn, only_missing=True) == 0  # 0 이 아니라 건너뜀
+    assert conn.execute("SELECT bytes FROM snapshots WHERE id=?", (snap_id,)).fetchone()[0] == expected
+
+
+def test_backfill_snapshot_titles_from_meta(conn):
+    """backfill_snapshot_titles 가 meta.json title 을 채우고, 없으면 NULL 로 둔다."""
+    from chunchugwan import storage
+
+    page_id = db.get_or_create_page(conn, "https://example.com/", "example.com", "root-abcd1234")
+    # snap1: meta.json 에 title 있음 / snap2: meta.json 없음
+    ids = {}
+    for dir_name, title in (("2026-06-01T00-00-00", "제목 있음"), ("2026-06-02T00-00-00", None)):
+        ids[dir_name] = db.insert_snapshot(
+            conn, page_id, taken_at=dir_name[:10] + "T00:00:00+00:00", dir_name=dir_name,
+            content_hash="0" * 64, final_url="https://example.com/", http_status=200, changed=1,
+        )
+        snap_dir = storage.page_dir("example.com", "root-abcd1234") / dir_name
+        snap_dir.mkdir(parents=True)
+        if title is not None:
+            storage.write_meta(snap_dir, storage.SnapshotMeta(
+                url="https://example.com/", final_url="https://example.com/",
+                taken_at=dir_name[:10] + "T00:00:00+00:00", content_hash="0" * 64,
+                http_status=200, title=title,
+            ))
+
+    assert db.backfill_snapshot_titles(conn) == 1  # title 있는 1개만 갱신
+    got = dict(conn.execute("SELECT id, title FROM snapshots").fetchall())
+    assert got[ids["2026-06-01T00-00-00"]] == "제목 있음"
+    assert got[ids["2026-06-02T00-00-00"]] is None
+
+
+def test_snapshot_resource_refs_chunks_large_id_lists(conn, monkeypatch):
+    """IN() 파라미터를 청크로 끊어도 청크 경계 넘어 전역 중복 제거된다 (순위 24)."""
+    monkeypatch.setattr(db, "_SQL_VAR_CHUNK", 2)  # 5개 id → 3청크 강제
+    page_id = db.get_or_create_page(conn, "https://e.com/", "e.com", "root-abcd1234")
+    name_a, name_b = "a" * 64 + ".png", "b" * 64 + ".png"
+    ids = []
+    for i in range(5):
+        sid = db.insert_snapshot(
+            conn, page_id, taken_at=f"2026-06-0{i + 1}T00:00:00+00:00",
+            dir_name=f"d{i}", content_hash=f"h{i}", final_url="https://e.com/",
+            http_status=200, changed=1,
+        )
+        ids.append(sid)
+        # 앞 3개는 자원 A, 뒤 2개는 자원 B 참조 — 청크마다 중복이 섞인다
+        db.insert_snapshot_resources(conn, sid, [{"name": name_a if i < 3 else name_b}])
+    names = db.list_snapshot_resource_refs(conn, ids)
+    assert sorted(names) == sorted({name_a, name_b})  # 전역 dedup
+    assert db.list_snapshot_resource_refs(conn, []) == []  # 빈 입력
+
+
+def test_migrate_creates_perf_indexes(conn):
+    """핫패스·삭제·정리 경로 인덱스 묶음이 _migrate 로 생성된다 (멱등)."""
+    have = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
+    expected = {
+        "idx_crawl_pages_url", "idx_crawls_start_url",
+        "idx_crawl_pages_snapshot", "idx_archive_logs_snapshot",
+        "idx_pages_credential", "idx_crawls_credential",
+        "idx_crawl_schedules_credential",
+        "idx_archive_logs_started", "idx_sessions_expires",
+    }
+    assert expected <= have
+
+
+def test_perf_indexes_used_by_query_planner(conn):
+    """대표 쿼리가 새 인덱스를 타는지 EXPLAIN QUERY PLAN 으로 확인."""
+    def plan(sql, params=()):
+        return " | ".join(
+            r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + sql, params)
+        )
+
+    assert "idx_crawl_pages_url" in plan(
+        "SELECT * FROM crawl_pages WHERE url = ?", ("x",))
+    assert "idx_crawls_start_url" in plan(
+        "SELECT * FROM crawls WHERE start_url = ?", ("x",))
+    assert "idx_archive_logs_started" in plan(
+        "SELECT * FROM archive_logs ORDER BY started_at DESC LIMIT 50")
+    assert "idx_sessions_expires" in plan(
+        "DELETE FROM sessions WHERE expires_at < ?", ("t",))
+
+
+def test_first_run_needed_latches_and_resets_on_db_swap(tmp_path, monkeypatch):
+    """최초 구동 판정은 한 번 사용자를 보면 래치하고, DB 교체 시 재평가한다."""
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
+
+    with db.connect() as c:
+        assert db.first_run_needed(c) is True   # 사용자 0명
+        db.create_user(c, "admin@test.co", "x", role="admin")
+        assert db.first_run_needed(c) is False  # 사용자 생김 → 래치
+
+    # 래치 후에는 COUNT 없이도 False 를 유지한다
+    calls = []
+    original = db.count_users
+    monkeypatch.setattr(db, "count_users", lambda c: calls.append(1) or original(c))
+    with db.connect() as c:
+        assert db.first_run_needed(c) is False
+    assert calls == []  # 래치가 COUNT(*) 를 건너뛴다
+
+    # 다른 DB 파일로 교체하면(테스트의 새 tmp DB·복원) 래치가 풀려 재평가
+    monkeypatch.setattr(db, "count_users", original)
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "fresh.db")
+    with db.connect() as c:
+        assert db.first_run_needed(c) is True
 
 
 def test_schema_ensured_once_per_process(tmp_path, monkeypatch):

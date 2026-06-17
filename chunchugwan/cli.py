@@ -10,13 +10,12 @@ from pathlib import Path
 import click
 
 from . import __version__
-from . import archive_worker
 from . import backup as backup_mod
-from . import worker as worker_mod
-from . import (
-    config, crawler, db, deletion, differ, optimize, resources,
-    scheduler, searchindex, storage, system_log,
-)
+from . import config, db, searchindex, storage, system_log
+# crawler·archive_worker·worker·differ·optimize·scheduler·deletion 은 capture
+# (playwright)·extract(lxml)·PIL 을 전이로 끌어와 import 비용이 크다 — 해당 명령
+# 에서만 쓰므로 함수 안에서 지연 import 한다 (cron 으로 자주 도는 list/search/add/
+# history 등의 콜드 스타트를 줄인다).
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
 
@@ -119,6 +118,7 @@ def archive_run() -> None:
     `wccg crawl run`/`schedule run` 과 대칭. worker 를 상주시키지 않는 배포에서
     cron 으로 돌려 큐를 소비한다 (serve/worker 가 돌고 있으면 자동 처리되므로 불필요).
     """
+    from . import archive_worker
     if _warn_if_migrating():
         return
     ran = 0
@@ -191,6 +191,7 @@ def _snapshot_text(page, snap) -> str:
 @click.option("--to", "to_idx", type=int, default=None, help="비교 대상 스냅샷 번호(최신 쪽)")
 def diff(url: str, from_idx: int | None, to_idx: int | None) -> None:
     """스냅샷 비교. 기본은 최신 2개."""
+    from . import differ
     with db.connect() as conn:
         page = _find_page(conn, url)
         snaps = db.list_snapshots(conn, page["id"])
@@ -244,6 +245,7 @@ def delete(url: str, snapshot_idx: int | None, whole_site: bool, yes: bool) -> N
     단일 스냅샷 삭제 시 다음 스냅샷의 변경 표시는 새 직전 스냅샷 기준으로
     자동 보정된다. 실행 로그(archive_logs)는 이력으로 남는다.
     """
+    from . import deletion
     if whole_site:
         if snapshot_idx is not None:
             raise click.ClickException("--site 와 --snapshot 은 함께 쓸 수 없습니다")
@@ -281,6 +283,7 @@ def delete(url: str, snapshot_idx: int | None, whole_site: bool, yes: bool) -> N
 
 def _delete_site(url: str, yes: bool) -> None:
     """URL 이 속한 사이트 전체 삭제 (delete --site 본체)."""
+    from . import deletion
     key = storage.site_key(storage.normalize_url(url))
     with db.connect() as conn:
         site = db.get_site_by_key(conn, key)
@@ -318,6 +321,7 @@ def schedule() -> None:
 )
 def schedule_add(url: str, every: str, at_time: str | None) -> None:
     """URL에 반복 주기를 등록/변경한다. 다음 실행은 지금 + 주기."""
+    from . import scheduler
     try:
         seconds = scheduler.parse_interval(every)
         row = scheduler.set_schedule(url, seconds, run_at=at_time)
@@ -332,6 +336,7 @@ def schedule_add(url: str, every: str, at_time: str | None) -> None:
 @schedule.command("list")
 def schedule_list() -> None:
     """등록된 스케줄 목록 (다음 실행이 가까운 순)."""
+    from . import scheduler
     with db.connect() as conn:
         rows = db.list_schedules(conn)
     if not rows:
@@ -363,6 +368,7 @@ def schedule_next(url: str, when: str) -> None:
         )
     if dt.tzinfo is None:
         dt = dt.astimezone()  # 로컬 타임존 부여
+    from . import scheduler
     try:
         row = scheduler.set_next_run(url, dt)
     except ValueError as e:
@@ -374,6 +380,7 @@ def schedule_next(url: str, when: str) -> None:
 @click.argument("url")
 def schedule_remove(url: str) -> None:
     """URL의 스케줄을 해제한다."""
+    from . import scheduler
     try:
         removed = scheduler.remove_schedule(url)
     except ValueError as e:
@@ -390,6 +397,7 @@ def schedule_run() -> None:
     크롤 스케줄도 함께 새 크롤로 등록한다 — 등록된 크롤의 페이지 처리는
     `wccg crawl run` (또는 serve 의 크롤러)이 맡는다.
     """
+    from . import crawler, scheduler
     if _warn_if_migrating():
         return
     results = scheduler.run_due()
@@ -454,6 +462,7 @@ def crawl_add(
     같은 시작 URL 의 크롤이 이미 진행 중이면 새로 만들지 않고 그 크롤에
     병합된다 (이번에 넘긴 옵션은 무시).
     """
+    from . import crawler
     if _warn_if_migrating():
         return
     try:
@@ -533,6 +542,7 @@ def crawl_run() -> None:
     간격이 강제되므로 한 번 실행에 크롤당 한 페이지꼴로 처리된다. 간격보다
     짧은 주기의 cron 으로 돌리면 큐가 계속 소비된다.
     """
+    from . import crawler
     if _warn_if_migrating():
         return
     ran = _echo_crawl_schedule_steps(crawler.run_due_schedules())
@@ -571,6 +581,7 @@ def crawl_schedule_add(
     max_pages: int | None, max_depth: int | None, delay: int | None,
 ) -> None:
     """시작 URL에 주기적 사이트 아카이브를 등록/변경한다. 다음 실행은 지금 + 주기."""
+    from . import crawler, scheduler
     try:
         seconds = scheduler.parse_interval(every)
         row = crawler.set_crawl_schedule(
@@ -590,6 +601,7 @@ def crawl_schedule_add(
 @crawl_schedule.command("list")
 def crawl_schedule_list() -> None:
     """등록된 크롤 스케줄 목록 (다음 실행이 가까운 순)."""
+    from . import scheduler
     with db.connect() as conn:
         rows = db.list_crawl_schedules(conn)
     if not rows:
@@ -612,6 +624,7 @@ def crawl_schedule_list() -> None:
 @click.argument("url")
 def crawl_schedule_remove(url: str) -> None:
     """시작 URL의 크롤 스케줄을 해제한다."""
+    from . import crawler
     try:
         removed = crawler.remove_crawl_schedule(url)
     except ValueError as e:
@@ -637,6 +650,7 @@ def compact(yes: bool) -> None:
     보존이라 스냅샷이 담는 정보는 그대로다 (불변 원칙의 유일한 예외).
     멱등 — 여러 번 실행해도 안전하다.
     """
+    from . import optimize
     compactable, css_pending, unindexed = optimize.pending_counts()
     if compactable == 0 and css_pending == 0 and unindexed == 0:
         click.echo("최적화할 항목이 없습니다 — 스냅샷이 모두 압축·인덱스 형태입니다.")
@@ -952,6 +966,8 @@ def worker(crawl_workers: int | None) -> None:
     """
     import signal
     import threading
+
+    from . import worker as worker_mod
 
     n = crawl_workers if crawl_workers is not None else config.CRAWL_WORKERS
     if not (1 <= n <= config.CRAWL_WORKERS_LIMIT):

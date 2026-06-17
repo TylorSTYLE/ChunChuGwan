@@ -39,6 +39,13 @@ FORMAT_VERSION = 4
 MANIFEST_NAME = "manifest.json"
 ARCHIVE_DATA_NAME = "archive.json"
 
+# 백업·내보내기 tar.gz 의 gzip 압축 레벨. 용량 대부분이 이미 압축된 자원
+# (page.html.gz·screenshot.webp·CAS gzip/webp·PDF/zip)이라 높은 레벨로 재압축해도
+# 거의 안 줄고 CPU 만 크게 든다 — 레벨 1 로 낮춰 시간을 아낀다(출력은 여전히
+# 표준 .tar.gz 라 restore/import 의 r:gz 와 호환). 잘 압축되는 DB·JSON 도 레벨 1
+# 로 충분히 작아진다.
+_BACKUP_COMPRESSLEVEL = 1
+
 # 아카이브 내보내기 파일 확장자 — 내용은 tar.gz 지만 가져오기는 이 확장자만
 # 인식한다(전체 백업 .ccg.backup 와 구분). 강제는 사용자 경계(CLI import·웹 업로드).
 EXPORT_SUFFIX = ".ccg.export"
@@ -145,7 +152,7 @@ def create_backup(dest: Path) -> Path:
         (tmp / MANIFEST_NAME).write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        with tarfile.open(out, "w:gz") as tar:
+        with tarfile.open(out, "w:gz", compresslevel=_BACKUP_COMPRESSLEVEL) as tar:
             tar.add(tmp / MANIFEST_NAME, arcname=MANIFEST_NAME)
             tar.add(tmp / "index.db", arcname="index.db")
             if config.RULES_PATH.is_file():
@@ -292,7 +299,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 for k in (
                     "page_url", "domain", "slug", "taken_at", "dir_name",
                     "content_hash", "final_url", "http_status", "changed", "note",
-                    "origin", "incomplete",
+                    "origin", "incomplete", "bytes", "title",
                 )
             }
             for r in conn.execute(
@@ -454,7 +461,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
         (tmp / ARCHIVE_DATA_NAME).write_text(
             json.dumps(data, ensure_ascii=False), encoding="utf-8"
         )
-        with tarfile.open(out, "w:gz") as tar:
+        with tarfile.open(out, "w:gz", compresslevel=_BACKUP_COMPRESSLEVEL) as tar:
             tar.add(tmp / MANIFEST_NAME, arcname=MANIFEST_NAME)
             tar.add(tmp / ARCHIVE_DATA_NAME, arcname=ARCHIVE_DATA_NAME)
             for s in snapshots:
@@ -668,7 +675,7 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     snap_ids[(s["page_url"], s["dir_name"])] = dup["id"]
                     result.snapshots_skipped += 1
                     continue
-                snap_ids[(s["page_url"], s["dir_name"])] = db.insert_snapshot(
+                snap_id = db.insert_snapshot(
                     conn, page_id,
                     taken_at=s["taken_at"], dir_name=s["dir_name"],
                     content_hash=s["content_hash"], final_url=s["final_url"],
@@ -676,7 +683,10 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                     changed=int(s.get("changed", 1)), note=s.get("note"),
                     origin=s.get("origin", "server"),
                     incomplete=int(s.get("incomplete", 0)),
+                    bytes=int(s.get("bytes", 0)),
+                    title=s.get("title"),
                 )
+                snap_ids[(s["page_url"], s["dir_name"])] = snap_id
                 result.snapshots_added += 1
 
                 domain, slug = page_paths[s["page_url"]]
@@ -685,6 +695,11 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                 if src_dir.is_dir() and not dst_dir.exists():
                     dst_dir.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(src_dir, dst_dir)
+                # 옮긴 실제 파일 기준으로 bytes 를 권위적으로 다시 맞춘다 — 구버전
+                # 내보내기(bytes 없음)나 직렬화 값과 파일의 불일치를 모두 흡수한다.
+                db.update_snapshot_bytes(
+                    conn, snap_id, storage.snapshot_dir_bytes(dst_dir)
+                )
 
             for c in data["checks"]:
                 page_id = page_ids.get(c["page_url"])

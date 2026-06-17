@@ -75,6 +75,11 @@ def run() -> OptimizeResult:
     ) = _externalize_styles()
     result.indexed = _backfill_refs()
     result.swept, result.swept_bytes, result.sweep_skipped = _sweep_orphans()
+    # 압축 변환·스타일 추출이 page.html.gz·스크린샷 형태를 바꿔 디렉토리 용량이
+    # 달라졌으면 비정규화 bytes 를 파일시스템에서 다시 맞춘다 (집계 일관성).
+    if result.compact.converted or result.styles_snapshots:
+        with db.connect() as conn:
+            db.backfill_snapshot_bytes(conn)
     return result
 
 

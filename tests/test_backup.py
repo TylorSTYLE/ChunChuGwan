@@ -131,6 +131,46 @@ def test_export_import_includes_documents(roots, tmp_path, monkeypatch):
     assert n == 1
 
 
+def test_export_import_sets_snapshot_bytes(roots, tmp_path, monkeypatch):
+    """가져오기가 옮긴 실제 파일 기준으로 snapshots.bytes 를 채운다 (집계 일관성)."""
+    root_a, root_b = roots
+    out = backup.export_archive(tmp_path / "e.tar.gz")
+
+    _patch_root(monkeypatch, root_b)
+    backup.import_archive(out, mode="merge")
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT s.bytes, p.domain, p.slug, s.dir_name "
+            "FROM snapshots s JOIN pages p ON p.id = s.page_id"
+        ).fetchall()
+    assert rows
+    for r in rows:
+        snap_dir = storage.page_dir(r["domain"], r["slug"]) / r["dir_name"]
+        actual = storage.snapshot_dir_bytes(snap_dir)
+        assert actual > 0
+        assert r["bytes"] == actual
+
+
+def test_export_import_preserves_title(roots, tmp_path, monkeypatch):
+    """비정규화된 스냅샷 title 이 내보내기/가져오기로 라운드트립된다."""
+    root_a, root_b = roots
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE snapshots SET title = ? WHERE dir_name = ?",
+            ("내보낸 제목", "2026-06-01T00-00-00"),
+        )
+        conn.commit()
+    out = backup.export_archive(tmp_path / "e.tar.gz")
+
+    _patch_root(monkeypatch, root_b)
+    backup.import_archive(out, mode="merge")
+    with db.connect() as conn:
+        title = conn.execute(
+            "SELECT title FROM snapshots WHERE dir_name = ?", ("2026-06-01T00-00-00",)
+        ).fetchone()["title"]
+    assert title == "내보낸 제목"
+
+
 def test_export_import_preserves_provenance(roots, tmp_path, monkeypatch):
     """확장 캡처 출처(origin/incomplete)와 client_captured 표식이 라운드트립된다."""
     root_a, root_b = roots

@@ -67,17 +67,19 @@ def _api_auth(request: Request) -> None:
                     401, "토큰 소유자의 권한이 없습니다",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
+            # 실효 권한을 1회만 계산해 사용 권한·토큰 권한(view/archive)을 모두 파생
+            # (예전엔 can_use_api_keys + token_permissions_for_user 가 오버라이드 JSON 을
+            #  두 번 파싱했다). role_presets 캐시가 워밍된 뒤라 정확하다.
+            perms = permissions.effective_permissions(owner)
             # 개인 API Key 사용 권한이 없으면(역할 강등·오버라이드 회수) 토큰 무효.
-            # role_presets 로 캐시가 워밍된 뒤라 effective_permissions 가 정확하다.
-            if not permissions.can_use_api_keys(owner):
+            if "use_api_keys" not in perms:
                 raise HTTPException(
                     401, "토큰 소유자에게 개인 API Key 사용 권한이 없습니다",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            can_view, can_archive = permissions.token_permissions_for_user(owner)
             key = dict(key)
-            key["can_view"] = int(can_view)
-            key["can_archive"] = int(can_archive)
+            key["can_view"] = int("view" in perms)
+            key["can_archive"] = int("archive" in perms)
     request.state.api_key = key
 
 

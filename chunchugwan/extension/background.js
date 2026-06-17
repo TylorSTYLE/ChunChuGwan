@@ -406,26 +406,99 @@ async function fetchDocuments(urls) {
   return out;
 }
 
-// CDP 렌더러가 한 번에 합성할 수 있는 표면 높이 상한 (지나치게 긴 페이지 보호).
+// 분할 캡처가 합성할 수 있는 전체 높이 상한 (지나치게 긴 페이지 보호).
 const MAX_SCREENSHOT_HEIGHT = 16384;
+const CAPTURE_SEGMENT_PAUSE_MS = 120; // 캡처 직전 스크롤 후 페인트 반영 대기
+const CAPTURE_SETTLE_PAUSE_MS = 150;  // 사전 스크롤(지연 로딩 유발) 각 단계 대기
+const MAX_CAPTURE_SEGMENTS = 240;     // 무한 루프 방지 (구간 수 상한)
 
-// 현재 레이아웃의 콘텐츠 크기(CSS px)를 읽는다 — { width, height } 또는 null.
-async function getContentSize(target) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 현재 레이아웃의 콘텐츠 크기 + 뷰포트 크기(CSS px)를 읽는다 — 또는 null.
+async function getLayout(target) {
   try {
-    const metrics = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
-    const cs = metrics && (metrics.cssContentSize || metrics.contentSize);
-    if (cs && cs.width > 0 && cs.height > 0) {
-      return { width: Math.ceil(cs.width), height: Math.ceil(cs.height) };
+    const m = await chrome.debugger.sendCommand(target, "Page.getLayoutMetrics");
+    const cs = m && (m.cssContentSize || m.contentSize);
+    const vp = m && (m.cssLayoutViewport || m.layoutViewport);
+    if (cs && cs.width > 0 && cs.height > 0 && vp && vp.clientWidth > 0 && vp.clientHeight > 0) {
+      return {
+        width: Math.ceil(cs.width),
+        height: Math.ceil(cs.height),
+        viewW: Math.ceil(vp.clientWidth),
+        viewH: Math.ceil(vp.clientHeight),
+      };
     }
   } catch (e) { /* 메트릭 실패 */ }
   return null;
 }
 
+// 페이지 컨텍스트 — y 로 스크롤하고 실제 적용된 scrollY(끝 클램프 반영)를 반환. 자체 완결.
+function scrollToY(y) {
+  window.scrollTo(0, y);
+  return window.scrollY;
+}
+
+// 페이지 컨텍스트 — 분할 캡처 준비. ① 고정/스티키 요소를 일반 흐름으로 바꿔 구간마다
+// 중복 합성되는 걸 막고(첫 구간 위치에만 남도록), ② 부드러운 스크롤·애니메이션·전환을
+// 꺼 구간 간 어긋남을 줄인다. 변경분은 isolated world 의 window 에 보관해
+// restoreAfterCapture 가 복원한다. 원래 scroll 위치도 반환. 자체 완결.
+function prepFixedForCapture() {
+  const changed = [];
+  for (const el of document.querySelectorAll("*")) {
+    const pos = getComputedStyle(el).position;
+    if (pos === "fixed" || pos === "sticky") {
+      changed.push({ el, prev: el.style.position });
+      el.style.setProperty("position", pos === "fixed" ? "absolute" : "relative", "important");
+    }
+  }
+  window.__wccgFixed = changed;
+  const style = document.createElement("style");
+  style.id = "__wccgCaptureStyle";
+  style.textContent =
+    "html{scroll-behavior:auto !important;}" +
+    "*,*::before,*::after{animation:none !important;transition:none !important;}";
+  (document.head || document.documentElement).appendChild(style);
+  return { scrollY: window.scrollY };
+}
+
+// 페이지 컨텍스트 — prepFixedForCapture 가 바꾼 요소·스타일·스크롤 위치를 복원. 자체 완결.
+function restoreAfterCapture(scrollY) {
+  for (const c of window.__wccgFixed || []) c.el.style.position = c.prev;
+  delete window.__wccgFixed;
+  const style = document.getElementById("__wccgCaptureStyle");
+  if (style) style.remove();
+  window.scrollTo(0, scrollY || 0);
+}
+
+async function runInPage(tabId, func, args) {
+  const r = await chrome.scripting.executeScript({ target: { tabId }, func, args: args || [] });
+  return r && r[0] ? r[0].result : undefined;
+}
+
+// 전체를 한 번 훑어 지연 로딩(이미지·무한스크롤 외 콘텐츠)을 미리 유발한다. 캡처 도중
+// 콘텐츠가 새로 로드돼 레이아웃이 밀리면 이음새가 어긋나므로, 캡처 전에 끝까지
+// 내려가 로드시킨 뒤 맨 위로 돌아온다.
+async function settleLazyLoad(tabId, target, viewH) {
+  const l = await getLayout(target);
+  const h = l ? l.height : 0;
+  for (let yy = 0, n = 0; yy < h && n < MAX_CAPTURE_SEGMENTS; yy += viewH, n++) {
+    await runInPage(tabId, scrollToY, [yy]);
+    await sleep(CAPTURE_SETTLE_PAUSE_MS);
+  }
+  await runInPage(tabId, scrollToY, [h]); // 바닥까지
+  await sleep(CAPTURE_SETTLE_PAUSE_MS);
+  await runInPage(tabId, scrollToY, [0]); // 맨 위로 복귀
+  await sleep(CAPTURE_SETTLE_PAUSE_MS);
+}
+
 // CDP 풀페이지 스크린샷 — base64 PNG 또는 null.
-// captureBeyondViewport + clip 만으로는 일부 페이지(내부 스크롤 컨테이너·고정 헤더,
-// Xvfb 헤드풀 표면)에서 스크롤이 반영되지 않아 첫 뷰포트가 타일처럼 반복 합성되는
-// CDP 버그가 있다. 그래서 캡처 전에 디바이스 메트릭을 전체 콘텐츠 높이로 덮어써
-// 실제 리레이아웃을 강제한 뒤 찍는다 (Playwright/Puppeteer 와 같은 방식).
+// captureBeyondViewport(+clip·디바이스메트릭 오버라이드)는 헤드풀 크롬에서 물리
+// 윈도우 표면이 뷰포트 크기에 묶여 있어, 요청한 전체 높이를 보이는 첫 뷰포트의
+// 반복 타일로 채우는 Chromium 버그가 있다. 그래서 뷰포트 단위로 스크롤하며 보이는
+// 표면만 찍어(captureBeyondViewport:false) OffscreenCanvas 에 이어 붙인다
+// (scroll-and-stitch). 이음새는 디바이스 픽셀로 누적하고 새로 드러난 부분만 소스
+// 크롭해 그려 틈/겹침을 없앤다(분수 dpr·끝 클램프 안전). 고정/스티키 요소는 첫
+// 구간에만 남도록 일반 흐름으로 바꾸고, 캡처 전 전체를 한 번 훑어 지연 로딩을 끝낸다.
 async function captureFullPage(tabId) {
   const target = { tabId };
   try {
@@ -433,41 +506,70 @@ async function captureFullPage(tabId) {
   } catch (e) {
     return null; // 부착 실패 (제약 페이지·이미 부착됨)
   }
-  let metricsOverridden = false;
+  let prepped = null;
   try {
-    const size = await getContentSize(target);
-    if (size) {
-      const height = Math.min(size.height, MAX_SCREENSHOT_HEIGHT);
-      try {
-        // deviceScaleFactor 0 = 디바이스 기본값 유지(dpr 보존), mobile false.
-        await chrome.debugger.sendCommand(target, "Emulation.setDeviceMetricsOverride", {
-          width: size.width, height, deviceScaleFactor: 0, mobile: false,
-        });
-        metricsOverridden = true;
-      } catch (e) { /* 오버라이드 실패 — 폴백으로 진행 */ }
-    }
+    const l0 = await getLayout(target);
+    if (!l0) return null;
+    try { await chrome.debugger.sendCommand(target, "Emulation.setScrollbarsHidden", { hidden: true }); }
+    catch (e) { /* 스크롤바 숨김 미지원 — 무시 */ }
 
-    // 오버라이드 후 리레이아웃으로 크기가 바뀔 수 있어 clip 은 다시 측정한다.
-    const clipSize = (metricsOverridden ? await getContentSize(target) : null) || size;
-    const params = { format: "png", captureBeyondViewport: true, fromSurface: true };
-    if (clipSize) {
-      params.clip = {
-        x: 0, y: 0,
-        width: clipSize.width,
-        height: Math.min(clipSize.height, MAX_SCREENSHOT_HEIGHT),
-        scale: 1,
-      };
+    await settleLazyLoad(tabId, target, l0.viewH);
+    prepped = (await runInPage(tabId, prepFixedForCapture)) || { scrollY: 0 };
+    // 지연 로딩·고정 요소 흐름 변경으로 콘텐츠 높이가 바뀌므로 다시 측정.
+    const layout = await getLayout(target);
+    if (!layout) return null;
+    const fullH = Math.min(layout.height, MAX_SCREENSHOT_HEIGHT);
+    const viewH = layout.viewH;
+
+    let canvas = null;
+    let ctx = null;
+    let dpr = 1;
+    let destY = 0;     // 캔버스에 채워진 높이(디바이스 px) — 다음 그릴 위치
+    let prevY = 0;     // 직전 구간의 실제 scrollY(CSS px)
+    let y = 0;
+    for (let i = 0; i < MAX_CAPTURE_SEGMENTS; i++) {
+      const actualY = (await runInPage(tabId, scrollToY, [y])) || 0;
+      await sleep(CAPTURE_SEGMENT_PAUSE_MS);
+      const shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
+        format: "png", fromSurface: true, captureBeyondViewport: false,
+      });
+      if (!shot || !shot.data) return null;
+      const bmp = await createImageBitmap(b64ToBlob(shot.data, "image/png"));
+      if (!canvas) {
+        dpr = bmp.width / layout.viewW || 1;
+        // 높이가 자라날 여지를 한 뷰포트만큼 더 둔다(끝에서 정확히 잘라낸다).
+        canvas = new OffscreenCanvas(bmp.width, Math.round(fullH * dpr) + bmp.height);
+        ctx = canvas.getContext("2d");
+        ctx.drawImage(bmp, 0, 0);
+        destY = bmp.height;
+      } else {
+        // 직전 구간 대비 새로 드러난 높이(디바이스 px)만큼만 아래쪽을 잘라 붙인다.
+        const newDev = Math.min(Math.round((actualY - prevY) * dpr), bmp.height);
+        if (newDev > 0) {
+          const srcY = bmp.height - newDev;
+          ctx.drawImage(bmp, 0, srcY, bmp.width, newDev, 0, destY, bmp.width, newDev);
+          destY += newDev;
+        }
+      }
+      prevY = actualY;
+      bmp.close();
+      if (actualY + viewH >= fullH) break; // 바닥 도달
+      const next = actualY + viewH;
+      if (next <= y) break; // 더 못 내려감 — 종료
+      y = next;
     }
-    const shot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", params);
-    return shot && shot.data ? shot.data : null;
+    if (!canvas) return null;
+    // 실제로 채운 높이만큼(상한 클램프) 정확히 잘라 내보낸다.
+    const outH = Math.min(destY, Math.round(MAX_SCREENSHOT_HEIGHT * dpr));
+    const out = new OffscreenCanvas(canvas.width, outH);
+    out.getContext("2d").drawImage(canvas, 0, 0);
+    const blob = await out.convertToBlob({ type: "image/png" });
+    return bufToBase64(await blob.arrayBuffer());
   } catch (e) {
     return null;
   } finally {
-    if (metricsOverridden) {
-      try {
-        await chrome.debugger.sendCommand(target, "Emulation.clearDeviceMetricsOverride");
-      } catch (e) { /* 무시 */ }
-    }
+    try { await runInPage(tabId, restoreAfterCapture, [prepped ? prepped.scrollY : 0]); } catch (e) { /* 무시 */ }
+    try { await chrome.debugger.sendCommand(target, "Emulation.setScrollbarsHidden", { hidden: false }); } catch (e) { /* 무시 */ }
     try { await chrome.debugger.detach(target); } catch (e) { /* 무시 */ }
   }
 }

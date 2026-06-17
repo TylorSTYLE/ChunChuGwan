@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
+from jinja2.environment import create_cache
 from markupsafe import Markup, escape
 
 
@@ -16,8 +17,9 @@ def _auth_context(request: Request) -> dict:
     from . import permissions
 
     user = getattr(request.state, "user", None)
-    admin = permissions.system_allowed(user)
-    can_manage_system = permissions.can_manage_system(user)
+    # 실효 권한을 1회만 계산해 메뉴/버튼 노출 플래그를 모두 파생 (렌더마다 9회 → 1회).
+    flags = permissions.menu_flags(user)
+    can_manage_system = flags["can_manage_system"]
     # 사람 확인 대기 작업은 워커가 기록하는 DB 사실이다 — 대시보드(serve)의
     # WCCG_LIVE_CHALLENGE 설정과 무관하게, 시스템 관리자에겐 대기 작업이 있으면
     # 헤더 메뉴·배너로 안내한다 (워커와 serve 의 env 가 달라도 누락되지 않게).
@@ -38,15 +40,7 @@ def _auth_context(request: Request) -> dict:
             needs_human_jobs = []
     return {
         "user": user,
-        "system_allowed": admin,
-        "can_manage_system": can_manage_system,
-        "can_manage_users": permissions.can_manage_users(user),
-        "can_manage_credentials": permissions.can_manage_credentials(user),
-        "can_archive": permissions.can_archive(user),
-        "can_delete": permissions.can_delete(user),
-        "can_view_logs": permissions.can_view_logs(user),
-        "can_search": permissions.can_search(user),
-        "can_use_api_keys": permissions.can_use_api_keys(user),
+        **flags,
         "needs_human_jobs": needs_human_jobs,
         "needs_human_count": len(needs_human_jobs),
     }
@@ -134,6 +128,11 @@ templates = Jinja2Templates(
     directory=Path(__file__).parent / "templates",
     context_processors=[_auth_context, _i18n_context, _tz_context],
 )
+# 템플릿은 패키지에 동봉돼 런타임에 바뀌지 않는다 — 매 렌더의 stat(변경 감지)을
+# 끄고(auto_reload), 컴파일된 템플릿을 전부 무제한 캐시(cache_size=-1)해 둔다.
+# (Starlette 1.x 는 env 옵션 kwargs 를 안 받으므로 생성 후 Environment 에 직접 적용.)
+templates.env.auto_reload = False
+templates.env.cache = create_cache(-1)
 templates.env.filters["filesize"] = filesize
 templates.env.filters["ts"] = ts
 templates.env.filters["highlight"] = highlight

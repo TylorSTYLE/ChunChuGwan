@@ -611,6 +611,7 @@ def run_loop(
     """
     logger.info("크롤러 시작 (폴링 %ds)", poll_seconds)
     with capture.BrowserSession() as session:
+        last_active = time.monotonic()
         while not stop.is_set():
             step = None
             try:
@@ -628,8 +629,13 @@ def run_loop(
                 logger.exception("크롤러 폴링 실패")
             if step is not None and step.crawl_done:
                 logger.info("크롤 완료: #%d", step.crawl_id)
-            if step is None:
-                session.close()  # 다음 캡처에서 재기동 — 유휴 중 점유 방지
+            if step is not None:
+                last_active = time.monotonic()
+            else:
+                # 큐가 빈 뒤 grace 를 넘겨야 close — 페이지 간 간격(next_page_at)
+                # 때문에 잠깐 비는 사이마다 재기동하는 스래싱을 막는다 (close 는 멱등).
+                if time.monotonic() - last_active >= config.BROWSER_IDLE_CLOSE_SECONDS:
+                    session.close()
                 if stop.wait(poll_seconds):
                     break
     logger.info("크롤러 종료")

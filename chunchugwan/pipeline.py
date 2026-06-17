@@ -297,31 +297,34 @@ def _archive_url(
     run.step("normalize", f"{norm} → {domain}/{slug}"
              + (" (도메인 룰 적용)" if rules else ""))
 
+    # 캡처 전 DB 조회를 한 커넥션·한 get_page 로 통합한다 — client_captured
+    # 백스톱·자격증명 연결·모바일 스크린샷 설정이 모두 같은 최종 norm 을 본다
+    # (이전에는 같은 URL 을 세 커넥션에서 세 번 조회했다).
+    #
     # 확장(브라우저) 캡처 페이지는 서버가 다시 가져오지 않는다 (불변식 — 캡처 전에
     # 차단해 비싼 캡처를 낭비하지 않는다). 스케줄·크롤·워커·직접 호출이 모두 이
     # 함수로 수렴하므로 여기 한 곳이 서버 재요청의 최종 차단선이다. 갱신은 확장
     # 재캡처(ingest)로만 — enqueue_archive_job 도 큐 진입에서 함께 막는다.
-    with db.connect() as conn:
-        existing_page = db.get_page(conn, norm)
-    if existing_page is not None and existing_page["client_captured"]:
-        raise ValueError(
-            "확장(브라우저) 캡처 페이지는 서버에서 다시 가져올 수 없습니다 — "
-            "확장에서 재캡처하세요"
-        )
-
-    # 이 URL 에 적용할 로그인 자격증명을 정한다 — 폼이 넘긴 credential_id 가
-    # 우선, 없으면 페이지에 저장된 연결(pages.credential_id)을 쓴다 (스케줄·
-    # CLI 재아카이빙이 저장된 자격증명을 이어 쓰는 경로). 복호화는 키 부재·
-    # 실패·삭제된 자격증명이면 인증 없이 진행한다(graceful).
+    #
+    # 로그인 자격증명은 폼이 넘긴 credential_id 가 우선, 없으면 페이지에 저장된
+    # 연결(pages.credential_id)을 쓴다 (스케줄·CLI 재아카이빙이 저장된 자격증명을
+    # 이어 쓰는 경로). 복호화는 키 부재·실패·삭제된 자격증명이면 인증 없이 진행(graceful).
     credential = None
     authenticated_by = None  # 로그인 캡처 스냅샷의 소유자(자격증명 등록자) — 접근제한용
     try:
         with db.connect() as conn:
+            existing_page = db.get_page(conn, norm)
+            if existing_page is not None and existing_page["client_captured"]:
+                raise ValueError(
+                    "확장(브라우저) 캡처 페이지는 서버에서 다시 가져올 수 없습니다 — "
+                    "확장에서 재캡처하세요"
+                )
+            # 모바일 해상도 스크린샷도 함께 저장할지 — 시스템 설정(기본 off).
+            mobile_screenshot = db.mobile_screenshot_enabled(conn)
+
             effective_cred_id = credential_id
-            if effective_cred_id is None:
-                existing = db.get_page(conn, norm)
-                if existing is not None:
-                    effective_cred_id = existing["credential_id"]
+            if effective_cred_id is None and existing_page is not None:
+                effective_cred_id = existing_page["credential_id"]
             revealed = (
                 credentials.reveal_for_capture(conn, effective_cred_id)
                 if effective_cred_id is not None else None
@@ -337,11 +340,6 @@ def _archive_url(
             run.step("credential", f"로그인 자격증명 적용 ({kind})")
     except (crypto.SecretKeyMissing, crypto.SecretDecryptError) as e:
         logger.warning("자격증명 복호화 실패 — 인증 없이 진행: %s (%s)", norm, e)
-
-    # 모바일 해상도 스크린샷도 함께 저장할지 — 시스템 설정(기본 off). 켜져
-    # 있으면 캡처가 데스크탑 외에 모바일 뷰포트 스크린샷을 한 장 더 찍는다.
-    with db.connect() as conn:
-        mobile_screenshot = db.mobile_screenshot_enabled(conn)
 
     # 해시가 같으면 스냅샷 디렉토리를 만들지 않도록 임시 디렉토리에 먼저 캡처
     capture_kwargs = dict(
@@ -562,6 +560,8 @@ def _archive_url(
                 http_status=result.http_status, changed=changed,
                 resources_indexed=1,  # 참조는 바로 아래에서 기록 — 백필 불필요
                 css_externalized=1,   # compact_snapshot_dir 가 위에서 추출 완료
+                bytes=storage.snapshot_dir_bytes(snap_dir),
+                title=result.title,
                 authenticated=1 if credential is not None else 0,
                 authenticated_by=authenticated_by if credential is not None else None,
             )
@@ -803,6 +803,8 @@ def _archive_document_url(
             http_status=dl.http_status, changed=changed,
             resources_indexed=1,  # 공유 자원 없음 — 백필 불필요
             css_externalized=1,   # 인라인 <style> 없음
+            bytes=storage.snapshot_dir_bytes(snap_dir),
+            title=meta.title,
             authenticated=1 if credential is not None else 0,
             authenticated_by=authenticated_by if credential is not None else None,
         )

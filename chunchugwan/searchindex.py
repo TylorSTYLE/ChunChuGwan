@@ -318,7 +318,7 @@ def _make_snippet(content: str, terms: list[str], radius: int = 90, max_len: int
     return snip
 
 
-def _hit(row: sqlite3.Row, terms: list[str]) -> SearchHit:
+def _hit(row: sqlite3.Row, terms: list[str], snippet: str) -> SearchHit:
     return SearchHit(
         snapshot_id=row["snapshot_id"],
         page_id=row["page_id"],
@@ -327,7 +327,7 @@ def _hit(row: sqlite3.Row, terms: list[str]) -> SearchHit:
         taken_at=row["taken_at"],
         changed=row["changed"],
         title=row["title"] or None,
-        snippet=_make_snippet(row["content"] or "", terms),
+        snippet=snippet,
         terms=terms,
     )
 
@@ -359,6 +359,9 @@ def search(
             total = db.count_search_snapshots_fts(
                 conn, payload, domain=domain, latest_only=latest_only
             )
+            # 스니펫은 DB(FTS5 snippet())가 매치 주변만 잘라 준다 — 본문 전문을
+            # Python 으로 가져오지 않는다.
+            hits = [_hit(r, terms, r["snippet"]) for r in rows]
         else:
             rows = db.search_snapshots_like(
                 conn, payload, domain=domain, latest_only=latest_only,
@@ -367,4 +370,6 @@ def search(
             total = db.count_search_snapshots_like(
                 conn, payload, domain=domain, latest_only=latest_only
             )
-    return SearchResults([_hit(r, terms) for r in rows], total, mode)
+            # LIKE 폴백은 MATCH 가 없어 snippet() 을 못 써 content 에서 직접 만든다.
+            hits = [_hit(r, terms, _make_snippet(r["content"] or "", terms)) for r in rows]
+    return SearchResults(hits, total, mode)

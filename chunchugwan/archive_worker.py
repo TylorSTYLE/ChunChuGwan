@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -185,7 +186,8 @@ def run_loop(
     """stop 이 설정될 때까지 단발 아카이빙 큐를 소비 (serve·worker 백그라운드 스레드용).
 
     처리할 작업이 있으면 즉시 다음으로 넘어가고, 없을 때만 poll_seconds 만큼
-    쉰다. 브라우저는 작업 간 재사용하고, 큐가 비면 내려서 메모리 점유를 피한다.
+    쉰다. 브라우저는 작업 간 재사용하고, 큐가 비어 일정 시간(유휴 grace) 이상
+    지나면 내려서 메모리 점유를 피한다.
     """
     logger.info("아카이빙 워커 시작 (폴링 %ds)", poll_seconds)
     # 재시작 — 사람 확인 대기였던 작업은 살아있던 라이브 page 가 사라졌으므로
@@ -195,6 +197,7 @@ def run_loop(
     if reset:
         logger.warning("재시작 — 사람 확인 대기였던 작업 %d개를 복구", len(reset))
     with capture.BrowserSession() as session:
+        last_active = time.monotonic()
         while not stop.is_set():
             step = None
             try:
@@ -203,8 +206,13 @@ def run_loop(
                 )
             except Exception:
                 logger.exception("아카이빙 워커 폴링 실패")
-            if step is None:
-                session.close()  # 다음 작업에서 재기동 — 유휴 중 점유 방지
+            if step is not None:
+                last_active = time.monotonic()
+            else:
+                # 큐가 빈 뒤 grace 를 넘겨야 close — 산발적 작업마다 재기동하는
+                # 스래싱을 막는다 (close 는 멱등이라 이후 폴링은 무해).
+                if time.monotonic() - last_active >= config.BROWSER_IDLE_CLOSE_SECONDS:
+                    session.close()
                 if stop.wait(poll_seconds):
                     break
     logger.info("아카이빙 워커 종료")

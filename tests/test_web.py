@@ -102,6 +102,13 @@ def client(tmp_path, monkeypatch):
         }, guide_entry],
     ))
 
+    # 픽스처는 finalize_snapshot 을 거치지 않고 파일을 두 단계로 쓰므로(스냅샷 행
+    # 삽입 후 files/·meta.json 추가), 실제 파일·meta 기준으로 snapshots.bytes·title
+    # 을 맞춘다 — production 의 캡처(저장 시점 기록)·import(파일 이동 후 백필)와 같은 결과.
+    with db.connect() as conn:
+        db.backfill_snapshot_bytes(conn)
+        db.backfill_snapshot_titles(conn)
+
     web_app._active_jobs.clear()  # 다른 테스트의 진행 목록 잔재 제거
     yield TestClient(web_app.app)
     web_app._active_jobs.clear()
