@@ -53,7 +53,7 @@
 		<a href="{base}/archives">{t('아카이브 사이트 목록')}</a>
 		<a href="{base}/documents">{t('전체 문서(파일)')}</a>
 		{#if flags.can_search}<a href="{base}/search">{t('검색')}</a>{/if}
-		{#if flags.can_archive}<a href="/archive/new">{t('새 아카이빙')}</a>{/if}
+		{#if flags.can_archive}<a href="{base}/archive/new">{t('새 아카이빙')}</a>{/if}
 		<a href="{base}/schedules">{t('스케줄')}</a>
 		{#if flags.can_view_logs}<a href="{base}/logs">{t('아카이빙 로그')}</a>{/if}
 		<span class="spacer"></span>

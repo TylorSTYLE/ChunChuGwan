@@ -22,8 +22,11 @@ from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from pydantic import BaseModel
+
 from .. import (
-    __version__, config, db, differ, documents, resources, searchindex, storage,
+    __version__, config, crawler, db, deletion, differ, documents, resources,
+    scheduler, searchindex, storage,
 )
 from . import i18n, permissions
 from .templating import _auth_context
@@ -767,4 +770,199 @@ def logs(
         "total": total,
         "total_pages": total_pages,
         "page_num": page,
+    }
+
+
+# ── 쓰기 액션 ───────────────────────────────────────────────────────────────
+# 변경 동작은 여전히 코어 모듈(scheduler·crawler·deletion·db)을 거친다(원칙 1).
+# app.py 의 검증 헬퍼(_queue_archive·_network_gate·_interval_from_form·
+# _requester_id)는 지연 import 로 재사용한다 — app 이 이 모듈을 모듈 레벨에서
+# import 하므로 함수 안에서 역참조해 순환을 피한다.
+
+
+def _require_archive(user: sqlite3.Row | None) -> None:
+    if not permissions.can_archive(user):
+        raise HTTPException(403, "아카이빙 권한이 없습니다")
+
+
+def _require_delete(user: sqlite3.Row | None) -> None:
+    if not permissions.can_delete(user):
+        raise HTTPException(403, "삭제 권한이 없습니다")
+
+
+def _require_not_migrating() -> None:
+    with db.connect() as conn:
+        if db.migration_mode_enabled(conn):
+            raise HTTPException(409, "이전(마이그레이션) 모드입니다 — 아카이빙할 수 없습니다")
+
+
+class ArchiveReq(BaseModel):
+    url: str
+    force: bool = False
+    site: bool = False
+    interval: str = "0"
+    custom_value: str = ""
+    custom_unit: str = "h"
+    run_at: str = ""
+    network_tag: str = ""
+    crawl_max_pages: str = ""
+    crawl_max_depth: str = ""
+    crawl_delay: str = ""
+
+
+@router.post("/archive", status_code=202)
+def archive_new(
+    request: Request,
+    body: ArchiveReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """새 URL 아카이빙(또는 사이트 전체 크롤) 등록 — app.archive_new 의 JSON 판.
+
+    자격증명 연결은 후속(여기서는 받지 않는다). 캡처는 워커 큐가 처리한다.
+    """
+    from .app import _interval_from_form, _network_gate, _queue_archive, _requester_id
+
+    _require_archive(user)
+    _require_not_migrating()
+    try:
+        seconds = _interval_from_form(body.interval, body.custom_value, body.custom_unit)
+        if seconds:
+            scheduler.validate_interval(seconds)
+            if body.run_at:
+                scheduler.validate_run_at(body.run_at, seconds)
+        norm = storage.normalize_url(body.url)
+        tag_id = _network_gate(request, norm, body.network_tag.strip() or None)
+    except ValueError as exc:
+        raise HTTPException(400, f"아카이빙 실패: {exc}")
+
+    if body.site:
+        options = {
+            "max_pages": int(body.crawl_max_pages) if body.crawl_max_pages else None,
+            "max_depth": int(body.crawl_max_depth) if body.crawl_max_depth else None,
+            "delay_seconds": int(body.crawl_delay) if body.crawl_delay else None,
+        }
+        try:
+            crawl, merged = crawler.start_crawl(
+                body.url, **options, source="web",
+                requested_by=_requester_id(request), network_tag_id=tag_id,
+            )
+            if seconds:
+                crawler.set_crawl_schedule(
+                    body.url, seconds, run_at=body.run_at or None, **options,
+                    network_tag_id=tag_id,
+                )
+        except ValueError as exc:
+            raise HTTPException(400, f"아카이빙 실패: {exc}")
+        return {"site": True, "crawl_id": crawl["id"], "merged": merged}
+
+    queued = _queue_archive(
+        norm, force=body.force, requested_by=_requester_id(request),
+        interval_seconds=seconds or None,
+        run_at=(body.run_at or None) if seconds else None,
+        network_tag_id=tag_id,
+    )
+    return {"site": False, "queued": norm, "enqueued": queued}
+
+
+class RearchiveReq(BaseModel):
+    force: bool = False
+
+
+@router.post("/pages/{page_id}/rearchive", status_code=202)
+def rearchive(
+    request: Request,
+    page_id: int,
+    body: RearchiveReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """재아카이빙 등록 — app.rearchive 의 JSON 판."""
+    from .app import _queue_archive, _requester_id
+
+    _require_archive(user)
+    _require_not_migrating()
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, "페이지 없음")
+    enqueued = _queue_archive(
+        page["url"], force=body.force, requested_by=_requester_id(request)
+    )
+    return {"enqueued": enqueued}
+
+
+class ScheduleReq(BaseModel):
+    interval: str
+    custom_value: str = ""
+    custom_unit: str = "h"
+    run_at: str = ""
+
+
+@router.post("/pages/{page_id}/schedule")
+def schedule_set(
+    request: Request,
+    page_id: int,
+    body: ScheduleReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """페이지 반복 주기 등록/변경 — app.schedule_set 의 JSON 판."""
+    from .app import _interval_from_form
+
+    _require_archive(user)
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, "페이지 없음")
+    try:
+        seconds = _interval_from_form(body.interval, body.custom_value, body.custom_unit)
+        scheduler.set_schedule(page["url"], seconds, run_at=body.run_at or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "interval_seconds": seconds}
+
+
+@router.post("/pages/{page_id}/schedule/delete")
+def schedule_delete(
+    request: Request,
+    page_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """페이지 반복 주기 해제 — app.schedule_delete 의 JSON 판."""
+    _require_archive(user)
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, "페이지 없음")
+    scheduler.remove_schedule(page["url"])
+    return {"ok": True}
+
+
+@router.post("/pages/{page_id}/delete")
+def page_delete(
+    request: Request,
+    page_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """페이지(전체 스냅샷) 삭제 — app.page_delete 의 JSON 판."""
+    _require_delete(user)
+    result = deletion.delete_page(page_id)
+    return {
+        "ok": True,
+        "snapshots_deleted": getattr(result, "snapshots_deleted", None),
+    }
+
+
+@router.post("/sites/{site_id}/delete")
+def site_delete(
+    request: Request,
+    site_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사이트 전체(페이지·크롤·스케줄) 삭제 — app.site_delete 의 JSON 판."""
+    _require_delete(user)
+    result = deletion.delete_site(site_id)
+    return {
+        "ok": True,
+        "site_key": getattr(result, "site_key", None),
+        "pages_deleted": getattr(result, "pages_deleted", None),
+        "snapshots_deleted": getattr(result, "snapshots_deleted", None),
     }

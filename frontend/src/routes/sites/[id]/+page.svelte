@@ -1,15 +1,35 @@
 <script lang="ts">
 	import { base } from '$app/paths';
+	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
+	import { api, ApiError } from '$lib/api';
 	import type { SiteDetail } from '$lib/types';
 
 	let { data }: { data: { site: SiteDetail } } = $props();
 	const s = $derived(data.site);
+
+	let busy = $state(false);
+	let error = $state('');
+
+	async function deleteSite() {
+		if (!confirm(t('이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 삭제할까요? 되돌릴 수 없습니다.')))
+			return;
+		busy = true;
+		error = '';
+		try {
+			await api(`/sites/${s.site.id}/delete`, { method: 'POST' });
+			goto(`${base}/archives`);
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+			busy = false;
+		}
+	}
 </script>
 
 <h2 class="mono">{s.site.site_key}</h2>
 {#if s.site_title}<p class="muted">{s.site_title}</p>{/if}
+{#if error}<div class="error">{error}</div>{/if}
 
 <div class="stat-grid">
 	<div class="stat-card">
@@ -108,6 +128,13 @@
 	</div>
 {/if}
 
+{#if s.can_delete}
+	<fieldset class="danger-zone">
+		<legend>{t('위험 구역')}</legend>
+		<button class="danger" onclick={deleteSite} disabled={busy}>{t('이 사이트 삭제')}</button>
+	</fieldset>
+{/if}
+
 <style>
 	td.url-cell {
 		max-width: 420px;
@@ -121,5 +148,35 @@
 		align-items: center;
 		margin-top: 10px;
 		font-size: 13px;
+	}
+	.error {
+		background: var(--red-bg);
+		color: var(--red-text);
+		border-radius: 4px;
+		padding: 8px 12px;
+		margin-bottom: 12px;
+		font-size: 13px;
+	}
+	.danger-zone {
+		border: 1px solid var(--red);
+		border-radius: 6px;
+		margin-top: 28px;
+		padding: 10px 14px 14px;
+	}
+	.danger-zone legend {
+		color: var(--red);
+		font-size: 12px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		padding: 0 4px;
+	}
+	button.danger {
+		color: #fff;
+		background: var(--red);
+		border-color: var(--red);
+	}
+	button.danger:hover {
+		background: var(--red-hover);
 	}
 </style>
