@@ -77,6 +77,37 @@
 			curPw = newPw = newPw2 = '';
 		}, '패스워드를 변경했습니다. 다른 기기의 세션은 로그아웃되었습니다.');
 
+	// ── 2단계 인증 (TOTP) ──
+	let totpSetup = $state<{ secret: string; qr: string } | null>(null);
+	let totpCode = $state('');
+	let totpPassword = $state('');
+
+	const startTotp = () =>
+		run(async () => {
+			totpSetup = await api<{ secret: string; qr: string }>('/settings/totp/setup', {
+				method: 'POST'
+			});
+		}, '인증 앱에 등록한 뒤 코드를 입력하세요.');
+
+	const confirmTotp = () =>
+		run(async () => {
+			await api('/settings/totp/confirm', {
+				method: 'POST',
+				body: JSON.stringify({ code: totpCode.trim() })
+			});
+			totpSetup = null;
+			totpCode = '';
+		}, '2단계 인증을 켰습니다.');
+
+	const disableTotp = () =>
+		run(async () => {
+			await api('/settings/totp/disable', {
+				method: 'POST',
+				body: JSON.stringify({ password: totpPassword })
+			});
+			totpPassword = '';
+		}, '2단계 인증을 껐습니다.');
+
 	async function withdraw() {
 		if (!confirm(t('정말 탈퇴할까요? 이 작업은 되돌릴 수 없습니다.'))) return;
 		busy = true;
@@ -163,6 +194,37 @@
 	</section>
 {/if}
 
+<section>
+	<h3>{t('2단계 인증 (TOTP)')}</h3>
+	{#if !d.has_password}
+		<p class="muted">{t('SSO 전용 계정의 2단계 인증은 IdP(Authentik)에서 관리합니다.')}</p>
+	{:else if d.totp_enabled}
+		<p class="muted">{t('사용 중입니다.')}</p>
+		<div class="form">
+			<input
+				type="password"
+				bind:value={totpPassword}
+				placeholder={t('현재 패스워드')}
+				autocomplete="current-password"
+			/>
+			<button class="danger" onclick={disableTotp} disabled={busy || !totpPassword}>{t('해제')}</button>
+		</div>
+	{:else if totpSetup}
+		<p class="muted hint">
+			{t('인증 앱(Google Authenticator 등)으로 QR 을 스캔하거나 키를 입력한 뒤, 표시되는 코드를 입력하세요.')}
+		</p>
+		<img class="qr" src={totpSetup.qr} alt={t('TOTP QR')} />
+		<div class="mono secret">{totpSetup.secret}</div>
+		<div class="form">
+			<input type="text" inputmode="numeric" bind:value={totpCode} placeholder={t('6자리 코드')} />
+			<button onclick={confirmTotp} disabled={busy || !totpCode.trim()}>{t('확인')}</button>
+			<button onclick={() => (totpSetup = null)} disabled={busy}>{t('취소')}</button>
+		</div>
+	{:else}
+		<button onclick={startTotp} disabled={busy}>{t('2단계 인증 설정')}</button>
+	{/if}
+</section>
+
 {#if !d.is_admin}
 	<section class="danger-zone">
 		<h3>{t('위험 영역')}</h3>
@@ -222,6 +284,21 @@
 	.hint {
 		font-size: 12px;
 		margin: 4px 0 0;
+	}
+	.qr {
+		display: block;
+		width: 180px;
+		height: 180px;
+		margin: 8px 0;
+		image-rendering: pixelated;
+		background: #fff;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+	}
+	.secret {
+		font-size: 13px;
+		word-break: break-all;
+		margin-bottom: 8px;
 	}
 	.danger-zone {
 		border-top-color: var(--red);

@@ -1992,3 +1992,69 @@ def my_archives(
         "total_pages": total_pages,
         "page_num": page,
     }
+
+
+# ── 개인 2단계 인증 (TOTP) ───────────────────────────────────────────────────
+# 패스워드 로그인의 2단계로만 쓴다 (SSO 는 IdP 2FA 신뢰). auth.totp_setup_page
+# /totp_confirm/totp_disable 의 JSON 판. 패스키(WebAuthn) 설정은 별도.
+
+
+@router.post("/settings/totp/setup")
+def totp_setup(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """2단계 인증 설정 시작 — 시크릿을 pending 으로 두고 QR(provisioning URI)을 반환."""
+    user = _require_account(user)
+    if user["password_hash"] is None:
+        raise HTTPException(400, "SSO 전용 계정은 2단계 인증을 설정할 수 없습니다.")
+    if user["totp_secret"] is not None:
+        raise HTTPException(409, "이미 2단계 인증이 설정되어 있습니다.")
+    secret = auth.new_totp_secret()
+    with db.connect() as conn:
+        db.set_totp_pending(conn, user["id"], secret)
+    return {
+        "secret": secret,
+        "qr": auth.qr_data_uri(auth.totp_provisioning_uri(secret, user["email"])),
+    }
+
+
+class TotpConfirmReq(BaseModel):
+    code: str
+
+
+@router.post("/settings/totp/confirm")
+def totp_confirm(
+    request: Request, body: TotpConfirmReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """pending 시크릿을 사용자가 입력한 코드로 확인 → 2단계 인증 활성화."""
+    user = _require_account(user)
+    with db.connect() as conn:
+        fresh = db.get_user_by_id(conn, user["id"])
+        pending = fresh["totp_pending_secret"]
+        window = pending and auth.verify_totp(pending, body.code, None)
+        if not window:
+            raise HTTPException(400, "코드가 올바르지 않습니다. QR 을 다시 스캔 후 시도하세요.")
+        db.confirm_totp(conn, user["id"])
+        db.set_totp_last_used(conn, user["id"], window)
+    return {"ok": True}
+
+
+class TotpDisableReq(BaseModel):
+    password: str
+
+
+@router.post("/settings/totp/disable")
+def totp_disable(
+    request: Request, body: TotpDisableReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """2단계 인증 해제 — 세션 탈취로 2FA 를 무력화하지 못하도록 패스워드 재확인."""
+    user = _require_account(user)
+    if user["password_hash"] is None or not auth.verify_password(
+        user["password_hash"], body.password
+    ):
+        raise HTTPException(401, "패스워드가 올바르지 않습니다.")
+    with db.connect() as conn:
+        db.disable_totp(conn, user["id"])
+    return {"ok": True}
