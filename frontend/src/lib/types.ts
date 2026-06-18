@@ -209,6 +209,19 @@ export interface SiteDetail {
 	schedules: (Record<string, unknown> & { page_id: number; label: string })[];
 	crawl_schedules: { start_url: string; label: string; next_run_at: string }[];
 	network_tags: Record<string, unknown>[];
+	certificates: {
+		cert: Record<string, unknown> & {
+			id: number;
+			host: string;
+			issuer: string;
+			subject: string;
+			not_after: string;
+			verified: number;
+		};
+		san: string[];
+		is_current: boolean;
+		pem_url: string;
+	}[];
 	documents: Record<string, unknown>[];
 	doc_total: number;
 	failed_items: Record<string, unknown>[];

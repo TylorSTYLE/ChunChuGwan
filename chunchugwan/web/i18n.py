@@ -1417,6 +1417,8 @@ _EN.update({
     "태그 병합": "Merge tags",
     "원본": "Source",
     "대상": "Target",
+    "TLS 인증서": "TLS certificates",
+    "검증됨": "Verified",
     "보관 시간(시간)": "Retention (hours)",
     "본문 비교": "Text diff",
     "비우면 이메일이 표시됩니다.": "Leave empty to show your email.",

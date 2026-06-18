@@ -434,6 +434,7 @@ def site_detail(
         schedules = db.list_site_schedules(conn, site_id)
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
         site_network_tags = db.list_site_network_tags(conn, site_id)
+        certificates = db.list_site_certificates(conn, site_id)
         failed_logs = db.list_site_failed_logs(conn, site_id)
         failed_log_urls = {f["page_url"] for f in failed_logs}
         failed_crawl_pages = [
@@ -452,6 +453,19 @@ def site_detail(
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
         for s in schedules
     }
+    # 인증서 — 호스트별 최신 행이 "현재"(db 정렬), .pem 은 기존 바이너리 라우트로 다운로드
+    current_cert_ids: dict[str, int] = {}
+    for c in certificates:
+        current_cert_ids.setdefault(c["host"], c["id"])
+    cert_rows = [
+        {
+            "cert": dict(c),
+            "san": json.loads(c["san"] or "[]"),
+            "is_current": current_cert_ids[c["host"]] == c["id"],
+            "pem_url": f"/sites/{site_id}/certificates/{c['id']}.pem",
+        }
+        for c in certificates
+    ]
     return {
         "site": dict(site),
         "site_title": _site_title(snap_dirs),
@@ -476,6 +490,7 @@ def site_detail(
             for s in crawl_schedules
         ],
         "network_tags": [dict(tg) for tg in site_network_tags],
+        "certificates": cert_rows,
         "documents": [dict(d) for d in site_documents],
         "doc_total": doc_total,
         "failed_items": _failed_items(site_id, failed_logs, failed_crawl_pages),

@@ -130,6 +130,22 @@
 	</div>
 {/if}
 
+{#if s.certificates.length > 0}
+	<h3>{t('TLS 인증서')}</h3>
+	<ul class="certs">
+		{#each s.certificates as c}
+			<li>
+				<span class="mono host">{c.cert.host}</span>
+				{#if c.is_current}<span class="badge">{t('현재')}</span>{/if}
+				<span class="muted issuer">{c.cert.issuer}</span>
+				<span class="muted">~{ts(String(c.cert.not_after))}</span>
+				{#if c.cert.verified}<span class="muted">{t('검증됨')}</span>{/if}
+				<a href={c.pem_url} class="pem">PEM</a>
+			</li>
+		{/each}
+	</ul>
+{/if}
+
 {#if s.can_manage_credentials}
 	<p class="cred-link">
 		<a href="{base}/sites/{s.site.id}/credentials">{t('로그인 자격증명 관리')}</a>
@@ -148,6 +164,31 @@
 	.cred-link {
 		font-size: 13px;
 		margin: 16px 0 0;
+	}
+	.certs {
+		list-style: none;
+		padding: 0;
+	}
+	.certs li {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 4px 0;
+		font-size: 13px;
+		flex-wrap: wrap;
+	}
+	.certs .issuer {
+		flex: 1;
+		min-width: 0;
+	}
+	.certs .badge {
+		background: var(--accent-bg, var(--border));
+		border-radius: 3px;
+		padding: 1px 6px;
+		font-size: 11px;
+	}
+	.certs .pem {
+		margin-left: auto;
 	}
 	td.url-cell {
 		max-width: 420px;

@@ -9,6 +9,8 @@ API 기준으로 대체한다. SSR test_web.py(site·pagination·byte)·test_del
 보강이 필요한 항목으로, 테스트가 아닌 별도 결정 사항이다(test_certs.py 는 컷오버 후에도
 .pem 다운로드 바이너리 라우트가 유지되므로 깨지지 않는다).
 """
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,6 +18,19 @@ from chunchugwan import auth, config, db, storage
 from chunchugwan.web import app as web_app
 
 DOMAIN = "example.com"
+
+
+def _cert_info(host=DOMAIN, fingerprint="ab" * 32):
+    """upsert_site_certificate 용 파싱 결과 dict (test_certs._info 와 동일 형식)."""
+    return {
+        "host": host, "fingerprint": fingerprint,
+        "subject": "CN=example.com", "issuer": "CN=Test CA", "serial": "1a2b",
+        "san": json.dumps(["example.com", "www.example.com"]),
+        "not_before": "2026-01-01T00:00:00+00:00",
+        "not_after": "2026-12-31T23:59:59+00:00",
+        "signature_algorithm": "sha256",
+        "pem": "-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n",
+    }
 
 
 @pytest.fixture
@@ -112,6 +127,27 @@ def test_site_detail(tmp_db):
 def test_site_detail_404(tmp_db):
     _, token = make_user()
     assert client_for(token).get("/api/web/sites/9999").status_code == 404
+
+
+def test_site_detail_certificates(tmp_db):
+    site_id = seed_site()
+    with db.connect() as conn:
+        db.upsert_site_certificate(conn, site_id, _cert_info(), verified=True)
+    _, token = make_user(email="a@test.co", role="archiver")
+    body = client_for(token).get(f"/api/web/sites/{site_id}").json()
+    assert len(body["certificates"]) == 1
+    cert = body["certificates"][0]
+    assert cert["is_current"] is True
+    assert cert["san"] == ["example.com", "www.example.com"]
+    assert cert["cert"]["subject"] == "CN=example.com"
+    assert cert["cert"]["verified"] == 1
+    assert cert["pem_url"] == f"/sites/{site_id}/certificates/{cert['cert']['id']}.pem"
+
+
+def test_site_detail_no_certificates(tmp_db):
+    site_id = seed_site()
+    _, token = make_user()
+    assert client_for(token).get(f"/api/web/sites/{site_id}").json()["certificates"] == []
 
 
 def test_site_detail_can_flags_by_role(tmp_db):
