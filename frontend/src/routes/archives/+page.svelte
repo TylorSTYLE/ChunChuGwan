@@ -1,11 +1,33 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
+	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
+	import { api } from '$lib/api';
 	import type { SiteItem } from '$lib/types';
 
 	let { data }: { data: { sites: SiteItem[] } } = $props();
 	const sites = $derived(data.sites);
+
+	// 진행 중 아카이빙·사람 확인 대기 집합이 바뀌면 목록을 새로 불러 상태를 갱신한다
+	// (크롤이 끝나거나 새 작업이 시작되면 행의 활동·진행 표시가 최신이 된다).
+	type Active = { active: string[]; needs_human?: { id: number; url: string }[] };
+	onMount(() => {
+		let last = '';
+		const timer = setInterval(async () => {
+			if (typeof document !== 'undefined' && document.hidden) return;
+			try {
+				const a = await api<Active>('/active');
+				const key = JSON.stringify([a.active, (a.needs_human ?? []).map((j) => j.url)]);
+				if (last && key !== last) await invalidateAll();
+				last = key;
+			} catch {
+				/* 일시 오류 — 다음 폴링에서 회복 */
+			}
+		}, 5000);
+		return () => clearInterval(timer);
+	});
 </script>
 
 <h2>{t('아카이브 사이트 목록')}</h2>

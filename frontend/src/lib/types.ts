@@ -226,6 +226,51 @@ export interface CredentialsData {
 	secret_key_configured: boolean;
 }
 
+// ── 크롤 회차 (/api/web/crawls/{id}) ──
+
+export interface CrawlCounts {
+	total: number;
+	pending: number;
+	in_progress: number;
+	done: number;
+	failed: number;
+}
+
+export interface CrawlPage {
+	id: number;
+	url: string;
+	depth: number;
+	status: string;
+	attempts: number;
+	next_attempt_at: string | null;
+	snapshot_id: number | null;
+	snapshot_page_id: number | null;
+	error: string | null;
+}
+
+export interface CrawlDetail {
+	crawl: Record<string, unknown> & {
+		id: number;
+		start_url: string;
+		status: string;
+		site_id: number;
+		scope_host: string;
+		scope_path: string;
+		max_pages: number;
+		max_depth: number;
+		delay_seconds: number;
+		created_at: string;
+		finished_at: string | null;
+	};
+	counts: CrawlCounts;
+	pages: CrawlPage[];
+	network_tag: { id: number; name: string; description: string | null } | null;
+	status_filter: string;
+	retry_backoff_labels: string[];
+	max_attempts: number;
+	can_archive: boolean;
+}
+
 export type DiffRow = [tag: string, left: string, right: string];
 
 export interface DiffData {

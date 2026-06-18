@@ -160,6 +160,12 @@ _EN: dict[str, str] = {
     "시도": "Attempts",
     "결과": "Result",
     "실패 일괄 재시도": "Retry all failed",
+    # SPA 크롤 회차 — 재시도 정책 문장을 조각으로 번역(횟수 동적)
+    "대기 후 재시도": "retry after waiting",
+    "최대": "max",
+    "회": " tries",
+    "크롤을 취소했습니다.": "Crawl cancelled.",
+    "실패한 페이지를 다시 시도합니다.": "Retrying failed pages.",
     "목록으로": "Back to list",
     "아카이브에 없는 페이지": "Page not in the archive",
     "이 링크의 페이지는 아카이브되지 않았습니다 — 크롤 범위 밖이거나 아직/끝내 저장되지 않았습니다.":

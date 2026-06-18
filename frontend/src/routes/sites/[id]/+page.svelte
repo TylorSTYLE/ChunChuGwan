@@ -88,7 +88,9 @@
 			<tbody>
 				{#each s.crawls as c}
 					<tr>
-						<td class="mono">{ts(String(c.started_at))}</td>
+						<td class="mono"
+							><a href="{base}/crawls/{c.id}">{ts(String(c.started_at))}</a></td
+						>
 						<td>{String(c.status)}</td>
 						<td class="num mono">{c.done_count}/{c.failed_count}/{c.pending_count}</td>
 					</tr>

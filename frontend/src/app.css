@@ -59,6 +59,7 @@ td.mono.muted { white-space: nowrap; }
 .badge.same { color: var(--gray); background: var(--gray-bg); }
 .badge.new { color: var(--green); background: var(--green-bg); }
 .badge.error { color: var(--red-text); background: var(--red-bg); }
+.badge.running { color: var(--blue); background: var(--blue-bg); }
 
 button, select, input[type='text'], input[type='url'], input[type='number'] {
 	font: inherit; font-size: 13px; padding: 3px 10px;

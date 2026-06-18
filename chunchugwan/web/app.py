@@ -1172,6 +1172,12 @@ def api_credentials_delete(request: Request, site_id: int, cred_id: int) -> dict
     return {"ok": True}
 
 
+@app.get("/api/web/active")
+def api_archive_active(request: Request) -> dict:
+    """진행 중 아카이빙·사람 확인 대기 (SPA 목록 폴링) — archive_active 재사용."""
+    return archive_active(request)
+
+
 @app.get("/archive/active")
 def archive_active(request: Request) -> dict:
     """진행 중 아카이빙 URL 목록 (목록 화면 자동 갱신 폴링용).
@@ -2995,6 +3001,106 @@ def crawl_page_retry(
     if status in _CRAWL_PAGE_STATUSES:
         params["status"] = status
     return RedirectResponse(f"/crawls/{crawl_id}?{urlencode(params)}", status_code=303)
+
+
+# ---- 크롤 회차 SPA JSON API (/api/web/crawls) ----
+# SSR /crawls/{id} 와 같은 코어를 재사용하는 JSON 래퍼. 상세 GET 은 세션이면
+# 누구나, 액션(취소·재시도·재실행)은 archiver 권한.
+
+
+@app.get("/api/web/crawls/{crawl_id}")
+def api_crawl_view(request: Request, crawl_id: int, status: str = "") -> dict:
+    """크롤 회차 상세 — 상태별 집계·페이지 목록·재시도 정책 (SPA)."""
+    crawl = _load_crawl(request, crawl_id)
+    status_filter = status if status in _CRAWL_PAGE_STATUSES else ""
+    with db.connect() as conn:
+        counts = db.crawl_page_counts(conn, crawl_id)
+        pages = db.list_crawl_pages(conn, crawl_id, status=status_filter or None)
+        backoff = crawler.retry_backoff(conn)
+        network_tag = (
+            db.get_network_tag(conn, crawl["network_tag_id"])
+            if crawl["network_tag_id"] else None
+        )
+    return {
+        "crawl": dict(crawl),
+        "counts": counts,
+        "pages": [dict(p) for p in pages],
+        "network_tag": dict(network_tag) if network_tag else None,
+        "status_filter": status_filter,
+        "retry_backoff_labels": [i18n.interval_label(request, s) for s in backoff],
+        "max_attempts": len(backoff) + 1,
+        "can_archive": permissions.can_archive(getattr(request.state, "user", None)),
+    }
+
+
+@app.post("/api/web/crawls/{crawl_id}/cancel")
+def api_crawl_cancel(request: Request, crawl_id: int) -> dict:
+    """크롤 취소 (JSON). archiver 전용."""
+    _require_archiver(request)
+    crawl = _load_crawl(request, crawl_id)
+    with db.connect() as conn:
+        db.cancel_crawl(conn, crawl_id)
+    audit.log(request, "크롤 취소: #%d (%s)", crawl_id, crawl["start_url"])
+    return {"ok": True}
+
+
+@app.post("/api/web/crawls/{crawl_id}/retry")
+def api_crawl_retry(request: Request, crawl_id: int) -> dict:
+    """실패 페이지 일괄 재시도 (JSON). archiver 전용."""
+    _require_archiver(request)
+    crawl = _load_crawl(request, crawl_id)
+    with db.connect() as conn:
+        db.retry_failed_crawl_pages(conn, crawl_id)
+    audit.log(
+        request, "크롤 실패 페이지 일괄 재시도: #%d (%s)", crawl_id, crawl["start_url"])
+    return {"ok": True}
+
+
+@app.post("/api/web/crawls/{crawl_id}/pages/{crawl_page_id}/retry")
+def api_crawl_page_retry(request: Request, crawl_id: int, crawl_page_id: int) -> dict:
+    """실패한 크롤 페이지 하나 재시도 (JSON). archiver 전용."""
+    _require_archiver(request)
+    _load_crawl(request, crawl_id)
+    with db.connect() as conn:
+        row = db.get_failed_crawl_page(conn, crawl_id, crawl_page_id)
+        if row is None:
+            raise HTTPException(404, t(request, "실패 기록 없음"))
+        db.retry_failed_crawl_page(conn, crawl_page_id)
+    audit.log(request, "크롤 페이지 재시도: %s", row["url"])
+    return {"ok": True}
+
+
+@app.post("/api/web/sites/{site_id}/crawls/{crawl_id}/rerun")
+def api_crawl_rerun(request: Request, site_id: int, crawl_id: int) -> dict:
+    """크롤 회차를 같은 옵션으로 다시 실행 (JSON) → 새 크롤 id 반환. archiver 전용."""
+    _require_archiver(request)
+    _require_not_migrating(request)
+    with db.connect() as conn:
+        crawl = db.get_crawl(conn, crawl_id)
+        if crawl is None or crawl["site_id"] != site_id:
+            raise HTTPException(404, t(request, "크롤 없음"))
+    try:
+        new_crawl, merged = crawler.start_crawl(
+            crawl["start_url"],
+            max_pages=crawl["max_pages"], max_depth=crawl["max_depth"],
+            delay_seconds=crawl["delay_seconds"], source="web",
+            network_tag_id=crawl["network_tag_id"],
+            credential_id=crawl["credential_id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(400, t(request, "아카이빙 실패: {e}", e=exc))
+    audit.log(
+        request, "사이트 아카이브 다시 실행: %s → 크롤 #%d%s",
+        crawl["start_url"], new_crawl["id"],
+        " (진행 중인 크롤로 병합)" if merged else "",
+    )
+    return {"crawl_id": new_crawl["id"], "merged": bool(merged)}
+
+
+@app.get("/api/web/crawls/{crawl_id}/status")
+def api_crawl_status(request: Request, crawl_id: int) -> dict:
+    """크롤 진행 상태 JSON (SPA 폴링) — SSR crawl_status 재사용."""
+    return crawl_status(request, crawl_id)
 
 
 # ---- 사이트 아카이브 스케줄 (주기적 재크롤) ----
