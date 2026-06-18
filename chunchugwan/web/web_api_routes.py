@@ -21,8 +21,11 @@ import sqlite3
 import zoneinfo
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import (
+    APIRouter, Depends, File, Form, HTTPException, Query, Request, Response,
+    UploadFile,
+)
+from fastapi.responses import FileResponse, JSONResponse
 
 from pydantic import BaseModel
 
@@ -1902,6 +1905,93 @@ def system_smtp_test(
         raise HTTPException(502, f"테스트 메일 발송에 실패했습니다: {e}")
     audit.log(request, "SMTP 테스트 메일 발송: %s", to_email)
     return {"ok": True, "email": to_email}
+
+
+@router.post("/system/backup")
+def system_backup(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> FileResponse:
+    """전체 백업(.ccg.backup) 다운로드 — system_routes.system_backup 의 JSON 라우터 판."""
+    from .system_routes import tar_download
+    from .. import backup as backup_mod
+
+    _require_manage_system(user)
+    audit.log(request, "전체 백업 다운로드")
+    return tar_download(backup_mod.create_backup, "backup")
+
+
+@router.post("/system/export")
+def system_export(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> FileResponse:
+    """아카이브 데이터만 내보내기(.ccg.export) 다운로드 — 인증 데이터 제외."""
+    from .system_routes import tar_download
+    from .. import backup as backup_mod
+
+    _require_manage_system(user)
+    audit.log(request, "아카이브 내보내기 다운로드")
+    return tar_download(backup_mod.export_archive, "export")
+
+
+@router.post("/system/restore")
+def system_restore(
+    request: Request, file: UploadFile = File(...),
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """전체 백업 업로드로 복원 — 현재 데이터(인증 포함)를 백업 시점으로 교체."""
+    import tarfile
+
+    from .system_routes import _save_upload
+    from .. import backup as backup_mod
+
+    _require_manage_system(user)
+    if not backup_mod.is_backup_filename(file.filename or ""):
+        raise HTTPException(400, "복원은 .ccg.backup 확장자 파일만 받습니다.")
+    tmp = _save_upload(file)
+    try:
+        manifest = backup_mod.restore_backup(tmp)
+    except (ValueError, tarfile.TarError, OSError) as e:
+        raise HTTPException(400, f"복원 실패: {e}")
+    finally:
+        tmp.unlink(missing_ok=True)
+    audit.log(request, "백업 복원 실행 (백업: %s)", manifest.get("created_at", "?"))
+    return {"ok": True, "manifest": manifest}
+
+
+@router.post("/system/import")
+def system_import(
+    request: Request, file: UploadFile = File(...), mode: str = Form("merge"),
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """내보낸 아카이브 데이터 업로드로 가져오기 — 인증 데이터는 건드리지 않음."""
+    import tarfile
+
+    from .system_routes import _save_upload
+    from .. import backup as backup_mod
+
+    _require_manage_system(user)
+    if mode not in ("merge", "overwrite"):
+        raise HTTPException(400, f"알 수 없는 모드: {mode!r}")
+    if not backup_mod.is_export_filename(file.filename or ""):
+        raise HTTPException(400, "가져오기는 .ccg.export 확장자 파일만 받습니다.")
+    tmp = _save_upload(file)
+    try:
+        result = backup_mod.import_archive(tmp, mode=mode)
+    except (ValueError, tarfile.TarError, OSError) as e:
+        raise HTTPException(400, f"가져오기 실패: {e}")
+    finally:
+        tmp.unlink(missing_ok=True)
+    audit.log(request, "아카이브 가져오기 [%s]: 페이지 +%d, 스냅샷 +%d",
+              mode, result.pages_added, result.snapshots_added)
+    return {
+        "ok": True,
+        "added": {
+            "pages": result.pages_added, "snapshots": result.snapshots_added,
+            "skipped": result.snapshots_skipped, "checks": result.checks_added,
+            "crawls": result.crawls_added, "certificates": result.certificates_added,
+            "logs": result.logs_added,
+        },
+    }
 
 
 # ── 개인 설정 (계정·개인 API Key·내 아카이브) ────────────────────────────────

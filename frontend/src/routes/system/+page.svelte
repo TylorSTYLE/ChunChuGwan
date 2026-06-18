@@ -2,7 +2,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize } from '$lib/format';
-	import { api, ApiError } from '$lib/api';
+	import { api, ApiError, download } from '$lib/api';
 	import type { SystemOverview } from '$lib/types';
 
 	let { data }: { data: { sys: SystemOverview } } = $props();
@@ -41,6 +41,9 @@
 	let smtpTls = $state('starttls');
 	let smtpPassword = $state('');
 	let smtpClearPw = $state(false);
+
+	// 백업·복원·가져오기
+	let importMode = $state('merge');
 
 	$effect(() => {
 		signupEnabled = s.signup_enabled;
@@ -121,6 +124,45 @@
 			error = err instanceof ApiError ? err.message : String(err);
 		} finally {
 			busy = false;
+		}
+	}
+
+	async function doDownload(path: string) {
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			await download(path);
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function uploadFile(e: Event, path: string, confirmMsg: string, extra: Record<string, string> = {}) {
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		if (confirmMsg && !confirm(confirmMsg)) {
+			input.value = '';
+			return;
+		}
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			const fd = new FormData();
+			fd.append('file', file);
+			for (const [k, v] of Object.entries(extra)) fd.append(k, v);
+			await api(path, { method: 'POST', body: fd });
+			notice = t('완료했습니다.');
+			await invalidateAll();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+			input.value = '';
 		}
 	}
 </script>
@@ -257,8 +299,31 @@
 	</div>
 </fieldset>
 
+<h3>{t('백업·복원')}</h3>
+<fieldset class="sec">
+	<legend>{t('데이터 관리')}</legend>
+	<div class="btn-row">
+		<button disabled={busy} onclick={() => doDownload('/system/backup')}>{t('전체 백업 다운로드')}</button>
+		<button disabled={busy} onclick={() => doDownload('/system/export')}>{t('아카이브 내보내기')}</button>
+	</div>
+	<label>{t('백업 복원')}
+		<input type="file" accept=".ccg.backup" disabled={busy}
+			onchange={(e) => uploadFile(e, '/system/restore', t('정말 복원하시겠습니까? 현재 데이터가 백업 시점으로 교체됩니다.'))} />
+	</label>
+	<label>{t('가져오기 모드')}
+		<select bind:value={importMode}>
+			<option value="merge">{t('병합')}</option>
+			<option value="overwrite">{t('덮어쓰기')}</option>
+		</select>
+	</label>
+	<label>{t('아카이브 가져오기')}
+		<input type="file" accept=".ccg.export" disabled={busy}
+			onchange={(e) => uploadFile(e, '/system/import', '', { mode: importMode })} />
+	</label>
+</fieldset>
+
 <p class="muted" style="font-size:12px; margin-top:20px">
-	{t('백업·복원·데이터 이전·재색인은 이어서 추가됩니다.')}
+	{t('데이터 이전·재색인은 이어서 추가됩니다.')}
 </p>
 
 <style>

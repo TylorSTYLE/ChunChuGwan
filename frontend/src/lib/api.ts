@@ -51,3 +51,35 @@ export async function api<T = unknown>(
 	}
 	return res.json() as Promise<T>;
 }
+
+/** POST 로 파일(tar.gz)을 받아 브라우저 다운로드를 트리거한다 — 백업·내보내기용.
+ *
+ * api() 는 응답을 JSON 으로 파싱하므로 바이너리 다운로드엔 쓸 수 없다. 같은
+ * 세션 쿠키·CSRF 헤더로 호출하되 Blob 으로 받아 a[download] 로 저장한다.
+ */
+export async function download(path: string): Promise<void> {
+	const res = await fetch(`/api/web${path}`, {
+		method: 'POST',
+		credentials: 'same-origin',
+		headers: { 'X-Requested-With': 'fetch' }
+	});
+	if (!res.ok) {
+		let detail = res.statusText;
+		try {
+			detail = (await res.json()).detail ?? detail;
+		} catch {
+			/* JSON 아님 */
+		}
+		throw new ApiError(res.status, detail);
+	}
+	const blob = await res.blob();
+	const cd = res.headers.get('content-disposition') ?? '';
+	const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+	const name = m ? decodeURIComponent(m[1]) : 'download';
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement('a');
+	a.href = url;
+	a.download = name;
+	a.click();
+	URL.revokeObjectURL(url);
+}
