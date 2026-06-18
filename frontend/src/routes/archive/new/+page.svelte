@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
@@ -6,7 +7,12 @@
 
 	type Tag = { id: string; name: string; description: string | null };
 	type Cred = { id: number; label: string; kind: string; kind_label: string };
-	let { data }: { data: { networkTags: Tag[]; canManageCred: boolean } } = $props();
+	type CrawlDefaults = { max_pages: number; max_depth: number; delay: number };
+	let {
+		data
+	}: {
+		data: { networkTags: Tag[]; canManageCred: boolean; crawlDefaults: CrawlDefaults | null };
+	} = $props();
 	const tags = $derived(data.networkTags);
 	const canManageCred = $derived(data.canManageCred);
 
@@ -14,9 +20,10 @@
 	let force = $state(false);
 	let site = $state(false);
 	let interval = $state('0');
-	let maxPages = $state('');
-	let maxDepth = $state('');
-	let delay = $state('');
+	// 사이트 아카이브 옵션은 시스템 설정의 기본값으로 채운다 (비우면 서버가 같은 기본값 적용).
+	let maxPages = $state(untrack(() => (data.crawlDefaults ? String(data.crawlDefaults.max_pages) : '')));
+	let maxDepth = $state(untrack(() => (data.crawlDefaults ? String(data.crawlDefaults.max_depth) : '')));
+	let delay = $state(untrack(() => (data.crawlDefaults ? String(data.crawlDefaults.delay) : '')));
 	let networkTag = $state('');
 	let error = $state('');
 	let busy = $state(false);
