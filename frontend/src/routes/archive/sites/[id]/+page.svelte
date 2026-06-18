@@ -11,6 +11,7 @@
 	const s = $derived(data.site);
 
 	let busy = $state(false);
+	let exporting = $state(false);
 	let error = $state('');
 	let notice = $state('');
 
@@ -54,14 +55,20 @@
 		}, '실패한 작업을 모두 재시도합니다 — 백그라운드에서 진행됩니다.');
 
 	async function exportSite() {
+		// 큰 사이트는 서버가 .ccg.export 를 만드는 동안 시간이 걸린다 — 준비중 표시로
+		// 중복 클릭(=중복 다운로드)을 막고, 다운로드가 시작되면 알림으로 끝을 알린다.
 		busy = true;
+		exporting = true;
 		error = '';
+		notice = '';
 		try {
 			await download(`/sites/${s.site.id}/export`);
+			notice = t('내보내기 파일을 다운로드했습니다.');
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
 		} finally {
 			busy = false;
+			exporting = false;
 		}
 	}
 
@@ -271,7 +278,9 @@
 
 {#if s.can_archive}
 	<p class="export-link">
-		<button onclick={exportSite} disabled={busy}>{t('이 사이트 내보내기')}</button>
+		<button onclick={exportSite} disabled={busy} aria-busy={exporting}>
+			{#if exporting}<span class="spinner" aria-hidden="true"></span>{t('파일 준비중…')}{:else}{t('이 사이트 내보내기')}{/if}
+		</button>
 		<span class="muted">{t('— 이 사이트의 페이지·스냅샷만 담은 .ccg.export 파일')}</span>
 	</p>
 {/if}
@@ -383,6 +392,29 @@
 	.export-link {
 		font-size: 13px;
 		margin: 16px 0 0;
+	}
+	.export-link button {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.spinner {
+		width: 11px;
+		height: 11px;
+		border: 2px solid var(--border);
+		border-top-color: var(--fg);
+		border-radius: 50%;
+		animation: export-spin 0.7s linear infinite;
+	}
+	@keyframes export-spin {
+		to {
+			transform: rotate(360deg);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.spinner {
+			animation-duration: 2.5s;
+		}
 	}
 	.danger-zone {
 		border: 1px solid var(--red);
