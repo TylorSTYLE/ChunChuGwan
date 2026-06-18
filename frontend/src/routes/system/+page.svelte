@@ -27,6 +27,12 @@
 	let docMb = $state(0);
 	let docTimeout = $state(0);
 
+	// 네트워크 태그 폼
+	let newTagName = $state('');
+	let newTagDesc = $state('');
+	let mergeSource = $state('');
+	let mergeTarget = $state('');
+
 	$effect(() => {
 		signupEnabled = s.signup_enabled;
 		signupRole = s.signup_default_role;
@@ -43,18 +49,34 @@
 		docTimeout = s.document_limits.timeout_seconds;
 	});
 
-	async function save(path: string, body: Record<string, unknown>) {
+	async function save(path: string, body?: Record<string, unknown>): Promise<boolean> {
 		busy = true;
 		error = '';
 		notice = '';
 		try {
-			await api(path, { method: 'POST', body: JSON.stringify(body) });
+			await api(path, { method: 'POST', ...(body ? { body: JSON.stringify(body) } : {}) });
 			notice = t('저장했습니다.');
 			await invalidateAll();
+			return true;
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
+			return false;
 		} finally {
 			busy = false;
+		}
+	}
+
+	async function createTag() {
+		if (await save('/system/network-tags', { name: newTagName, description: newTagDesc })) {
+			newTagName = '';
+			newTagDesc = '';
+		}
+	}
+
+	async function mergeTags() {
+		if (await save('/system/network-tags/merge', { source: mergeSource, target: mergeTarget })) {
+			mergeSource = '';
+			mergeTarget = '';
 		}
 	}
 </script>
@@ -128,12 +150,42 @@
 </fieldset>
 
 <h3>{t('로컬 네트워크 태그')}</h3>
+<fieldset class="sec">
+	<legend>{t('태그 추가')}</legend>
+	<label>{t('이름')} <input type="text" bind:value={newTagName} maxlength="60" /></label>
+	<label>{t('설명')} <input type="text" bind:value={newTagDesc} maxlength="200" /></label>
+	<button disabled={busy || !newTagName.trim()} onclick={createTag}>{t('추가')}</button>
+</fieldset>
 {#if s.network_tags.length === 0}
 	<p class="muted">{t('등록된 태그가 없습니다.')}</p>
 {:else}
-	<ul class="muted">
-		{#each s.network_tags as tag}<li class="mono">{tag.name} <span>{String(tag.id)}</span></li>{/each}
+	<ul class="taglist">
+		{#each s.network_tags as tag}
+			<li>
+				<span class="mono">{tag.name}</span>
+				<span class="muted mono">{tag.id}</span>
+				<button class="del" disabled={busy} onclick={() => save(`/system/network-tags/${tag.id}/delete`)}>{t('삭제')}</button>
+			</li>
+		{/each}
 	</ul>
+	{#if s.network_tags.length >= 2}
+		<fieldset class="sec">
+			<legend>{t('태그 병합')}</legend>
+			<label>{t('원본')}
+				<select bind:value={mergeSource}>
+					<option value="">—</option>
+					{#each s.network_tags as tag}<option value={tag.id}>{tag.name}</option>{/each}
+				</select>
+			</label>
+			<label>{t('대상')}
+				<select bind:value={mergeTarget}>
+					<option value="">—</option>
+					{#each s.network_tags as tag}<option value={tag.id}>{tag.name}</option>{/each}
+				</select>
+			</label>
+			<button disabled={busy || !mergeSource || !mergeTarget} onclick={mergeTags}>{t('병합')}</button>
+		</fieldset>
+	{/if}
 {/if}
 
 <h3>{t('메일(SMTP)')}</h3>
@@ -142,7 +194,7 @@
 </p>
 
 <p class="muted" style="font-size:12px; margin-top:20px">
-	{t('백업·복원·데이터 이전·재색인·네트워크 태그 편집·SMTP 설정은 이어서 추가됩니다.')}
+	{t('백업·복원·데이터 이전·재색인·SMTP 설정은 이어서 추가됩니다.')}
 </p>
 
 <style>
@@ -181,5 +233,21 @@
 	}
 	.sec button {
 		align-self: flex-start;
+	}
+	.taglist {
+		list-style: none;
+		padding: 0;
+		max-width: 560px;
+	}
+	.taglist li {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 4px 0;
+		font-size: 13px;
+	}
+	.taglist li .del {
+		margin-left: auto;
+		font-size: 12px;
 	}
 </style>

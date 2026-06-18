@@ -1742,6 +1742,88 @@ def system_document_settings(
     return {"ok": True}
 
 
+class NetworkTagReq(BaseModel):
+    name: str
+    description: str = ""
+
+
+@router.post("/system/network-tags")
+def system_network_tag_create(
+    request: Request, body: NetworkTagReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """로컬 네트워크 태그 추가 — system_routes.network_tags_create 의 JSON 판."""
+    from .system_routes import MAX_NETWORK_TAG_NAME_LENGTH, MAX_NETWORK_TAG_DESC_LENGTH
+
+    _require_manage_system(user)
+    name = body.name.strip()
+    description = body.description.strip()
+    if not name:
+        raise HTTPException(400, "태그 이름을 입력하세요.")
+    if len(name) > MAX_NETWORK_TAG_NAME_LENGTH:
+        raise HTTPException(400, f"태그 이름은 {MAX_NETWORK_TAG_NAME_LENGTH}자 이하여야 합니다.")
+    if len(description) > MAX_NETWORK_TAG_DESC_LENGTH:
+        raise HTTPException(400, f"태그 설명은 {MAX_NETWORK_TAG_DESC_LENGTH}자 이하여야 합니다.")
+    with db.connect() as conn:
+        if db.get_network_tag_by_name(conn, name) is not None:
+            raise HTTPException(400, f"이미 있는 태그 이름입니다: {name}")
+        db.create_network_tag(conn, name, description)
+    audit.log(request, "로컬 네트워크 태그 추가: '%s'", name)
+    return {"ok": True}
+
+
+@router.post("/system/network-tags/{tag_id}/delete")
+def system_network_tag_delete(
+    request: Request, tag_id: str,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """로컬 네트워크 태그 삭제 — 참조 중이면 거부. system_routes.network_tags_delete 의 JSON 판."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        tag = db.get_network_tag(conn, tag_id)
+        if tag is None:
+            raise HTTPException(404, "로컬 네트워크 태그 없음")
+        refs = db.count_network_tag_refs(conn, tag_id)
+        if refs:
+            raise HTTPException(
+                400, f"'{tag['name']}' 태그는 사용 중이라 삭제할 수 없습니다 (참조 {refs}개).")
+        db.delete_network_tag(conn, tag_id)
+    audit.log(request, "로컬 네트워크 태그 삭제: '%s'", tag["name"])
+    return {"ok": True}
+
+
+class NetworkTagMergeReq(BaseModel):
+    source: str
+    target: str
+
+
+@router.post("/system/network-tags/merge")
+def system_network_tag_merge(
+    request: Request, body: NetworkTagMergeReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """두 로컬 네트워크 태그 병합 — 같은 사설 네트워크를 가리킬 때만. JSON 판."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        src = db.get_network_tag(conn, body.source)
+        tgt = db.get_network_tag(conn, body.target)
+        if src is None or tgt is None:
+            raise HTTPException(404, "로컬 네트워크 태그 없음")
+        if body.source == body.target:
+            raise HTTPException(400, "같은 태그끼리는 병합할 수 없습니다.")
+        src_sites = db.network_tag_site_ids(conn, body.source)
+        tgt_sites = db.network_tag_site_ids(conn, body.target)
+        if not src_sites or not tgt_sites:
+            raise HTTPException(400, "참조가 없는 태그는 병합할 수 없습니다 — 삭제를 사용하세요.")
+        if src_sites != tgt_sites:
+            raise HTTPException(
+                400,
+                "두 태그가 같은 사설 네트워크(같은 IP·포트)를 가리킬 때만 병합할 수 있습니다.")
+        moved = db.merge_network_tags(conn, body.source, body.target)
+    audit.log(request, "로컬 네트워크 태그 병합: '%s' → '%s'", src["name"], tgt["name"])
+    return {"ok": True, "moved": moved}
+
+
 # ── 개인 설정 (계정·개인 API Key·내 아카이브) ────────────────────────────────
 # 헤더 개인설정 드롭다운의 세 화면. SSR auth_routes 의 /settings/* 와 같은 코어
 # 동작을 JSON 으로 제공한다 (원칙 1·6 — 인증 데이터는 단방향, 쓰기는 코어 경유).
