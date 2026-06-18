@@ -2054,6 +2054,52 @@ def system_search_reindex_status(
     return reindex_status()
 
 
+def _issue_migration_token(request: Request) -> dict:
+    """이전 토큰 발급(또는 재발급)하고 모드를 켠다. 토큰 원문은 이 응답에서만 1회 노출.
+
+    토큰은 SHA-256 해시만 저장(원칙 6 단방향, API 키와 동일).
+    """
+    token = secrets.token_urlsafe(32)
+    with db.connect() as conn:
+        db.set_migration_mode(conn, True, auth.hash_token(token))
+    return {"ok": True, "token": token}
+
+
+@router.post("/system/migration/enable")
+def system_migration_enable(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """이전 모드 ON + 토큰 발급 — 받는 쪽이 이 토큰으로 데이터를 가져간다."""
+    _require_manage_system(user)
+    audit.log(request, "이전(마이그레이션) 모드 켬 — 토큰 발급")
+    return _issue_migration_token(request)
+
+
+@router.post("/system/migration/regenerate")
+def system_migration_regenerate(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """이전 토큰 재발급 (이전 토큰 무효화). 모드는 켜진 채로 둔다."""
+    _require_manage_system(user)
+    audit.log(request, "이전(마이그레이션) 토큰 재발급")
+    return _issue_migration_token(request)
+
+
+@router.post("/system/migration/disable")
+def system_migration_disable(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """이전 모드 OFF + 토큰 무효화 — 스크래핑·스케줄·크롤을 재개한다."""
+    from .. import migration as migration_mod
+
+    _require_manage_system(user)
+    with db.connect() as conn:
+        db.set_migration_mode(conn, False)
+    migration_mod.cleanup_source()
+    audit.log(request, "이전(마이그레이션) 모드 끔 — 스크래핑 재개")
+    return {"ok": True}
+
+
 # ── 개인 설정 (계정·개인 API Key·내 아카이브) ────────────────────────────────
 # 헤더 개인설정 드롭다운의 세 화면. SSR auth_routes 의 /settings/* 와 같은 코어
 # 동작을 JSON 으로 제공한다 (원칙 1·6 — 인증 데이터는 단방향, 쓰기는 코어 경유).

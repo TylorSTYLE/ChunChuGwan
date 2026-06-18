@@ -50,6 +50,9 @@
 	let reindexDone = $state(0);
 	let reindexTotal = $state(0);
 
+	// 데이터 이전(마이그레이션) — 발급 토큰은 1회만 표시
+	let migrationToken = $state('');
+
 	$effect(() => {
 		signupEnabled = s.signup_enabled;
 		signupRole = s.signup_default_role;
@@ -138,6 +141,22 @@
 		notice = '';
 		try {
 			await download(path);
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function migrationAction(action: 'enable' | 'regenerate' | 'disable') {
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			const r = await api<{ token?: string }>(`/system/migration/${action}`, { method: 'POST' });
+			migrationToken = r.token ?? '';
+			notice = t('완료했습니다.');
+			await invalidateAll();
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
 		} finally {
@@ -386,9 +405,22 @@
 	</div>
 </fieldset>
 
-<p class="muted" style="font-size:12px; margin-top:20px">
-	{t('데이터 이전은 이어서 추가됩니다.')}
-</p>
+<h3>{t('데이터 이전')}</h3>
+<fieldset class="sec">
+	<legend>{s.migration_mode ? t('이전 모드 켜짐') : t('이전 모드 꺼짐')}</legend>
+	{#if migrationToken}
+		<p class="mono mtoken">{migrationToken}</p>
+		<p class="muted">{t('이 토큰은 다시 표시되지 않습니다 — 받는 쪽에 안전하게 전달하세요.')}</p>
+	{/if}
+	{#if s.migration_mode}
+		<div class="btn-row">
+			<button disabled={busy} onclick={() => migrationAction('regenerate')}>{t('토큰 재발급')}</button>
+			<button disabled={busy} onclick={() => migrationAction('disable')}>{t('이전 모드 끄기')}</button>
+		</div>
+	{:else}
+		<button disabled={busy} onclick={() => migrationAction('enable')}>{t('이전 모드 켜기')}</button>
+	{/if}
+</fieldset>
 
 <style>
 	.error {
@@ -446,5 +478,12 @@
 	.btn-row {
 		display: flex;
 		gap: 8px;
+	}
+	.mtoken {
+		background: var(--code-bg, var(--border));
+		border-radius: 4px;
+		padding: 8px 10px;
+		font-size: 12px;
+		word-break: break-all;
 	}
 </style>
