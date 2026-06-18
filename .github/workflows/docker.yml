@@ -17,7 +17,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref == 'refs/heads/develop' }}
 
 jobs:
-  # 플랫폼별 네이티브 빌드 (QEMU 에뮬레이션 없이 — chromium 설치가 느려서)
+  # 플랫폼별 네이티브 빌드 (QEMU 에뮬레이션 없이 — chromium 설치가 느려서).
+  # 셀프 호스트 러너를 아키텍처별로 1대씩 둬서 amd64→X64·arm64→ARM64 로 보낸다.
   build:
     # 릴리스(release.yml)는 main 범프 커밋·develop FF 를 따로 push 하는데, 같은 트리를
     # 가리키는 vX.Y.Z 태그 빌드가 :latest·:main·:develop 태그까지 모두 떠맡으므로
@@ -28,9 +29,9 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-latest
+            runner: [self-hosted, X64]
           - platform: linux/arm64
-            runner: ubuntu-24.04-arm
+            runner: [self-hosted, ARM64]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -79,7 +80,7 @@ jobs:
 
   # 플랫폼별 digest 를 하나의 멀티아치 매니페스트로 합쳐 태그 푸시
   merge:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: build
     permissions:
       packages: write
@@ -129,7 +130,7 @@ jobs:
 
   # 방금 푸시한 브랜치 이미지를 실제로 돌려 기동을 확인 (develop·main 푸시만)
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: merge
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
     permissions:
@@ -174,7 +175,7 @@ jobs:
   # 스모크 통과한 develop 을 main 으로 올릴 릴리스 PR 을 만들고
   # 변경 diff 로 release:* 라벨을 자동 부여 (사람이 검토 후 머지)
   promote:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: smoke
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     permissions:
