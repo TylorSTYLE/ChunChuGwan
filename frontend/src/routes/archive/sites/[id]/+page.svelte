@@ -29,6 +29,16 @@
 		}
 	}
 
+	/** 인증서 만료 상태 — 현재 시각 기준 (만료 30일 전부터 '곧 만료'). */
+	function expiry(notAfter: string): 'expired' | 'soon' | 'ok' {
+		const end = new Date(notAfter).getTime();
+		if (isNaN(end)) return 'ok';
+		const now = Date.now();
+		if (end < now) return 'expired';
+		if (end < now + 30 * 24 * 3600 * 1000) return 'soon';
+		return 'ok';
+	}
+
 	const retryFailed = (f: FailedItem) =>
 		act(async () => {
 			if (f.kind === 'crawl') {
@@ -191,15 +201,62 @@
 
 {#if s.certificates.length > 0}
 	<h3>{t('TLS 인증서')}</h3>
+	<p class="muted cert-note">
+		{t(
+			'https 아카이빙 때 받은 서버 인증서의 버전 이력입니다. 인증서가 갱신되면 새 버전으로 기록되고 이전 버전은 남습니다.'
+		)}
+	</p>
 	<ul class="certs">
 		{#each s.certificates as c}
-			<li>
-				<span class="mono host">{c.cert.host}</span>
-				{#if c.is_current}<span class="badge">{t('현재')}</span>{/if}
-				<span class="muted issuer">{c.cert.issuer}</span>
-				<span class="muted">~{ts(String(c.cert.not_after))}</span>
-				{#if c.cert.verified}<span class="muted">{t('검증됨')}</span>{/if}
-				<a href={c.pem_url} class="pem">PEM</a>
+			{@const exp = expiry(String(c.cert.not_after))}
+			<li class="cert" class:is-current={c.is_current}>
+				<div class="cert-head">
+					<span class="mono host">{c.cert.host}</span>
+					{#if c.is_current}
+						<span class="badge new">{t('현재')}</span>
+					{:else}
+						<span class="badge same">{t('이전 버전')}</span>
+					{/if}
+					{#if exp === 'expired'}
+						<span class="badge error">{t('만료됨')}</span>
+					{:else if exp === 'soon'}
+						<span class="badge changed">{t('곧 만료')}</span>
+					{/if}
+					{#if !c.cert.verified}
+						<span
+							class="badge error"
+							title={t('캡처가 인증서 검증을 통과하지 못했습니다 (자체 서명 등)')}
+						>{t('검증 안 됨')}</span>
+					{/if}
+					<a href={c.pem_url} class="pem" download>PEM</a>
+				</div>
+				<dl class="cert-fields">
+					<dt>{t('주체')}</dt>
+					<dd class="mono">{c.cert.subject}</dd>
+					<dt>{t('발급자')}</dt>
+					<dd class="mono">{c.cert.issuer}</dd>
+					{#if c.san.length > 0}
+						<dt>{t('대체 이름')}</dt>
+						<dd class="mono wrap">{c.san.join(', ')}</dd>
+					{/if}
+					<dt>{t('유효 기간')}</dt>
+					<dd class="mono" class:expired={exp === 'expired'}>
+						{ts(String(c.cert.not_before))} ~ {ts(String(c.cert.not_after))}
+					</dd>
+					<dt>{t('확인 기간')}</dt>
+					<dd class="mono">
+						{ts(String(c.cert.first_seen_at))}{#if c.cert.last_seen_at !== c.cert.first_seen_at}
+							~ {ts(String(c.cert.last_seen_at))}{/if}
+					</dd>
+					<dt>{t('일련번호')}</dt>
+					<dd class="mono wrap">{c.cert.serial}</dd>
+					{#if c.cert.signature_algorithm}
+						<dt>{t('서명 알고리즘')}</dt>
+						<dd class="mono">{c.cert.signature_algorithm}</dd>
+					{/if}
+					<dt>{t('지문')}</dt>
+					<dd class="mono wrap">{c.cert.fingerprint}</dd>
+				</dl>
 			</li>
 		{/each}
 	</ul>
@@ -231,30 +288,62 @@
 		font-size: 13px;
 		margin: 16px 0 0;
 	}
+	.cert-note {
+		font-size: 13px;
+		margin: 0 0 8px;
+	}
 	.certs {
 		list-style: none;
 		padding: 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
 	}
-	.certs li {
+	.cert {
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		padding: 10px 12px;
+	}
+	.cert.is-current {
+		border-color: var(--green);
+	}
+	.cert-head {
 		display: flex;
 		align-items: center;
-		gap: 10px;
-		padding: 4px 0;
-		font-size: 13px;
+		gap: 8px;
 		flex-wrap: wrap;
+		margin-bottom: 8px;
 	}
-	.certs .issuer {
-		flex: 1;
-		min-width: 0;
+	.cert-head .host {
+		font-weight: 600;
+		font-size: 13px;
 	}
-	.certs .badge {
-		background: var(--accent-bg, var(--border));
-		border-radius: 3px;
-		padding: 1px 6px;
-		font-size: 11px;
-	}
-	.certs .pem {
+	.cert-head .pem {
 		margin-left: auto;
+		font-size: 13px;
+	}
+	.cert-fields {
+		display: grid;
+		grid-template-columns: max-content minmax(0, 1fr);
+		gap: 3px 14px;
+		margin: 0;
+		font-size: 13px;
+	}
+	.cert-fields dt {
+		color: var(--muted);
+		white-space: nowrap;
+	}
+	.cert-fields dd {
+		margin: 0;
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+	.cert-fields dd.wrap {
+		word-break: break-all;
+	}
+	.cert-fields dd.expired {
+		color: var(--red-text);
 	}
 	td.url-cell {
 		max-width: 420px;
