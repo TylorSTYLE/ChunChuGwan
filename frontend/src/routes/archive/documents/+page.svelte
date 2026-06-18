@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pagePath } from '$lib/urls';
 	import { base } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
@@ -50,7 +51,7 @@
 					<tr>
 						<td><a href="/document/{String(g.sha256)}/{g.file}" download>{g.file}</a></td>
 						<td class="num mono">{filesize(g.bytes)}</td>
-						<td class="url-cell"><a href="{base}/page/{g.page_id}">{g.page_url}</a></td>
+						<td class="url-cell"><a href={pagePath(g.site_id, g.page_id)}>{g.page_url}</a></td>
 						<td class="num">{g.snapshot_count}</td>
 						<td class="mono">{g.last_seen ? ts(String(g.last_seen)) : '-'}</td>
 					</tr>
@@ -60,9 +61,9 @@
 	</div>
 	{#if d.page > 1 || d.has_next}
 		<div class="pager">
-			{#if d.page > 1}<a href="{base}/documents?page={d.page - 1}">← {t('이전')}</a>{/if}
+			{#if d.page > 1}<a href="{base}/archive/documents?page={d.page - 1}">← {t('이전')}</a>{/if}
 			<span class="muted">{d.page}</span>
-			{#if d.has_next}<a href="{base}/documents?page={d.page + 1}">{t('다음')} →</a>{/if}
+			{#if d.has_next}<a href="{base}/archive/documents?page={d.page + 1}">{t('다음')} →</a>{/if}
 		</div>
 	{/if}
 {/if}

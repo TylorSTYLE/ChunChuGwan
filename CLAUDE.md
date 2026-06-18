@@ -24,7 +24,7 @@
 사용자용 기능 문서는 `docs/` 에 주제별로 나눠져 있다 (CRAWLING·STORAGE·
 SEARCH·DOCKER·API·AUTHENTICATION·DEVELOPMENT — README 는 빠른 시작 + 링크만 둔다).
 해당 기능의 동작·옵션·CLI 를 바꾸면 README 요약과 함께 그 docs 파일도 갱신한다.
-웹 UI 화면을 추가/수정하기 전에는 `docs/DASHBOARD.md`(대시보드 화면 22개의 라우트·권한·
+웹 UI 화면을 추가/수정하기 전에는 `docs/DASHBOARD.md`(대시보드 화면 23개의 라우트·권한·
 세부 동작 레퍼런스)를, 기능의 도입 배경·구현 범위가 궁금하면 `docs/ROADMAP.md`(완료된
 구현 로드맵 히스토리 M1~M8·A1~A11)를 읽는다.
 

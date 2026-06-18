@@ -364,6 +364,10 @@ def snapshot(
     SPA 는 page_html_url 을 <iframe sandbox> src 로만 쓴다.
     """
     snap = _load_snapshot(request, snapshot_id)
+    audit.log(
+        request, "아카이브 열람: %s (스냅샷 #%d)", snap["page_url"], snapshot_id,
+        action="view", target=snap["page_url"],
+    )
     network_tag = None
     if snap["network_tag_id"]:
         with db.connect() as conn:
@@ -744,8 +748,8 @@ def logs(
     limit: int = _LOG_PAGE_SIZE_DEFAULT,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """아카이빙 로그(필터·페이징) — app.logs_view 의 JSON 판. viewer 이상."""
-    if not permissions.can_view_logs(user):
+    """아카이빙 로그(필터·페이징) — '아카이브 로그 보기'(기본 admin) 권한."""
+    if not permissions.can_view_archive_logs(user):
         raise HTTPException(403, "로그 열람 권한이 없습니다")
     if limit not in _LOG_PAGE_SIZES:
         limit = _LOG_PAGE_SIZE_DEFAULT
@@ -830,6 +834,23 @@ def _require_not_migrating() -> None:
             raise HTTPException(409, "이전(마이그레이션) 모드입니다 — 아카이빙할 수 없습니다")
 
 
+@router.get("/network-tags")
+def network_tags_list(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """로컬 네트워크 태그 목록 — 새 아카이빙 폼의 태그 선택용 (아카이빙 권한)."""
+    if not permissions.can_archive(user):
+        raise HTTPException(403, "아카이빙 권한이 없습니다")
+    with db.connect() as conn:
+        tags = db.list_network_tags(conn)
+    return {
+        "network_tags": [
+            {"id": t["id"], "name": t["name"], "description": t["description"]}
+            for t in tags
+        ]
+    }
+
+
 class ArchiveReq(BaseModel):
     url: str
     force: bool = False
@@ -842,6 +863,14 @@ class ArchiveReq(BaseModel):
     crawl_max_pages: str = ""
     crawl_max_depth: str = ""
     crawl_delay: str = ""
+    # 로그인 자격증명 연결 (자격증명 관리 권한) — ""=연결 안 함, "__new__"=신규 생성, 숫자=기존
+    cred_existing_id: str = ""
+    cred_kind: str = ""
+    cred_label: str = ""
+    cred_username: str = ""
+    cred_password: str = ""
+    cred_storage_state: str = ""
+    cred_token: str = ""
 
 
 @router.post("/archive", status_code=202)
@@ -852,9 +881,13 @@ def archive_new(
 ) -> dict:
     """새 URL 아카이빙(또는 사이트 전체 크롤) 등록 — app.archive_new 의 JSON 판.
 
-    자격증명 연결은 후속(여기서는 받지 않는다). 캡처는 워커 큐가 처리한다.
+    자격증명 관리 권한이 있으면 입력 도메인의 기존 자격증명을 연결하거나 새로
+    만들어 연결한다(`resolve_archive_credential`). 캡처는 워커 큐가 처리한다.
     """
-    from .app import _interval_from_form, _network_gate, _queue_archive, _requester_id
+    from .app import (
+        _interval_from_form, _network_gate, _queue_archive, _requester_id,
+        resolve_archive_credential,
+    )
 
     _require_archive(user)
     _require_not_migrating()
@@ -869,6 +902,14 @@ def archive_new(
     except ValueError as exc:
         raise HTTPException(400, f"아카이빙 실패: {exc}")
 
+    cred_id, cred_error = resolve_archive_credential(
+        request, norm, existing_id=body.cred_existing_id, kind=body.cred_kind.strip(),
+        label=body.cred_label, username=body.cred_username, password=body.cred_password,
+        storage_state=body.cred_storage_state, token=body.cred_token,
+    )
+    if cred_error is not None:
+        raise HTTPException(400, cred_error)
+
     if body.site:
         options = {
             "max_pages": int(body.crawl_max_pages) if body.crawl_max_pages else None,
@@ -879,22 +920,29 @@ def archive_new(
             crawl, merged = crawler.start_crawl(
                 body.url, **options, source="web",
                 requested_by=_requester_id(request), network_tag_id=tag_id,
+                credential_id=cred_id,
             )
             if seconds:
                 crawler.set_crawl_schedule(
                     body.url, seconds, run_at=body.run_at or None, **options,
-                    network_tag_id=tag_id,
+                    network_tag_id=tag_id, credential_id=cred_id,
                 )
         except ValueError as exc:
             raise HTTPException(400, f"아카이빙 실패: {exc}")
+        audit.log(request, "새 사이트 아카이브 등록: %s", body.url,
+                  action="archive", target=norm)
         return {"site": True, "crawl_id": crawl["id"], "merged": merged}
 
     queued = _queue_archive(
         norm, force=body.force, requested_by=_requester_id(request),
+        credential_id=cred_id,
         interval_seconds=seconds or None,
         run_at=(body.run_at or None) if seconds else None,
         network_tag_id=tag_id,
     )
+    if queued:
+        audit.log(request, "새 아카이빙 등록: %s", norm,
+                  action="archive", target=norm)
     return {"site": False, "queued": norm, "enqueued": queued}
 
 
@@ -921,6 +969,9 @@ def rearchive(
     enqueued = _queue_archive(
         page["url"], force=body.force, requested_by=_requester_id(request)
     )
+    if enqueued:
+        audit.log(request, "재아카이빙 등록: %s", page["url"],
+                  action="archive", target=page["url"])
     return {"enqueued": enqueued}
 
 
@@ -1128,24 +1179,10 @@ def system_users(
         users = db.list_users(conn)
         invites = db.list_invites(conn)
         mail_on = mailer.mail_enabled(conn)
-        presets = db.role_presets(conn)
         assignable = db.assignable_roles(conn)
         invitable = db.invitable_roles(conn)
         role_labels = db.role_labels(conn)
-        permission_role_names = db.permission_group_names(conn)
-    user_perms = {
-        u["id"]: {
-            "effective": sorted(
-                db.effective_permissions(
-                    u["role"], u["permission_overrides"], presets=presets
-                )
-            ),
-            "overridden": sorted(
-                db.parse_permission_overrides(u["permission_overrides"])
-            ),
-        }
-        for u in users
-    }
+    # 권한은 역할(권한 묶음) 단위로만 부여한다 — 사용자별 세분 권한 편집은 없다.
     return {
         "users": [dict(u) for u in users],
         "invites": [dict(i) for i in invites],
@@ -1153,10 +1190,6 @@ def system_users(
         "roles": list(assignable),
         "invitable_roles": list(invitable),
         "role_labels": dict(role_labels),
-        "permission_roles": list(permission_role_names),
-        "permissions_catalog": list(db.PERMISSIONS),
-        "permission_labels": dict(db.PERMISSION_LABELS),
-        "user_perms": user_perms,
         "mail_enabled": mail_on,
         "invite_ttl_days": config.INVITE_TTL_DAYS,
     }
@@ -1212,8 +1245,9 @@ def system_logs(
     limit: int = _SYSLOG_PAGE_SIZE_DEFAULT,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """시스템 로그(필터·페이징) — system_routes.system_logs_view 의 JSON 판."""
-    _require_manage_system(user)
+    """시스템 로그(필터·페이징) — '시스템 로그 보기'(기본 admin) 권한."""
+    if not permissions.can_view_system_logs(user):
+        raise HTTPException(403, "로그 열람 권한이 없습니다")
     if limit not in _SYSLOG_PAGE_SIZES:
         limit = _SYSLOG_PAGE_SIZE_DEFAULT
     if level not in db.SYSTEM_LOG_LEVELS:
@@ -1243,6 +1277,62 @@ def system_logs(
         "date_to": date_to or "",
         "levels": list(db.SYSTEM_LOG_LEVELS),
         "sources": list(db.SYSTEM_LOG_SOURCES),
+        "limit": limit,
+        "limits": list(_SYSLOG_PAGE_SIZES),
+        "total": total,
+        "total_pages": total_pages,
+        "page_num": page,
+    }
+
+
+@router.get("/audit")
+def audit_logs(
+    request: Request,
+    action: str | None = None,
+    actor: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    page: int = 1,
+    limit: int = _SYSLOG_PAGE_SIZE_DEFAULT,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """감사 로그(필터·페이징) — '감사 로그 보기'(기본 admin) 권한.
+
+    누가 아카이빙·열람·문서 다운로드·관리 작업을 했는지 audit_logs 에서 읽는다.
+    """
+    if not permissions.can_view_audit_logs(user):
+        raise HTTPException(403, "로그 열람 권한이 없습니다")
+    if limit not in _SYSLOG_PAGE_SIZES:
+        limit = _SYSLOG_PAGE_SIZE_DEFAULT
+    if action not in db.AUDIT_ACTIONS:
+        action = None
+    date_from = _clean_date(date_from)
+    date_to = _clean_date(date_to)
+    if date_from and date_to and date_from > date_to:
+        date_from, date_to = date_to, date_from
+    with db.connect() as conn:
+        actors = db.list_audit_actors(conn)
+        if actor not in actors:
+            actor = None
+        filters = {
+            "action": action, "actor": actor,
+            "date_from": date_from, "date_to": date_to,
+        }
+        total = db.count_audit_logs(conn, **filters)
+        total_pages = max(1, -(-total // limit))
+        page = max(1, min(page, total_pages))
+        rows = db.list_audit_logs(
+            conn, **filters, limit=limit, offset=(page - 1) * limit
+        )
+    return {
+        "logs": [dict(r) for r in rows],
+        "action": action or "",
+        "actor": actor or "",
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "actions": list(db.AUDIT_ACTIONS),
+        "action_labels": dict(db.AUDIT_ACTION_LABELS),
+        "actors": actors,
         "limit": limit,
         "limits": list(_SYSLOG_PAGE_SIZES),
         "total": total,
@@ -1288,46 +1378,6 @@ def system_user_role(
         if body.role == "blocked":
             db.delete_user_sessions(conn, user_id)
     audit.log(request, "사용자 권한 변경: %s → %s", target["email"], body.role)
-    return {"ok": True}
-
-
-class PermsReq(BaseModel):
-    permissions: list[str]
-
-
-@router.post("/system/users/{user_id}/permissions")
-def system_user_perms(
-    request: Request, user_id: int, body: PermsReq,
-    user: sqlite3.Row | None = Depends(require_session),
-) -> dict:
-    """사용자 세분 권한 오버라이드 — granted 목록을 받아 프리셋과 다른 항목만 저장."""
-    _require_manage_users(user)
-    with db.connect() as conn:
-        target = db.get_user_by_id(conn, user_id)
-        if target is None:
-            raise HTTPException(404, "사용자 없음")
-        if target["is_founder"]:
-            raise HTTPException(400, "최초 관리자의 권한은 변경할 수 없습니다")
-        presets = db.role_presets(conn)
-        if target["role"] not in db.permission_group_names(conn):
-            raise HTTPException(400, "이 계정 상태에서는 세분 권한을 조정할 수 없습니다")
-        preset = presets.get(target["role"], frozenset())
-        granted = set(body.permissions)
-        overrides = {}
-        for perm in db.PERMISSIONS:
-            g = perm in granted
-            if g != (perm in preset):
-                overrides[perm] = g
-        new_eff = db.effective_permissions(
-            target["role"], json.dumps(overrides), presets=presets
-        )
-        if "manage_users" not in new_eff:
-            if db.count_active_users_with_permission(
-                conn, "manage_users", exclude_user_id=user_id, presets=presets
-            ) == 0:
-                raise HTTPException(400, "사용자 관리 권한을 가진 마지막 계정입니다")
-        db.set_permission_overrides(conn, user_id, overrides)
-    audit.log(request, "사용자 세분 권한 변경: %s", target["email"])
     return {"ok": True}
 
 

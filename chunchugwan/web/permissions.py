@@ -49,13 +49,23 @@ def can_delete(user: sqlite3.Row | None) -> bool:
     return has_permission(user, "delete")
 
 
-def can_view_logs(user: sqlite3.Row | None) -> bool:
-    """아카이빙 로그(/logs)·열람 가능 여부 — viewer 이상."""
-    return has_permission(user, "view")
+def can_view_archive_logs(user: sqlite3.Row | None) -> bool:
+    """아카이브 로그(/log/archive) 열람 가능 여부 — 기본 admin 만."""
+    return has_permission(user, "view_archive_logs")
+
+
+def can_view_system_logs(user: sqlite3.Row | None) -> bool:
+    """시스템 로그(/log/system) 열람 가능 여부 — 기본 admin 만."""
+    return has_permission(user, "view_system_logs")
+
+
+def can_view_audit_logs(user: sqlite3.Row | None) -> bool:
+    """감사 로그(/log/audit) 열람 가능 여부 — 기본 admin 만."""
+    return has_permission(user, "view_audit_logs")
 
 
 def can_search(user: sqlite3.Row | None) -> bool:
-    """아카이브 전문 검색(/search) 가능 여부 — 로그 열람과 같은 하한(view)."""
+    """아카이브 전문 검색(/search) 가능 여부 — 아카이브 열람과 같은 하한(view)."""
     return has_permission(user, "view")
 
 
@@ -128,7 +138,13 @@ def menu_flags(user: sqlite3.Row | None) -> dict[str, bool]:
         "can_manage_credentials": can_manage_credentials,
         "can_archive": has("archive"),
         "can_delete": has("delete"),
-        "can_view_logs": has("view"),
+        "can_view_archive_logs": has("view_archive_logs"),
+        "can_view_system_logs": has("view_system_logs"),
+        "can_view_audit_logs": has("view_audit_logs"),
+        "can_view_any_logs": (
+            has("view_archive_logs") or has("view_system_logs")
+            or has("view_audit_logs")
+        ),
         "can_search": has("view"),
         "can_use_api_keys": has("use_api_keys"),
     }

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pagePath, snapPath } from '$lib/urls';
 	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import { goto, invalidateAll } from '$app/navigation';
@@ -132,7 +133,7 @@
 			<button onclick={rerun} disabled={busy}>{t('다시 아카이빙')}</button>
 		{/if}
 	{/if}
-	<a href="{base}/archives">{t('목록으로')}</a>
+	<a href="{base}/archive/list">{t('목록으로')}</a>
 </div>
 
 {#if notice}<div class="notice">{notice}</div>{/if}
@@ -227,9 +228,9 @@
 					<td class="num mono">{p.attempts || '—'}</td>
 					<td>
 						{#if p.snapshot_id}
-							<a href="{base}/snapshot/{p.snapshot_id}">{t('스냅샷')}</a>
+							<a href={snapPath(p.snapshot_site_id, p.snapshot_page_id, p.snapshot_id)}>{t('스냅샷')}</a>
 							{#if p.snapshot_page_id}
-								· <a href="{base}/page/{p.snapshot_page_id}">{t('타임라인')}</a>
+								· <a href={pagePath(p.snapshot_site_id, p.snapshot_page_id)}>{t('타임라인')}</a>
 							{/if}
 						{:else if p.error}
 							<span class="mono muted">{p.error}</span>

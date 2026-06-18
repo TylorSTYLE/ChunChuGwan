@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pagePath } from '$lib/urls';
 	import { base } from '$app/paths';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
@@ -61,7 +62,7 @@
 		error = '';
 		try {
 			await api(`/sites/${s.site.id}/delete`, { method: 'POST' });
-			goto(`${base}/archives`);
+			goto(`${base}/archive/list`);
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
 			busy = false;
@@ -102,7 +103,7 @@
 		<tbody>
 			{#each s.pages as p}
 				<tr>
-					<td class="url-cell"><a href="{base}/page/{p.id}" title={p.url}>{p.url}</a></td>
+					<td class="url-cell"><a href={pagePath(s.site.id, p.id)} title={p.url}>{p.url}</a></td>
 					<td class="num">{p.snapshot_count ?? '-'}</td>
 					<td class="num mono">{filesize(p.bytes)}</td>
 					<td class="mono">{p.last_snapshot_at ? ts(String(p.last_snapshot_at)) : '-'}</td>
@@ -114,11 +115,11 @@
 {#if s.pager.total_pages > 1}
 	<div class="pager">
 		{#if s.pager.page > 1}
-			<a href="{base}/sites/{s.site.id}?page={s.pager.page - 1}">← {t('이전')}</a>
+			<a href="{base}/archive/sites/{s.site.id}?page={s.pager.page - 1}">← {t('이전')}</a>
 		{/if}
 		<span class="muted">{s.pager.page} / {s.pager.total_pages}</span>
 		{#if s.pager.page < s.pager.total_pages}
-			<a href="{base}/sites/{s.site.id}?page={s.pager.page + 1}">{t('다음')} →</a>
+			<a href="{base}/archive/sites/{s.site.id}?page={s.pager.page + 1}">{t('다음')} →</a>
 		{/if}
 	</div>
 {/if}
@@ -147,7 +148,7 @@
 	<h3>{t('스케줄')}</h3>
 	<ul class="muted">
 		{#each s.schedules as sc}
-			<li><a href="{base}/page/{sc.page_id}">{t('페이지')} #{sc.page_id}</a> — {sc.label}</li>
+			<li><a href={pagePath(s.site.id, sc.page_id)}>{t('페이지')} #{sc.page_id}</a> — {sc.label}</li>
 		{/each}
 		{#each s.crawl_schedules as cs}
 			<li class="mono">{cs.start_url} — {cs.label}</li>
@@ -166,7 +167,7 @@
 		<table>
 			<thead>
 				<tr>
-					<th>{t('시각')}</th><th>URL</th><th>{t('오류')}</th>
+					<th>{t('시간')}</th><th>URL</th><th>{t('오류')}</th>
 					{#if s.can_archive}<th></th>{/if}
 				</tr>
 			</thead>
@@ -206,7 +207,7 @@
 
 {#if s.can_manage_credentials}
 	<p class="cred-link">
-		<a href="{base}/sites/{s.site.id}/credentials">{t('로그인 자격증명 관리')}</a>
+		<a href="{base}/archive/sites/{s.site.id}/credentials">{t('로그인 자격증명 관리')}</a>
 		<span class="muted">{t('— 이 사이트 캡처 시 사용할 로그인 정보')}</span>
 	</p>
 {/if}

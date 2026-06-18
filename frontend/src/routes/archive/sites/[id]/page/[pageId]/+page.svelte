@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { snapPath } from '$lib/urls';
 	import { base } from '$app/paths';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
@@ -56,7 +57,7 @@
 		error = '';
 		try {
 			await api(`/pages/${tl.page.id}/delete`, { method: 'POST' });
-			goto(`${base}/archives`);
+			goto(`${base}/archive/list`);
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
 			busy = false;
@@ -70,7 +71,7 @@
 {#if error}<div class="error">{error}</div>{/if}
 
 <div class="toolbar">
-	{#if tl.site}<a href="{base}/sites/{tl.site.id}">← {t('사이트 상세')}</a>{/if}
+	{#if tl.site}<a href="{base}/archive/sites/{tl.site.id}">← {t('사이트 상세')}</a>{/if}
 	{#if snaps.length >= 2}<a href="{base}/diff/{tl.page.id}">{t('최신 2개 비교')}</a>{/if}
 </div>
 
@@ -102,7 +103,7 @@
 		<table>
 			<thead>
 				<tr>
-					<th>#</th><th>{t('시각')}</th><th>{t('상태')}</th><th>{t('해시')}</th><th>{t('용량')}</th
+					<th>#</th><th>{t('시간')}</th><th>{t('상태')}</th><th>{t('해시')}</th><th>{t('용량')}</th
 					><th></th>
 				</tr>
 			</thead>
@@ -122,7 +123,7 @@
 						</td>
 						<td class="mono muted">{String(item.snap.content_hash).slice(0, 12)}</td>
 						<td class="num mono">{filesize(item.total_bytes)}</td>
-						<td><a href="{base}/snapshot/{item.snap.id}">{t('보기')}</a></td>
+						<td><a href={snapPath(tl.site?.id, tl.page.id, item.snap.id)}>{t('보기')}</a></td>
 					</tr>
 				{/each}
 			</tbody>

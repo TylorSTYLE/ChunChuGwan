@@ -52,7 +52,7 @@
 					<tr>
 						<td>
 							{#if s.site_id}
-								<a href="{base}/sites/{s.site_id}">{s.site_key}</a>
+								<a href="{base}/archive/sites/{s.site_id}">{s.site_key}</a>
 							{:else}
 								<span>{s.site_key}</span>
 							{/if}
@@ -63,10 +63,19 @@
 						<td class="num">{s.snapshot_count}</td>
 						<td class="num">{s.schedule_count || '-'}</td>
 						<td class="num mono">{filesize(s.bytes)}</td>
-						<td class="mono">{s.activity_at ? ts(s.activity_at) : '-'}</td>
+						<td class="mono activity">{s.activity_at ? ts(s.activity_at) : '-'}</td>
 					</tr>
 				{/each}
 			</tbody>
 		</table>
 	</div>
 {/if}
+
+<style>
+	/* 마지막 활동(시간) 컬럼은 한 줄 유지 — 폭이 좁아 줄바꿈되던 문제 보정 */
+	td.activity,
+	th:last-child {
+		white-space: nowrap;
+		min-width: 160px;
+	}
+</style>

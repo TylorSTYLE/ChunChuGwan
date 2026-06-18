@@ -301,6 +301,17 @@ CREATE TABLE IF NOT EXISTS system_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_system_logs_time ON system_logs(created_at);
 
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id            INTEGER PRIMARY KEY,
+    created_at    TEXT NOT NULL,          -- ISO 8601 UTC
+    actor         TEXT NOT NULL,          -- 요청 주체 (이메일 / API 키 이름 / 익명)
+    actor_user_id INTEGER,                -- 세션 사용자 id (있으면, FK 없는 상관 키)
+    action        TEXT NOT NULL,          -- 액션 종류 (db.AUDIT_ACTIONS)
+    target        TEXT,                   -- 대상 식별 (URL·스냅샷·문서명 등)
+    message       TEXT NOT NULL           -- 사람이 읽는 한국어 원문 (요청자 포함)
+);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_time ON audit_logs(created_at);
+
 CREATE TABLE IF NOT EXISTS users (
     id                  INTEGER PRIMARY KEY,
     email               TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -632,6 +643,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(ddl)
     _seed_permission_groups(conn)
     _migrate_api_key_permission(conn)
+    _migrate_log_view_permissions(conn)
     _backfill_sites(conn)
 
 
@@ -690,6 +702,31 @@ def _migrate_api_key_permission(conn: sqlite3.Connection) -> None:
             )
             changed = True
     if changed:
+        _bump_permission_groups_version(conn)
+
+
+def _migrate_log_view_permissions(conn: sqlite3.Connection) -> None:
+    """기존 빌트인 admin 그룹에 로그 열람 3종 권한을 보강 — 멱등.
+
+    view_audit_logs·view_system_logs·view_archive_logs 는 신규 추가 권한이라
+    기존 설치의 admin 그룹 permissions JSON 에는 없다. '관리자 권한 그룹만
+    기본값'이라 admin 에만 보강하고 다른 빌트인에는 넣지 않는다. 신규 설치는
+    _seed_permission_groups 가 list(PERMISSIONS) 로 이미 포함하므로 no-op.
+    """
+    row = conn.execute(
+        "SELECT permissions FROM permission_groups "
+        "WHERE name = 'admin' AND is_builtin = 1"
+    ).fetchone()
+    if row is None:
+        return
+    perms = _parse_permission_list(row["permissions"])
+    added = [p for p in LOG_VIEW_PERMISSIONS if p not in perms]
+    if added:
+        perms.extend(added)
+        conn.execute(
+            "UPDATE permission_groups SET permissions = ? WHERE name = 'admin'",
+            (json.dumps(perms),),
+        )
         _bump_permission_groups_version(conn)
 
 
@@ -850,7 +887,7 @@ def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> sqlite3.Row | No
     """스냅샷 row + 소속 페이지 정보(page_url, domain, slug, network_tag_id) 조회."""
     return conn.execute(
         """
-        SELECT s.*, p.url AS page_url, p.domain, p.slug, p.network_tag_id
+        SELECT s.*, p.url AS page_url, p.domain, p.slug, p.site_id, p.network_tag_id
         FROM snapshots s JOIN pages p ON p.id = s.page_id
         WHERE s.id = ?
         """,
@@ -1401,7 +1438,7 @@ def list_archive_logs(
                sp.domain AS snap_domain, sp.slug AS snap_slug,
                nt.name AS network_tag_name,
                nt.description AS network_tag_description,
-               lp.network_tag_id
+               lp.network_tag_id, lp.site_id AS page_site_id
         FROM archive_logs al
         LEFT JOIN snapshots s ON s.id = al.snapshot_id
         LEFT JOIN pages sp ON sp.id = s.page_id
@@ -1557,6 +1594,115 @@ def prune_system_logs(conn: sqlite3.Connection, keep: int) -> int:
     return cur.rowcount
 
 
+# ---- 감사 로그 (audit_logs — 사용자 액션 기록, web.audit 가 적재) ----
+
+# 감사 액션 종류 — 화면 필터의 단위. archive(아카이빙)·view(아카이브 열람)·
+# download(문서 다운로드)·admin(설정·권한·자격증명 등 관리 작업).
+AUDIT_ACTIONS = ("archive", "view", "download", "admin")
+AUDIT_ACTION_LABELS = {
+    "archive": "아카이빙",
+    "view": "열람",
+    "download": "문서 다운로드",
+    "admin": "관리 작업",
+}
+
+
+def insert_audit_log(
+    conn: sqlite3.Connection,
+    *,
+    created_at: str,
+    actor: str,
+    action: str,
+    message: str,
+    actor_user_id: int | None = None,
+    target: str | None = None,
+) -> int:
+    """감사 로그 한 행 삽입 후 id 반환."""
+    cur = conn.execute(
+        "INSERT INTO audit_logs "
+        "(created_at, actor, actor_user_id, action, target, message)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (created_at, actor, actor_user_id, action, target, message),
+    )
+    return cur.lastrowid
+
+
+def _audit_log_where(
+    *,
+    action: str | None,
+    actor: str | None,
+    date_from: str | None,
+    date_to: str | None,
+) -> tuple[str, list[object]]:
+    """audit_logs 필터 WHERE 절 조립 (list/count 공용). 날짜 의미는 system_logs 와 동일."""
+    where: list[str] = []
+    params: list[object] = []
+    for cond, value in (
+        ("action = ?", action),
+        ("actor = ?", actor),
+        ("created_at >= ?", date_from),
+        ("created_at < DATE(?, '+1 day')", date_to),
+    ):
+        if value is not None:
+            where.append(cond)
+            params.append(value)
+    return (" WHERE " + " AND ".join(where)) if where else "", params
+
+
+def list_audit_logs(
+    conn: sqlite3.Connection,
+    *,
+    action: str | None = None,
+    actor: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """감사 로그 (최신 순). 액션/요청자/기간으로 필터."""
+    where_sql, params = _audit_log_where(
+        action=action, actor=actor, date_from=date_from, date_to=date_to,
+    )
+    sql = (
+        "SELECT * FROM audit_logs" + where_sql
+        + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+    )
+    return conn.execute(sql, params + [limit, offset]).fetchall()
+
+
+def count_audit_logs(
+    conn: sqlite3.Connection,
+    *,
+    action: str | None = None,
+    actor: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """필터 조건에 맞는 감사 로그 총 건수 (페이징용)."""
+    where_sql, params = _audit_log_where(
+        action=action, actor=actor, date_from=date_from, date_to=date_to,
+    )
+    row = conn.execute("SELECT COUNT(*) FROM audit_logs" + where_sql, params).fetchone()
+    return row[0]
+
+
+def list_audit_actors(conn: sqlite3.Connection) -> list[str]:
+    """감사 로그에 등장한 요청 주체 목록 (필터 드롭다운용, 가나다순)."""
+    rows = conn.execute("SELECT DISTINCT actor FROM audit_logs ORDER BY actor").fetchall()
+    return [r["actor"] for r in rows]
+
+
+def prune_audit_logs(conn: sqlite3.Connection, keep: int) -> int:
+    """최신 keep 건만 남기고 오래된 감사 로그 삭제. 삭제 건수 반환."""
+    cur = conn.execute(
+        "DELETE FROM audit_logs WHERE id < ("
+        " SELECT COALESCE(MIN(id), 0) FROM ("
+        "  SELECT id FROM audit_logs ORDER BY id DESC LIMIT ?))",
+        (keep,),
+    )
+    return cur.rowcount
+
+
 def _visible_snapshot_filter(
     viewer: "tuple[int | None, bool] | None", alias: str = "s"
 ) -> tuple[str, dict]:
@@ -1631,6 +1777,7 @@ def list_recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sql
     return conn.execute(
         """
         SELECT s.*, p.url AS page_url, p.domain, p.slug, p.network_tag_id,
+               p.site_id,
                nt.name AS network_tag_name,
                nt.description AS network_tag_description,
                NOT EXISTS (
@@ -1934,7 +2081,7 @@ def delete_fts_rows(conn: sqlite3.Connection, rowids: list[int]) -> None:
 # terms 로 한다, 생략기호 …, trigram 토큰 최대 64개 ≈ 매치 주변 ~60자).
 _SEARCH_SELECT_FTS = """
     SELECT snapshot_fts.rowid AS snapshot_id, s.page_id, s.taken_at, s.changed,
-           p.url AS page_url, p.domain,
+           p.url AS page_url, p.domain, p.site_id,
            snippet(snapshot_fts, 0, '', '', '…', 64) AS snippet,
            snapshot_fts.title AS title
     FROM snapshot_fts
@@ -1945,7 +2092,7 @@ _SEARCH_SELECT_FTS = """
 # 가져와 searchindex 가 매치 위치를 찾아 스니펫을 만든다.
 _SEARCH_SELECT_LIKE = """
     SELECT snapshot_fts.rowid AS snapshot_id, s.page_id, s.taken_at, s.changed,
-           p.url AS page_url, p.domain,
+           p.url AS page_url, p.domain, p.site_id,
            snapshot_fts.content AS content, snapshot_fts.title AS title
     FROM snapshot_fts
     JOIN snapshots s ON s.id = snapshot_fts.rowid
@@ -2262,7 +2409,7 @@ def list_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """
     return conn.execute(
         """
-        SELECT sc.*, p.url, p.network_tag_id,
+        SELECT sc.*, p.url, p.network_tag_id, p.site_id,
                nt.name AS network_tag_name,
                nt.description AS network_tag_description
         FROM schedules sc
@@ -2416,8 +2563,10 @@ def list_crawl_pages(
     status 를 주면 해당 상태(pending/in_progress/done/failed)만 추린다.
     """
     sql = """
-        SELECT cp.*, s.page_id AS snapshot_page_id
-        FROM crawl_pages cp LEFT JOIN snapshots s ON s.id = cp.snapshot_id
+        SELECT cp.*, s.page_id AS snapshot_page_id, sp.site_id AS snapshot_site_id
+        FROM crawl_pages cp
+        LEFT JOIN snapshots s ON s.id = cp.snapshot_id
+        LEFT JOIN pages sp ON sp.id = s.page_id
         WHERE cp.crawl_id = ?
     """
     params: list[object] = [crawl_id]
@@ -3489,6 +3638,9 @@ PERMISSIONS = (
     "manage_users",            # 사용자·초대·시스템 API 키 관리
     "view_authenticated_all",  # 다른 사용자가 로그인 캡처한 인증 스냅샷 열람
     "use_api_keys",            # 개인 API Key(확장 토큰) 발급·사용 (크롬 확장 캡처)
+    "view_audit_logs",         # 감사 로그(/log/audit) 열람 — 기본 admin 만
+    "view_system_logs",        # 시스템 로그(/log/system) 열람 — 기본 admin 만
+    "view_archive_logs",       # 아카이브 로그(/log/archive) 열람 — 기본 admin 만
 )
 PERMISSION_LABELS = {
     "view": "보기·검색",
@@ -3499,7 +3651,13 @@ PERMISSION_LABELS = {
     "manage_users": "사용자 관리",
     "view_authenticated_all": "인증 스냅샷 전체 열람",
     "use_api_keys": "개인 API Key",
+    "view_audit_logs": "감사 로그 보기",
+    "view_system_logs": "시스템 로그 보기",
+    "view_archive_logs": "아카이브 로그 보기",
 }
+# 로그 열람 3종 — 신규 추가 권한. 빌트인 중 admin 에만 기본 부여하고(관리자 권한
+# 그룹만 기본값), 기존 설치는 _migrate_log_view_permissions 가 보강한다.
+LOG_VIEW_PERMISSIONS = ("view_audit_logs", "view_system_logs", "view_archive_logs")
 # 빌트인 역할의 기본 프리셋 — permission_groups 시드의 소스이자, 캐시가 아직
 # 워밍되지 않은 프로세스의 conn 없는 fallback. 런타임 편집·커스텀 그룹은 DB
 # permission_groups 가 정본이며 role_presets(conn) 가 버전 비교로 최신화한다.

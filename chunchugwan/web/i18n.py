@@ -43,6 +43,59 @@ _EN: dict[str, str] = {
     "아카이빙 로그": "Archive logs",
     "아카이브 로그": "Archive logs",
     "시스템 로그": "System logs",
+    "감사 로그": "Audit log",
+    "누가 아카이빙·열람·문서 다운로드·관리 작업을 했는지 기록":
+        "Record of who archived, viewed, downloaded documents, or performed admin actions",
+    "모든 종류": "All types",
+    "모든 요청자": "All actors",
+    "요청자": "Actor",
+    "감사 기록이 없습니다.": "No audit records yet.",
+    "시간": "Time",
+    "표시이름": "Display name",
+    "표시이름을 저장했습니다.": "Saved display name.",
+    "루프백 주소는 아카이빙할 수 없습니다.": "Loopback addresses cannot be archived.",
+    "입력한 주소가 사설 IP 대역(로컬 네트워크)입니다 — 태그를 선택해야 아카이빙할 수 있습니다.":
+        "The address is a private-IP (local network) — select a tag to archive it.",
+    "로그인이 필요한 사이트의 자격증명 연결은 사이트 상세 화면에서 관리합니다.":
+        "Credentials for sites requiring login are managed on the site detail page.",
+    "HAR 파일 업로드는 사이트 상세 화면에서 지원합니다.":
+        "HAR file upload is supported on the site detail page.",
+    "이 도메인에 등록된 자격증명을 연결하거나 새로 추가할 수 있습니다. 아카이빙 시 로그인에 사용됩니다.":
+        "Link a credential registered for this domain or add a new one — used to log in when archiving.",
+    "시스템 상태": "System status",
+    "현재 버전과 저장된 데이터 규모입니다.": "Current version and stored-data size.",
+    "유지관리": "Maintenance",
+    "검색 인덱스와 저장공간을 정리합니다.": "Maintain the search index and storage.",
+    "아직 색인되지 않은 스냅샷을 다시 색인합니다.": "Re-index snapshots that are not yet indexed.",
+    "압축·자원 공유로 저장공간을 줄입니다 (내용은 그대로).":
+        "Reduce storage by compression and resource sharing (content preserved).",
+    "아카이빙·크롤·문서 수집·로컬 네트워크 동작을 설정합니다.":
+        "Configure archiving, crawling, document fetching, and local-network behavior.",
+    "사이트 전체 아카이브(크롤)의 기본 범위·간격입니다.":
+        "Default scope and interval for whole-site archiving (crawl).",
+    "스냅샷을 찍을 때의 추가 캡처 동작입니다.": "Extra capture behavior when taking snapshots.",
+    "확장이 보낸 1회성 로그인 자격증명의 보관 시간입니다.":
+        "Retention time for one-time login credentials sent by the extension.",
+    "페이지가 링크한 문서 파일을 받을 때의 한도입니다.":
+        "Limits when fetching document files linked from a page.",
+    "사설 IP(로컬 네트워크) 주소를 아카이빙할 때 붙이는 태그입니다.":
+        "Tags attached when archiving private-IP (local-network) addresses.",
+    "회원 가입과 이메일 본인 인증 정책입니다.": "Sign-up and email-verification policy.",
+    "회원 가입 허용 여부와 가입 시 초기 권한입니다.":
+        "Whether sign-up is allowed and the initial role on sign-up.",
+    "패스워드 계정이 로그인 전에 메일로 이메일을 검증하게 합니다.":
+        "Require password accounts to verify their email by mail before login.",
+    "메일 발송과 API 키 등 서버 연동 설정입니다.":
+        "Server integration settings such as mail delivery and API keys.",
+    "초대·이메일 인증 메일을 보내는 SMTP 서버입니다.":
+        "SMTP server used to send invitation and verification emails.",
+    "API 키 관리로 이동": "Go to API key management",
+    "데이터 전체를 바꾸는 작업입니다 — 신중히 사용하세요.":
+        "Operations that change all data — use with care.",
+    "전체 백업·복원과 아카이브 내보내기·가져오기입니다.":
+        "Full backup/restore and archive export/import.",
+    "다른 춘추관 인스턴스로 전체 데이터를 옮길 때 켭니다 — 켜면 아카이빙이 중단됩니다.":
+        "Enable when migrating all data to another ChunChuGwan instance — archiving stops while on.",
     "사용자": "Users",
     "API Key 관리": "Manage API keys",
     "시스템": "System",

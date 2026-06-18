@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pagePath } from '$lib/urls';
 	import { base } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
@@ -14,7 +15,7 @@
 <h2 class="mono">{d.page.url}</h2>
 
 <div class="toolbar">
-	<a href="{base}/page/{d.page.id}">← {t('타임라인')}</a>
+	<a href={pagePath(d.page.site_id, d.page.id)}>← {t('타임라인')}</a>
 	<span class="muted"
 		>#{d.from_idx} ({ts(String(d.old_snap.taken_at))}) → #{d.to_idx} ({ts(
 			String(d.new_snap.taken_at)

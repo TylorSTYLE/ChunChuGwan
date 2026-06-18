@@ -76,8 +76,7 @@ def test_users_list(tmp_db):
     body = client_for(admin).get("/api/web/system/users").json()
     emails = {u["email"] for u in body["users"]}
     assert {"boss@test.co", "admin@test.co"} <= emails
-    assert "roles" in body and "user_perms" in body
-    assert "permissions_catalog" in body
+    assert "roles" in body and "role_labels" in body
 
 
 # ---- 역할 변경 ----
@@ -127,29 +126,7 @@ def test_user_role_last_manage_users_blocked(tmp_db):
     assert r.status_code == 400
 
 
-# ---- 세분 권한 ----
-
-
-def test_user_permissions_override(tmp_db):
-    _, admin = make_user("admin@test.co", role="admin")
-    target, _ = make_user("v@test.co", role="viewer")
-    # viewer 에게 archive 권한 추가
-    r = client_for(admin).post(
-        f"/api/web/system/users/{target}/permissions",
-        json={"permissions": ["view", "search", "archive"]}, headers=POST_HEADERS)
-    assert r.status_code == 200
-    with db.connect() as conn:
-        eff = db.effective_permissions(
-            "viewer", db.get_user_by_id(conn, target)["permission_overrides"])
-    assert "archive" in eff
-
-
-def test_user_permissions_founder_protected(tmp_db):
-    founder = make_founder()
-    _, admin = make_user("admin@test.co", role="admin")
-    r = client_for(admin).post(f"/api/web/system/users/{founder}/permissions",
-                               json={"permissions": ["view"]}, headers=POST_HEADERS)
-    assert r.status_code == 400
+# 세분 권한(사용자별 오버라이드) 편집 기능은 제거됐다 — 권한은 역할 단위로만 부여한다.
 
 
 # ---- 삭제 ----

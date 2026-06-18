@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager
 import zoneinfo
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import (
     FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
@@ -354,6 +354,66 @@ def extension_download(request: Request) -> Response:
     )
 
 
+# ---- 확장(크롬) 전용 진입 경로 (용도별 분리) ----
+# 확장은 SPA 화면 구조(중첩 라우트 등)를 직접 알지 못하도록 /extension/* 진입점만
+# 쓰고, 여기서 정식 SPA 라우트로 302 한다 — 화면 경로가 바뀌어도 확장은 무관하다.
+
+@app.get("/extension/page/{page_id}")
+def extension_page(request: Request, page_id: int):
+    """확장: 아카이브된 페이지 타임라인 열기 → 사이트 계층 정식 경로로 이동."""
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+    if page is None:
+        raise HTTPException(404, t(request, "페이지 없음"))
+    return RedirectResponse(
+        f"/archive/sites/{page['site_id'] or 0}/page/{page_id}", status_code=302
+    )
+
+
+@app.get("/extension/crawl/{crawl_id}")
+def extension_crawl(request: Request, crawl_id: int):
+    """확장: 사이트 아카이브(크롤) 회차 열기."""
+    return RedirectResponse(f"/crawls/{crawl_id}", status_code=302)
+
+
+@app.get("/extension/needs-human")
+def extension_needs_human(request: Request):
+    """확장: 사람 확인 대기 목록 열기."""
+    return RedirectResponse("/archive/needs-human", status_code=302)
+
+
+@app.get("/extension/archives")
+def extension_archives(request: Request):
+    """확장: 내 아카이브(본인 요청 이력) 열기."""
+    return RedirectResponse("/settings/archives", status_code=302)
+
+
+@app.get("/extension/token")
+def extension_token(request: Request):
+    """확장: 개인 API Key(확장 토큰) 발급 폼 열기."""
+    return RedirectResponse("/settings/api-keys#ext-token-form", status_code=302)
+
+
+@app.get("/extension/go")
+def extension_go(request: Request, url: str = ""):
+    """확장: URL 로 아카이브 화면 열기 — 이미 있으면 타임라인, 없으면 새 아카이빙."""
+    try:
+        norm = storage.normalize_url(url) if url.strip() else ""
+    except ValueError:
+        norm = ""
+    if norm:
+        with db.connect() as conn:
+            page = db.get_page(conn, norm)
+        if page is not None:
+            return RedirectResponse(
+                f"/archive/sites/{page['site_id'] or 0}/page/{page['id']}",
+                status_code=302,
+            )
+    return RedirectResponse(
+        f"/archive/new?url={quote(url, safe='')}", status_code=302
+    )
+
+
 def _site_title(snap_rows) -> str | None:
     """사이트 스냅샷 중 최신 것부터 비정규화된 title 을 찾는다 (현재 타이틀).
 
@@ -541,6 +601,97 @@ def api_credentials_delete(request: Request, site_id: int, cred_id: int) -> dict
     return {"ok": True}
 
 
+@app.get("/api/web/archive/credentials")
+def api_archive_credentials(request: Request, url: str = "") -> dict:
+    """입력 URL 도메인(사이트)의 자격증명 목록 — 새 아카이빙 폼의 '연결' 선택용.
+
+    비밀은 내려보내지 않는다(id·라벨·종류만). 자격증명 관리 권한 전용.
+    """
+    _require_credentials(request)
+    try:
+        site_key = storage.site_key(storage.normalize_url(url)) if url.strip() else ""
+    except ValueError:
+        site_key = ""
+    creds: list[dict] = []
+    if site_key:
+        with db.connect() as conn:
+            site = db.get_site_by_key(conn, site_key)
+            if site is not None:
+                creds = [
+                    {"id": c["id"], "label": c["label"], "kind": c["kind"],
+                     "kind_label": credentials.kind_label(c["kind"])}
+                    for c in db.list_site_credentials(conn, site["id"])
+                ]
+    return {
+        "site_key": site_key,
+        "credentials": creds,
+        "kinds": [
+            {"value": k, "label": credentials.kind_label(k)} for k in credentials.KINDS
+        ],
+        "secret_key_configured": crypto.is_configured(),
+    }
+
+
+def resolve_archive_credential(
+    request: Request, norm: str, *,
+    existing_id: str, kind: str, label: str,
+    username: str, password: str, storage_state: str, token: str,
+) -> tuple[int | None, str | None]:
+    """새 아카이빙 폼의 자격증명 선택을 해석 — (연결할 credential_id, 오류) 반환.
+
+    자격증명 관리 권한이 없으면 무시(None, None). existing_id 가:
+    - ""        : 연결 안 함
+    - "__new__" : 새 자격증명을 만들어 그 id 를 연결 (HAR 업로드는 사이트 화면에서)
+    - 숫자       : 그 기존 자격증명을 연결 (URL 도메인 소속인지 검증)
+    """
+    if config.AUTH_ENABLED and not permissions.can_manage_credentials(
+        getattr(request.state, "user", None)
+    ):
+        return None, None
+    existing_id = (existing_id or "").strip()
+    if not existing_id:
+        return None, None
+    site_key = storage.site_key(norm)
+    if existing_id == "__new__":
+        if not crypto.is_configured():
+            return None, t(request,
+                           "WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.")
+        label = (label or "").strip()
+        label_error = credentials.validate_label(label)
+        if label_error is not None:
+            return None, t(request, label_error)
+        if kind not in credentials.KINDS:
+            return None, t(request, "잘못된 자격증명 종류입니다.")
+        try:
+            payload = credentials.build_payload(
+                kind, {"username": username, "password": password,
+                       "storage_state": storage_state, "token": token},
+            )
+        except credentials.CredentialError as e:
+            return None, t(request, str(e))
+        with db.connect() as conn:
+            site_id = db.get_or_create_site(conn, site_key)
+            if db.get_site_credential_by_label(conn, site_id, label) is not None:
+                return None, t(request, "이미 있는 이름입니다: {name}", name=label)
+            cred_id = credentials.add(
+                conn, site_id, label, kind, payload,
+                created_by=request.state.user["id"] if request.state.user else None,
+            )
+        audit.log(request, "새 아카이빙에 자격증명 생성·연결: %s '%s' (%s)",
+                  site_key, label, kind)
+        return cred_id, None
+    if not existing_id.isdigit():
+        return None, t(request, "잘못된 자격증명 선택입니다.")
+    cred_id = int(existing_id)
+    with db.connect() as conn:
+        site = db.get_site_by_key(conn, site_key)
+        cred = db.get_site_credential(conn, cred_id)
+        if site is None or cred is None or cred["site_id"] != site["id"]:
+            return None, t(request, "이 도메인에 등록된 자격증명이 아닙니다.")
+    audit.log(request, "새 아카이빙에 기존 자격증명 연결: %s (cred #%d)", site_key, cred_id)
+    return cred_id, None
+
+
 @app.get("/api/web/active")
 def api_archive_active(request: Request) -> dict:
     """진행 중 아카이빙 URL + 사람 확인 대기 (SPA 목록 폴링·전역 배너).
@@ -722,6 +873,8 @@ def snapshot_document(request: Request, snapshot_id: int, name: str):
     )
     if entry is None:
         raise HTTPException(404, t(request, "허용되지 않은 파일"))
+    audit.log(request, "문서 다운로드: %s (스냅샷 #%d)", name, snapshot_id,
+              action="download", target=name)
     legacy = snap_dir / "files" / name
     if legacy.is_file():
         return _document_response(legacy, name)
@@ -780,6 +933,7 @@ def document_download(request: Request, sha256: str, name: str):
     path = documents.cas_path(cas_name)
     if not path.is_file():
         raise HTTPException(404, t(request, "파일 없음"))
+    audit.log(request, "문서 다운로드: %s", name, action="download", target=name)
     return _document_response(path, name)
 
 

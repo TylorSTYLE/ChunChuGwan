@@ -75,7 +75,7 @@
 </script>
 
 <p class="muted back">
-	<a href="{base}/sites/{d.site.id}">← <span class="mono">{d.site.site_key}</span></a>
+	<a href="{base}/archive/sites/{d.site.id}">← <span class="mono">{d.site.site_key}</span></a>
 </p>
 <h2>{t('로그인 자격증명')} <span class="mono muted">{d.site.site_key}</span></h2>
 {#if notice}<div class="notice">{notice}</div>{/if}

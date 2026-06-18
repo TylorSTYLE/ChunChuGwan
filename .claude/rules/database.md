@@ -13,7 +13,7 @@ paths:
 
 | 테이블 | 상세 |
 |---|---|
-| `sites`·`pages`·`snapshots`·`checks`·`settings`·`archive_logs`·`system_logs` | 이 파일 |
+| `sites`·`pages`·`snapshots`·`checks`·`settings`·`archive_logs`·`system_logs`·`audit_logs` | 이 파일 |
 | `snapshot_resources`·`snapshot_documents` | `.claude/rules/storage.md` |
 | `snapshot_fts` | `.claude/rules/search.md` |
 | `network_tags`·`site_certificates`·`archive_jobs`·`live_commands`·`schedules`·`crawls`/`crawl_pages`·`crawl_schedules` | `.claude/rules/capture-crawl.md` |
@@ -67,8 +67,17 @@ paths:
 - `system_logs` — 앱 동작 로그 (`system_log.py` 의 logging 핸들러가
   chunchugwan 네임스페이스의 INFO 이상 레코드를 적재 — 레벨·로거·출처
   serve/worker/cli·트레이스백). 비차단 큐 + 쓰기 스레드, 보관 한도
-  (`WCCG_SYSTEM_LOG_MAX_ROWS`) 초과분 자동 정리. 대시보드 `/system/logs`
-  (관리자 전용)의 데이터 소스
+  (`WCCG_SYSTEM_LOG_MAX_ROWS`) 초과분 자동 정리. 대시보드 `/log/system`
+  (`view_system_logs` 권한, 기본 admin)의 데이터 소스. 감사 로그(`chunchugwan.web.audit`
+  로거)는 핸들러가 **제외**해 여기 적재되지 않는다 (전용 audit_logs 로 분리)
+- `audit_logs` — 사용자 액션 감사 로그 (누가 무엇을 했는지). `web.audit.log` 가
+  요청 주체(actor=이메일/API 키 이름/익명, actor_user_id)·액션 종류(action ∈
+  `db.AUDIT_ACTIONS` = archive·view·download·admin)·대상(target)·한국어 원문
+  메시지를 적재한다. 아카이빙(archive)·아카이브 열람(view)·문서 다운로드(download)·
+  관리 작업(admin, 설정·권한·자격증명·네트워크 태그·API 키 등)을 기록하고, 대시보드
+  `/log/audit`(`view_audit_logs` 권한, 기본 admin)이 액션·요청자·기간 필터로 보여준다.
+  `system_log` 핸들러가 audit 로거를 제외하므로 시스템 로그와 분리된다.
+  `db.list/count/insert/list_audit_actors/prune_audit_logs`
 - `settings` — 대시보드에서 변경하는 key-value 런타임 설정. 가입 설정
   (`signup_enabled` on/off 기본 on — off 면 `/signup` 차단 + 로그인 화면
   가입 링크 숨김(초대 가입은 허용), `signup_default_role`)과 이메일 본인 인증

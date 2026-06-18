@@ -1,8 +1,8 @@
 import type { PageLoad } from './$types';
 import { api } from '$lib/api';
-import type { SnapshotMeta } from '$lib/types';
+import type { PageTimeline } from '$lib/types';
 
 export const load: PageLoad = async ({ params }) => {
-	const meta = await api<SnapshotMeta>(`/snapshots/${params.id}`);
-	return { meta };
+	const tl = await api<PageTimeline>(`/pages/${params.pageId}`);
+	return { tl };
 };
