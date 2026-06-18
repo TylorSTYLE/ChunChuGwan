@@ -45,7 +45,8 @@
 - 사이트(섹션) 전체를 링크 따라 수집하는 크롤, 페이지/사이트 주기적 재아카이빙
 - 전문(full-text) 검색 — 페이지 본문 + 첨부 문서(PDF·워드·한글 등) 본문을
   SQLite FTS5(trigram, 한국어 부분문자열)로 검색 (CLI `wccg search`, 대시보드 `/search`)
-- 읽기 전용 대시보드 (목록/타임라인/스냅샷 뷰어/diff 뷰어/검색/로그 + 재아카이빙·삭제 버튼)
+- 읽기 전용 대시보드 — SvelteKit SPA (목록/타임라인/스냅샷 뷰어/diff 뷰어/검색/로그 +
+  재아카이빙·삭제 버튼). FastAPI 가 정적 SPA 를 루트(/)로 서빙하고 데이터는 `/api/web` JSON
 - 아카이브 실행 로그 — 모든 실행(성공/실패)을 단계별 소요시간과 함께 DB에 기록
 - 사용자 인증 — 이메일/패스워드(+선택 TOTP 2FA), Authentik OIDC SSO 지원
 - 세분 권한 — 관리자/아카이브 관리/아카이브/보기 전용/권한없음(가입 승인 대기)/차단
@@ -77,6 +78,10 @@
 ```bash
 uv sync                                  # 의존성 설치
 uv run playwright install chromium       # 최초 1회
+npm --prefix frontend ci                 # 대시보드 SPA 의존성 (최초 1회, Node 18+)
+npm --prefix frontend run build          # 대시보드(SvelteKit) 빌드 → frontend/build
+                                         #   serve 가 이 산출물을 루트(/)로 서빙한다
+                                         #   (Docker 이미지는 빌드 단계에서 자동 동봉)
 ```
 
 ## 사용법

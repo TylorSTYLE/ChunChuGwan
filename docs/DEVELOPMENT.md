@@ -29,8 +29,9 @@ uv run pytest                            # 테스트 (네트워크 불필요, ~1
   응답이 끝난 뒤 브레이크포인트가 잡힌다.
 - **작업 디렉토리**: 모든 구성이 프로젝트 루트 기준이라 터미널 실행과 동일한
   `./archive`를 사용한다.
-- Jinja2 템플릿 디렉토리(`chunchugwan/web/templates`)가 프로젝트 설정에 등록되어
-  있어 템플릿 자동완성/네비게이션이 동작한다.
+- 대시보드는 SvelteKit SPA(`frontend/`)다 — `serve` 전에 `npm --prefix frontend run build`
+  로 빌드해 두면 FastAPI 가 산출물을 루트(/)로 서빙한다(빌드가 없으면 503). SPA 개발 중에는
+  `npm --prefix frontend run dev`(Vite, HMR)로 띄우고 API 는 `wccg serve` 로 따로 돌린다.
 
 ## 모듈 구성
 

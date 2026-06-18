@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from chunchugwan import auth, config, db, searchindex
 from chunchugwan.web import app as web_app
-from chunchugwan.web import system_routes
+from chunchugwan.web import maintenance
 
 POST_HEADERS = {"X-Requested-With": "fetch", "Origin": "http://testserver"}
 
@@ -31,8 +31,8 @@ def tmp_db(tmp_path, monkeypatch):
 def _reset_reindex_state():
     """SSR 과 공유하는 모듈 전역 재색인 상태를 테스트 간 격리한다."""
     yield
-    with system_routes._reindex_lock:
-        system_routes._reindex_state.update(
+    with maintenance._reindex_lock:
+        maintenance._reindex_state.update(
             running=False, done=0, total=0, result=None, error=None, finished_at=None)
 
 

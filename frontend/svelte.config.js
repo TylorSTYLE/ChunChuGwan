@@ -14,9 +14,9 @@ const config = {
 			precompress: false,
 			strict: false
 		}),
-		// 공존 기간 — 기존 SSR 대시보드(/)와 충돌하지 않게 SPA 를 /ui 아래 둔다.
-		// 빅뱅 컷오버 PR 에서 base 를 '' 로 바꾸고 / 로 서빙한다.
-		paths: { base: '/ui' }
+		// 빅뱅 컷오버(C2) 완료 — SSR 을 제거하고 SPA 를 루트(/)로 서빙한다.
+		// FastAPI 는 정적 산출물 + /api/web JSON + 자원/CAS 만 담당한다.
+		paths: { base: '' }
 	}
 };
 

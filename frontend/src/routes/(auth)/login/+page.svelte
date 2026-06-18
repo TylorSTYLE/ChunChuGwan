@@ -13,7 +13,7 @@
 	let error = $state('');
 	let busy = $state(false);
 
-	// OIDC 콜백이 SPA 현황으로 돌아오도록 next 를 /ui/ 로 넘긴다(백엔드 safe_next 허용).
+	// OIDC 콜백이 SPA 현황(루트)으로 돌아오도록 next 를 base(=/) 로 넘긴다(백엔드 safe_next 허용).
 	const oidcHref = $derived(`/auth/oidc/login?next=${encodeURIComponent(`${base}/`)}`);
 
 	async function submit(e: SubmitEvent) {

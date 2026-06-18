@@ -298,6 +298,52 @@ def signup(request: Request, body: LoginReq) -> JSONResponse:
         return _active_or_verify(conn, user)
 
 
+class InviteAcceptReq(BaseModel):
+    password: str
+
+
+@router.get("/invite/{token}")
+def invite_status(token: str) -> dict:
+    """초대 토큰 유효성·대상 이메일 — SPA 초대 수락 화면 게이팅."""
+    with db.connect() as conn:
+        invite = db.get_invite_by_token(conn, auth.hash_token(token))
+    if invite is None:
+        raise HTTPException(404, "초대가 유효하지 않거나 만료되었습니다.")
+    return {"email": invite["email"]}
+
+
+@router.post("/invite/{token}")
+def invite_accept(token: str, body: InviteAcceptReq) -> JSONResponse:
+    """초대 수락 — 패스워드 설정 후 초대된 권한으로 가입, 즉시 로그인.
+
+    초대 이메일은 관리자가 지정한 신뢰 대상이라 이메일 인증 단계 없이 active 로
+    승격한다 (SSR invite_accept 와 동일 계약).
+    """
+    token_session: str | None = None
+    with db.connect() as conn:
+        invite = db.get_invite_by_token(conn, auth.hash_token(token))
+        if invite is None:
+            raise HTTPException(404, "초대가 유효하지 않거나 만료되었습니다.")
+        err = auth.validate_password(body.password)
+        if err is None and db.get_user_by_email(conn, invite["email"]) is not None:
+            # 초대 후 같은 이메일이 일반 가입한 경우 — 초대는 더 이상 유효하지 않다.
+            # 정리(delete)가 커밋되도록 블록을 정상 종료한 뒤 밖에서 에러를 던진다.
+            db.delete_invite(conn, invite["id"])
+            err = "이미 가입된 이메일입니다. 로그인하세요."
+        elif err is None:
+            user_id = db.create_user(
+                conn, invite["email"], auth.hash_password(body.password),
+                role=invite["role"],
+            )
+            db.delete_invite(conn, invite["id"])  # 1회용
+            token_session = auth.issue_session(conn, user_id)
+    if err is not None:
+        raise HTTPException(400, err)
+    resp = JSONResponse({"status": "active"})
+    set_session_cookie(resp, token_session)
+    return resp
+
+
 @router.get("/verify-email/status")
 def verify_email_status(request: Request) -> dict:
     """이메일 인증 대상 상태 — 로그인 도중(pending_email_verify) 또는 개인 설정 진입."""

@@ -31,7 +31,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _login(c, email, pw):
-    return c.post("/login", data={"email": email, "password": pw}, follow_redirects=False)
+    return c.post("/api/web/auth/login", json={"email": email, "password": pw})
 
 
 def _make_needs_human(token="tok-abc") -> int:

@@ -57,7 +57,7 @@ def _headers(token):
 
 
 def _login(client, email, pw="password1234"):
-    client.post("/login", data={"email": email, "password": pw}, follow_redirects=False)
+    client.post("/api/web/auth/login", json={"email": email, "password": pw})
 
 
 def _insert_auth_snapshots(owner_id, specs):
@@ -139,33 +139,42 @@ def test_regular_snapshot_unrestricted(client):
 
 
 def test_web_authenticated_snapshot_denied_to_other(client):
+    # C2 컷오버: 스냅샷 콘텐츠는 자원 라우트(/snapshot/{id}/file/…)가 _load_snapshot
+    # 가드로 비소유자에게 404(존재 은폐). SSR 뷰(/snapshot/{id})는 이제 SPA 셸이다.
     owner = _uid("arch@test.co")
     _insert_auth_snapshots(owner, [("h", "secret", 1, owner)])
     _login(client, "viewer@test.co")
-    assert client.get("/snapshot/1").status_code == 404  # 가드가 렌더 전에 차단
+    assert client.get("/snapshot/1/file/content.md").status_code == 404
+    _login(client, "arch@test.co")  # 소유자
+    assert client.get("/snapshot/1/file/content.md").status_code == 200
 
 
 def test_web_diff_blocks_authenticated(client):
+    # diff 데이터는 /api/web/diff/{page_id} (JSON) — 비소유자는 인증 스냅샷이 가려져 404.
     owner = _uid("arch@test.co")
     page_id = _insert_auth_snapshots(owner, [
         ("h1", "비밀1", 1, owner), ("h2", "비밀2", 1, owner),
     ])
     _login(client, "viewer@test.co")
-    assert client.get(f"/diff/{page_id}").status_code == 404
+    assert client.get(f"/api/web/diff/{page_id}").status_code == 404
     _login(client, "arch@test.co")  # 소유자
-    assert client.get(f"/diff/{page_id}").status_code == 200
+    assert client.get(f"/api/web/diff/{page_id}").status_code == 200
 
 
 def test_web_timeline_hides_authenticated(client):
+    # 타임라인 데이터는 /api/web/pages/{page_id} (JSON) — 비소유자에겐 인증 스냅샷이 빠진다.
     owner = _uid("arch@test.co")
     page_id = _insert_auth_snapshots(owner, [
         ("publichash01", "공개", 0, None), ("secrethash99", "비밀", 1, owner),
     ])
     _login(client, "viewer@test.co")
-    body = client.get(f"/page/{page_id}").text
-    assert "publichash01" in body and "secrethash99" not in body
+    hashes = [s["snap"]["content_hash"]
+              for s in client.get(f"/api/web/pages/{page_id}").json()["snapshots"]]
+    assert "publichash01" in hashes and "secrethash99" not in hashes
     _login(client, "arch@test.co")
-    assert "secrethash99" in client.get(f"/page/{page_id}").text
+    owner_hashes = [s["snap"]["content_hash"]
+                    for s in client.get(f"/api/web/pages/{page_id}").json()["snapshots"]]
+    assert "secrethash99" in owner_hashes
 
 
 # ---- 사용자 삭제 FK ----
@@ -229,9 +238,11 @@ def test_timeline_hides_checks_hash_for_non_owner(client):
     page_id = _insert_auth_snapshots(owner, [("publichashBB", "공개", 0, None),
                                              ("secrethashAA", "비밀", 1, owner)])
     with db.connect() as conn:
-        db.insert_check(conn, page_id, "checkhashCC9")  # 변경없음 확인 기록 (표시 [:12] = 전체)
+        db.insert_check(conn, page_id, "checkhashCC9")  # 변경없음 확인 기록
+    # /api/web/pages 는 가려진 인증 스냅샷이 있으면 checks 도 통째로 숨긴다(비소유자).
     _login(client, "viewer@test.co")
-    body = client.get(f"/page/{page_id}").text
-    assert "checkhashCC9" not in body   # 가려진 인증 스냅샷 있으면 checks 도 숨김
+    checks = client.get(f"/api/web/pages/{page_id}").json()["checks"]
+    assert all(c["content_hash"] != "checkhashCC9" for c in checks)
     _login(client, "arch@test.co")       # 소유자
-    assert "checkhashCC9" in client.get(f"/page/{page_id}").text
+    owner_checks = client.get(f"/api/web/pages/{page_id}").json()["checks"]
+    assert any(c["content_hash"] == "checkhashCC9" for c in owner_checks)

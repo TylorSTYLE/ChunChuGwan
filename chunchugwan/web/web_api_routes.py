@@ -34,7 +34,6 @@ from .. import (
     mailer, optimize, resources, scheduler, searchindex, storage,
 )
 from . import audit, i18n, permissions
-from .templating import _auth_context
 
 router = APIRouter(prefix="/api/web")
 
@@ -100,10 +99,10 @@ def _user_public(user: sqlite3.Row | None) -> dict | None:
 def me(request: Request, user: sqlite3.Row | None = Depends(require_session)) -> dict:
     """현재 세션·권한 컨텍스트 — SPA 의 메뉴/버튼 노출 게이팅 소스.
 
-    `_auth_context`(권한 플래그·needs-human)를 재사용해 SSR 헤더와 동일한
-    노출 규칙을 SPA 에 그대로 전달한다 (서버 권한 가드는 각 엔드포인트에서 이중 유지).
+    `permissions.auth_context`(권한 플래그·needs-human)를 재사용해 SPA 메뉴 노출
+    규칙을 전달한다 (서버 권한 가드는 각 엔드포인트에서 이중 유지).
     """
-    ctx = _auth_context(request)
+    ctx = permissions.auth_context(request)
     return {
         "auth_enabled": config.AUTH_ENABLED,
         "authenticated": user is not None or not config.AUTH_ENABLED,
@@ -397,13 +396,13 @@ def _failed_items(site_id: int, failed_logs, failed_crawl_pages) -> list[dict]:
     items: list[dict] = []
     for f in failed_logs:
         items.append({
-            "kind": "log", "page_id": f["page_id"], "page_url": f["page_url"],
-            "url": f["url"], "at": f["started_at"], "source": f["source"],
-            "error": f["error"],
+            "kind": "log", "id": f["id"], "page_id": f["page_id"],
+            "page_url": f["page_url"], "url": f["url"], "at": f["started_at"],
+            "source": f["source"], "error": f["error"],
         })
     for f in failed_crawl_pages:
         items.append({
-            "kind": "crawl", "url": f["url"], "at": f["failed_at"],
+            "kind": "crawl", "id": f["id"], "url": f["url"], "at": f["failed_at"],
             "crawl_id": f["crawl_id"], "error": f["error"],
         })
     items.sort(key=lambda x: x["at"] or "", reverse=True)
@@ -804,6 +803,7 @@ def logs(
         "total": total,
         "total_pages": total_pages,
         "page_num": page,
+        "can_archive": permissions.can_archive(user),
     }
 
 
@@ -1000,6 +1000,106 @@ def site_delete(
         "pages_deleted": getattr(result, "pages_deleted", None),
         "snapshots_deleted": getattr(result, "snapshots_deleted", None),
     }
+
+
+@router.post("/sites/{site_id}/failed/{log_id}/retry")
+def site_failed_retry(
+    request: Request,
+    site_id: int,
+    log_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """실패한 직접 아카이빙 작업 재시도 — app.site_failed_retry 의 JSON 판."""
+    from .app import _queue_archive, _requester_id
+
+    _require_archive(user)
+    with db.connect() as conn:
+        log = db.get_site_failed_log(conn, site_id, log_id)
+    if log is None:
+        raise HTTPException(404, "실패 기록 없음")
+    queued = _queue_archive(log["page_url"], requested_by=_requester_id(request))
+    if queued:
+        audit.log(request, "실패 작업 재시도: %s", log["page_url"])
+    return {"queued": queued}
+
+
+@router.post("/sites/{site_id}/failed/retry-all")
+def site_failed_retry_all(
+    request: Request,
+    site_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사이트의 실패 작업(직접 아카이빙 + 크롤 페이지) 모두 재시도 — app.site_failed_retry_all 의 JSON 판."""
+    from .app import _queue_archive, _requester_id
+
+    _require_archive(user)
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, "사이트 없음")
+        failed_logs = db.list_site_failed_logs(conn, site_id)
+        failed_log_urls = {f["page_url"] for f in failed_logs}
+        failed_crawl_pages = [
+            r for r in db.list_site_failed_crawl_pages(conn, site_id)
+            if r["url"] not in failed_log_urls
+        ]
+        crawl_retried = db.retry_failed_crawl_pages_by_ids(
+            conn, [r["id"] for r in failed_crawl_pages]
+        )
+    requester = _requester_id(request)
+    queued = sum(
+        _queue_archive(f["page_url"], requested_by=requester) for f in failed_logs
+    )
+    if queued or crawl_retried:
+        audit.log(
+            request, "사이트 실패 작업 모두 재시도: site #%d (로그 %d · 크롤 %d)",
+            site_id, queued, crawl_retried,
+        )
+    return {"queued": queued, "crawl_retried": crawl_retried}
+
+
+@router.post("/sites/{site_id}/export")
+def site_export(
+    request: Request,
+    site_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> FileResponse:
+    """사이트 아카이브 내보내기(.ccg.export) 다운로드 — app.site_export 의 JSON 판."""
+    from .maintenance import tar_download
+    from .. import backup as backup_mod
+
+    _require_archive(user)
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+    if site is None:
+        raise HTTPException(404, "사이트 없음")
+    audit.log(request, "사이트 아카이브 내보내기: %s", site["site_key"])
+    return tar_download(
+        lambda dest: backup_mod.export_archive(dest, site_id=site_id), "export"
+    )
+
+
+@router.post("/logs/{log_id}/retry")
+def log_retry(
+    request: Request,
+    log_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """실패 로그의 URL 재시도 — app.log_retry 의 JSON 판 (필터·리다이렉트 없이 상태만 반환)."""
+    from .app import _queue_archive, _requester_id
+
+    _require_archive(user)
+    _require_not_migrating()
+    with db.connect() as conn:
+        log = db.get_archive_log(conn, log_id)
+    if log is None:
+        raise HTTPException(404, "로그 없음")
+    if log["status"] != "error":
+        raise HTTPException(400, "실패한 로그만 재시도할 수 있습니다")
+    queued = _queue_archive(log["url"], requested_by=_requester_id(request))
+    if queued:
+        audit.log(request, "실패 로그 재시도: %s", log["url"])
+    return {"queued": queued}
 
 
 # ── 관리 영역 (system_routes 의 JSON 판) ─────────────────────────────────────
@@ -1771,7 +1871,7 @@ def system_network_tag_create(
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
     """로컬 네트워크 태그 추가 — system_routes.network_tags_create 의 JSON 판."""
-    from .system_routes import MAX_NETWORK_TAG_NAME_LENGTH, MAX_NETWORK_TAG_DESC_LENGTH
+    from .maintenance import MAX_NETWORK_TAG_NAME_LENGTH, MAX_NETWORK_TAG_DESC_LENGTH
 
     _require_manage_system(user)
     name = body.name.strip()
@@ -1912,7 +2012,7 @@ def system_backup(
     request: Request, user: sqlite3.Row | None = Depends(require_session)
 ) -> FileResponse:
     """전체 백업(.ccg.backup) 다운로드 — system_routes.system_backup 의 JSON 라우터 판."""
-    from .system_routes import tar_download
+    from .maintenance import tar_download
     from .. import backup as backup_mod
 
     _require_manage_system(user)
@@ -1925,7 +2025,7 @@ def system_export(
     request: Request, user: sqlite3.Row | None = Depends(require_session)
 ) -> FileResponse:
     """아카이브 데이터만 내보내기(.ccg.export) 다운로드 — 인증 데이터 제외."""
-    from .system_routes import tar_download
+    from .maintenance import tar_download
     from .. import backup as backup_mod
 
     _require_manage_system(user)
@@ -1941,7 +2041,7 @@ def system_restore(
     """전체 백업 업로드로 복원 — 현재 데이터(인증 포함)를 백업 시점으로 교체."""
     import tarfile
 
-    from .system_routes import _save_upload
+    from .maintenance import _save_upload
     from .. import backup as backup_mod
 
     _require_manage_system(user)
@@ -1966,7 +2066,7 @@ def system_import(
     """내보낸 아카이브 데이터 업로드로 가져오기 — 인증 데이터는 건드리지 않음."""
     import tarfile
 
-    from .system_routes import _save_upload
+    from .maintenance import _save_upload
     from .. import backup as backup_mod
 
     _require_manage_system(user)
@@ -2027,7 +2127,7 @@ def system_search_reindex(
     """검색 인덱스 전체 다시 색인을 백그라운드로 시작 — SSR 과 같은 인메모리 상태 공유."""
     import threading
 
-    from .system_routes import _reindex_lock, _reindex_state, _reindex_worker
+    from .maintenance import _reindex_lock, _reindex_state, _reindex_worker
 
     _require_manage_system(user)
     if not searchindex.available():
@@ -2048,7 +2148,7 @@ def system_search_reindex_status(
     request: Request, user: sqlite3.Row | None = Depends(require_session)
 ) -> dict:
     """전체 다시 색인 진행 상태(JSON) — 시스템 화면 폴링용."""
-    from .system_routes import reindex_status
+    from .maintenance import reindex_status
 
     _require_manage_system(user)
     return reindex_status()

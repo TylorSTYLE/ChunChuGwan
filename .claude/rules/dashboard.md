@@ -1,12 +1,28 @@
 ---
-description: 대시보드 디자인·렌더링 보안(원칙 5)·i18n·diff 뷰. web/ 템플릿·라우트·differ 를 만질 때.
+description: 대시보드 디자인·SvelteKit SPA·렌더링 보안(원칙 5)·i18n·diff 뷰. web/ 라우트·frontend·differ 를 만질 때.
 paths:
   - "chunchugwan/web/**"
+  - "frontend/**"
   - "chunchugwan/differ.py"
   - "docs/DASHBOARD.md"
 ---
 
 # 대시보드
+
+## 아키텍처 (C2 컷오버 이후 — SvelteKit SPA)
+
+대시보드는 **SvelteKit 정적 SPA**다 (Jinja2 SSR 은 C2 컷오버로 제거). 프론트엔드 소스는
+`frontend/`(Svelte 5 + adapter-static, `paths.base=''`), 빌드 산출물은
+`chunchugwan/web/frontend_dist`(없으면 개발 빌드 `frontend/build`)를 FastAPI 가 **루트(/)**
+로 서빙한다 — `app.py` 의 catch-all `@app.get("/{full_path:path}")`(반드시 마지막 등록)가
+실존 파일이면 그 파일을, 아니면 `index.html`(딥링크·새로고침 fallback)을 돌려준다.
+미매칭 `/api` 는 SPA HTML 대신 404 JSON. 데이터는 `/api/web/*` JSON API(`web_api_routes`·
+`web_auth_routes`)가 담당하고 `require_session` 으로 401 게이트한다. 인증 라우팅(setup·
+pending·login)은 **SPA 루트 레이아웃이 `/api/web/me` 응답으로 단일 결정**한다 — `auth_gate`
+미들웨어는 경로별 리다이렉트를 하지 않고, active·비차단 세션만 `request.state.user` 에
+싣고 pending 은 `/me`·i18n·auth 외 `/api` 를 403 으로 막는다. 아카이브 콘텐츠를 직접
+서빙하는 자원 라우트(스냅샷 파일·문서·인증서·diff·확장)는 `_require_viewer` 로 로그인을
+직접 강제한다(`/resource/` CAS 만 예외 — 원칙 5).
 
 ## 렌더링·서빙 보안 (아키텍처 원칙 5)
 
@@ -48,19 +64,20 @@ meta.json documents 목록 검증, `/document/{sha256}/{name}` — snapshot_docu
   내 아카이브(`/settings/archives` — 본인이 요청한 아카이빙 이력),
   사람 확인 필요(`/archive/needs-human` — 관리자 전용, `WCCG_LIVE_CHALLENGE` 켜짐 시)·
   라이브 챌린지 처리(`/archive/jobs/{id}/live` — 관리자, 스크린샷 보고 직접 클릭/입력).
-  권한이 없는 메뉴는 헤더에 표시하지 않는다 (`templating._auth_context` 의
-  노출 플래그). 로그(아카이빙·시스템)·관리자(사용자·시스템) 메뉴와 개인설정
-  (우측 이메일/표시이름 → 계정·개인 API Key·내 아카이브·로그아웃)은 헤더에서
-  같은 `<details>` 드롭다운(`.nav-group`)으로 묶는다 (base.html — 넓은 화면은
-  겹침 패널, 좁은 화면은 햄버거 안 아코디언). 화면별 라우트·권한·세부 동작은
-  `docs/DASHBOARD.md` 참조.
+  권한이 없는 메뉴는 헤더에 표시하지 않는다 — `/api/web/me`(=`permissions.auth_context`)
+  가 내려주는 노출 플래그를 SPA 루트 레이아웃이 읽어 메뉴를 가린다(서버 권한 가드는 각
+  엔드포인트에서 이중 유지). 로그(아카이빙·시스템)·관리자(사용자·시스템) 메뉴와 개인설정
+  (우측 이메일/표시이름 → 계정·개인 API Key·내 아카이브·로그아웃)을 헤더 드롭다운으로
+  묶는다(`frontend/src/routes/+layout.svelte`). 화면별 라우트·권한·세부 동작은
+  `docs/DASHBOARD.md` 참조. 라우트 경로는 SSR 시절과 동일하나 이제 SPA 가 렌더한다.
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
-- 다국어(ko/en): `web/i18n.py` — 한국어 원문이 메시지 키(gettext msgid 방식),
-  언어별 "원문 → 번역" dict 로 확장. 로케일은 `wccg_lang` 쿠키(헤더의 언어
-  선택, `POST /lang`) → Accept-Language → ko. 템플릿은 `_("…")`, 라우트는
-  `i18n.t(request, "…")`. 새 UI 문자열 추가 시 en 카탈로그도 채울 것 —
-  템플릿 리터럴 키 누락은 `tests/test_i18n.py` 가 검사한다. CLI 는 한국어 유지.
+- 다국어(ko/en): `web/i18n.py` 가 정본 카탈로그(한국어 원문이 메시지 키, gettext msgid
+  방식 — 언어별 "원문 → 번역" dict). SPA 는 `frontend/src/lib/i18n.ts` 의 `t('…')` 로
+  쓰고, 로케일 카탈로그는 `/api/web/i18n/{locale}` 로 받아 `setCatalog` 주입한다(ko 는
+  패스스루). 백엔드 라우트 메시지는 `i18n.t(request, "…")`. **새 SPA 문자열 추가 시
+  `web/i18n.py` 의 en 카탈로그도 채울 것** — `.svelte`/`.ts` 의 `t('…')` 리터럴 키
+  누락은 `tests/test_i18n.py` 가 검사한다(en `CATALOGS` 대조). CLI 는 한국어 유지.
 - diff 뷰: 텍스트 side-by-side + 스크린샷 비교(슬라이더 또는 토글). 단, 비교
   대상 중 하나라도 확장(브라우저) 캡처(`origin=extension`)면 스크린샷 비교를
   숨기고(로컬 해상도·dpr 의존이라 무의미) 본문 diff 에 렌더 환경 차이 경고를 단다.

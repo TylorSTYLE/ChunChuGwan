@@ -44,7 +44,7 @@ def _sid() -> int:
 
 
 def _login(c, email, pw):
-    return c.post("/login", data={"email": email, "password": pw}, follow_redirects=False)
+    return c.post("/api/web/auth/login", json={"email": email, "password": pw})
 
 
 def _login_admin(c):

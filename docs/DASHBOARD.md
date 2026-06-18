@@ -3,8 +3,14 @@
 화면 22개의 라우트·권한·세부 동작 레퍼런스. UI 스타일·i18n 규칙 등
 작업 시 지켜야 하는 원칙은 CLAUDE.md "대시보드 디자인 방향" 절 참조.
 
-헤더 우측의 이메일/표시이름을 누르면 **개인설정 드롭다운**(`<details>`)이 열려
-계정·개인 API Key·내 아카이브·로그아웃으로 이동한다 (`base.html`).
+> **C2 컷오버 이후**: 대시보드는 **SvelteKit SPA**(`frontend/`)다. 아래 화면 라우트
+> 경로(`/`·`/archives`·`/sites/{id}` 등)는 SSR 시절과 그대로지만 이제 클라이언트가
+> 렌더하며, 데이터는 `/api/web/*` JSON API 가 내려준다. SPA 화면 컴포넌트는
+> `frontend/src/routes/`, 백엔드 데이터 엔드포인트는 `web_api_routes`·`web_auth_routes`.
+> 아키텍처 상세는 `.claude/rules/dashboard.md` 참조.
+
+헤더 우측의 이메일/표시이름을 누르면 **개인설정 드롭다운**이 열려
+계정·개인 API Key·내 아카이브·로그아웃으로 이동한다 (`frontend/src/routes/+layout.svelte`).
 
 - **현황** (dashboard) — 첫 화면 `/`(= `/dashboard`). 맨 위에 구글 검색
   느낌의 검색 박스(로고 + 둥근 입력창, `can_search`= viewer 이상에게만

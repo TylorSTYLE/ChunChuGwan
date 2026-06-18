@@ -136,7 +136,7 @@ def test_action_requires_archiver(tmp_path, monkeypatch):
     web_app._active_jobs.clear()
     c = TestClient(web_app.app)
     crawl, _ = crawler.start_crawl(START, source="web")
-    c.post("/login", data={"email": "viewer@test.co", "password": "password1234"})
+    c.post("/api/web/auth/login", json={"email": "viewer@test.co", "password": "password1234"})
     # viewer 는 상세는 보지만 액션(취소)은 막힌다
     assert c.get(f"/api/web/crawls/{crawl['id']}").json()["can_archive"] is False
     assert c.post(f"/api/web/crawls/{crawl['id']}/cancel").status_code == 403

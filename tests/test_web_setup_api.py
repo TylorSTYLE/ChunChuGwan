@@ -1,7 +1,8 @@
 """SPA 최초 설정·승인 대기 JSON API + auth_gate 통과 규칙.
 
 first_run(사용자 0명) 중에는 /api/web/auth/setup* 만, pending 계정에는 /api/web/me·
-/ui 만 통과시킨다 — SPA 가 setup·pending 화면을 직접 띄운다.
+i18n·auth 만 통과시키고 나머지 /api 는 막는다 — 비-API(SPA 셸)는 그대로 떠 SPA 가
+setup·pending 화면을 직접 띄운다 (C2 컷오버 — 화면 라우팅은 SPA 레이아웃 권위).
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -49,8 +50,8 @@ def test_first_run_blocks_other_api(tmp_db):
 
 
 def test_first_run_serves_spa_shell(tmp_db):
-    # SPA 셸(/ui)은 first_run 중에도 로드된다 (설정 화면을 띄우려고)
-    r = client().get("/ui", follow_redirects=False)
+    # SPA 셸(루트)은 first_run 중에도 로드된다 (설정 화면을 띄우려고)
+    r = client().get("/", follow_redirects=False)
     assert r.status_code == 200
 
 
@@ -96,7 +97,7 @@ def _make_pending_client(tmp_db):
         db.create_first_admin(conn, "boss@test.co", auth.hash_password("bosspass1234"))
         db.create_user(conn, "wait@test.co", auth.hash_password("waitpass1234"), role="pending")
     c = client()
-    c.post("/login", data={"email": "wait@test.co", "password": "waitpass1234"})
+    c.post("/api/web/auth/login", json={"email": "wait@test.co", "password": "waitpass1234"})
     return c
 
 
@@ -108,11 +109,12 @@ def test_pending_me_allowed(tmp_db):
 
 def test_pending_blocked_from_other_api(tmp_db):
     c = _make_pending_client(tmp_db)
-    # pending 은 /me 외 다른 /api/web 은 /pending 으로 리다이렉트(302)
-    r = c.get("/api/web/archives", follow_redirects=False)
-    assert r.status_code == 302 and r.headers["location"] == "/pending"
+    # C2 컷오버: pending 은 /me·i18n·auth 외 데이터 /api/web 을 403 으로 막는다
+    # (SSR 시절의 /pending 302 리다이렉트 대신 — 화면 라우팅은 SPA 레이아웃 권위).
+    assert c.get("/api/web/sites", follow_redirects=False).status_code == 403
+    assert c.get("/api/web/dashboard", follow_redirects=False).status_code == 403
 
 
 def test_pending_serves_spa_shell(tmp_db):
     c = _make_pending_client(tmp_db)
-    assert c.get("/ui/pending", follow_redirects=False).status_code == 200
+    assert c.get("/pending", follow_redirects=False).status_code == 200

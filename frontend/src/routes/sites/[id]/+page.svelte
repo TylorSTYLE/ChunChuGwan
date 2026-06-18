@@ -1,16 +1,58 @@
 <script lang="ts">
 	import { base } from '$app/paths';
-	import { goto } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
-	import { api, ApiError } from '$lib/api';
-	import type { SiteDetail } from '$lib/types';
+	import { api, ApiError, download } from '$lib/api';
+	import type { SiteDetail, FailedItem } from '$lib/types';
 
 	let { data }: { data: { site: SiteDetail } } = $props();
 	const s = $derived(data.site);
 
 	let busy = $state(false);
 	let error = $state('');
+	let notice = $state('');
+
+	async function act(fn: () => Promise<void>, ok: string) {
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			await fn();
+			notice = t(ok);
+			await invalidateAll();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+		}
+	}
+
+	const retryFailed = (f: FailedItem) =>
+		act(async () => {
+			if (f.kind === 'crawl') {
+				await api(`/crawls/${f.crawl_id}/pages/${f.id}/retry`, { method: 'POST' });
+			} else {
+				await api(`/sites/${s.site.id}/failed/${f.id}/retry`, { method: 'POST' });
+			}
+		}, '재시도가 등록되었습니다 — 백그라운드에서 진행됩니다.');
+
+	const retryAllFailed = () =>
+		act(async () => {
+			await api(`/sites/${s.site.id}/failed/retry-all`, { method: 'POST' });
+		}, '실패한 작업을 모두 재시도합니다 — 백그라운드에서 진행됩니다.');
+
+	async function exportSite() {
+		busy = true;
+		error = '';
+		try {
+			await download(`/sites/${s.site.id}/export`);
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+		}
+	}
 
 	async function deleteSite() {
 		if (!confirm(t('이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 삭제할까요? 되돌릴 수 없습니다.')))
@@ -30,6 +72,7 @@
 <h2 class="mono">{s.site.site_key}</h2>
 {#if s.site_title}<p class="muted">{s.site_title}</p>{/if}
 {#if error}<div class="error">{error}</div>{/if}
+{#if notice}<div class="notice">{notice}</div>{/if}
 
 <div class="stat-grid">
 	<div class="stat-card">
@@ -113,16 +156,31 @@
 {/if}
 
 {#if s.failed_items.length > 0}
-	<h3>{t('실패한 작업')} ({s.failed_items.length})</h3>
+	<div class="section-head">
+		<h3>{t('실패한 작업')} ({s.failed_items.length})</h3>
+		{#if s.can_archive}
+			<button onclick={retryAllFailed} disabled={busy}>{t('모두 재시도')}</button>
+		{/if}
+	</div>
 	<div class="table-wrap">
 		<table>
-			<thead><tr><th>{t('시각')}</th><th>URL</th><th>{t('오류')}</th></tr></thead>
+			<thead>
+				<tr>
+					<th>{t('시각')}</th><th>URL</th><th>{t('오류')}</th>
+					{#if s.can_archive}<th></th>{/if}
+				</tr>
+			</thead>
 			<tbody>
 				{#each s.failed_items as f}
 					<tr>
 						<td class="mono">{f.at ? ts(String(f.at)) : '-'}</td>
 						<td class="url-cell">{f.url}</td>
 						<td class="muted">{f.error}</td>
+						{#if s.can_archive}
+							<td>
+								<button onclick={() => retryFailed(f)} disabled={busy}>{t('재시도')}</button>
+							</td>
+						{/if}
 					</tr>
 				{/each}
 			</tbody>
@@ -150,6 +208,13 @@
 	<p class="cred-link">
 		<a href="{base}/sites/{s.site.id}/credentials">{t('로그인 자격증명 관리')}</a>
 		<span class="muted">{t('— 이 사이트 캡처 시 사용할 로그인 정보')}</span>
+	</p>
+{/if}
+
+{#if s.can_archive}
+	<p class="export-link">
+		<button onclick={exportSite} disabled={busy}>{t('이 사이트 내보내기')}</button>
+		<span class="muted">{t('— 이 사이트의 페이지·스냅샷만 담은 .ccg.export 파일')}</span>
 	</p>
 {/if}
 
@@ -210,6 +275,24 @@
 		padding: 8px 12px;
 		margin-bottom: 12px;
 		font-size: 13px;
+	}
+	.notice {
+		background: var(--green-bg);
+		color: var(--green);
+		border-radius: 4px;
+		padding: 8px 12px;
+		margin-bottom: 12px;
+		font-size: 13px;
+	}
+	.section-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
+	.export-link {
+		font-size: 13px;
+		margin: 16px 0 0;
 	}
 	.danger-zone {
 		border: 1px solid var(--red);

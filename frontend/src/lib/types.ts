@@ -224,10 +224,22 @@ export interface SiteDetail {
 	}[];
 	documents: Record<string, unknown>[];
 	doc_total: number;
-	failed_items: Record<string, unknown>[];
+	failed_items: FailedItem[];
 	can_archive: boolean;
 	can_delete: boolean;
 	can_manage_credentials: boolean;
+}
+
+export interface FailedItem {
+	kind: 'log' | 'crawl';
+	id: number;
+	url: string;
+	at: string | null;
+	error: string;
+	page_id?: number | null;
+	page_url?: string;
+	source?: string;
+	crawl_id?: number;
 }
 
 // ── 사이트 로그인 자격증명 (/api/web/sites/{id}/credentials) ──
@@ -362,6 +374,7 @@ export interface SchedulesData {
 
 export interface LogItem {
 	log: Record<string, unknown> & {
+		id: number;
 		started_at: string;
 		status: string;
 		url: string;
@@ -389,6 +402,7 @@ export interface LogsData {
 	total: number;
 	total_pages: number;
 	page_num: number;
+	can_archive: boolean;
 }
 
 export interface SystemLogsData {

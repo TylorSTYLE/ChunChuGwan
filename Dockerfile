@@ -51,7 +51,7 @@ RUN set -eux; \
 
 COPY pyproject.toml uv.lock ./
 COPY chunchugwan/ chunchugwan/
-# SvelteKit SPA 정적 산출물 — app.py 가 web/frontend_dist 를 우선 서빙(/ui).
+# SvelteKit SPA 정적 산출물 — app.py 가 web/frontend_dist 를 루트(/)로 서빙한다(C2 컷오버).
 # editable 설치라 소스 경로의 이 디렉토리를 런타임에 그대로 읽는다.
 COPY --from=frontend /frontend/build chunchugwan/web/frontend_dist
 RUN --mount=type=cache,target=/root/.cache/uv \

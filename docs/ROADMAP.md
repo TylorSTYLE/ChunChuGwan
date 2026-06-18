@@ -104,3 +104,19 @@
       `/api/v1/network-tags` 로 태그 선택/추가(생성 `manage_system`). 설계:
       `docs/EXTENSION_CLIENT_CAPTURE_PLAN.md`. 서버측은 테스트로 검증(test_ingest·
       test_extension_api), 확장 런타임(CDP·업로드)은 언팩 로드 후 수동 테스트 필요.
+
+## SvelteKit SPA 전환 (#13 — C2 빅뱅 컷오버 완료)
+
+- [x] **Phase A~C1 + 보강**: 기존 Jinja2 SSR 대시보드 전 화면을 SvelteKit SPA(`frontend/`,
+      Svelte 5 + adapter-static)로 재구축하고, 데이터 계층을 `/api/web/*` JSON API
+      (`web_api_routes`·`web_auth_routes`)로 분리. 인증(로그인·2FA·패스키·가입·이메일
+      인증·최초설정·네트워크 이전)·읽기 10화면·쓰기 액션·관리(사용자·권한그룹·시스템
+      설정·네트워크태그·SMTP·백업/복원/내보내기/가져오기·compact/재색인·이전 모드)를
+      JSON+SPA 로 보강. 인증 라우팅은 SPA 루트 레이아웃이 `/api/web/me` 로 단일 결정.
+- [x] **C2 빅뱅 컷오버**: `svelte.config.js` base `/ui`→`''`, SPA 를 루트(/)로 서빙
+      (`app.py` catch-all). SSR 전면 제거 — Jinja 템플릿 43개·`templating.py`·SSR HTML
+      라우트(app/auth/system_routes)·`system_routes.py`·`jinja2` 의존 삭제. `auth_gate`
+      미들웨어 단순화(리다이렉트 제거→SPA 권위, pending /api 게이트), 아카이브 자원
+      라우트에 `_require_viewer` 가드, 초대 수락 SPA 흐름 추가, 실패 재시도·사이트 export
+      를 `/api/web` 으로 보강. 공용 헬퍼(tar_download·재색인 상태)는 `web/maintenance.py`.
+      SSR 테스트는 `/api/web` 스위트로 대체.
