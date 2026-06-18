@@ -117,24 +117,6 @@ def client(tmp_db):
     return TestClient(web_app.app)
 
 
-def signup(client, email="a@b.co", password="12345678"):
-    return client.post(
-        "/signup", data={"email": email, "password": password},
-        follow_redirects=False,
-    )
-
-
-def enroll_passkey(client, name="테스트 키") -> FakeAuthenticator:
-    """로그인된 client 에 패스키를 등록하고 인증기를 반환."""
-    authenticator = FakeAuthenticator()
-    options = client.post("/settings/passkey/options").json()
-    res = client.post(
-        "/settings/passkey/register",
-        json={"name": name, "credential": authenticator.create(options)},
-    )
-    assert res.status_code == 200 and res.json() == {"ok": True}
-    return authenticator
-
 
 # ---- 코어 검증 (auth.py + py_webauthn) ----
 

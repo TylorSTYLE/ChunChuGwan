@@ -243,20 +243,6 @@ def test_migration_maps_is_admin_to_role(tmp_db):
 # ---- 라우트: TOTP 등록 + 2단계 로그인 ----
 
 
-def enroll_totp(client) -> str:
-    """가입된 상태에서 TOTP 를 등록하고 시크릿을 반환."""
-    res = client.get("/settings/totp")
-    assert res.status_code == 200 and "data:image/png;base64," in res.text
-    with db.connect() as conn:
-        secret = db.get_user_by_email(conn, "a@b.co")["totp_pending_secret"]
-    res = client.post(
-        "/settings/totp", data={"code": pyotp.TOTP(secret).now()},
-        follow_redirects=False,
-    )
-    assert res.status_code == 303
-    return secret
-
-
 # ---- 계정 설정 (이름/패스워드 변경) ----
 
 
