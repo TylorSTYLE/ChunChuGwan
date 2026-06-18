@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
-archive/
+/archive/
 .pytest_cache/
 .DS_Store
 

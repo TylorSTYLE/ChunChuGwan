@@ -48,6 +48,7 @@ from . import (
     web_api_routes, web_auth_routes,
 )
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from .i18n import t
 from .templating import templates
 
@@ -2604,6 +2605,129 @@ def live_force_solve(request: Request, job_id: int):
     """사람 확인 완료 — 사람이 로봇 확인을 풀었으니 챌린지 자동 판정과 무관하게
     현재 페이지로 진행하라고 worker 에 알린다 (잔여 위젯/마커로 자동 통과가 안 되는
     경우의 강제 진행). worker 가 다음 폴링에 현재 DOM 으로 캡처를 이어간다."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    _live_owner_or_403(request, job)
+    with db.connect() as conn:
+        db.set_live_force_solve(conn, job_id)
+    audit.log(request, "사람 확인 완료(강제 진행): %s", job["url"])
+    return {"ok": True}
+
+
+# ---- 라이브 챌린지 SPA JSON API (/api/web/live) ----
+# SSR 라이브 라우트(위)와 같은 헬퍼·코어를 재사용하되 JSON 으로 응답한다.
+# 컷오버(Phase C) 전까지 SSR /archive/jobs/{id}/live 와 공존한다.
+
+
+class _LiveClick(BaseModel):
+    x: int
+    y: int
+    kind: str = "click"
+    delay_ms: int = 0
+
+
+class _LiveKey(BaseModel):
+    key: str
+    kind: str = "text"
+    delay_ms: int = 0
+
+
+@app.get("/api/web/live")
+def api_live_list(request: Request) -> dict:
+    """사람 확인 대기 작업 목록 (관리자 전용) — SPA needs-human 화면."""
+    _require_admin(request)
+    uid = request.state.user["id"] if request.state.user else None
+    with db.connect() as conn:
+        jobs = db.list_needs_human_jobs(conn)
+    return {
+        "jobs": [
+            {"id": j["id"], "url": j["url"],
+             "needs_human_at": j["needs_human_at"],
+             # 다른 admin 이 이미 처리 중인지 — 목록에서 '처리 중' 배지로 안내
+             "held_by_other": (
+                 j["live_owner_id"] is not None
+                 and uid is not None
+                 and j["live_owner_id"] != uid
+             )}
+            for j in jobs
+        ]
+    }
+
+
+@app.get("/api/web/live/{job_id}")
+def api_live_view(request: Request, job_id: int) -> dict:
+    """라이브 세션 열기(클레임) — 화면 메타(URL·뷰포트·소유 여부)를 돌려준다."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    with db.connect() as conn:
+        owned = db.claim_live_session(conn, job_id, request.state.user["id"])
+        job = db.get_archive_job(conn, job_id)
+    audit.log(request, "라이브 챌린지 처리 시작: %s", job["url"])
+    return {
+        "id": job_id, "url": job["url"], "owned": owned,
+        "viewport_w": job["live_viewport_w"] or config.LIVE_VIEWPORT_W,
+        "viewport_h": job["live_viewport_h"] or config.LIVE_VIEWPORT_H,
+        "shot_interval_ms": config.LIVE_SHOT_INTERVAL_MS,
+    }
+
+
+@app.get("/api/web/live/{job_id}/state")
+def api_live_state(request: Request, job_id: int) -> dict:
+    """라이브 세션 상태 폴링 (needs_human | done) — SSR live_state 재사용."""
+    return live_state(request, job_id)
+
+
+@app.get("/api/web/live/{job_id}/shot")
+def api_live_shot(request: Request, job_id: int):
+    """라이브 스크린샷 (JPEG) — SSR live_shot 재사용."""
+    return live_shot(request, job_id)
+
+
+@app.post("/api/web/live/{job_id}/click")
+def api_live_click(request: Request, job_id: int, body: _LiveClick) -> dict:
+    """클릭/드래그 좌표를 명령 큐에 넣는다 (JSON). 소유 admin 만."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    _live_owner_or_403(request, job)
+    if body.kind not in ("click", "move", "down", "up"):
+        raise HTTPException(400, "kind")
+    with db.connect() as conn:
+        db.enqueue_live_command(
+            conn, job["live_token"], kind=body.kind, x=body.x, y=body.y,
+            delay_ms=max(0, body.delay_ms))
+    return {"ok": True}
+
+
+@app.post("/api/web/live/{job_id}/key")
+def api_live_key(request: Request, job_id: int, body: _LiveKey) -> dict:
+    """키 입력/문자열을 명령 큐에 넣는다 (JSON). 소유 admin 만."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    _live_owner_or_403(request, job)
+    if body.kind not in ("key", "text"):
+        raise HTTPException(400, "kind")
+    with db.connect() as conn:
+        db.enqueue_live_command(
+            conn, job["live_token"], kind=body.kind, key=body.key[:200],
+            delay_ms=max(0, body.delay_ms))
+    return {"ok": True}
+
+
+@app.post("/api/web/live/{job_id}/cancel")
+def api_live_cancel(request: Request, job_id: int) -> dict:
+    """라이브 세션 취소 (JSON) — worker 가 다음 폴링에 중단·실패 처리."""
+    _require_admin(request)
+    job = _live_job_or_404(request, job_id)
+    _live_owner_or_403(request, job)
+    with db.connect() as conn:
+        db.set_live_cancel(conn, job_id)
+    audit.log(request, "라이브 챌린지 취소: %s", job["url"])
+    return {"ok": True}
+
+
+@app.post("/api/web/live/{job_id}/solve")
+def api_live_solve(request: Request, job_id: int) -> dict:
+    """사람 확인 완료 — 강제 진행 (JSON). SSR live_force_solve 와 동일."""
     _require_admin(request)
     job = _live_job_or_404(request, job_id)
     _live_owner_or_403(request, job)

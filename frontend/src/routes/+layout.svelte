@@ -65,6 +65,11 @@
 		{#if me.flags.can_manage_users}<a href="{base}/system/api-keys">{t('API 키')}</a>{/if}
 		{#if me.flags.can_manage_system}<a href="{base}/system">{t('시스템')}</a>{/if}
 		{#if me.flags.can_manage_system}<a href="{base}/system/logs">{t('시스템 로그')}</a>{/if}
+		{#if me.flags.can_manage_system && me.needs_human_count > 0}
+			<a href="{base}/archive/needs-human" class="needs-human"
+				>{t('사람 확인')}<span class="nh-badge">{me.needs_human_count}</span></a
+			>
+		{/if}
 		<span class="spacer"></span>
 		<button type="button" onclick={cycleTheme}>{THEME_LABELS[themeMode]}</button>
 		{#if me.user}
@@ -114,6 +119,19 @@
 	}
 	header nav .spacer {
 		flex: 1;
+	}
+	.needs-human {
+		color: var(--amber);
+	}
+	.nh-badge {
+		display: inline-block;
+		margin-left: 4px;
+		padding: 0 6px;
+		border-radius: 8px;
+		background: var(--amber-bg);
+		color: var(--amber);
+		font-size: 11px;
+		font-weight: 600;
 	}
 	.user-menu {
 		position: relative;

@@ -51,6 +51,7 @@ _EN: dict[str, str] = {
     # 사람 보조 챌린지 해결 (라이브)
     "사람 확인": "Human check",
     "사람 확인 필요": "Human check needed",
+    "처리 중": "In progress",
     "사람 확인 처리": "Human-assisted solve",
     "자동으로 통과하지 못한 챌린지 — 직접 풀어서 통과시킵니다": "Challenges that auto-solve couldn't pass — solve them yourself",
     "사람 확인이 필요한 작업이 없습니다.": "No jobs need human check.",

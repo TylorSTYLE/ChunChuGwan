@@ -67,6 +67,29 @@ export interface VerifyEmailStatus {
 	ttl_minutes: number;
 }
 
+// ── 라이브 챌린지 (/api/web/live) ──
+
+export interface LiveJob {
+	id: number;
+	url: string;
+	needs_human_at: string;
+	held_by_other: boolean;
+}
+
+export interface LiveMeta {
+	id: number;
+	url: string;
+	owned: boolean;
+	viewport_w: number;
+	viewport_h: number;
+	shot_interval_ms: number;
+}
+
+export interface LiveState {
+	status: 'needs_human' | 'done';
+	owned?: boolean;
+}
+
 export interface TrendRow {
 	label: string;
 	count: number;
