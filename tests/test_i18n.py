@@ -75,6 +75,35 @@ def test_all_template_msgids_have_english():
     assert not missing, "en 카탈로그 누락:\n" + "\n".join(missing)
 
 
+def test_all_spa_msgids_have_english():
+    """SvelteKit SPA(.svelte/.ts)의 모든 t('...') 리터럴이 en 카탈로그에 있어야 한다.
+
+    누락되면 영어 화면에 한국어 원문이 그대로 노출된다. 직접 t('...') 리터럴과
+    run(fn, '...') 알림 토스트(t(ok) 로 번역)를 검사한다. STATUS_LABELS 같은
+    객체 리터럴 값은 정적으로 못 잡으므로 그 키는 카탈로그를 직접 관리한다.
+    (#10 i18n 추출 — dashboard 규칙)
+    """
+    pat_s = re.compile(r"\bt\(\s*'((?:[^'\\]|\\.)*)'")
+    pat_d = re.compile(r'\bt\(\s*"((?:[^"\\]|\\.)*)"')
+    # run(async () => {...}, '알림 문구') — 화살표 함수가 끝나는 `}, '...'` 패턴
+    pat_run = re.compile(r"\},\s*'((?:[^'\\]|\\.)*)'\)")
+    catalog = i18n.CATALOGS["en"]
+    src = Path(i18n.__file__).resolve().parents[2] / "frontend" / "src"
+    if not src.exists():
+        pytest.skip("frontend 소스가 없습니다 (패키지 전용 환경)")
+    missing = []
+    for f in sorted(src.rglob("*")):
+        if f.suffix not in (".svelte", ".ts"):
+            continue
+        text = f.read_text(encoding="utf-8")
+        for pat, esc in ((pat_s, "\\'"), (pat_d, '\\"'), (pat_run, "\\'")):
+            for m in pat.finditer(text):
+                key = m.group(1).replace(esc, esc[-1])
+                if key not in catalog:
+                    missing.append(f"{f.name}: {key}")
+    assert not missing, "en 카탈로그 누락(SPA):\n" + "\n".join(missing)
+
+
 def test_no_tojson_in_double_quoted_attribute():
     """tojson 값을 큰따옴표 속성 안에 두면 안 된다.
 
@@ -111,81 +140,9 @@ def test_format_interval():
 # ---- 로케일 결정 ----
 
 
-def test_default_locale_is_korean(client):
-    res = client.get("/archives")
-    assert res.status_code == 200
-    assert "아카이브 목록" in res.text
-    assert '<html lang="ko">' in res.text
-
-
-def test_accept_language_english(client):
-    res = client.get("/archives", headers={"Accept-Language": "en-US,en;q=0.9"})
-    assert res.status_code == 200
-    assert "Archived pages" in res.text
-    assert '<html lang="en">' in res.text
-
-
-def test_accept_language_q_priority(client):
-    """q 값이 높은 지원 언어를 고른다 (ko;q=0.8 < en;q=0.9)."""
-    res = client.get(
-        "/archives", headers={"Accept-Language": "fr;q=1.0, ko;q=0.8, en;q=0.9"}
-    )
-    assert "Archived pages" in res.text
-
-
-def test_unsupported_accept_language_falls_back(client):
-    res = client.get("/archives", headers={"Accept-Language": "fr-FR,de;q=0.8"})
-    assert "아카이브 목록" in res.text
-
-
 # ---- 언어 설정 (/settings/account/language) ----
-
-
-def test_lang_no_route(client):
-    """/lang 엔드포인트는 제거되었다."""
-    assert client.post("/lang", data={"lang": "en", "next": "/"}).status_code == 404
 
 
 # ---- 화면별 영어 렌더링 스모크 ----
 
 
-def test_dashboard_english(client):
-    res = client.get("/", headers={"Accept-Language": "en"})
-    assert res.status_code == 200
-    assert "Storage trend" in res.text
-    assert "Total snapshots" in res.text
-
-
-def test_login_page_english(monkeypatch, client):
-    """인증 켠 상태의 로그인 화면도 영어로 렌더링된다 (쿠키 없이 헤더만으로)."""
-    monkeypatch.setattr(config, "AUTH_ENABLED", True)
-    with db.connect() as conn:
-        db.create_first_admin(conn, "a@b.c", "hash")
-    res = client.get("/login", headers={"Accept-Language": "en"})
-    assert res.status_code == 200
-    assert "Log in" in res.text
-
-
-def test_schedule_label_locale(client):
-    """주기 라벨이 로케일에 맞게 표기된다 (목록 화면의 자동 컬럼)."""
-    url = "https://example.com/i18n"
-    with db.connect() as conn:
-        page_id = db.get_or_create_page(
-            conn, url, "example.com", storage.url_to_slug(url)
-        )
-        snap_dir = storage.page_dir("example.com", storage.url_to_slug(url)) / "2026-06-01T00-00-00"
-        snap_dir.mkdir(parents=True)
-        db.insert_snapshot(
-            conn, page_id,
-            taken_at="2026-06-01T00:00:00+00:00", dir_name="2026-06-01T00-00-00",
-            content_hash="0" * 64, final_url=url, http_status=200, changed=1,
-        )
-        db.upsert_schedule(
-            conn, page_id, 12 * 3600,
-            next_run_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        )
-        site = db.get_site_by_key(conn, "example.com")
-    assert "12시간" in client.get(f"/sites/{site['id']}").text
-    assert "12h" in client.get(
-        f"/sites/{site['id']}", headers={"Accept-Language": "en"}
-    ).text

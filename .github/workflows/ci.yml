@@ -10,6 +10,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Node 설치
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 의존성 설치
+        run: npm ci
+        working-directory: frontend
+
+      - name: 타입체크 (svelte-check)
+        run: npm run check
+        working-directory: frontend
+
+      - name: 빌드
+        run: npm run build
+        working-directory: frontend
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -25,6 +51,21 @@ jobs:
 
       - name: 의존성 설치
         run: uv sync --locked
+
+      - name: Node 설치 (대시보드 SPA 빌드용)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 대시보드 SPA 빌드
+        # C2 컷오버로 FastAPI 가 SPA 정적 산출물을 루트(/)로 서빙한다 — 통합 테스트가
+        # SPA 셸 라우트(예: GET /·/login)를 200 으로 받으려면 frontend/build 가 필요하다.
+        run: |
+          npm ci
+          npm run build
+        working-directory: frontend
 
       - name: Playwright 브라우저 캐시
         id: playwright-cache

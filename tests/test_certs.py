@@ -262,15 +262,6 @@ def _seed_site_with_cert() -> tuple[int, int]:
     return site_id, cert["id"]
 
 
-def test_site_view_shows_certificate(client):
-    site_id, _ = _seed_site_with_cert()
-    res = client.get(f"/sites/{site_id}")
-    assert "인증서" in res.text
-    assert "CN=example.com" in res.text and "CN=Test CA" in res.text
-    assert "현재" in res.text
-    assert "검증 안 됨" in res.text  # verified=False 뱃지
-
-
 def test_certificate_pem_download(client):
     site_id, cert_id = _seed_site_with_cert()
     res = client.get(f"/sites/{site_id}/certificates/{cert_id}.pem")

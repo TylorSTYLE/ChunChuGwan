@@ -28,14 +28,14 @@ def client(tmp_db):
 
 
 def _login(client):
-    client.post("/login", data={"email": "boss@test.co", "password": "bosspass1234"},
-                follow_redirects=False)
+    client.post("/api/web/auth/login",
+                json={"email": "boss@test.co", "password": "bosspass1234"})
 
 
 def test_download_requires_session(client):
+    # C2 컷오버: 자원 라우트는 미인증 시 401(로그인 리다이렉트 대신 — _require_viewer 가드).
     r = client.get("/extension/download", follow_redirects=False)
-    assert r.status_code in (302, 307)
-    assert "/login" in r.headers["location"]
+    assert r.status_code == 401
 
 
 def test_download_serves_zip(client):
@@ -66,10 +66,3 @@ def test_download_serves_zip(client):
     assert zf.read("icons/icon16.png")[:8] == b"\x89PNG\r\n\x1a\n"  # 실제 PNG
     # _locales 가 유효 JSON
     assert "tab_archive" in json.loads(zf.read("_locales/ko/messages.json"))
-
-
-def test_dashboard_shows_extension_card(client):
-    _login(client)
-    body = client.get("/").text
-    assert "/extension/download" in body
-    assert "더 빠르고 편리하게" in body

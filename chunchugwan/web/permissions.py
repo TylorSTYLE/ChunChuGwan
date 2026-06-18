@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from fastapi import Request
+
 from .. import config, db
 
 
@@ -146,3 +148,30 @@ def token_permissions_for_user(user: sqlite3.Row | None) -> tuple[bool, bool]:
     """사용자 실효 권한에서 확장 토큰 권한(can_view, can_archive)을 파생 (오버라이드 반영)."""
     perms = effective_permissions(user)
     return "view" in perms, "archive" in perms
+
+
+def auth_context(request: Request) -> dict:
+    """로그인 사용자 + 메뉴/버튼 노출 플래그 + 사람 확인 대기 작업.
+
+    SPA 세션 컨텍스트(/api/web/me)가 쓰는 권한·needs-human 묶음. 실효 권한을
+    1회 계산해 메뉴 플래그를 모두 파생하고, manage_system 권한자에겐 워커가 DB 에
+    기록한 needs_human(사람 확인 대기) 작업을 함께 내려보낸다 (serve 의
+    LIVE_CHALLENGE 설정과 무관 — DB 사실 기준)."""
+    user = getattr(request.state, "user", None)
+    flags = menu_flags(user)
+    needs_human_jobs: list = []
+    if flags["can_manage_system"]:
+        try:
+            with db.connect() as conn:
+                needs_human_jobs = [
+                    {"id": j["id"], "url": j["url"]}
+                    for j in db.list_needs_human_jobs(conn)
+                ]
+        except Exception:
+            needs_human_jobs = []
+    return {
+        "user": user,
+        **flags,
+        "needs_human_jobs": needs_human_jobs,
+        "needs_human_count": len(needs_human_jobs),
+    }

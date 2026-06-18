@@ -13,7 +13,7 @@
 |---|---|
 | `chunchugwan/db.py` | `.claude/rules/database.md` — DB 스키마 전체·코어 테이블·마이그레이션 |
 | `chunchugwan/storage.py`·`resources.py`·`documents.py`·`deletion.py`·`optimize.py`·`backup.py` | `.claude/rules/storage.md` — 저장 구조·CAS·문서 스냅샷·compact |
-| `chunchugwan/web/**`·`differ.py` | `.claude/rules/dashboard.md` — 대시보드 디자인·렌더링 보안(원칙 5)·i18n·diff |
+| `chunchugwan/web/**`·`frontend/**`·`differ.py` | `.claude/rules/dashboard.md` — 대시보드 디자인·SvelteKit SPA·렌더링 보안(원칙 5)·i18n·diff |
 | `chunchugwan/auth.py`·`oidc.py`·`credentials.py`·`crypto.py`·`mailer.py`·`web/auth_routes.py`·`web/permissions.py` | `.claude/rules/authentication.md` — 인증 데이터 규칙(원칙 6)·역할/권한·자격증명·SMTP |
 | `chunchugwan/capture.py`·`pipeline.py`·`crawler.py`·`extract.py`·`scheduler.py`·`archive_worker.py`·`worker.py`·`certs.py`·`netcheck.py`·`browser_engine.py`·`trackers.py`·`live_challenge.py` | `.claude/rules/capture-crawl.md` — 캡처·크롤·스케줄·네트워크 게이트(원칙 7)·인증서·라이브 |
 | `chunchugwan/searchindex.py`·`doctext.py` | `.claude/rules/search.md` — 전문 검색(FTS5 trigram)·문서 본문 추출 |
@@ -37,7 +37,9 @@ SEARCH·DOCKER·API·AUTHENTICATION·DEVELOPMENT — README 는 빠른 시작 + 
 - 문서 본문 추출(검색 색인): pypdf(PDF) + 표준 zipfile/XML(docx·pptx·xlsx·
   odf·hwpx·epub) — doctext.py
 - CLI: click
-- 대시보드: FastAPI + Jinja2 템플릿 (읽기 전용 + 재아카이빙 트리거)
+- 대시보드: FastAPI + SvelteKit SPA (정적 셸을 루트(/)로 서빙 + `/api/web` JSON API,
+  읽기 전용 + 재아카이빙 트리거). 프론트엔드 소스는 `frontend/`, 빌드 산출물은
+  `chunchugwan/web/frontend_dist`(개발 시 `frontend/build`). C2 컷오버로 SSR(Jinja2) 제거.
 - 인증: argon2-cffi(패스워드), pyotp+qrcode(TOTP), webauthn(패스키),
   httpx+PyJWT(OIDC — Authentik)
 - 테스트: pytest

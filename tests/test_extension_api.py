@@ -178,42 +178,6 @@ def test_non_api_post_still_csrf_protected(client):
 # ---- GET /go 딥링크 ----
 
 
-def test_go_redirects_to_timeline(client):
-    _login_admin(client)
-    with db.connect() as conn:
-        page_id = db.get_page(conn, URL)["id"]
-    r = client.get("/go", params={"url": URL}, follow_redirects=False)
-    assert r.status_code == 302
-    assert r.headers["location"] == f"/page/{page_id}"
-
-
-def test_go_scheme_swap_finds_https_page(client):
-    _login_admin(client)
-    with db.connect() as conn:
-        page_id = db.get_page(conn, URL)["id"]
-    # http 로 물어도 https 로 저장된 페이지를 찾아준다
-    r = client.get(
-        "/go", params={"url": "http://example.com/post"}, follow_redirects=False
-    )
-    assert r.status_code == 302
-    assert r.headers["location"] == f"/page/{page_id}"
-
-
-def test_go_missing_returns_404(client):
-    _login_admin(client)
-    r = client.get(
-        "/go", params={"url": "https://nowhere.example/zzz"}, follow_redirects=False
-    )
-    assert r.status_code == 404
-    assert "아카이브된 스냅샷이 없습니다" in r.text
-
-
-def test_go_requires_session(client):
-    r = client.get("/go", params={"url": URL}, follow_redirects=False)
-    assert r.status_code in (302, 307)
-    assert "/login" in r.headers["location"]
-
-
 # ---- POST /api/v1/ingest (확장 클라이언트 캡처 적재) ----
 
 
