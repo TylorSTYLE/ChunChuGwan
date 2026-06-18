@@ -288,16 +288,6 @@ def _site_id_for(site_key):
         return row["id"] if row else None
 
 
-def test_archive_form_hides_credential_section_for_archiver(client):
-    with db.connect() as conn:
-        db.create_user(
-            conn, "arch@test.co", auth.hash_password("password1234"), role="archiver"
-        )
-    _login(client, "arch@test.co", "password1234")
-    html = client.get("/archive/new").text
-    assert 'name="cred_existing_id"' not in html
-
-
 # ---- 기존 자격증명 연결 (조회 엔드포인트 + 연결) ----
 
 

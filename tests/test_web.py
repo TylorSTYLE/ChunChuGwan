@@ -143,9 +143,8 @@ def test_site_failed_jobs_cleared_after_success(client):
     _insert_log("changed", started_at="2026-06-04T00:00:00+00:00")
     with db.connect() as conn:
         site = db.get_site_by_key(conn, "example.com")
-    res = client.get(f"/sites/{site['id']}")
-    assert "실패한 작업" not in res.text
-    assert "boom" not in res.text
+    data = client.get(f"/api/web/sites/{site['id']}").json()
+    assert data["failed_items"] == []
 
 
 def _insert_failed_crawl_page(
@@ -182,8 +181,9 @@ def test_site_failed_crawl_page_cleared_after_later_crawl_success(client):
         ).fetchone()["id"]
         db.finish_crawl_page(conn, cp2, None)
         site = db.get_site_by_key(conn, "example.com")
-    res = client.get(f"/sites/{site['id']}")
-    assert "https://example.com/broken" not in res.text
+    data = client.get(f"/api/web/sites/{site['id']}").json()
+    urls = [item["url"] for item in data["failed_items"]]
+    assert "https://example.com/broken" not in urls
 
 
 def test_site_failed_crawl_page_cleared_after_direct_archive(client):
@@ -196,8 +196,9 @@ def test_site_failed_crawl_page_cleared_after_direct_archive(client):
             started_at="2026-06-05T00:00:00+00:00", duration_ms=100,
         )
         site = db.get_site_by_key(conn, "example.com")
-    res = client.get(f"/sites/{site['id']}")
-    assert "https://example.com/broken" not in res.text
+    data = client.get(f"/api/web/sites/{site['id']}").json()
+    urls = [item["url"] for item in data["failed_items"]]
+    assert "https://example.com/broken" not in urls
 
 
 def _seed_failed_pages(n: int) -> None:
@@ -292,28 +293,12 @@ def test_period_starts_boundaries():
     assert starts["recent"] == "2026-06-10T15:30:45+00:00"
 
 
-def test_schedule_next_run_uses_user_timezone(client, tmp_path, monkeypatch):
+def test_schedule_next_run_uses_user_timezone():
     """사용자 타임존(Asia/Seoul)으로 로컬 시각을 UTC 로 환산한다."""
     import zoneinfo
-    from chunchugwan import db
-
-    # request.state.user 에 Asia/Seoul 타임존을 가진 사용자 주입
-    from chunchugwan.web import app as web_app
-    from fastapi import Request
-
-    original_dispatch = web_app.app.middleware_stack
-
-    def _set_user(request: Request, call_next):
-        request.state.user = {"timezone": "Asia/Seoul", "role": "archiver"}
-        return call_next(request)
-
-    client.post("/page/1/schedule", data={"interval": "3600"})
-
-    # monkeypatch: request.state.user 를 Asia/Seoul 사용자로 교체
-    # middleware 대신, 엔드포인트가 읽는 request.state.user 를 직접 세팅할 방법이
-    # AUTH_ENABLED=False 환경에서는 없으므로, ZoneInfo 동작을 직접 검증한다
-    tz = zoneinfo.ZoneInfo("Asia/Seoul")
     from datetime import datetime, timezone as _utc
+
+    tz = zoneinfo.ZoneInfo("Asia/Seoul")
     dt_local = datetime(2099, 1, 2, 12, 0)
     dt_utc = dt_local.replace(tzinfo=tz).astimezone(_utc.utc)
     assert dt_utc.isoformat() == "2099-01-02T03:00:00+00:00"

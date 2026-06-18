@@ -378,14 +378,4 @@ def test_backfill_skips_concurrently_deleted_snapshot(archive, monkeypatch):
         assert db.list_orphan_fts_rowids(conn) == []
 
 
-def _wait_reindex_done(client, timeout: float = 15.0) -> dict:
-    import time
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        state = client.get("/system/search/reindex/status").json()
-        if not state["running"]:
-            return state
-        time.sleep(0.05)
-    raise AssertionError("재색인이 시간 내에 끝나지 않음")
-
 

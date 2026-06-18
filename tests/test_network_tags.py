@@ -272,23 +272,22 @@ def test_merge_deletes_source_tag(archive_env, monkeypatch):
 # ---- 새 아카이빙 폼 ----
 
 
-# ---- 목록·상세 화면 표시 ----
-# 같은 IP 대역의 다른 사설 네트워크를 구분할 수 있도록 아카이브 목록·사이트
-# 상세·크롤·타임라인·스냅샷 화면 모두 태그 이름을 뱃지로 보여준다.
+# ---- 페이지·사이트 API 네트워크 태그 표시 ----
+# 같은 IP 대역의 다른 사설 네트워크를 구분할 수 있도록 사이트 상세·페이지
+# 상세 API 가 태그를 포함해 반환한다 — 공인 주소는 태그 없음.
 
 
-def test_public_views_show_no_tag_badge(client, monkeypatch):
-    """공인 주소 아카이브에는 어떤 화면에도 태그 뱃지가 없다."""
+def test_public_page_has_no_network_tag_in_api(client, monkeypatch):
+    """공인 주소 아카이브는 페이지·사이트 API 에 네트워크 태그가 없다."""
     _make_tag()
     _fake_capture(monkeypatch)
     outcome = pipeline.archive_url("https://example.com/post")
     with db.connect() as conn:
         page = db.get_page(conn, outcome.url)
-    assert "집 NAS" not in client.get("/archives").text
-    assert "집 NAS" not in client.get(f"/sites/{page['site_id']}").text
-    assert "집 NAS" not in client.get(f"/page/{page['id']}").text
-    assert "집 NAS" not in client.get("/").text
-    assert "집 NAS" not in client.get("/logs").text
+    page_data = client.get(f"/api/web/pages/{page['id']}").json()
+    assert page_data["network_tag"] is None
+    site_data = client.get(f"/api/web/sites/{page['site_id']}").json()
+    assert site_data["network_tags"] == []
 
 
 # ---- REST API ----
