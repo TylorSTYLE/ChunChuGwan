@@ -1578,6 +1578,21 @@ _EN.update({
     "확장 자격증명": "Extension credentials",
     "확장(브라우저) 캡처가 포함되어 스크린샷 비교는 제공하지 않습니다 (렌더 환경 차이).": "Includes extension (browser) capture, so screenshot comparison isn't available (rendering-environment differences).",
     "회원 가입 허용": "Allow sign-up",
+    # ---- 새 아카이빙 폼 리디자인 (archive/new) ----
+    "캡처 범위": "Scope",
+    "단일 페이지": "Single page",
+    "사이트 전체": "Whole site",
+    "없음": "None",
+    "1회": "Once",
+    "공개 주소": "Public address",
+    "사설 IP — 태그 필요": "Private IP — tag required",
+    "루프백 — 아카이빙 불가": "Loopback — can't archive",
+    "아카이빙할 페이지의 전체 주소를 입력하세요.": "Enter the full URL of the page to archive.",
+    "입력한 URL 한 페이지만 스냅샷으로 저장합니다.": "Captures only this single URL as a snapshot.",
+    "같은 호스트의 경로 프리픽스 이하를 모두 따라가 저장합니다. 비우면 시스템 기본값이 적용됩니다.": "Follows every page under the same host and path prefix. Leave blank to use system defaults.",
+    "기본값은 본문 해시가 바뀐 경우에만 새 스냅샷을 만듭니다.": "By default a new snapshot is created only when the content hash changes.",
+    # ---- 공통 컴포넌트 (Pager 등) ----
+    "페이지 이동": "Pagination",
     # 알림 토스트(run(fn, ok) 의 ok 인자 — t(변수)로 번역)
     "표시 이름을 변경했습니다.": "Display name updated.",
     "인증 앱에 등록한 뒤 코드를 입력하세요.": "Register it in your authenticator app, then enter the code.",

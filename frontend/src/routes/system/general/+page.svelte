@@ -5,6 +5,7 @@
 	import { filesize } from '$lib/format';
 	import { api, ApiError, download } from '$lib/api';
 	import type { SystemOverview } from '$lib/types';
+	import AlertBox from '$lib/components/AlertBox.svelte';
 
 	let { data }: { data: { sys: SystemOverview } } = $props();
 	const s = $derived(data.sys);
@@ -250,8 +251,7 @@
 </script>
 
 <h2>{t('시스템 설정')}</h2>
-{#if error}<div class="error">{error}</div>{/if}
-{#if notice}<div class="notice">{notice}</div>{/if}
+<AlertBox {error} {notice} />
 
 <!-- ── 시스템 상태 ── -->
 <h3 class="group">{t('시스템 상태')}</h3>
@@ -470,14 +470,6 @@
 </fieldset>
 
 <style>
-	.error {
-		background: var(--red-bg);
-		color: var(--red-text);
-		border-radius: 4px;
-		padding: 8px 12px;
-		margin-bottom: 12px;
-		font-size: 13px;
-	}
 	/* 그룹 제목 — 설정 섹션들을 묶는 상단 헤더 */
 	h3.group {
 		font-size: 13px;
@@ -576,12 +568,18 @@
 	.sec label {
 		font-size: 13px;
 		display: flex;
+		flex-wrap: wrap;
 		justify-content: space-between;
 		align-items: center;
 		gap: 8px;
 	}
 	.sec label.ck {
 		justify-content: flex-start;
+	}
+	.sec label input[type='text'],
+	.sec label select {
+		flex: 1 1 180px;
+		min-width: 0;
 	}
 	.sec button {
 		align-self: flex-start;
@@ -604,6 +602,7 @@
 	}
 	.btn-row {
 		display: flex;
+		flex-wrap: wrap;
 		gap: 8px;
 	}
 	.mtoken {

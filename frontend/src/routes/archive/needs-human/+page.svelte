@@ -6,6 +6,7 @@
 	import { ts } from '$lib/format';
 	import { api } from '$lib/api';
 	import type { LiveJob } from '$lib/types';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 
 	let { data }: { data: { jobs: LiveJob[] } } = $props();
 	const jobs = $derived(data.jobs);
@@ -27,13 +28,11 @@
 	});
 </script>
 
-<div class="toolbar">
-	<h2>{t('사람 확인 필요')}</h2>
-	<span class="muted">{t('자동으로 통과하지 못한 챌린지 — 직접 풀어서 통과시킵니다')}</span>
-</div>
+<h2>{t('사람 확인 필요')}</h2>
+<p class="muted lead">{t('자동으로 통과하지 못한 챌린지 — 직접 풀어서 통과시킵니다')}</p>
 
 {#if jobs.length === 0}
-	<p class="muted">{t('사람 확인이 필요한 작업이 없습니다.')}</p>
+	<EmptyState message={t('사람 확인이 필요한 작업이 없습니다.')} />
 {:else}
 	<div class="table-wrap wide">
 		<table>
@@ -43,7 +42,7 @@
 			<tbody>
 				{#each jobs as j}
 					<tr>
-						<td>{j.url}</td>
+						<td class="url-cell"><span title={j.url}>{j.url}</span></td>
 						<td class="mono muted">{ts(j.needs_human_at)}</td>
 						<td>
 							<a href="{base}/archive/jobs/{j.id}/live">{t('처리')}</a>
@@ -57,14 +56,8 @@
 {/if}
 
 <style>
-	.toolbar {
-		display: flex;
-		gap: 12px;
-		align-items: baseline;
-		flex-wrap: wrap;
-		margin-bottom: 12px;
-	}
-	.toolbar h2 {
-		margin: 0;
+	.lead {
+		font-size: 13px;
+		margin: -6px 0 12px;
 	}
 </style>

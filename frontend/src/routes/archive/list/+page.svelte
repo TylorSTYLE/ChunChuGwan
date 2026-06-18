@@ -6,6 +6,7 @@
 	import { filesize, ts } from '$lib/format';
 	import { api } from '$lib/api';
 	import type { SiteItem } from '$lib/types';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 
 	let { data }: { data: { sites: SiteItem[] } } = $props();
 	const sites = $derived(data.sites);
@@ -33,7 +34,7 @@
 <h2>{t('아카이브 사이트 목록')}</h2>
 
 {#if sites.length === 0}
-	<p class="muted">{t('아직 아카이브가 없습니다.')}</p>
+	<EmptyState message={t('아직 아카이브가 없습니다.')} />
 {:else}
 	<div class="table-wrap wide">
 		<table>

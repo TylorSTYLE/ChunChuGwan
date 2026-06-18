@@ -90,6 +90,7 @@
 	}
 	.shot-mobile {
 		width: 390px;
+		max-width: 100%;
 	}
 	button.tab.active {
 		background: var(--gray-bg);

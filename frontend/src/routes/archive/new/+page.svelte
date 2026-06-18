@@ -4,6 +4,13 @@
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { api, ApiError } from '$lib/api';
+	import AlertBox from '$lib/components/AlertBox.svelte';
+	import FormSection from '$lib/components/FormSection.svelte';
+	import Field from '$lib/components/Field.svelte';
+	import Segmented from '$lib/components/Segmented.svelte';
+	import Toggle from '$lib/components/Toggle.svelte';
+	import ChipGroup from '$lib/components/ChipGroup.svelte';
+	import HostBadge from '$lib/components/HostBadge.svelte';
 
 	type Tag = { id: string; name: string; description: string | null };
 	type Cred = { id: number; label: string; kind: string; kind_label: string };
@@ -18,7 +25,9 @@
 
 	let url = $state('');
 	let force = $state(false);
-	let site = $state(false);
+	// 캡처 범위 세그먼트 — 'single'=단일 페이지, 'site'=사이트 전체. payload 의 site 는 파생값.
+	let scope = $state<'single' | 'site'>('single');
+	const site = $derived(scope === 'site');
 	let interval = $state('0');
 	// 사이트 아카이브 옵션은 시스템 설정의 기본값으로 채운다 (비우면 서버가 같은 기본값 적용).
 	let maxPages = $state(untrack(() => (data.crawlDefaults ? String(data.crawlDefaults.max_pages) : '')));
@@ -87,7 +96,9 @@
 			return 'private';
 		return 'public';
 	}
-	const netKind = $derived(classify(hostOf(url)));
+	const host = $derived(hostOf(url));
+	const netKind = $derived(classify(host));
+	const isLoopback = $derived(netKind === 'loopback');
 
 	// 주기 선택지 — app._SCHEDULE_OPTIONS 와 동일(초 단위). "0" = 없음.
 	const INTERVALS: [string, string][] = [
@@ -102,9 +113,21 @@
 		['2592000', '1개월']
 	];
 
+	// 캡처 범위 세그먼트 옵션 (리터럴 t() — i18n 정적 검사 대상).
+	const scopeOptions = $derived([
+		{ value: 'single', label: t('단일 페이지') },
+		{ value: 'site', label: t('사이트 전체') }
+	]);
+
+	// 하단 요약 — host · 범위 · 주기.
+	const scopeLabel = $derived(site ? t('사이트 전체') : t('단일 페이지'));
+	const intervalLabel = $derived(
+		interval === '0' ? t('1회') : t(INTERVALS.find(([v]) => v === interval)?.[1] ?? '없음')
+	);
+
 	async function submit(e: Event) {
 		e.preventDefault();
-		if (!url.trim()) return;
+		if (!url.trim() || isLoopback) return;
 		busy = true;
 		error = '';
 		try {
@@ -140,30 +163,16 @@
 
 <h2>{t('새 아카이빙')}</h2>
 
-{#if error}<div class="error">{error}</div>{/if}
+<AlertBox {error} />
 
 <form onsubmit={submit} class="archive-form">
-	<label>
-		URL
+	<Field label="URL" hint={t('아카이빙할 페이지의 전체 주소를 입력하세요.')}>
 		<input type="url" bind:value={url} placeholder="https://example.com" required onchange={loadCreds} />
-	</label>
+	</Field>
+	{#if url.trim()}<HostBadge kind={netKind} />{/if}
 
-	<label class="check"><input type="checkbox" bind:checked={force} /> {t('콘텐츠 동일해도 강제 저장')}</label>
-	<label class="check"><input type="checkbox" bind:checked={site} /> {t('사이트 전체 아카이브 (같은 호스트)')}</label>
-
-	{#if site}
-		<div class="crawl-opts">
-			<label>{t('최대 페이지')}<input type="number" bind:value={maxPages} min="1" /></label>
-			<label>{t('최대 깊이')}<input type="number" bind:value={maxDepth} min="0" /></label>
-			<label>{t('지연(초)')}<input type="number" bind:value={delay} min="0" /></label>
-		</div>
-	{/if}
-
-	{#if netKind === 'loopback'}
-		<div class="error">{t('루프백 주소는 아카이빙할 수 없습니다.')}</div>
-	{:else if netKind === 'private'}
-		<label>
-			{t('로컬 네트워크 태그')}
+	{#if netKind === 'private'}
+		<Field label={t('로컬 네트워크 태그')}>
 			{#if tags.length > 0}
 				<select bind:value={networkTag}>
 					<option value="">{t('선택 안 함 (공개 주소)')}</option>
@@ -172,7 +181,7 @@
 					{/each}
 				</select>
 			{/if}
-		</label>
+		</Field>
 		<p class="muted net-hint">
 			{t('입력한 주소가 사설 IP 대역(로컬 네트워크)입니다 — 태그를 선택해야 아카이빙할 수 있습니다.')}
 			{#if tags.length === 0}
@@ -183,16 +192,33 @@
 		</p>
 	{/if}
 
-	<label>
-		{t('자동 재아카이빙 주기')}
-		<select bind:value={interval}>
-			{#each INTERVALS as [v, label]}<option value={v}>{t(label)}</option>{/each}
-		</select>
-	</label>
+	<FormSection title={t('캡처 범위')}>
+		<Segmented bind:value={scope} options={scopeOptions} />
+		{#if site}
+			<div class="crawl-opts">
+				<Field label={t('최대 페이지')}><input type="number" bind:value={maxPages} min="1" /></Field>
+				<Field label={t('최대 깊이')}><input type="number" bind:value={maxDepth} min="0" /></Field>
+				<Field label={t('지연(초)')}><input type="number" bind:value={delay} min="0" /></Field>
+			</div>
+			<p class="muted hint">
+				{t('같은 호스트의 경로 프리픽스 이하를 모두 따라가 저장합니다. 비우면 시스템 기본값이 적용됩니다.')}
+			</p>
+		{:else}
+			<p class="muted hint">{t('입력한 URL 한 페이지만 스냅샷으로 저장합니다.')}</p>
+		{/if}
+		<Toggle
+			bind:checked={force}
+			label={t('콘텐츠 동일해도 강제 저장')}
+			description={t('기본값은 본문 해시가 바뀐 경우에만 새 스냅샷을 만듭니다.')}
+		/>
+	</FormSection>
 
-	{#if canManageCred}
-		<label>
-			{t('로그인 자격증명')}
+	<FormSection title={t('자동 재아카이빙')}>
+		<ChipGroup bind:value={interval} options={INTERVALS} />
+	</FormSection>
+
+	<FormSection title={t('로그인 자격증명')}>
+		{#if canManageCred}
 			<select bind:value={credExisting}>
 				<option value="">{t('연결 안 함')}</option>
 				{#each existingCreds as c}
@@ -200,91 +226,125 @@
 				{/each}
 				<option value="__new__">{t('새 자격증명 추가…')}</option>
 			</select>
-		</label>
-		{#if credExisting === '__new__'}
-			<div class="cred-new">
-				{#if !secretKeyConfigured}
-					<div class="error">{t('WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.')}</div>
-				{/if}
-				<label>{t('종류')}
-					<select bind:value={credKind}>
-						{#each credKinds as k}<option value={k.value}>{k.label}</option>{/each}
-					</select>
-				</label>
-				<label>{t('이름')} <input type="text" bind:value={credLabel} maxlength="50" /></label>
-				{#if credKind === 'http_basic'}
-					<label>{t('사용자명')} <input type="text" bind:value={credUsername} autocomplete="off" /></label>
-					<label>{t('비밀번호')} <input type="password" bind:value={credPassword} autocomplete="new-password" /></label>
-				{:else if credKind === 'session'}
-					<label>{t('세션 상태 (storage_state JSON)')}
-						<textarea bind:value={credStorageState} rows="5" spellcheck="false"></textarea>
-					</label>
-					<p class="muted hint">{t('HAR 파일 업로드는 사이트 상세 화면에서 지원합니다.')}</p>
-				{:else if credKind === 'jwt'}
-					<label>{t('Bearer 토큰')}
-						<textarea bind:value={credToken} rows="3" spellcheck="false" autocomplete="off"></textarea>
-					</label>
-				{/if}
-			</div>
+			{#if credExisting === '__new__'}
+				<div class="cred-new">
+					{#if !secretKeyConfigured}
+						<div class="error">{t('WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다.')}</div>
+					{/if}
+					<Field label={t('종류')}>
+						<select bind:value={credKind}>
+							{#each credKinds as k}<option value={k.value}>{k.label}</option>{/each}
+						</select>
+					</Field>
+					<Field label={t('이름')}><input type="text" bind:value={credLabel} maxlength="50" /></Field>
+					{#if credKind === 'http_basic'}
+						<Field label={t('사용자명')}><input type="text" bind:value={credUsername} autocomplete="off" /></Field>
+						<Field label={t('비밀번호')}>
+							<input type="password" bind:value={credPassword} autocomplete="new-password" />
+						</Field>
+					{:else if credKind === 'session'}
+						<Field
+							label={t('세션 상태 (storage_state JSON)')}
+							hint={t('HAR 파일 업로드는 사이트 상세 화면에서 지원합니다.')}
+						>
+							<textarea bind:value={credStorageState} rows="5" spellcheck="false"></textarea>
+						</Field>
+					{:else if credKind === 'jwt'}
+						<Field label={t('Bearer 토큰')}>
+							<textarea bind:value={credToken} rows="3" spellcheck="false" autocomplete="off"></textarea>
+						</Field>
+					{/if}
+				</div>
+			{/if}
+			<p class="muted creds-note">
+				{t('이 도메인에 등록된 자격증명을 연결하거나 새로 추가할 수 있습니다. 아카이빙 시 로그인에 사용됩니다.')}
+			</p>
+		{:else}
+			<p class="muted creds-note">
+				{t('로그인이 필요한 사이트의 자격증명 연결은 사이트 상세 화면에서 관리합니다.')}
+			</p>
 		{/if}
-		<p class="muted" style="font-size:12px">
-			{t('이 도메인에 등록된 자격증명을 연결하거나 새로 추가할 수 있습니다. 아카이빙 시 로그인에 사용됩니다.')}
-		</p>
-	{:else}
-		<p class="muted" style="font-size:12px">
-			{t('로그인이 필요한 사이트의 자격증명 연결은 사이트 상세 화면에서 관리합니다.')}
-		</p>
-	{/if}
+	</FormSection>
 
-	<button type="submit" class="primary" disabled={busy}>
-		{busy ? t('등록 중…') : t('아카이빙 등록')}
-	</button>
+	<div class="foot">
+		<span class="summary">{host || '—'} · {scopeLabel} · {intervalLabel}</span>
+		<button type="submit" class="primary" disabled={busy || isLoopback}>
+			{busy ? t('등록 중…') : t('아카이빙 등록')}
+		</button>
+	</div>
 </form>
 
 <style>
 	.archive-form {
-		max-width: 560px;
+		max-width: 640px;
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
-	}
-	.archive-form label {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		font-size: 13px;
-	}
-	.archive-form label.check {
-		flex-direction: row;
-		align-items: center;
-		gap: 6px;
+		gap: 14px;
 	}
 	.crawl-opts {
-		display: flex;
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 10px;
+		padding: 12px;
+		background: var(--bg-soft);
+		border-radius: 6px;
 	}
-	.crawl-opts label {
-		flex: 1;
+	/* 슬롯 input 은 부모(이 페이지) 스코프 — number 입력 고유 너비가 좁은 화면에서
+	   그리드 컬럼을 밀어내지 않도록 줄어들 수 있게 한다. */
+	.crawl-opts input {
+		width: 100%;
+		min-width: 0;
 	}
-	.error {
-		background: var(--red-bg);
-		color: var(--red-text);
-		border-radius: 4px;
-		padding: 8px 12px;
-		margin-bottom: 12px;
+	.cred-new {
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		padding: 12px;
+		background: var(--bg-soft);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+	}
+	.cred-new textarea {
+		font: inherit;
 		font-size: 13px;
+		padding: 5px 10px;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		background: var(--surface);
+		color: var(--fg);
+		resize: vertical;
+	}
+	.hint,
+	.net-hint,
+	.creds-note {
+		font-size: 12px;
+		margin: 0;
+	}
+	.foot {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 14px;
+		border-top: 1px solid var(--border);
+		margin-top: 18px;
+		padding-top: 15px;
+	}
+	.summary {
+		font-size: 12px;
+		color: var(--muted);
+		overflow-wrap: anywhere;
 	}
 	button.primary {
-		align-self: flex-start;
 		color: #fff;
 		background: #16a34a;
 		border-color: #16a34a;
-		padding: 6px 18px;
+		padding: 8px 20px;
 	}
 	button.primary:hover {
 		background: #15803d;
 	}
 	button.primary:disabled {
 		opacity: 0.6;
+		cursor: default;
 	}
 </style>

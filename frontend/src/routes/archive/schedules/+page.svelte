@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { pagePath } from '$lib/urls';
-	import { base } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
 	import type { SchedulesData } from '$lib/types';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 
 	let { data }: { data: { sched: SchedulesData } } = $props();
 	const s = $derived(data.sched);
@@ -13,7 +13,7 @@
 
 <h3>{t('페이지 재아카이빙')} ({s.items.length})</h3>
 {#if s.items.length === 0}
-	<p class="muted">{t('등록된 스케줄이 없습니다.')}</p>
+	<EmptyState message={t('등록된 스케줄이 없습니다.')} />
 {:else}
 	<div class="table-wrap">
 		<table>
@@ -52,12 +52,3 @@
 		</table>
 	</div>
 {/if}
-
-<style>
-	td.url-cell {
-		max-width: 480px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-</style>

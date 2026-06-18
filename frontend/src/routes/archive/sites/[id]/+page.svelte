@@ -1,34 +1,22 @@
 <script lang="ts">
 	import { pagePath } from '$lib/urls';
 	import { base } from '$app/paths';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
 	import { api, ApiError, download } from '$lib/api';
+	import { filterUrl } from '$lib/filters';
 	import type { SiteDetail, FailedItem } from '$lib/types';
+	import AlertBox from '$lib/components/AlertBox.svelte';
+	import StatGrid from '$lib/components/StatGrid.svelte';
+	import StatCard from '$lib/components/StatCard.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import { createAction } from '$lib/action.svelte';
 
 	let { data }: { data: { site: SiteDetail } } = $props();
 	const s = $derived(data.site);
-
-	let busy = $state(false);
+	const action = createAction();
 	let exporting = $state(false);
-	let error = $state('');
-	let notice = $state('');
-
-	async function act(fn: () => Promise<void>, ok: string) {
-		busy = true;
-		error = '';
-		notice = '';
-		try {
-			await fn();
-			notice = t(ok);
-			await invalidateAll();
-		} catch (err) {
-			error = err instanceof ApiError ? err.message : String(err);
-		} finally {
-			busy = false;
-		}
-	}
 
 	/** 인증서 만료 상태 — 현재 시각 기준 (만료 30일 전부터 '곧 만료'). */
 	function expiry(notAfter: string): 'expired' | 'soon' | 'ok' {
@@ -41,75 +29,64 @@
 	}
 
 	const retryFailed = (f: FailedItem) =>
-		act(async () => {
+		action.run(async () => {
 			if (f.kind === 'crawl') {
 				await api(`/crawls/${f.crawl_id}/pages/${f.id}/retry`, { method: 'POST' });
 			} else {
 				await api(`/sites/${s.site.id}/failed/${f.id}/retry`, { method: 'POST' });
 			}
-		}, '재시도가 등록되었습니다 — 백그라운드에서 진행됩니다.');
+		}, t('재시도가 등록되었습니다 — 백그라운드에서 진행됩니다.'));
 
 	const retryAllFailed = () =>
-		act(async () => {
-			await api(`/sites/${s.site.id}/failed/retry-all`, { method: 'POST' });
-		}, '실패한 작업을 모두 재시도합니다 — 백그라운드에서 진행됩니다.');
+		action.run(
+			() => api(`/sites/${s.site.id}/failed/retry-all`, { method: 'POST' }),
+			t('실패한 작업을 모두 재시도합니다 — 백그라운드에서 진행됩니다.')
+		);
 
 	async function exportSite() {
 		// 큰 사이트는 서버가 .ccg.export 를 만드는 동안 시간이 걸린다 — 준비중 표시로
 		// 중복 클릭(=중복 다운로드)을 막고, 다운로드가 시작되면 알림으로 끝을 알린다.
-		busy = true;
+		action.busy = true;
 		exporting = true;
-		error = '';
-		notice = '';
+		action.error = '';
+		action.notice = '';
 		try {
 			await download(`/sites/${s.site.id}/export`);
-			notice = t('내보내기 파일을 다운로드했습니다.');
+			action.notice = t('내보내기 파일을 다운로드했습니다.');
 		} catch (err) {
-			error = err instanceof ApiError ? err.message : String(err);
+			action.error = err instanceof ApiError ? err.message : String(err);
 		} finally {
-			busy = false;
+			action.busy = false;
 			exporting = false;
 		}
 	}
 
 	async function deleteSite() {
-		if (!confirm(t('이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 삭제할까요? 되돌릴 수 없습니다.')))
-			return;
-		busy = true;
-		error = '';
+		if (!confirm(t('이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 삭제할까요? 되돌릴 수 없습니다.'))) return;
+		action.busy = true;
+		action.error = '';
 		try {
 			await api(`/sites/${s.site.id}/delete`, { method: 'POST' });
 			goto(`${base}/archive/list`);
 		} catch (err) {
-			error = err instanceof ApiError ? err.message : String(err);
-			busy = false;
+			action.error = err instanceof ApiError ? err.message : String(err);
+			action.busy = false;
 		}
 	}
+
+	const pageUrl = (n: number) => filterUrl(`/archive/sites/${s.site.id}`, { page: n }, { page: 1 });
 </script>
 
-<h2 class="mono">{s.site.site_key}</h2>
+<h2 class="mono page-key">{s.site.site_key}</h2>
 {#if s.site_title}<p class="muted">{s.site_title}</p>{/if}
-{#if error}<div class="error">{error}</div>{/if}
-{#if notice}<div class="notice">{notice}</div>{/if}
+<AlertBox error={action.error} notice={action.notice} />
 
-<div class="stat-grid">
-	<div class="stat-card">
-		<div class="label">{t('페이지')}</div>
-		<div class="value">{s.page_count}</div>
-	</div>
-	<div class="stat-card">
-		<div class="label">{t('스냅샷')}</div>
-		<div class="value">{s.snapshot_total}</div>
-	</div>
-	<div class="stat-card">
-		<div class="label">{t('문서')}</div>
-		<div class="value">{s.doc_total}</div>
-	</div>
-	<div class="stat-card">
-		<div class="label">{t('용량')}</div>
-		<div class="value">{filesize(s.site_bytes)}</div>
-	</div>
-</div>
+<StatGrid>
+	<StatCard label={t('페이지')} value={s.page_count} />
+	<StatCard label={t('스냅샷')} value={s.snapshot_total} />
+	<StatCard label={t('문서')} value={s.doc_total} />
+	<StatCard label={t('용량')} value={filesize(s.site_bytes)} />
+</StatGrid>
 
 <h3>{t('페이지')} ({s.page_count})</h3>
 <div class="table-wrap">
@@ -129,17 +106,7 @@
 		</tbody>
 	</table>
 </div>
-{#if s.pager.total_pages > 1}
-	<div class="pager">
-		{#if s.pager.page > 1}
-			<a href="{base}/archive/sites/{s.site.id}?page={s.pager.page - 1}">← {t('이전')}</a>
-		{/if}
-		<span class="muted">{s.pager.page} / {s.pager.total_pages}</span>
-		{#if s.pager.page < s.pager.total_pages}
-			<a href="{base}/archive/sites/{s.site.id}?page={s.pager.page + 1}">{t('다음')} →</a>
-		{/if}
-	</div>
-{/if}
+<Pager page={s.pager.page} totalPages={s.pager.total_pages} href={pageUrl} />
 
 {#if s.crawls.length > 0}
 	<h3>{t('사이트 아카이브 회차')} ({s.crawls.length})</h3>
@@ -149,9 +116,7 @@
 			<tbody>
 				{#each s.crawls as c}
 					<tr>
-						<td class="mono"
-							><a href="{base}/crawls/{c.id}">{ts(String(c.started_at))}</a></td
-						>
+						<td class="mono"><a href="{base}/crawls/{c.id}">{ts(String(c.started_at))}</a></td>
 						<td>{String(c.status)}</td>
 						<td class="num mono">{c.done_count}/{c.failed_count}/{c.pending_count}</td>
 					</tr>
@@ -177,7 +142,7 @@
 	<div class="section-head">
 		<h3>{t('실패한 작업')} ({s.failed_items.length})</h3>
 		{#if s.can_archive}
-			<button onclick={retryAllFailed} disabled={busy}>{t('모두 재시도')}</button>
+			<button onclick={retryAllFailed} disabled={action.busy}>{t('모두 재시도')}</button>
 		{/if}
 	</div>
 	<div class="table-wrap">
@@ -195,9 +160,7 @@
 						<td class="url-cell">{f.url}</td>
 						<td class="muted">{f.error}</td>
 						{#if s.can_archive}
-							<td>
-								<button onclick={() => retryFailed(f)} disabled={busy}>{t('재시도')}</button>
-							</td>
+							<td><button onclick={() => retryFailed(f)} disabled={action.busy}>{t('재시도')}</button></td>
 						{/if}
 					</tr>
 				{/each}
@@ -230,10 +193,9 @@
 						<span class="badge changed">{t('곧 만료')}</span>
 					{/if}
 					{#if !c.cert.verified}
-						<span
-							class="badge error"
-							title={t('캡처가 인증서 검증을 통과하지 못했습니다 (자체 서명 등)')}
-						>{t('검증 안 됨')}</span>
+						<span class="badge error" title={t('캡처가 인증서 검증을 통과하지 못했습니다 (자체 서명 등)')}>
+							{t('검증 안 됨')}
+						</span>
 					{/if}
 					<a href={c.pem_url} class="pem" download>PEM</a>
 				</div>
@@ -278,7 +240,7 @@
 
 {#if s.can_archive}
 	<p class="export-link">
-		<button onclick={exportSite} disabled={busy} aria-busy={exporting}>
+		<button onclick={exportSite} disabled={action.busy} aria-busy={exporting}>
 			{#if exporting}<span class="spinner" aria-hidden="true"></span>{t('파일 준비중…')}{:else}{t('이 사이트 내보내기')}{/if}
 		</button>
 		<span class="muted">{t('— 이 사이트의 페이지·스냅샷만 담은 .ccg.export 파일')}</span>
@@ -288,12 +250,16 @@
 {#if s.can_delete}
 	<fieldset class="danger-zone">
 		<legend>{t('위험 구역')}</legend>
-		<button class="danger" onclick={deleteSite} disabled={busy}>{t('이 사이트 삭제')}</button>
+		<button class="danger" onclick={deleteSite} disabled={action.busy}>{t('이 사이트 삭제')}</button>
 	</fieldset>
 {/if}
 
 <style>
-	.cred-link {
+	.page-key {
+		overflow-wrap: anywhere;
+	}
+	.cred-link,
+	.export-link {
 		font-size: 13px;
 		margin: 16px 0 0;
 	}
@@ -354,44 +320,12 @@
 	.cert-fields dd.expired {
 		color: var(--red-text);
 	}
-	td.url-cell {
-		max-width: 420px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.pager {
-		display: flex;
-		gap: 12px;
-		align-items: center;
-		margin-top: 10px;
-		font-size: 13px;
-	}
-	.error {
-		background: var(--red-bg);
-		color: var(--red-text);
-		border-radius: 4px;
-		padding: 8px 12px;
-		margin-bottom: 12px;
-		font-size: 13px;
-	}
-	.notice {
-		background: var(--green-bg);
-		color: var(--green);
-		border-radius: 4px;
-		padding: 8px 12px;
-		margin-bottom: 12px;
-		font-size: 13px;
-	}
 	.section-head {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		flex-wrap: wrap;
 		gap: 12px;
-	}
-	.export-link {
-		font-size: 13px;
-		margin: 16px 0 0;
 	}
 	.export-link button {
 		display: inline-flex;
@@ -429,13 +363,5 @@
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		padding: 0 4px;
-	}
-	button.danger {
-		color: #fff;
-		background: var(--red);
-		border-color: var(--red);
-	}
-	button.danger:hover {
-		background: var(--red-hover);
 	}
 </style>

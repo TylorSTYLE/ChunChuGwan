@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { pagePath, snapPath } from '$lib/urls';
-	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
+	import { filterUrl } from '$lib/filters';
 	import type { SearchData } from '$lib/types';
+	import Pager from '$lib/components/Pager.svelte';
 
 	let { data }: { data: { search: SearchData } } = $props();
 	const s = $derived(data.search);
@@ -21,35 +22,20 @@
 
 	function submit(e: Event) {
 		e.preventDefault();
-		const qs = new URLSearchParams();
-		if (q.trim()) qs.set('q', q.trim());
-		if (domain.trim()) qs.set('domain', domain.trim());
-		if (latest) qs.set('latest', '1');
-		goto(`${base}/search${qs.toString() ? `?${qs}` : ''}`);
+		goto(filterUrl('/search', { q: q.trim(), domain: domain.trim(), latest: latest ? '1' : '' }));
 	}
 
-	function pageUrl(n: number): string {
-		const qs = new URLSearchParams();
-		if (s.q) qs.set('q', s.q);
-		if (s.domain) qs.set('domain', s.domain);
-		if (s.latest) qs.set('latest', '1');
-		if (n > 1) qs.set('page', String(n));
-		return `${base}/search${qs.toString() ? `?${qs}` : ''}`;
-	}
+	const pageUrl = (n: number) =>
+		filterUrl('/search', { q: s.q, domain: s.domain, latest: s.latest ? '1' : '', page: n }, { page: 1 });
 </script>
 
 <h2>{t('검색')}</h2>
 
 <form onsubmit={submit} class="toolbar">
-	<input
-		type="text"
-		bind:value={q}
-		placeholder={t('아카이브 본문·문서에서 검색…')}
-		style="flex:1; min-width:200px"
-	/>
-	<input type="text" bind:value={domain} placeholder={t('도메인')} style="width:160px" />
+	<input type="text" class="search-q" bind:value={q} placeholder={t('아카이브 본문·문서에서 검색…')} />
+	<input type="text" class="search-domain" bind:value={domain} placeholder={t('도메인')} />
 	<label class="muted"><input type="checkbox" bind:checked={latest} /> {t('최신만')}</label>
-	<button type="submit">{t('검색')}</button>
+	<button type="submit" class="primary">{t('검색')}</button>
 </form>
 
 {#if !s.available}
@@ -71,17 +57,19 @@
 				</div>
 			</div>
 		{/each}
-		{#if s.total_pages > 1}
-			<div class="pager">
-				{#if s.page > 1}<a href={pageUrl(s.page - 1)}>← {t('이전')}</a>{/if}
-				<span class="muted">{s.page} / {s.total_pages}</span>
-				{#if s.page < s.total_pages}<a href={pageUrl(s.page + 1)}>{t('다음')} →</a>{/if}
-			</div>
-		{/if}
+		<Pager page={s.page} totalPages={s.total_pages} href={pageUrl} />
 	</div>
 {/if}
 
 <style>
+	.search-q {
+		flex: 2 1 200px;
+		min-width: 0;
+	}
+	.search-domain {
+		flex: 1 1 140px;
+		min-width: 0;
+	}
 	/* 검색엔진 결과창 스타일 — 가독 폭의 한 컬럼, URL → 큰 제목 링크 → 스니펫 순 */
 	.results {
 		max-width: 640px;
@@ -121,10 +109,5 @@
 	.hit-meta {
 		font-size: 12px;
 		margin-top: 3px;
-	}
-	.pager {
-		display: flex;
-		gap: 12px;
-		margin-top: 12px;
 	}
 </style>

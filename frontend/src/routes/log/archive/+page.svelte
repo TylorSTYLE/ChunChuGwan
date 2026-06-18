@@ -1,33 +1,26 @@
 <script lang="ts">
 	import { pagePath, snapPath } from '$lib/urls';
-	import { base } from '$app/paths';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
-	import { api, ApiError } from '$lib/api';
+	import { api } from '$lib/api';
+	import { filterUrl } from '$lib/filters';
 	import type { LogsData } from '$lib/types';
+	import AlertBox from '$lib/components/AlertBox.svelte';
+	import Toolbar from '$lib/components/Toolbar.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { createAction } from '$lib/action.svelte';
 
 	let { data }: { data: { logs: LogsData } } = $props();
 	const d = $derived(data.logs);
+	const act = createAction();
 
-	let busy = $state(false);
-	let error = $state('');
-	let notice = $state('');
-
-	async function retry(logId: number) {
-		busy = true;
-		error = '';
-		notice = '';
-		try {
-			await api(`/logs/${logId}/retry`, { method: 'POST' });
-			notice = t('재시도가 등록되었습니다 — 백그라운드에서 진행됩니다.');
-			await invalidateAll();
-		} catch (err) {
-			error = err instanceof ApiError ? err.message : String(err);
-		} finally {
-			busy = false;
-		}
-	}
+	const retry = (logId: number) =>
+		act.run(
+			() => api(`/logs/${logId}/retry`, { method: 'POST' }),
+			t('재시도가 등록되었습니다 — 백그라운드에서 진행됩니다.')
+		);
 
 	const STATUS_LABEL: Record<string, string> = {
 		new: '신규',
@@ -44,35 +37,18 @@
 		error: 'error'
 	};
 
+	const FILTER_DEF = { limit: 25, page: 1 };
 	function applyFilter(patch: Record<string, string>) {
-		const qs = new URLSearchParams();
-		const cur: Record<string, string> = {
-			domain: d.domain,
-			status: d.status,
-			limit: String(d.limit)
-		};
-		Object.assign(cur, patch);
-		if (cur.domain) qs.set('domain', cur.domain);
-		if (cur.status) qs.set('status', cur.status);
-		if (cur.limit && cur.limit !== '25') qs.set('limit', cur.limit);
-		goto(`${base}/logs${qs.toString() ? `?${qs}` : ''}`);
+		goto(filterUrl('/logs', { domain: d.domain, status: d.status, limit: d.limit, ...patch }, FILTER_DEF));
 	}
-
-	function pageUrl(n: number): string {
-		const qs = new URLSearchParams();
-		if (d.domain) qs.set('domain', d.domain);
-		if (d.status) qs.set('status', d.status);
-		if (d.limit !== 25) qs.set('limit', String(d.limit));
-		if (n > 1) qs.set('page', String(n));
-		return `${base}/logs${qs.toString() ? `?${qs}` : ''}`;
-	}
+	const pageUrl = (n: number) =>
+		filterUrl('/logs', { domain: d.domain, status: d.status, limit: d.limit, page: n }, FILTER_DEF);
 </script>
 
 <h2>{t('아카이빙 로그')}</h2>
-{#if error}<div class="error">{error}</div>{/if}
-{#if notice}<div class="notice">{notice}</div>{/if}
+<AlertBox error={act.error} notice={act.notice} />
 
-<div class="toolbar">
+<Toolbar>
 	<select value={d.domain} onchange={(e) => applyFilter({ domain: e.currentTarget.value })}>
 		<option value="">{t('전체 도메인')}</option>
 		{#each d.domains as dom}<option value={dom}>{dom}</option>{/each}
@@ -83,10 +59,10 @@
 	</select>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
-</div>
+</Toolbar>
 
 {#if d.items.length === 0}
-	<p class="muted">{t('로그가 없습니다.')}</p>
+	<EmptyState message={t('로그가 없습니다.')} />
 {:else}
 	<div class="table-wrap wide">
 		<table>
@@ -105,9 +81,7 @@
 					<tr>
 						<td class="mono">{ts(it.log.started_at)}</td>
 						<td>
-							<span class="badge {BADGE[it.log.status] ?? 'same'}"
-								>{t(STATUS_LABEL[it.log.status] ?? it.log.status)}</span
-							>
+							<span class="badge {BADGE[it.log.status] ?? 'same'}">{t(STATUS_LABEL[it.log.status] ?? it.log.status)}</span>
 						</td>
 						<td class="url-cell">
 							{#if it.log.page_id}
@@ -122,9 +96,7 @@
 							{#if it.log.snapshot_id}
 								<a href={snapPath(it.log.page_site_id, it.log.page_id, it.log.snapshot_id)}>{t('보기')}</a>
 							{:else if d.can_archive && it.log.status === 'error'}
-								<button type="button" class="linkbtn" onclick={() => retry(it.log.id)} disabled={busy}
-									>{t('재시도')}</button
-								>
+								<button type="button" class="linkbtn" onclick={() => retry(it.log.id)} disabled={act.busy}>{t('재시도')}</button>
 							{/if}
 						</td>
 					</tr>
@@ -132,35 +104,10 @@
 			</tbody>
 		</table>
 	</div>
-	{#if d.total_pages > 1}
-		<div class="pager">
-			{#if d.page_num > 1}<a href={pageUrl(d.page_num - 1)}>← {t('이전')}</a>{/if}
-			<span class="muted">{d.page_num} / {d.total_pages}</span>
-			{#if d.page_num < d.total_pages}<a href={pageUrl(d.page_num + 1)}>{t('다음')} →</a>{/if}
-		</div>
-	{/if}
+	<Pager page={d.page_num} totalPages={d.total_pages} href={pageUrl} />
 {/if}
 
 <style>
-	.error {
-		background: var(--red-bg);
-		color: var(--red-text);
-		border-radius: 4px;
-		padding: 8px 12px;
-		margin-bottom: 12px;
-		font-size: 13px;
-	}
-	.notice {
-		background: var(--green-bg);
-		color: var(--green);
-		border-radius: 4px;
-		padding: 8px 12px;
-		margin-bottom: 12px;
-		font-size: 13px;
-	}
-	.toolbar .spacer {
-		flex: 1;
-	}
 	/* 첫 컬럼(시간)은 한 줄 유지 — 폭이 좁아 줄바꿈되던 문제 보정 */
 	th:first-child,
 	td.mono:first-child {
@@ -182,16 +129,5 @@
 		color: var(--muted);
 		cursor: default;
 		text-decoration: none;
-	}
-	td.url-cell {
-		max-width: 420px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.pager {
-		display: flex;
-		gap: 12px;
-		margin-top: 10px;
 	}
 </style>
