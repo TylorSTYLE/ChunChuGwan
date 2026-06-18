@@ -87,6 +87,17 @@ def test_network_tags_endpoint_gated(tmp_db):
     assert viewer.get("/api/web/network-tags").status_code == 403
 
 
+def test_network_tags_endpoint_includes_crawl_defaults(tmp_db):
+    """새 아카이빙 폼이 사이트 아카이브 기본값을 폼에 미리 채울 수 있게 함께 내려준다."""
+    with db.connect() as conn:
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY, "42")
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_DEPTH_KEY, "4")
+        db.set_setting(conn, db.CRAWL_DEFAULT_DELAY_KEY, "7")
+    archiver = _client("archiver", "a@test.co")
+    body = archiver.get("/api/web/network-tags").json()
+    assert body["crawl_defaults"] == {"max_pages": 42, "max_depth": 4, "delay": 7}
+
+
 def test_archive_credentials_endpoint_gated(tmp_db):
     admin = _client("founder")
     viewer = _client("viewer", "v@test.co")

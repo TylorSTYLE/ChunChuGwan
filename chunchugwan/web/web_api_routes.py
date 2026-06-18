@@ -838,16 +838,22 @@ def _require_not_migrating() -> None:
 def network_tags_list(
     request: Request, user: sqlite3.Row | None = Depends(require_session)
 ) -> dict:
-    """로컬 네트워크 태그 목록 — 새 아카이빙 폼의 태그 선택용 (아카이빙 권한)."""
+    """새 아카이빙 폼 데이터 — 로컬 네트워크 태그 + 사이트 아카이브 기본값 (아카이빙 권한)."""
     if not permissions.can_archive(user):
         raise HTTPException(403, "아카이빙 권한이 없습니다")
     with db.connect() as conn:
         tags = db.list_network_tags(conn)
+        crawl_defaults = crawler.crawl_defaults(conn)
     return {
         "network_tags": [
             {"id": t["id"], "name": t["name"], "description": t["description"]}
             for t in tags
-        ]
+        ],
+        "crawl_defaults": {
+            "max_pages": crawl_defaults["max_pages"],
+            "max_depth": crawl_defaults["max_depth"],
+            "delay": crawl_defaults["delay_seconds"],
+        },
     }
 
 
