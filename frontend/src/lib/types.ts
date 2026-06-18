@@ -37,6 +37,36 @@ export interface Me {
 	version: string;
 }
 
+// ── 미인증 인증 흐름 (/api/web/auth) ──
+
+export interface AuthConfig {
+	oidc_enabled: boolean;
+	signup_enabled: boolean;
+	mail_enabled: boolean;
+}
+
+/** 로그인·2단계·가입 응답의 다음 단계. */
+export type AuthStatus = 'active' | 'totp' | 'email_verify';
+
+export interface LoginResult {
+	status: AuthStatus;
+	has_totp?: boolean;
+	has_passkey?: boolean;
+}
+
+export interface TotpStatus {
+	has_totp: boolean;
+	has_passkey: boolean;
+}
+
+export interface VerifyEmailStatus {
+	email: string;
+	verified: boolean;
+	pending: boolean;
+	mail_enabled: boolean;
+	ttl_minutes: number;
+}
+
 export interface TrendRow {
 	label: string;
 	count: number;

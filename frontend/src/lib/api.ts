@@ -17,18 +17,24 @@ export class ApiError extends Error {
 	}
 }
 
-export async function api<T = unknown>(path: string, opts: RequestInit = {}): Promise<T> {
+export async function api<T = unknown>(
+	path: string,
+	opts: RequestInit & { redirectOn401?: boolean } = {}
+): Promise<T> {
+	// 미인증 흐름(로그인·me 프로브)은 redirectOn401:false 로 401 을 직접 처리한다 —
+	// 기본값은 기존 SSR 로그인으로 보내는 공존 동작을 유지한다(컷오버 시 SPA /login 으로).
+	const { redirectOn401 = true, ...init } = opts;
 	const res = await fetch(`/api/web${path}`, {
 		credentials: 'same-origin',
 		headers: {
 			'X-Requested-With': 'fetch',
-			...(opts.body ? { 'Content-Type': 'application/json' } : {}),
-			...(opts.headers ?? {})
+			...(init.body ? { 'Content-Type': 'application/json' } : {}),
+			...(init.headers ?? {})
 		},
-		...opts
+		...init
 	});
 	if (res.status === 401) {
-		if (typeof window !== 'undefined') {
+		if (redirectOn401 && typeof window !== 'undefined') {
 			const next = encodeURIComponent(window.location.pathname + window.location.search);
 			window.location.href = `/login?next=${next}`;
 		}

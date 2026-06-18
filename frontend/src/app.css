@@ -90,3 +90,41 @@ button:hover { background: var(--bg-soft); }
 	.stat-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
 	.stat-card .value { font-size: 19px; }
 }
+
+/* 미인증 화면(로그인·가입·2단계·이메일 인증) — base.html auth_base 스타일 이식.
+   (auth) 라우트 그룹 레이아웃과 각 화면이 공유하므로 전역에 둔다. */
+main.plain { max-width: none; padding: 0; }
+.auth-shell { max-width: 392px; margin: 7vh auto 48px; padding: 0 16px; }
+.auth-brand { text-align: center; margin-bottom: 22px; }
+.auth-brand .logo { color: var(--fg); }
+.auth-brand .auth-title {
+	font-size: 21px; font-weight: 700; margin-top: 10px; letter-spacing: 0.1em;
+}
+.auth-brand .auth-tagline {
+	font-size: 12px; margin-top: 3px; color: var(--muted); letter-spacing: 0.05em;
+}
+.auth-card {
+	border: 1px solid var(--border); border-top: 2px solid var(--seal);
+	border-radius: 8px; padding: 20px 24px; background: var(--surface);
+}
+.auth-card h2 { font-size: 16px; margin: 0 0 14px; }
+.auth-card label { display: block; margin-bottom: 10px; font-size: 13px; }
+.auth-card input {
+	display: block; width: 100%; margin-top: 3px; padding: 5px 10px;
+	font: inherit; font-size: 13px; border: 1px solid var(--border);
+	border-radius: 4px; background: var(--surface); color: var(--fg);
+}
+.auth-card button[type='submit'] { width: 100%; margin-top: 4px; padding: 6px; }
+.auth-card .alt {
+	margin-top: 14px; padding-top: 12px;
+	border-top: 1px solid var(--border); font-size: 13px;
+}
+.auth-card .alt.muted { color: var(--muted); }
+.auth-card div.error {
+	background: var(--red-bg); color: var(--amber); border-radius: 4px;
+	padding: 6px 12px; margin-bottom: 12px; font-size: 13px;
+}
+.auth-card .notice {
+	background: var(--green-bg); color: var(--green); border-radius: 4px;
+	padding: 6px 12px; margin-bottom: 12px; font-size: 13px;
+}

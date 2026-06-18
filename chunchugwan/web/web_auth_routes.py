@@ -14,7 +14,7 @@ from __future__ import annotations
 import hmac
 import sqlite3
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -26,10 +26,22 @@ from .auth_routes import (
     _pending_session,
     _two_factor_target,
     _verify_target,
+    passkey_login_options as _ssr_passkey_login_options,
     set_session_cookie,
 )
 
 router = APIRouter(prefix="/api/web/auth")
+
+
+@router.get("/config")
+def auth_config() -> dict:
+    """로그인 화면 게이팅 — SSO·회원가입·메일 발송 가능 여부(비밀 아님, 공개)."""
+    with db.connect() as conn:
+        return {
+            "oidc_enabled": config.oidc_enabled(),
+            "signup_enabled": db.signup_enabled(conn),
+            "mail_enabled": mailer.mail_enabled(conn),
+        }
 
 
 class LoginReq(BaseModel):
@@ -94,6 +106,20 @@ def login(request: Request, body: LoginReq) -> JSONResponse:
         return _active_or_verify(conn, user)
 
 
+@router.get("/login/totp")
+def login_totp_status(request: Request) -> dict:
+    """2단계 인증 화면 상태 — pending_totp 세션의 사용 가능한 수단(TOTP·패스키)."""
+    sess = _pending_session(request)
+    if sess is None:
+        raise HTTPException(401, "패스워드 인증이 필요합니다")
+    with db.connect() as conn:
+        user = db.get_user_by_id(conn, sess["user_id"])
+        return {
+            "has_totp": user["totp_secret"] is not None,
+            "has_passkey": db.count_passkeys(conn, user["id"]) > 0,
+        }
+
+
 @router.post("/login/totp")
 def login_totp(request: Request, body: CodeReq) -> JSONResponse:
     """2단계 인증(TOTP) 코드 검증 → 세션 활성(또는 이메일 인증 단계). pending_totp 세션 필수."""
@@ -110,6 +136,47 @@ def login_totp(request: Request, body: CodeReq) -> JSONResponse:
         db.set_totp_last_used(conn, user["id"], window)
         status = "email_verify" if _email_verification_required(conn, user) else "active"
         # 세션을 active 로 승격(또는 pending_email_verify 전환) — 쿠키는 그대로 재설정
+        _two_factor_target(conn, sess["token_hash"], user, None)
+    resp = JSONResponse({"status": status})
+    set_session_cookie(resp, request.cookies[config.SESSION_COOKIE])
+    return resp
+
+
+@router.post("/login/passkey/options")
+def login_passkey_options(request: Request) -> Response:
+    """패스키 2단계 인증 옵션 발급 — SSR 핸들러를 그대로 재사용(pending 세션 전용)."""
+    return _ssr_passkey_login_options(request)
+
+
+@router.post("/login/passkey")
+async def login_passkey(request: Request) -> JSONResponse:
+    """패스키 2단계 인증 응답 검증 → 세션 활성(또는 이메일 인증 단계).
+
+    login_totp 와 같은 상태(active|email_verify) 계약을 따른다 — SSR 핸들러는
+    next URL 을 반환하지만 SPA 는 status 로 화면 전이를 판단하므로 별도 구현.
+    """
+    sess = _pending_session(request)
+    if sess is None:
+        raise HTTPException(401, "패스워드 인증이 필요합니다")
+    body = await request.json()
+    credential = body.get("credential")
+    if not isinstance(credential, dict):
+        raise HTTPException(400, "credential 누락")
+    with db.connect() as conn:
+        challenge = db.consume_session_challenge(conn, sess["token_hash"])
+        if challenge is None:
+            raise HTTPException(400, "진행 중인 인증이 없습니다 — 다시 시도하세요")
+        cred = db.get_passkey(conn, sess["user_id"], str(credential.get("id", "")))
+        if cred is None:
+            raise HTTPException(401, "등록되지 않은 패스키입니다")
+        new_count = auth.verify_passkey_authentication(
+            credential, challenge, cred["public_key"], cred["sign_count"]
+        )
+        if new_count is None:
+            raise HTTPException(401, "패스키 인증에 실패했습니다")
+        db.touch_passkey(conn, cred["id"], new_count)
+        user = db.get_user_by_id(conn, sess["user_id"])
+        status = "email_verify" if _email_verification_required(conn, user) else "active"
         _two_factor_target(conn, sess["token_hash"], user, None)
     resp = JSONResponse({"status": status})
     set_session_cookie(resp, request.cookies[config.SESSION_COOKIE])

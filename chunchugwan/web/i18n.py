@@ -572,6 +572,11 @@ _EN: dict[str, str] = {
         "The verification code expiry must be between {lo} and {hi} minutes.",
     "{email} (으)로 보낸 인증 코드를 입력하세요. 코드는 {n}분 후 만료됩니다.":
         "Enter the verification code sent to {email}. The code expires in {n} minutes.",
+    # SPA 는 이메일·만료 시간을 동적으로 끼워 넣어 문장을 조각으로 번역한다.
+    "(으)로 보낸 인증 코드를 입력하세요.": "is the address we sent your verification code to. Enter it below.",
+    "코드는": "Expires in",
+    "분 후 만료됩니다.": " minutes.",
+    "인증 코드를 다시 보냈습니다.": "Verification code resent.",
     "인증 코드": "Verification code",
     "코드를 받지 못했나요?": "Didn't get the code?",
     "인증 코드 다시 보내기": "Resend verification code",

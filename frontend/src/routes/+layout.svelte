@@ -5,9 +5,9 @@
 	import type { Snippet } from 'svelte';
 	import type { Me } from '$lib/types';
 
-	let { data, children }: { data: { me: Me }; children: Snippet } = $props();
+	let { data, children }: { data: { me: Me | null }; children: Snippet } = $props();
+	// me 가 null 이면 미인증 — 헤더 없이 (auth) 로그인 화면만 렌더한다.
 	const me = $derived(data.me);
-	const flags = $derived(me.flags);
 
 	// 테마 토글 — 자동(시스템) → 라이트 → 다크 순환 (base.html 의 wccgTheme 재사용).
 	const THEME_LABELS: Record<string, string> = {
@@ -41,6 +41,7 @@
 	let menuOpen = $state(false);
 </script>
 
+{#if me}
 <header>
 	<h1><a href="{base}/">{t('춘추관')}</a></h1>
 	<span class="muted tagline">{t('개인 웹 아카이브')}</span>
@@ -55,15 +56,15 @@
 		<a href="{base}/">{t('현황')}</a>
 		<a href="{base}/archives">{t('아카이브 사이트 목록')}</a>
 		<a href="{base}/documents">{t('전체 문서(파일)')}</a>
-		{#if flags.can_search}<a href="{base}/search">{t('검색')}</a>{/if}
-		{#if flags.can_archive}<a href="{base}/archive/new">{t('새 아카이빙')}</a>{/if}
+		{#if me.flags.can_search}<a href="{base}/search">{t('검색')}</a>{/if}
+		{#if me.flags.can_archive}<a href="{base}/archive/new">{t('새 아카이빙')}</a>{/if}
 		<a href="{base}/schedules">{t('스케줄')}</a>
-		{#if flags.can_view_logs}<a href="{base}/logs">{t('아카이빙 로그')}</a>{/if}
-		{#if flags.can_manage_users}<a href="{base}/system/users">{t('사용자')}</a>{/if}
-		{#if flags.can_manage_system}<a href="{base}/system/groups">{t('권한 그룹')}</a>{/if}
-		{#if flags.can_manage_users}<a href="{base}/system/api-keys">{t('API 키')}</a>{/if}
-		{#if flags.can_manage_system}<a href="{base}/system">{t('시스템')}</a>{/if}
-		{#if flags.can_manage_system}<a href="{base}/system/logs">{t('시스템 로그')}</a>{/if}
+		{#if me.flags.can_view_logs}<a href="{base}/logs">{t('아카이빙 로그')}</a>{/if}
+		{#if me.flags.can_manage_users}<a href="{base}/system/users">{t('사용자')}</a>{/if}
+		{#if me.flags.can_manage_system}<a href="{base}/system/groups">{t('권한 그룹')}</a>{/if}
+		{#if me.flags.can_manage_users}<a href="{base}/system/api-keys">{t('API 키')}</a>{/if}
+		{#if me.flags.can_manage_system}<a href="{base}/system">{t('시스템')}</a>{/if}
+		{#if me.flags.can_manage_system}<a href="{base}/system/logs">{t('시스템 로그')}</a>{/if}
 		<span class="spacer"></span>
 		<button type="button" onclick={cycleTheme}>{THEME_LABELS[themeMode]}</button>
 		{#if me.user}
@@ -71,7 +72,7 @@
 				<summary class="mono muted">{me.user.display_name || me.user.email}</summary>
 				<div class="user-menu-items">
 					<a href="{base}/settings/account" onclick={() => (menuOpen = false)}>{t('계정')}</a>
-					{#if flags.can_use_api_keys}
+					{#if me.flags.can_use_api_keys}
 						<a href="{base}/settings/api-keys" onclick={() => (menuOpen = false)}>{t('개인 API Key')}</a>
 					{/if}
 					<a href="{base}/settings/archives" onclick={() => (menuOpen = false)}>{t('내 아카이브')}</a>
@@ -81,8 +82,9 @@
 		{/if}
 	</nav>
 </header>
+{/if}
 
-<main>
+<main class:plain={!me}>
 	{@render children()}
 </main>
 

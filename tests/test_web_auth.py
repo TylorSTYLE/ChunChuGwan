@@ -175,3 +175,57 @@ def test_login_email_verify_flow(tmp_db, monkeypatch):
     r2 = c.post("/api/web/auth/verify-email", json={"code": captured[0]}, headers=POST_HEADERS)
     assert r2.status_code == 200 and r2.json()["status"] == "active"
     assert c.get("/api/web/me").json()["authenticated"] is True
+
+
+# ---- 로그인 화면 config (SPA 게이팅) ----
+
+
+def test_auth_config(tmp_db):
+    mkuser(email="admin@test.co", role="admin")  # first_run 게이트 회피
+    body = client().get("/api/web/auth/config").json()
+    assert set(body) == {"oidc_enabled", "signup_enabled", "mail_enabled"}
+    assert all(isinstance(v, bool) for v in body.values())
+
+
+# ---- 2단계 인증 화면 상태(GET) ----
+
+
+def test_login_totp_status(tmp_db):
+    """패스워드 단계 후 사용 가능한 2단계 수단(TOTP·패스키)을 알린다."""
+    mkuser(email="ts@test.co", totp=True)
+    c = client()
+    _login(c, "ts@test.co")
+    body = c.get("/api/web/auth/login/totp").json()
+    assert body == {"has_totp": True, "has_passkey": False}
+
+
+def test_login_totp_status_no_session(tmp_db):
+    """pending_totp 세션 없이 상태 조회하면 401."""
+    assert client().get("/api/web/auth/login/totp").status_code == 401
+
+
+# ---- 패스키 로그인 옵션 게이트 ----
+
+
+def test_passkey_options_no_session(tmp_db):
+    """pending_totp 세션 없이 옵션 발급 호출하면 401."""
+    r = client().post("/api/web/auth/login/passkey/options", headers=POST_HEADERS)
+    assert r.status_code == 401
+
+
+def test_passkey_options_no_passkey(tmp_db):
+    """pending 세션은 있으나 등록된 패스키가 없으면 400."""
+    mkuser(email="np@test.co", totp=True)  # totp 로 pending 진입, 패스키는 없음
+    c = client()
+    _login(c, "np@test.co")
+    r = c.post("/api/web/auth/login/passkey/options", headers=POST_HEADERS)
+    assert r.status_code == 400
+
+
+def test_passkey_login_no_session(tmp_db):
+    """pending_totp 세션 없이 패스키 검증 호출하면 401."""
+    r = client().post(
+        "/api/web/auth/login/passkey",
+        json={"credential": {"id": "x"}}, headers=POST_HEADERS,
+    )
+    assert r.status_code == 401
