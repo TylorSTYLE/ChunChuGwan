@@ -15,3 +15,6 @@ chunchugwan/web/frontend_dist/
 
 # fablize 골 트래커 상태
 .fablize/
+
+# PyCharm 로컬 전용 워크스페이스 설정 (절대 경로·개인 설정 포함)
+.idea/workspace.xml

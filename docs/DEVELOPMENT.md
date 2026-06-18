@@ -14,7 +14,8 @@ uv run pytest                            # 테스트 (네트워크 불필요, ~1
 
 | 구성 | 용도 |
 |---|---|
-| `wccg serve` | 대시보드 실행 — `web/app.py` 라우트 디버깅 |
+| `wccg serve` | 대시보드 실행 — `web/app.py` 라우트 디버깅 (Before launch 로 프론트엔드 자동 빌드) |
+| `wccg worker` | 아카이빙 워커 — `pipeline.py`·`archive_worker.py` 디버깅 |
 | `wccg add` | 아카이빙 1회 실행 — 캡처/파이프라인 디버깅 (URL은 구성 편집에서 변경) |
 | `wccg list` / `wccg diff` | CLI 조회 명령 |
 | `pytest: all` | `tests/` 전체를 테스트 러너로 실행 (개별 테스트 디버그/재실행 가능) |
@@ -29,9 +30,10 @@ uv run pytest                            # 테스트 (네트워크 불필요, ~1
   응답이 끝난 뒤 브레이크포인트가 잡힌다.
 - **작업 디렉토리**: 모든 구성이 프로젝트 루트 기준이라 터미널 실행과 동일한
   `./archive`를 사용한다.
-- 대시보드는 SvelteKit SPA(`frontend/`)다 — `serve` 전에 `npm --prefix frontend run build`
-  로 빌드해 두면 FastAPI 가 산출물을 루트(/)로 서빙한다(빌드가 없으면 503). SPA 개발 중에는
-  `npm --prefix frontend run dev`(Vite, HMR)로 띄우고 API 는 `wccg serve` 로 따로 돌린다.
+- 대시보드는 SvelteKit SPA(`frontend/`)다 — `wccg serve` 구성은 Before launch 로
+  `npm run build`를 자동 실행하므로 별도 빌드 없이 바로 시작할 수 있다(빌드가 없으면 503).
+  SPA 개발 중에는 `npm --prefix frontend run dev`(Vite, HMR)로 띄우고 API 는
+  `wccg serve` 로 따로 돌린다.
 
 ## 모듈 구성
 
