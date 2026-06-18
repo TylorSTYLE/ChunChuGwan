@@ -12,3 +12,6 @@ compose.override.yaml
 
 # SvelteKit SPA 빌드 산출물 — Docker/CI 가 빌드해 동봉(소스 커밋 안 함)
 chunchugwan/web/frontend_dist/
+
+# fablize 골 트래커 상태
+.fablize/

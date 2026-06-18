@@ -163,6 +163,60 @@ def test_my_archives_empty(tmp_db):
     assert body["items"] == [] and body["total"] == 0
 
 
+def _insert_my_log(requester, status="new", domain="example.com"):
+    with db.connect() as conn:
+        return db.insert_archive_log(
+            conn, url=f"https://{domain}/x", domain=domain, status=status,
+            started_at="2026-06-01T00:00:00+00:00", requested_by=requester,
+        )
+
+
+def test_my_archives_own_only(tmp_db):
+    """내 아카이브는 본인이 요청한 로그만 보인다(requested_by 필터)."""
+    uid_a, token_a = make_user(email="a@test.co", role="archiver")
+    uid_b, _ = make_user(email="b@test.co", role="archiver")
+    _insert_my_log(uid_a, domain="mine.com")
+    _insert_my_log(uid_b, domain="theirs.com")
+    body = client_for(token_a).get("/api/web/settings/archives").json()
+    assert body["total"] == 1
+    assert body["items"][0]["log"]["domain"] == "mine.com"
+
+
+def test_my_archives_status_filter(tmp_db):
+    uid, token = make_user(role="archiver")
+    _insert_my_log(uid, status="new")
+    _insert_my_log(uid, status="error")
+    c = client_for(token)
+    assert c.get("/api/web/settings/archives").json()["total"] == 2
+    errors = c.get("/api/web/settings/archives?status=error").json()
+    assert errors["total"] == 1
+    assert errors["items"][0]["log"]["status"] == "error"
+
+
+# ---- 계정 이메일 인증 표시·SSO 탈퇴 (#9 잔여) ----
+
+
+def test_account_email_verified_display(tmp_db):
+    uid, token = make_user(email="me@test.co")
+    c = client_for(token)
+    assert c.get("/api/web/settings/account").json()["email_verified"] is False
+    with db.connect() as conn:
+        db.set_email_verified(conn, uid)
+    assert c.get("/api/web/settings/account").json()["email_verified"] is True
+
+
+def test_account_sso_withdraw(tmp_db):
+    """SSO 전용(패스워드 없음) 계정은 확인 이메일 입력으로 탈퇴한다."""
+    _, token = make_user(email="sso@test.co", password=None, role="viewer")
+    c = client_for(token)
+    # 이메일 불일치 → 400
+    assert c.post("/api/web/settings/account/withdraw",
+                  json={"confirm": "wrong@test.co"}, headers=POST_HEADERS).status_code == 400
+    # 이메일 일치 → 탈퇴
+    assert c.post("/api/web/settings/account/withdraw",
+                  json={"confirm": "sso@test.co"}, headers=POST_HEADERS).status_code == 200
+
+
 # ---- 2단계 인증 TOTP (#9) ----
 
 
