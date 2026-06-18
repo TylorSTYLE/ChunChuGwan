@@ -45,6 +45,11 @@
 	// 백업·복원·가져오기
 	let importMode = $state('merge');
 
+	// 유지보수 — 재색인 진행
+	let reindexRunning = $state(false);
+	let reindexDone = $state(0);
+	let reindexTotal = $state(0);
+
 	$effect(() => {
 		signupEnabled = s.signup_enabled;
 		signupRole = s.signup_default_role;
@@ -137,6 +142,55 @@
 			error = err instanceof ApiError ? err.message : String(err);
 		} finally {
 			busy = false;
+		}
+	}
+
+	async function compact() {
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			const r = await api<{ ran: boolean }>('/system/compact', { method: 'POST' });
+			notice = r.ran ? t('최적화했습니다.') : t('최적화할 항목이 없습니다.');
+			await invalidateAll();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function pollReindex() {
+		try {
+			const s = await api<{ running: boolean; done: number; total: number; error: string | null }>(
+				'/system/search/reindex/status'
+			);
+			reindexDone = s.done;
+			reindexTotal = s.total;
+			if (s.running) {
+				setTimeout(pollReindex, 1000);
+			} else {
+				reindexRunning = false;
+				notice = s.error ? `${t('재색인 실패')}: ${s.error}` : t('재색인을 완료했습니다.');
+				await invalidateAll();
+			}
+		} catch (err) {
+			reindexRunning = false;
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function startReindex() {
+		error = '';
+		notice = '';
+		try {
+			await api('/system/search/reindex', { method: 'POST' });
+			reindexRunning = true;
+			reindexDone = 0;
+			reindexTotal = 0;
+			pollReindex();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
 		}
 	}
 
@@ -322,8 +376,18 @@
 	</label>
 </fieldset>
 
+<h3>{t('유지보수')}</h3>
+<fieldset class="sec">
+	<legend>{t('저장공간·검색')}</legend>
+	<button disabled={busy} onclick={compact}>{t('저장공간 최적화')}</button>
+	<div class="btn-row">
+		<button disabled={busy || reindexRunning} onclick={startReindex}>{t('검색 인덱스 전체 재색인')}</button>
+		{#if reindexRunning}<span class="muted">{t('재색인 중')} {reindexDone}/{reindexTotal}</span>{/if}
+	</div>
+</fieldset>
+
 <p class="muted" style="font-size:12px; margin-top:20px">
-	{t('데이터 이전·재색인은 이어서 추가됩니다.')}
+	{t('데이터 이전은 이어서 추가됩니다.')}
 </p>
 
 <style>

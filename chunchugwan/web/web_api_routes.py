@@ -1994,6 +1994,66 @@ def system_import(
     }
 
 
+@router.post("/system/compact")
+def system_compact(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """저장공간 최적화(동기) — system_routes.system_compact 의 JSON 판. 멱등·내용 보존."""
+    _require_manage_system(user)
+    if sum(optimize.pending_counts()) == 0:
+        return {"ok": True, "ran": False}
+    try:
+        result = optimize.run()
+    except OSError as e:
+        raise HTTPException(500, f"최적화 실패: {e}")
+    audit.log(request, "저장공간 최적화 실행")
+    c = result.compact
+    return {
+        "ok": True, "ran": True,
+        "result": {
+            "converted": c.converted, "total": c.total,
+            "externalized": c.externalized, "documents": c.documents,
+            "styles_extracted": result.styles_extracted,
+            "indexed": result.indexed, "swept": result.swept,
+            "saved_bytes": c.saved_bytes + result.styles_saved_bytes + result.swept_bytes,
+        },
+    }
+
+
+@router.post("/system/search/reindex")
+def system_search_reindex(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """검색 인덱스 전체 다시 색인을 백그라운드로 시작 — SSR 과 같은 인메모리 상태 공유."""
+    import threading
+
+    from .system_routes import _reindex_lock, _reindex_state, _reindex_worker
+
+    _require_manage_system(user)
+    if not searchindex.available():
+        raise HTTPException(
+            400, "검색 인덱스를 쓸 수 없습니다 — 이 SQLite 빌드에 FTS5 가 없습니다.")
+    with _reindex_lock:
+        if _reindex_state["running"]:
+            return {"ok": True, "started": False, "already_running": True}
+        _reindex_state.update(
+            running=True, done=0, total=0, result=None, error=None, finished_at=None)
+    audit.log(request, "검색 인덱스 전체 다시 색인 시작")
+    threading.Thread(target=_reindex_worker, daemon=True).start()
+    return {"ok": True, "started": True}
+
+
+@router.get("/system/search/reindex/status")
+def system_search_reindex_status(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """전체 다시 색인 진행 상태(JSON) — 시스템 화면 폴링용."""
+    from .system_routes import reindex_status
+
+    _require_manage_system(user)
+    return reindex_status()
+
+
 # ── 개인 설정 (계정·개인 API Key·내 아카이브) ────────────────────────────────
 # 헤더 개인설정 드롭다운의 세 화면. SSR auth_routes 의 /settings/* 와 같은 코어
 # 동작을 JSON 으로 제공한다 (원칙 1·6 — 인증 데이터는 단방향, 쓰기는 코어 경유).
