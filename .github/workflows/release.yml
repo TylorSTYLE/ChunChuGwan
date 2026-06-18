@@ -22,7 +22,7 @@ jobs:
   release:
     # 머지된 PR 만 (단순 close 는 제외)
     if: github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 10
 
     steps:
