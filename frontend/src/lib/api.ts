@@ -19,6 +19,34 @@ export class ApiError extends Error {
 	}
 }
 
+/** 서버 오류 응답에서 사람이 읽을 메시지를 뽑는다.
+ *
+ * FastAPI 는 HTTPException 이면 `detail` 에 문자열을, 요청 검증 실패(422)면
+ * `detail` 에 `[{loc, msg, type}, ...]` 배열을 담는다. 배열을 그대로
+ * Error.message 로 넘기면 `[object Object],...` 로 직렬화돼 화면에 노출되므로
+ * 여기서 항상 문자열로 정규화한다(필드명 + 메시지). */
+export function errorDetail(body: unknown, fallback: string): string {
+	if (!body || typeof body !== 'object') return fallback;
+	const detail = (body as { detail?: unknown }).detail;
+	if (typeof detail === 'string' && detail) return detail;
+	if (Array.isArray(detail)) {
+		const msgs = detail
+			.map((item) => {
+				if (!item || typeof item !== 'object' || !('msg' in item))
+					return typeof item === 'string' ? item : '';
+				const rawLoc = (item as { loc?: unknown }).loc;
+				const loc = Array.isArray(rawLoc)
+					? rawLoc.filter((p) => p !== 'body').join('.')
+					: '';
+				const msg = String((item as { msg?: unknown }).msg ?? '');
+				return loc ? `${loc}: ${msg}` : msg;
+			})
+			.filter(Boolean);
+		if (msgs.length) return msgs.join('; ');
+	}
+	return fallback;
+}
+
 export async function api<T = unknown>(
 	path: string,
 	// redirectOn401 은 과거 호환을 위해 받기만 하고 무시한다(인증 라우팅은 레이아웃 권위).
@@ -42,8 +70,7 @@ export async function api<T = unknown>(
 	if (!res.ok) {
 		let detail = res.statusText;
 		try {
-			const body = await res.json();
-			detail = body.detail ?? detail;
+			detail = errorDetail(await res.json(), res.statusText);
 		} catch {
 			/* JSON 아님 — statusText 유지 */
 		}
@@ -66,7 +93,7 @@ export async function download(path: string): Promise<void> {
 	if (!res.ok) {
 		let detail = res.statusText;
 		try {
-			detail = (await res.json()).detail ?? detail;
+			detail = errorDetail(await res.json(), res.statusText);
 		} catch {
 			/* JSON 아님 */
 		}
