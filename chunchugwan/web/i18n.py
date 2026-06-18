@@ -1285,6 +1285,10 @@ _EN: dict[str, str] = {
     "일부 파일을 받지 못했습니다 ({n}개). 전체 재시도하거나, 무시하고 이전을 마무리할 수 있습니다(빠진 스냅샷 파일은 표시되지 않을 수 있습니다).":
         "Some files could not be received ({n}). You can retry them all, or ignore "
         "and finish the migration (missing snapshot files may not display).",
+    # SPA setup — 개수 동적 부분을 뺀 조각 버전
+    "일부 파일을 받지 못했습니다. 전체 재시도하거나, 무시하고 이전을 마무리할 수 있습니다(빠진 스냅샷 파일은 표시되지 않을 수 있습니다).":
+        "Some files could not be received. You can retry them all, or ignore and "
+        "finish the migration (missing snapshot files may not display).",
     "실패한 파일 목록": "Failed files",
     "전체 재시도": "Retry all",
     "빠진 파일을 무시하고 이전을 마무리할까요? 받은 데이터로 서비스를 시작합니다.":

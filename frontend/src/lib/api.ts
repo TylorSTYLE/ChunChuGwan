@@ -3,8 +3,10 @@
  * - same-origin 쿠키로 세션 인증(FastAPI 가 SPA 를 같은 출처로 서빙).
  * - 변경 요청에 `X-Requested-With` 를 실어 CSRF 방어를 보강한다
  *   (서버는 Origin 검사도 한다 — auth_gate).
- * - 401 은 세션 만료/미인증 — 공존 기간에는 기존 SSR 로그인(/login)으로 보낸다.
- *   빅뱅 컷오버 후에는 SPA 의 /login 라우트로 바꾼다.
+ * - 401(세션 만료/미인증)은 던지기만 한다. 인증 라우팅은 루트 레이아웃이
+ *   단일 권위로 담당한다(매 네비게이션마다 /me 로 재평가 → setup·pending·login).
+ *   페이지 로드가 401 을 직접 리다이렉트하면 레이아웃 부트스트랩과 경합하므로
+ *   하지 않는다. 액션 호출의 401 은 ApiError 로 표면화돼 화면이 안내한다.
  */
 
 export class ApiError extends Error {
@@ -19,11 +21,10 @@ export class ApiError extends Error {
 
 export async function api<T = unknown>(
 	path: string,
+	// redirectOn401 은 과거 호환을 위해 받기만 하고 무시한다(인증 라우팅은 레이아웃 권위).
 	opts: RequestInit & { redirectOn401?: boolean } = {}
 ): Promise<T> {
-	// 미인증 흐름(로그인·me 프로브)은 redirectOn401:false 로 401 을 직접 처리한다 —
-	// 기본값은 기존 SSR 로그인으로 보내는 공존 동작을 유지한다(컷오버 시 SPA /login 으로).
-	const { redirectOn401 = true, ...init } = opts;
+	const { redirectOn401: _ignored, ...init } = opts;
 	const res = await fetch(`/api/web${path}`, {
 		credentials: 'same-origin',
 		headers: {
@@ -36,10 +37,6 @@ export async function api<T = unknown>(
 		...init
 	});
 	if (res.status === 401) {
-		if (redirectOn401 && typeof window !== 'undefined') {
-			const next = encodeURIComponent(window.location.pathname + window.location.search);
-			window.location.href = `/login?next=${next}`;
-		}
 		throw new ApiError(401, '인증이 필요합니다');
 	}
 	if (!res.ok) {

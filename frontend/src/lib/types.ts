@@ -48,6 +48,15 @@ export interface AuthConfig {
 /** 로그인·2단계·가입 응답의 다음 단계. */
 export type AuthStatus = 'active' | 'totp' | 'email_verify';
 
+export interface MigrationStatus {
+	status: string;
+	done?: number;
+	total?: number;
+	insecure?: boolean;
+	error?: string;
+	failed?: { path: string; error: string }[];
+}
+
 export interface LoginResult {
 	status: AuthStatus;
 	has_totp?: boolean;

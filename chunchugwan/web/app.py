@@ -195,16 +195,23 @@ async def auth_gate(request: Request, call_next):
 
         if first_run:
             if path.startswith("/api/"):
-                # API 클라이언트에게 /setup 리다이렉트는 의미가 없다
-                return PlainTextResponse(
-                    "최초 설정이 완료되지 않았습니다", status_code=401
-                )
-            # /setup 과 그 하위(복원·네트워크 이전·진행 상태 폴링)는 최초 설정 흐름
-            if (
+                # SPA 최초 설정 API(/api/web/auth/setup*)만 통과 — 나머지 API 는
+                # 아직 설정 전이라 401 (API 클라이언트에게 /setup 리다이렉트는 무의미).
+                if not (
+                    path == "/api/web/auth/setup"
+                    or path.startswith("/api/web/auth/setup/")
+                ):
+                    return PlainTextResponse(
+                        "최초 설정이 완료되지 않았습니다", status_code=401
+                    )
+            # /setup·그 하위(SSR), /ui(SPA 셸·setup 화면)는 최초 설정 흐름
+            elif (
                 path != "/setup"
                 and not path.startswith("/setup/")
                 and path != "/healthz"
                 and path not in _BROWSER_ICON_PATHS
+                and path != "/ui"
+                and not path.startswith("/ui/")
             ):
                 return RedirectResponse("/setup", status_code=302)
         else:
@@ -221,11 +228,17 @@ async def auth_gate(request: Request, call_next):
                     else "탈퇴한 계정입니다."
                 )
                 return PlainTextResponse(t(request, message), status_code=403)
-            # 승인 대기(권한없음) 계정 — 안내 페이지·로그아웃·언어 전환만 허용
+            # 승인 대기(권한없음) 계정 — 안내 페이지·로그아웃·언어 전환만 허용.
+            # SPA 셸(/ui)·세션 컨텍스트(/me)·번역(i18n)은 통과시켜 SPA 가 pending
+            # 화면을 직접 띄우게 한다 (me.user.role == 'pending' 로 판별).
             if (
                 request.state.user is not None
                 and request.state.user["role"] == "pending"
                 and path not in _PENDING_ALLOWED_PATHS
+                and path != "/ui"
+                and not path.startswith("/ui/")
+                and path != "/api/web/me"
+                and not path.startswith("/api/web/i18n/")
             ):
                 return RedirectResponse("/pending", status_code=302)
             # /resource/ 는 인증 예외 — 샌드박스된 page.html(불투명 출처)의

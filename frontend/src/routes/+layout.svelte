@@ -6,8 +6,10 @@
 	import type { Me } from '$lib/types';
 
 	let { data, children }: { data: { me: Me | null }; children: Snippet } = $props();
-	// me 가 null 이면 미인증 — 헤더 없이 (auth) 로그인 화면만 렌더한다.
+	// me 가 null(미인증)이거나 승인 대기(pending)면 헤더 없이 셸만 렌더한다 —
+	// 미인증은 (auth) 로그인·setup, pending 은 안내 화면이 children 으로 들어온다.
 	const me = $derived(data.me);
+	const chrome = $derived(me && me.user?.role !== 'pending');
 
 	// 테마 토글 — 자동(시스템) → 라이트 → 다크 순환 (base.html 의 wccgTheme 재사용).
 	const THEME_LABELS: Record<string, string> = {
@@ -41,7 +43,7 @@
 	let menuOpen = $state(false);
 </script>
 
-{#if me}
+{#if me && me.user?.role !== 'pending'}
 <header>
 	<h1><a href="{base}/">{t('춘추관')}</a></h1>
 	<span class="muted tagline">{t('개인 웹 아카이브')}</span>
@@ -89,7 +91,7 @@
 </header>
 {/if}
 
-<main class:plain={!me}>
+<main class:plain={!chrome}>
 	{@render children()}
 </main>
 
