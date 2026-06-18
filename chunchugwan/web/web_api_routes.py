@@ -1839,6 +1839,71 @@ def system_network_tag_merge(
     return {"ok": True, "moved": moved}
 
 
+class SmtpSettingsReq(BaseModel):
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_tls: str = "starttls"
+    smtp_clear_password: bool = False
+
+
+@router.post("/system/smtp-settings")
+def system_smtp_settings(
+    request: Request, body: SmtpSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """초대·인증 메일 SMTP 설정 — system_routes.system_smtp_settings 의 JSON 판.
+
+    비밀번호는 대칭 암호화 암호문으로만 저장(원칙 6 예외). 빈 입력이면 기존
+    저장값 유지, smtp_clear_password 면 삭제.
+    """
+    _require_manage_system(user)
+    host = body.smtp_host.strip()
+    if body.smtp_tls not in mailer.SMTP_TLS_MODES:
+        raise HTTPException(400, "TLS 모드가 올바르지 않습니다.")
+    if not (1 <= body.smtp_port <= 65535):
+        raise HTTPException(400, "SMTP 포트는 1 ~ 65535 사이여야 합니다.")
+    if body.smtp_password and not crypto.is_configured():
+        raise HTTPException(
+            400, "WCCG_SECRET_KEY 가 설정되지 않아 SMTP 비밀번호를 저장할 수 없습니다.")
+    with db.connect() as conn:
+        db.set_setting(conn, db.SMTP_HOST_KEY, host)
+        db.set_setting(conn, db.SMTP_PORT_KEY, str(body.smtp_port))
+        db.set_setting(conn, db.SMTP_USER_KEY, body.smtp_user.strip())
+        db.set_setting(conn, db.SMTP_FROM_KEY, body.smtp_from.strip())
+        db.set_setting(conn, db.SMTP_TLS_KEY, body.smtp_tls)
+        if body.smtp_password:
+            db.set_setting(conn, db.SMTP_PASSWORD_KEY, crypto.encrypt(body.smtp_password))
+        elif body.smtp_clear_password:
+            db.delete_setting(conn, db.SMTP_PASSWORD_KEY)
+    audit.log(request, "메일(SMTP) 설정 변경: 호스트 %s, 포트 %d, TLS %s",
+              host or "(없음)", body.smtp_port, body.smtp_tls)
+    return {"ok": True}
+
+
+@router.post("/system/smtp-test")
+def system_smtp_test(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """저장된 SMTP 설정으로 요청 관리자 본인에게 테스트 메일 발송."""
+    _require_manage_system(user)
+    to_email = user["email"] if user else ""
+    if not to_email:
+        raise HTTPException(400, "테스트 메일을 받을 이메일 주소가 없습니다.")
+    with db.connect() as conn:
+        smtp = mailer.resolve_config(conn)
+    if not smtp.enabled:
+        raise HTTPException(400, "SMTP 호스트가 설정되지 않았습니다.")
+    try:
+        mailer.send_test(smtp, to_email)
+    except (smtplib.SMTPException, OSError) as e:
+        raise HTTPException(502, f"테스트 메일 발송에 실패했습니다: {e}")
+    audit.log(request, "SMTP 테스트 메일 발송: %s", to_email)
+    return {"ok": True, "email": to_email}
+
+
 # ── 개인 설정 (계정·개인 API Key·내 아카이브) ────────────────────────────────
 # 헤더 개인설정 드롭다운의 세 화면. SSR auth_routes 의 /settings/* 와 같은 코어
 # 동작을 JSON 으로 제공한다 (원칙 1·6 — 인증 데이터는 단방향, 쓰기는 코어 경유).

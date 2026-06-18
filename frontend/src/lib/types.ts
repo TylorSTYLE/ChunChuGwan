@@ -482,7 +482,15 @@ export interface SystemOverview {
 	document_limit_ranges: Record<string, number>;
 	network_tags: (Record<string, unknown> & { id: string; name: string })[];
 	credential_key_set: boolean;
-	smtp_config: Record<string, unknown> & { enabled: boolean; host: string };
+	smtp_config: Record<string, unknown> & {
+		enabled: boolean;
+		host: string;
+		port: number;
+		user: string;
+		sender: string;
+		tls: string;
+		has_password: boolean;
+	};
 	smtp_tls_modes: string[];
 	archive_root: string;
 	usage: Record<string, number>;

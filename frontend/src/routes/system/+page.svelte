@@ -33,6 +33,15 @@
 	let mergeSource = $state('');
 	let mergeTarget = $state('');
 
+	// SMTP 폼
+	let smtpHost = $state('');
+	let smtpPort = $state(587);
+	let smtpUser = $state('');
+	let smtpFrom = $state('');
+	let smtpTls = $state('starttls');
+	let smtpPassword = $state('');
+	let smtpClearPw = $state(false);
+
 	$effect(() => {
 		signupEnabled = s.signup_enabled;
 		signupRole = s.signup_default_role;
@@ -47,6 +56,11 @@
 		docCount = s.document_limits.max_count;
 		docMb = s.document_limits.max_mb;
 		docTimeout = s.document_limits.timeout_seconds;
+		smtpHost = s.smtp_config.host;
+		smtpPort = s.smtp_config.port;
+		smtpUser = s.smtp_config.user;
+		smtpFrom = s.smtp_config.sender;
+		smtpTls = s.smtp_config.tls;
 	});
 
 	async function save(path: string, body?: Record<string, unknown>): Promise<boolean> {
@@ -77,6 +91,36 @@
 		if (await save('/system/network-tags/merge', { source: mergeSource, target: mergeTarget })) {
 			mergeSource = '';
 			mergeTarget = '';
+		}
+	}
+
+	async function saveSmtp() {
+		const ok = await save('/system/smtp-settings', {
+			smtp_host: smtpHost,
+			smtp_port: smtpPort,
+			smtp_user: smtpUser,
+			smtp_from: smtpFrom,
+			smtp_tls: smtpTls,
+			smtp_password: smtpPassword,
+			smtp_clear_password: smtpClearPw
+		});
+		if (ok) {
+			smtpPassword = '';
+			smtpClearPw = false;
+		}
+	}
+
+	async function testSmtp() {
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			await api('/system/smtp-test', { method: 'POST' });
+			notice = t('테스트 메일을 보냈습니다.');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
 		}
 	}
 </script>
@@ -189,12 +233,32 @@
 {/if}
 
 <h3>{t('메일(SMTP)')}</h3>
-<p class="muted">
-	{s.smtp_config.enabled ? `${t('사용 중')} · ${s.smtp_config.host}` : t('미설정')}
-</p>
+<fieldset class="sec">
+	<legend>{s.smtp_config.enabled ? t('사용 중') : t('미설정')}</legend>
+	<label>{t('호스트')} <input type="text" bind:value={smtpHost} /></label>
+	<label>{t('포트')} <input type="number" bind:value={smtpPort} min="1" max="65535" /></label>
+	<label>{t('사용자')} <input type="text" bind:value={smtpUser} /></label>
+	<label>{t('보내는 주소')} <input type="text" bind:value={smtpFrom} /></label>
+	<label>TLS
+		<select bind:value={smtpTls}>
+			{#each s.smtp_tls_modes as m}<option value={m}>{m}</option>{/each}
+		</select>
+	</label>
+	<label>{t('비밀번호')}
+		<input type="password" bind:value={smtpPassword}
+			placeholder={s.smtp_config.has_password ? '••••••••' : ''} />
+	</label>
+	{#if s.smtp_config.has_password}
+		<label class="ck"><input type="checkbox" bind:checked={smtpClearPw} /> {t('저장된 비밀번호 삭제')}</label>
+	{/if}
+	<div class="btn-row">
+		<button disabled={busy} onclick={saveSmtp}>{t('저장')}</button>
+		<button disabled={busy || !s.smtp_config.enabled} onclick={testSmtp}>{t('테스트 메일 보내기')}</button>
+	</div>
+</fieldset>
 
 <p class="muted" style="font-size:12px; margin-top:20px">
-	{t('백업·복원·데이터 이전·재색인·SMTP 설정은 이어서 추가됩니다.')}
+	{t('백업·복원·데이터 이전·재색인은 이어서 추가됩니다.')}
 </p>
 
 <style>
@@ -249,5 +313,9 @@
 	.taglist li .del {
 		margin-left: auto;
 		font-size: 12px;
+	}
+	.btn-row {
+		display: flex;
+		gap: 8px;
 	}
 </style>
