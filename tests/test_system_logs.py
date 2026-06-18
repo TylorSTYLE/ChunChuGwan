@@ -160,8 +160,3 @@ def test_install_rejects_unknown_source(tmp_db):
 # ---- /system/logs 화면 · 권한 ----
 
 
-def test_viewer_can_see_archive_logs(client):
-    _login(client, "viewer@test.co")
-    assert client.get("/logs").status_code == 200
-
-

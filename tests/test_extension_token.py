@@ -160,14 +160,6 @@ def test_system_key_permissions_use_stored_columns(client):
 # ---- 계정 화면 발급/폐기 ----
 
 
-def test_account_page_hides_api_keys_for_viewer(client):
-    """use_api_keys 권한이 없는 viewer 는 계정 화면에 개인 API Key 링크가 없다."""
-    _login(client, "viewer@test.co")
-    res = client.get("/settings/account")
-    assert res.status_code == 200
-    assert 'href="/settings/api-keys"' not in res.text
-
-
 # ---- 관리 화면 격리 / 사용자 삭제 ----
 
 

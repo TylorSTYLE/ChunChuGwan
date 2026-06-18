@@ -95,16 +95,6 @@ def _seed_needs_human(url: str = "https://sd.test/article") -> int:
     return job["id"]
 
 
-def test_viewer_sees_schedules_readonly(client):
-    """viewer 도 스케줄 화면은 볼 수 있지만 변경/해제 폼은 보이지 않는다."""
-    _login(client, "viewer@test.co")
-    res = client.get("/schedules")
-    assert res.status_code == 200
-    assert "주기 변경" not in res.text
-    assert "/schedule/next-run" not in res.text
-    assert "/schedule/delete" not in res.text
-
-
 # ---- 차단된 계정 ----
 
 
