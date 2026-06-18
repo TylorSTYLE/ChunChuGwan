@@ -128,6 +128,13 @@
 	</div>
 {/if}
 
+{#if s.can_manage_credentials}
+	<p class="cred-link">
+		<a href="{base}/sites/{s.site.id}/credentials">{t('로그인 자격증명 관리')}</a>
+		<span class="muted">{t('— 이 사이트 캡처 시 사용할 로그인 정보')}</span>
+	</p>
+{/if}
+
 {#if s.can_delete}
 	<fieldset class="danger-zone">
 		<legend>{t('위험 구역')}</legend>
@@ -136,6 +143,10 @@
 {/if}
 
 <style>
+	.cred-link {
+		font-size: 13px;
+		margin: 16px 0 0;
+	}
 	td.url-cell {
 		max-width: 420px;
 		overflow: hidden;

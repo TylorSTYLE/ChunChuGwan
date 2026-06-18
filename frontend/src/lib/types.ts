@@ -205,6 +205,25 @@ export interface SiteDetail {
 	failed_items: Record<string, unknown>[];
 	can_archive: boolean;
 	can_delete: boolean;
+	can_manage_credentials: boolean;
+}
+
+// ── 사이트 로그인 자격증명 (/api/web/sites/{id}/credentials) ──
+
+export interface SiteCredential {
+	id: number;
+	label: string;
+	kind: string;
+	kind_label: string;
+	creator_email: string | null;
+	created_at: string;
+}
+
+export interface CredentialsData {
+	site: { id: number; site_key: string };
+	credentials: SiteCredential[];
+	kinds: { value: string; label: string }[];
+	secret_key_configured: boolean;
 }
 
 export type DiffRow = [tag: string, left: string, right: string];

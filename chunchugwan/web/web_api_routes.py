@@ -481,6 +481,7 @@ def site_detail(
         "failed_items": _failed_items(site_id, failed_logs, failed_crawl_pages),
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
+        "can_manage_credentials": permissions.can_manage_credentials(user),
     }
 
 

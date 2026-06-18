@@ -1076,6 +1076,102 @@ def site_credentials_delete(request: Request, site_id: int, cred_id: int):
     return _credentials_redirect(site_id, notice=t(request, "자격증명을 삭제했습니다."))
 
 
+# ---- 사이트 자격증명 SPA JSON API (/api/web/sites/{id}/credentials) ----
+# SSR /sites/{id}/credentials 와 같은 코어(credentials·crypto·HAR 파서)를 재사용.
+
+
+@app.get("/api/web/sites/{site_id}/credentials")
+def api_credentials_list(request: Request, site_id: int) -> dict:
+    """사이트 로그인 자격증명 목록 + 메타 (비밀 제외). 자격증명 관리 권한 전용."""
+    _require_credentials(request)
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, t(request, "사이트 없음"))
+        rows = db.list_site_credentials(conn, site_id)
+    return {
+        "site": {"id": site["id"], "site_key": site["site_key"]},
+        "credentials": [
+            {"id": c["id"], "label": c["label"], "kind": c["kind"],
+             "kind_label": credentials.kind_label(c["kind"]),
+             "creator_email": c["creator_email"], "created_at": c["created_at"]}
+            for c in rows
+        ],
+        "kinds": [
+            {"value": k, "label": credentials.kind_label(k)} for k in credentials.KINDS
+        ],
+        "secret_key_configured": crypto.is_configured(),
+    }
+
+
+@app.post("/api/web/sites/{site_id}/credentials")
+def api_credentials_create(
+    request: Request,
+    site_id: int,
+    label: str = Form(""),
+    kind: str = Form(""),
+    username: str = Form(""),
+    password: str = Form(""),
+    storage_state: str = Form(""),
+    token: str = Form(""),
+    har_file: UploadFile | None = File(None),
+) -> dict:
+    """자격증명 등록 (JSON 응답). SSR site_credentials_create 와 같은 검증·암호화."""
+    _require_credentials(request)
+    if not crypto.is_configured():
+        raise HTTPException(
+            400, t(request, "WCCG_SECRET_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다."))
+    label = label.strip()
+    label_error = credentials.validate_label(label)
+    if label_error is not None:
+        raise HTTPException(400, t(request, label_error))
+    if kind not in credentials.KINDS:
+        raise HTTPException(400, t(request, "잘못된 자격증명 종류입니다."))
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+    if site is None:
+        raise HTTPException(404, t(request, "사이트 없음"))
+    try:
+        if kind == credentials.KIND_SESSION:
+            storage_state = _session_storage_state(
+                storage_state, _read_har_upload(har_file), site_key=site["site_key"]
+            )
+        payload = credentials.build_payload(
+            kind,
+            {"username": username, "password": password,
+             "storage_state": storage_state, "token": token},
+        )
+    except credentials.CredentialError as e:
+        raise HTTPException(400, t(request, str(e)))
+    with db.connect() as conn:
+        if db.get_site_credential_by_label(conn, site_id, label) is not None:
+            raise HTTPException(400, t(request, "이미 있는 이름입니다: {name}", name=label))
+        credentials.add(
+            conn, site_id, label, kind, payload,
+            created_by=request.state.user["id"] if request.state.user else None,
+        )
+    audit.log(
+        request, "사이트 자격증명 등록: %s '%s' (%s)", site["site_key"], label, kind)
+    return {"ok": True}
+
+
+@app.post("/api/web/sites/{site_id}/credentials/{cred_id}/delete")
+def api_credentials_delete(request: Request, site_id: int, cred_id: int) -> dict:
+    """자격증명 삭제 (JSON). 자격증명 관리 권한 전용."""
+    _require_credentials(request)
+    with db.connect() as conn:
+        cred = db.get_site_credential(conn, cred_id)
+        if cred is None or cred["site_id"] != site_id:
+            raise HTTPException(404, t(request, "자격증명 없음"))
+        site = db.get_site(conn, site_id)
+        db.delete_site_credential(conn, cred_id)
+    audit.log(
+        request, "사이트 자격증명 삭제: %s '%s'",
+        site["site_key"] if site else f"#{site_id}", cred["label"],
+    )
+    return {"ok": True}
+
+
 @app.get("/archive/active")
 def archive_active(request: Request) -> dict:
     """진행 중 아카이빙 URL 목록 (목록 화면 자동 갱신 폴링용).

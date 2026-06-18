@@ -814,6 +814,8 @@ _EN: dict[str, str] = {
     "문서 아카이브 설정을 저장했습니다.": "Document archive settings saved.",
     # ---- 사이트 로그인 자격증명 (site_credentials) ----
     "로그인 자격증명": "Login credentials",
+    "로그인 자격증명 관리": "Manage login credentials",
+    "— 이 사이트 캡처 시 사용할 로그인 정보": "— login info used when capturing this site",
     "이 사이트를 아카이빙할 때 춘추관이 로그인하는 데 쓸 자격증명입니다. 비밀은 WCCG_SECRET_KEY 로 대칭 암호화해 저장하며, 화면에는 다시 표시되지 않습니다.":
         "Credentials ChunChuGwan uses to log in when archiving this site. Secrets are "
         "stored symmetrically encrypted with WCCG_SECRET_KEY and are never shown again.",

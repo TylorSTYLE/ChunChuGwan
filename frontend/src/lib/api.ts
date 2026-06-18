@@ -28,7 +28,9 @@ export async function api<T = unknown>(
 		credentials: 'same-origin',
 		headers: {
 			'X-Requested-With': 'fetch',
-			...(init.body ? { 'Content-Type': 'application/json' } : {}),
+			// 문자열 본문만 JSON — FormData(멀티파트 HAR 업로드)는 브라우저가
+			// 경계 포함 Content-Type 을 직접 설정하게 둔다.
+			...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
 			...(init.headers ?? {})
 		},
 		...init
