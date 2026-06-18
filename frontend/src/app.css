@@ -11,6 +11,7 @@
 	--blue: #1e40af;  --blue-bg: #dbeafe;
 	--red-bg: #fee2e2; --red: #dc2626; --red-text: #991b1b; --red-hover: #b91c1c;
 	--link: #1d4ed8;
+	--accent: #16a34a; --accent-hover: #15803d;
 	--seal: #c2410c;
 }
 :root[data-theme='dark'] {
@@ -23,6 +24,7 @@
 	--blue: #93c5fd;  --blue-bg: #1e3a5f;
 	--red-bg: #3f181b; --red: #dc2626; --red-text: #f87171; --red-hover: #b91c1c;
 	--link: #60a5fa;
+	--accent: #16a34a; --accent-hover: #22c55e;
 	--seal: #ea7c4f;
 }
 * { box-sizing: border-box; }
@@ -61,11 +63,14 @@ td.mono.muted { white-space: nowrap; }
 .badge.error { color: var(--red-text); background: var(--red-bg); }
 .badge.running { color: var(--blue); background: var(--blue-bg); }
 
-button, select, input[type='text'], input[type='url'], input[type='number'] {
+button, select, textarea,
+input[type='text'], input[type='url'], input[type='number'],
+input[type='password'], input[type='email'] {
 	font: inherit; font-size: 13px; padding: 3px 10px;
 	border: 1px solid var(--border); border-radius: 4px;
 	background: var(--surface); color: var(--fg);
 }
+textarea { padding: 5px 10px; resize: vertical; }
 button { cursor: pointer; }
 button:hover { background: var(--bg-soft); }
 button:disabled { cursor: not-allowed; opacity: 0.55; }
@@ -124,10 +129,59 @@ main.plain { max-width: none; padding: 0; }
 }
 .auth-card .alt.muted { color: var(--muted); }
 .auth-card div.error {
-	background: var(--red-bg); color: var(--amber); border-radius: 4px;
+	background: var(--red-bg); color: var(--red-text); border-radius: 4px;
 	padding: 6px 12px; margin-bottom: 12px; font-size: 13px;
 }
 .auth-card .notice {
 	background: var(--green-bg); color: var(--green); border-radius: 4px;
 	padding: 6px 12px; margin-bottom: 12px; font-size: 13px;
 }
+
+/* ── 공통 UI 프리미티브 (톤앤매너 확산·반응형) ───────────────────────
+   여러 페이지에서 중복 정의하던 버튼·알림·필터바·페이지헤더·페이지네이션
+   스타일을 전역으로 통합한다. 모바일/태블릿에서 줄바꿈·풀폭으로 흐른다. */
+
+/* 액션 버튼 — primary(초록)·danger(빨강). 보조 버튼은 기본 button 스타일. */
+button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+button.primary:hover { background: var(--accent-hover); }
+button.danger { color: #fff; background: var(--red); border-color: var(--red); }
+button.danger:hover { background: var(--red-hover); }
+
+/* 알림 박스 — error·notice·warn. */
+.error, .notice, .warn {
+	border-radius: 4px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px;
+}
+.error { background: var(--red-bg); color: var(--red-text); }
+.notice { background: var(--green-bg); color: var(--green); }
+.warn { background: var(--amber-bg); color: var(--amber); }
+
+/* 페이지 헤더 — 제목 + 우측 액션(모바일 줄바꿈). */
+.page-head {
+	display: flex; flex-wrap: wrap; gap: 10px;
+	align-items: baseline; justify-content: space-between; margin: 0 0 12px;
+}
+.page-head h2 { margin: 0; }
+.page-head .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* 필터/검색 바 — 좁은 화면에서 줄바꿈, 모바일에선 입력이 풀폭. */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.toolbar .spacer { flex: 1 1 auto; }
+@media (max-width: 599px) {
+	.toolbar > select,
+	.toolbar > input[type='text'],
+	.toolbar > input[type='url'] { flex: 1 1 100%; min-width: 0; }
+}
+
+/* 액션 버튼 바 — 여러 버튼이 좁은 화면에서 줄바꿈. */
+.action-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+
+/* 반응형 폼 그리드 — 여러 입력을 나란히, 모바일에서 자동 1열. */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.form-grid input, .form-grid select { width: 100%; min-width: 0; }
+
+/* 페이지네이션. */
+.pager { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 12px; }
+
+/* URL 셀 — 고정폭 대신 화면폭 비례(모바일 오버플로·잘림 방지). */
+td.url-cell { max-width: min(56vw, 460px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 599px) { td.url-cell { max-width: 64vw; } }

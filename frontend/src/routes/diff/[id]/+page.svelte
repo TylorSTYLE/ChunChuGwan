@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { pagePath } from '$lib/urls';
-	import { base } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
 	import type { DiffData } from '$lib/types';
@@ -12,35 +11,35 @@
 	let shotMode = $state<'side' | 'pixel'>('side');
 </script>
 
-<h2 class="mono">{d.page.url}</h2>
+<h2 class="mono page-url">{d.page.url}</h2>
 
 <div class="toolbar">
 	<a href={pagePath(d.page.site_id, d.page.id)}>← {t('타임라인')}</a>
-	<span class="muted"
-		>#{d.from_idx} ({ts(String(d.old_snap.taken_at))}) → #{d.to_idx} ({ts(
-			String(d.new_snap.taken_at)
-		)})</span
-	>
+	<span class="muted">
+		#{d.from_idx} ({ts(String(d.old_snap.taken_at))}) → #{d.to_idx} ({ts(String(d.new_snap.taken_at))})
+	</span>
 	<span class="spacer"></span>
 	<span class="mono" style="color:var(--green)">+{d.added}</span>
 	<span class="mono" style="color:var(--amber)">-{d.removed}</span>
 </div>
 
 <h3>{t('본문 비교')}</h3>
-<table class="diff">
-	<tbody>
-		{#each d.rows as [tag, left, right]}
-			{#if tag === 'skip'}
-				<tr class="d-skip"><td colspan="2">… {left} …</td></tr>
-			{:else}
-				<tr class="d-{tag}">
-					<td class="l mono">{left}</td>
-					<td class="r mono">{right}</td>
-				</tr>
-			{/if}
-		{/each}
-	</tbody>
-</table>
+<div class="diff-wrap">
+	<table class="diff">
+		<tbody>
+			{#each d.rows as [tag, left, right]}
+				{#if tag === 'skip'}
+					<tr class="d-skip"><td colspan="2">… {left} …</td></tr>
+				{:else}
+					<tr class="d-{tag}">
+						<td class="l mono">{left}</td>
+						<td class="r mono">{right}</td>
+					</tr>
+				{/if}
+			{/each}
+		</tbody>
+	</table>
+</div>
 
 <h3>{t('스크린샷 비교')}</h3>
 {#if d.local_capture}
@@ -49,12 +48,8 @@
 	</p>
 {:else}
 	<div class="toolbar">
-		<button class="tab" class:active={shotMode === 'side'} onclick={() => (shotMode = 'side')}
-			>{t('나란히')}</button
-		>
-		<button class="tab" class:active={shotMode === 'pixel'} onclick={() => (shotMode = 'pixel')}
-			>{t('픽셀 차이')}</button
-		>
+		<button class="tab" class:active={shotMode === 'side'} onclick={() => (shotMode = 'side')}>{t('나란히')}</button>
+		<button class="tab" class:active={shotMode === 'pixel'} onclick={() => (shotMode = 'pixel')}>{t('픽셀 차이')}</button>
 		{#if d.shot_ratio != null}
 			<span class="muted">{t('차이')}: {(d.shot_ratio * 100).toFixed(2)}%</span>
 		{/if}
@@ -70,9 +65,18 @@
 {/if}
 
 <style>
+	.page-url {
+		overflow-wrap: anywhere;
+	}
+	/* 본문 비교는 좌우 정렬을 유지해야 하므로 좁은 화면에선 가로 스크롤(스쿼시 방지). */
+	.diff-wrap {
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+	}
 	table.diff {
 		table-layout: fixed;
 		font-size: 12px;
+		min-width: 520px;
 	}
 	table.diff td {
 		width: 50%;
@@ -112,7 +116,9 @@
 		background: var(--gray-bg);
 		border-color: var(--gray);
 	}
-	.toolbar .spacer {
-		flex: 1;
+	@media (max-width: 599px) {
+		.shot-grid {
+			grid-template-columns: 1fr;
+		}
 	}
 </style>

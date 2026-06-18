@@ -7,15 +7,14 @@
 	import { ts } from '$lib/format';
 	import { api, ApiError } from '$lib/api';
 	import type { CrawlDetail } from '$lib/types';
+	import AlertBox from '$lib/components/AlertBox.svelte';
+	import { createAction } from '$lib/action.svelte';
 
 	let { data }: { data: { detail: CrawlDetail; merged: boolean } } = $props();
 	const d = $derived(data.detail);
 	const c = $derived(d.crawl);
 	const counts = $derived(d.counts);
-
-	let error = $state('');
-	let notice = $state('');
-	let busy = $state(false);
+	const action = createAction();
 
 	const STATUS_BADGE: Record<string, string> = {
 		running: 'running',
@@ -49,52 +48,27 @@
 		return value ? (counts[value as keyof typeof counts] as number) : counts.total;
 	}
 
-	async function act(fn: () => Promise<void>, ok: string) {
-		busy = true;
-		error = '';
-		notice = '';
-		try {
-			await fn();
-			notice = t(ok);
-			await invalidateAll();
-		} catch (err) {
-			error = err instanceof ApiError ? err.message : String(err);
-		} finally {
-			busy = false;
-		}
-	}
-
-	const cancel = () =>
-		act(async () => {
-			await api(`/crawls/${c.id}/cancel`, { method: 'POST' });
-		}, '크롤을 취소했습니다.');
-
+	const cancel = () => action.run(() => api(`/crawls/${c.id}/cancel`, { method: 'POST' }), t('크롤을 취소했습니다.'));
 	const retryAll = () =>
-		act(async () => {
-			await api(`/crawls/${c.id}/retry`, { method: 'POST' });
-		}, '실패한 페이지를 다시 시도합니다.');
-
+		action.run(() => api(`/crawls/${c.id}/retry`, { method: 'POST' }), t('실패한 페이지를 다시 시도합니다.'));
 	const retryPage = (pageId: number) =>
-		act(async () => {
-			await api(`/crawls/${c.id}/pages/${pageId}/retry`, { method: 'POST' });
-		}, '재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.');
+		action.run(
+			() => api(`/crawls/${c.id}/pages/${pageId}/retry`, { method: 'POST' }),
+			t('재시도가 등록되었습니다 — 크롤러가 곧 다시 시도합니다.')
+		);
 
 	async function rerun() {
-		if (!confirm(`${c.start_url}\n\n${t('같은 범위·옵션으로 사이트 전체를 다시 아카이빙합니다. 계속할까요?')}`))
-			return;
-		busy = true;
-		error = '';
+		if (!confirm(`${c.start_url}\n\n${t('같은 범위·옵션으로 사이트 전체를 다시 아카이빙합니다. 계속할까요?')}`)) return;
+		action.busy = true;
+		action.error = '';
 		try {
-			const r = await api<{ crawl_id: number; merged: boolean }>(
-				`/sites/${c.site_id}/crawls/${c.id}/rerun`,
-				{ method: 'POST' }
-			);
-			await goto(`${base}/crawls/${r.crawl_id}${r.merged ? '?merged=1' : ''}`, {
-				invalidateAll: true
+			const r = await api<{ crawl_id: number; merged: boolean }>(`/sites/${c.site_id}/crawls/${c.id}/rerun`, {
+				method: 'POST'
 			});
+			await goto(`${base}/crawls/${r.crawl_id}${r.merged ? '?merged=1' : ''}`, { invalidateAll: true });
 		} catch (err) {
-			error = err instanceof ApiError ? err.message : String(err);
-			busy = false;
+			action.error = err instanceof ApiError ? err.message : String(err);
+			action.busy = false;
 		}
 	}
 
@@ -104,9 +78,7 @@
 		let last = JSON.stringify(counts);
 		const timer = setInterval(async () => {
 			try {
-				const s = await api<{ status: string; counts: typeof counts }>(
-					`/crawls/${c.id}/status`
-				);
+				const s = await api<{ status: string; counts: typeof counts }>(`/crawls/${c.id}/status`);
 				if (s.status !== 'running' || JSON.stringify(s.counts) !== last) {
 					last = JSON.stringify(s.counts);
 					await invalidateAll();
@@ -124,20 +96,19 @@
 	<span class="spacer"></span>
 	{#if d.can_archive}
 		{#if c.status === 'running'}
-			<button onclick={cancel} disabled={busy}>{t('취소')}</button>
+			<button onclick={cancel} disabled={action.busy}>{t('취소')}</button>
 		{/if}
 		{#if counts.failed > 0}
-			<button onclick={retryAll} disabled={busy}>{t('실패 일괄 재시도')}</button>
+			<button onclick={retryAll} disabled={action.busy}>{t('실패 일괄 재시도')}</button>
 		{/if}
 		{#if c.status !== 'running'}
-			<button onclick={rerun} disabled={busy}>{t('다시 아카이빙')}</button>
+			<button onclick={rerun} disabled={action.busy}>{t('다시 아카이빙')}</button>
 		{/if}
 	{/if}
 	<a href="{base}/archive/list">{t('목록으로')}</a>
 </div>
 
-{#if notice}<div class="notice">{notice}</div>{/if}
-{#if error}<div class="error">{error}</div>{/if}
+<AlertBox error={action.error} notice={action.notice} />
 {#if data.merged}
 	<div class="notice">
 		{t('같은 사이트의 아카이브가 이미 진행 중이라 이 크롤에 병합되었습니다 (기존 옵션 유지).')}
@@ -148,11 +119,7 @@
 	<tbody>
 		<tr>
 			<th>{t('상태')}</th>
-			<td>
-				<span class="badge {STATUS_BADGE[c.status] ?? 'same'}"
-					>{t(STATUS_LABEL[c.status] ?? c.status)}</span
-				>
-			</td>
+			<td><span class="badge {STATUS_BADGE[c.status] ?? 'same'}">{t(STATUS_LABEL[c.status] ?? c.status)}</span></td>
 		</tr>
 		<tr><th>{t('범위')}</th><td class="mono">{c.scope_host}{c.scope_path}</td></tr>
 		{#if d.network_tag}
@@ -161,9 +128,7 @@
 		<tr>
 			<th>{t('옵션')}</th>
 			<td class="mono">
-				{t('최대 페이지 수')} {c.max_pages} · {t('최대 깊이')} {c.max_depth} · {t(
-					'페이지 간 간격(초)'
-				)} {c.delay_seconds}
+				{t('최대 페이지 수')} {c.max_pages} · {t('최대 깊이')} {c.max_depth} · {t('페이지 간 간격(초)')} {c.delay_seconds}
 			</td>
 		</tr>
 		<tr>
@@ -214,7 +179,7 @@
 		<tbody>
 			{#each d.pages as p}
 				<tr>
-					<td class="mono">{p.url}</td>
+					<td class="url-cell mono"><span title={p.url}>{p.url}</span></td>
 					<td class="num mono">{p.depth}</td>
 					<td>
 						{#if PAGE_BADGE[p.status]}
@@ -238,9 +203,7 @@
 								<span class="muted">— {t('재시도')} {ts(p.next_attempt_at)}</span>
 							{/if}
 							{#if d.can_archive && p.status === 'failed'}
-								<button class="link-btn" onclick={() => retryPage(p.id)} disabled={busy}
-									>{t('재시도')}</button
-								>
+								<button class="link-btn" onclick={() => retryPage(p.id)} disabled={action.busy}>{t('재시도')}</button>
 							{/if}
 						{:else}—{/if}
 					</td>
@@ -251,19 +214,9 @@
 </div>
 
 <style>
-	.toolbar {
-		display: flex;
-		gap: 8px;
-		align-items: center;
-		flex-wrap: wrap;
-		margin-bottom: 12px;
-	}
 	.toolbar h2 {
 		margin: 0;
 		word-break: break-all;
-	}
-	.toolbar .spacer {
-		flex: 1;
 	}
 	table.meta {
 		max-width: 760px;
