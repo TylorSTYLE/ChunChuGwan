@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pagePath, snapPath } from '$lib/urls';
 	import { base } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
@@ -83,7 +84,7 @@
 	<div class="table-wrap">
 		<table>
 			<thead>
-				<tr><th>{t('시각')}</th><th>{t('상태')}</th><th>URL</th><th>{t('용량')}</th><th></th></tr>
+				<tr><th>{t('시간')}</th><th>{t('상태')}</th><th>URL</th><th>{t('용량')}</th><th></th></tr>
 			</thead>
 			<tbody>
 				{#each d.recent_snaps as s}
@@ -92,10 +93,10 @@
 						<td class="mono">{ts(s.taken_at)}</td>
 						<td><span class="badge {b.cls}">{t(b.label)}</span></td>
 						<td class="url-cell"
-							><a href="{base}/page/{s.page_id}" title={s.page_url}>{s.page_url}</a></td
+							><a href={pagePath(s.site_id, s.page_id)} title={s.page_url}>{s.page_url}</a></td
 						>
 						<td class="num mono">{filesize(s.bytes)}</td>
-						<td><a href="{base}/snapshot/{s.id}">{t('보기')}</a></td>
+						<td><a href={snapPath(s.site_id, s.page_id, s.id)}>{t('보기')}</a></td>
 					</tr>
 				{/each}
 			</tbody>
@@ -111,7 +112,7 @@
 		<table>
 			<thead>
 				<tr
-					><th>{t('시각')}</th><th>{t('상태')}</th><th>URL</th><th>{t('소요')}</th><th
+					><th>{t('시간')}</th><th>{t('상태')}</th><th>URL</th><th>{t('소요')}</th><th
 						>{t('출처')}</th
 					><th></th></tr
 				>
@@ -124,20 +125,20 @@
 						<td><span class="badge {b.cls}">{t(b.label)}</span></td>
 						<td class="url-cell">
 							{#if log.page_id}
-								<a href="{base}/page/{log.page_id}" title={log.url}>{log.url}</a>
+								<a href={pagePath(log.page_site_id, log.page_id)} title={log.url}>{log.url}</a>
 							{:else}
 								<span title={log.url}>{log.url}</span>
 							{/if}
 						</td>
 						<td class="num mono">{log.duration_ms}ms</td>
 						<td class="mono muted">{log.source}</td>
-						<td>{#if log.snapshot_id}<a href="{base}/snapshot/{log.snapshot_id}">{t('보기')}</a>{/if}</td>
+						<td>{#if log.snapshot_id}<a href={snapPath(log.page_site_id, log.page_id, log.snapshot_id)}>{t('보기')}</a>{/if}</td>
 					</tr>
 				{/each}
 			</tbody>
 		</table>
 	</div>
-	<p class="more-link"><a href="{base}/logs">{t('전체 로그 →')}</a></p>
+	<p class="more-link"><a href="{base}/log/archive">{t('전체 로그 →')}</a></p>
 {/if}
 
 <style>

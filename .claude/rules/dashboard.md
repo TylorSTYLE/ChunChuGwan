@@ -50,26 +50,37 @@ meta.json documents 목록 검증, `/document/{sha256}/{name}` — snapshot_docu
 
 ## 디자인 방향
 
-- 화면 22개 — 현황(`/`), 목록(`/archives` — 사이트(서브도메인) 단위),
-  사이트 상세(`/sites/{id}` — 소속 페이지·문서·크롤 회차·스케줄·사이트 삭제),
-  사이트 로그인 자격증명(`/sites/{id}/credentials` — 관리자 전용),
-  문서(`/documents` — 문서 파일 통합 목록),
+- 화면 — 현황(`/`), 목록(`/archive/list` — 사이트(서브도메인) 단위),
+  사이트 상세(`/archive/sites/{id}` — 소속 페이지·문서·크롤 회차·스케줄·사이트 삭제),
+  사이트 로그인 자격증명(`/archive/sites/{id}/credentials` — 관리자 전용),
+  문서(`/archive/documents` — 문서 파일 통합 목록),
   검색(`/search` — 본문·문서 전문 검색, viewer 이상), 새 아카이빙(`/archive/new`),
-  사이트 아카이브 진행(`/crawls/{id}` — 크롤 회차 상세), 스케줄(`/schedules`),
-  타임라인, 스냅샷 뷰어, diff 뷰어, 아카이빙 로그(`/logs` — viewer 이상),
-  시스템 로그(`/system/logs` — 관리자 전용), 시스템, 사용자,
+  사이트 아카이브 진행(`/crawls/{id}` — 크롤 회차 상세), 스케줄(`/archive/schedules`),
+  타임라인(`/archive/sites/{id}/page/{pageId}`), 스냅샷 뷰어
+  (`/archive/sites/{id}/page/{pageId}/snapshot/{snapId}`), diff 뷰어,
+  아카이브 로그(`/log/archive`), 시스템 로그(`/log/system`), 감사 로그(`/log/audit`),
+  시스템 설정(`/system/general`), 사용자(`/system/users`),
   권한 그룹(`/system/groups` — 관리자 전용, 역할 프리셋 편집·커스텀 그룹 추가/삭제),
-  API 키,
+  API 키(`/system/api-keys`),
   개인 API Key(`/settings/api-keys` — 본인 확장 토큰 발급·폐기),
   내 아카이브(`/settings/archives` — 본인이 요청한 아카이빙 이력),
   사람 확인 필요(`/archive/needs-human` — 관리자 전용, `WCCG_LIVE_CHALLENGE` 켜짐 시)·
   라이브 챌린지 처리(`/archive/jobs/{id}/live` — 관리자, 스크린샷 보고 직접 클릭/입력).
-  권한이 없는 메뉴는 헤더에 표시하지 않는다 — `/api/web/me`(=`permissions.auth_context`)
-  가 내려주는 노출 플래그를 SPA 루트 레이아웃이 읽어 메뉴를 가린다(서버 권한 가드는 각
-  엔드포인트에서 이중 유지). 로그(아카이빙·시스템)·관리자(사용자·시스템) 메뉴와 개인설정
-  (우측 이메일/표시이름 → 계정·개인 API Key·내 아카이브·로그아웃)을 헤더 드롭다운으로
-  묶는다(`frontend/src/routes/+layout.svelte`). 화면별 라우트·권한·세부 동작은
-  `docs/DASHBOARD.md` 참조. 라우트 경로는 SSR 시절과 동일하나 이제 SPA 가 렌더한다.
+  페이지·스냅샷은 사이트 계층 아래로 중첩한다(`/archive/sites/{site}/page/{page}/
+  snapshot/{snap}`) — `site_id` 를 모르는 목록 링크는 `frontend/src/lib/urls.ts`
+  의 `pagePath`/`snapPath` 헬퍼로 만들고, API 응답이 행마다 `site_id`(스냅샷은
+  `page_site_id`)를 함께 내려준다. 로그 3종(`/log/archive`·`/log/system`·`/log/audit`)은
+  각각 `view_archive_logs`·`view_system_logs`·`view_audit_logs` 권한(기본 admin 만,
+  authentication.md)이며 헤더 '로그' 드롭다운으로 묶인다. 감사 로그는 누가
+  아카이빙·열람·문서 다운로드·관리 작업을 했는지 전용 `audit_logs` 테이블에서 읽는다
+  (database.md). 권한이 없는 메뉴는 헤더에 표시하지 않는다 —
+  `/api/web/me`(=`permissions.auth_context`)가 내려주는 노출 플래그를 SPA 루트
+  레이아웃이 읽어 메뉴를 가린다(서버 권한 가드는 각 엔드포인트에서 이중 유지). 로그·
+  아카이브·관리자 메뉴와 개인설정(우측 이메일/표시이름 → 계정·개인 API Key·내 아카이브·
+  로그아웃)을 헤더 드롭다운으로 묶는다(`frontend/src/routes/+layout.svelte`). 크롬 확장이
+  여는 대시보드 딥링크는 `/extension/*`(page·crawl·needs-human·archives·token·go)가
+  정식 화면으로 302 리다이렉트해 화면 구조와 분리한다(api-extension.md). 화면별 라우트·
+  권한·세부 동작은 `docs/DASHBOARD.md` 참조.
 - 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
   (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
 - 다국어(ko/en): `web/i18n.py` 가 정본 카탈로그(한국어 원문이 메시지 키, gettext msgid

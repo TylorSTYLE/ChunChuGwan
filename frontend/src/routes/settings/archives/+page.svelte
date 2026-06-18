@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pagePath } from '$lib/urls';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { t } from '$lib/i18n';
@@ -55,7 +56,7 @@
 		<table>
 			<thead>
 				<tr>
-					<th>{t('시각')}</th>
+					<th>{t('시간')}</th>
 					<th>{t('상태')}</th>
 					<th>{t('URL')}</th>
 					<th>{t('소요')}</th>
@@ -68,7 +69,7 @@
 						<td>{t(STATUS_LABELS[log.status] ?? log.status)}</td>
 						<td class="url">
 							{#if log.page_id}
-								<a href="{base}/page/{log.page_id}">{log.url}</a>
+								<a href={pagePath(log.page_site_id, log.page_id)}>{log.url}</a>
 							{:else}
 								{log.url}
 							{/if}

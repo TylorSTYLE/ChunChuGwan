@@ -41,6 +41,18 @@ zip 빌드 시 manifest version 을 서버 `__version__` 으로 덮어쓴다 →
 최신이면 팝업 배너로 재설치를 안내한다(`openDownload` → `/extension/download` 새 탭).
 버전 조회는 권한 불필요(토큰만). 비교는 서버 > 확장일 때만 안내(오탐 방지).
 
+## 확장 진입 경로 (`/extension/*`)
+
+확장이 새 탭으로 여는 대시보드 딥링크는 SPA 화면 구조(중첩 라우트 등)를 직접 알지
+못하도록 **`/extension/*` 진입점만** 쓰고, FastAPI(`web/app.py`, SPA catch-all 보다
+먼저 등록)가 정식 SvelteKit 화면 경로로 **302 리다이렉트**한다 — 화면 경로가 바뀌어도
+확장은 무관하다. `/extension/download`(세션 인증 zip) 외에:
+`/extension/page/{page_id}`(→`/archive/sites/{site}/page/{page_id}`, site_id 서버 해석)·
+`/extension/crawl/{id}`(→`/crawls/{id}`)·`/extension/needs-human`·`/extension/archives`
+(→`/settings/archives`)·`/extension/token`(→`/settings/api-keys#ext-token-form`)·
+`/extension/go?url=`(URL 의 페이지가 있으면 타임라인, 없으면 `/archive/new?url=`).
+`background.js` 의 알림 클릭·딥링크는 모두 이 경로를 만든다(`clickTarget`·`openDeepLink`).
+
 `pages.client_captured` = 확장으로 적재된 페이지 표식(`ingest.py` 가 1 로 설정) —
 1 이면 서버가 그 URL 을 다시 가져오지 않는다(스케줄·크롤·재시도·재아카이빙·enqueue 차단).
 `snapshots.origin=extension`·`incomplete` 의 뷰어/타임라인 뱃지와 diff 영향은

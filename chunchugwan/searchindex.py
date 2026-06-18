@@ -251,6 +251,7 @@ class SearchHit:
 
     snapshot_id: int
     page_id: int
+    site_id: int | None
     page_url: str
     domain: str
     taken_at: str
@@ -322,6 +323,7 @@ def _hit(row: sqlite3.Row, terms: list[str], snippet: str) -> SearchHit:
     return SearchHit(
         snapshot_id=row["snapshot_id"],
         page_id=row["page_id"],
+        site_id=row["site_id"],
         page_url=row["page_url"],
         domain=row["domain"],
         taken_at=row["taken_at"],

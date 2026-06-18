@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pagePath } from '$lib/urls';
 	import { base } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
@@ -41,7 +42,7 @@
 {/if}
 
 <div class="toolbar">
-	<a href="{base}/page/{m.snap.page_id}">← {t('타임라인')}</a>
+	<a href={pagePath(m.snap.site_id, m.snap.page_id)}>← {t('타임라인')}</a>
 	<button class="tab" class:active={tab === 'render'} onclick={() => (tab = 'render')}
 		>{t('렌더링')}</button
 	>

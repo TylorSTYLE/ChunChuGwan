@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pagePath, snapPath } from '$lib/urls';
 	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
@@ -58,45 +59,68 @@
 {:else if !s.results || s.results.total === 0}
 	<p class="muted">{t('검색 결과가 없습니다.')}</p>
 {:else}
-	<p class="muted">{t('총')} {s.results.total}{t('건')}</p>
-	{#each s.results.hits as hit}
-		<div class="hit">
-			<a href="{base}/snapshot/{hit.snapshot_id}" class="hit-title"
-				>{hit.title || hit.page_url}</a
-			>
-			<div class="mono muted hit-url">{hit.page_url}</div>
-			<div class="snippet">{hit.snippet}</div>
-			<div class="muted hit-meta">
-				{ts(hit.taken_at)} · <a href="{base}/page/{hit.page_id}">{t('타임라인')}</a>
+	<div class="results">
+		<p class="muted count">{t('총')} {s.results.total}{t('건')}</p>
+		{#each s.results.hits as hit}
+			<div class="hit">
+				<div class="mono hit-url">{hit.page_url}</div>
+				<a href={snapPath(hit.site_id, hit.page_id, hit.snapshot_id)} class="hit-title">{hit.title || hit.page_url}</a>
+				<div class="snippet">{hit.snippet}</div>
+				<div class="muted hit-meta">
+					{ts(hit.taken_at)} · <a href={pagePath(hit.site_id, hit.page_id)}>{t('타임라인')}</a>
+				</div>
 			</div>
-		</div>
-	{/each}
-	{#if s.total_pages > 1}
-		<div class="pager">
-			{#if s.page > 1}<a href={pageUrl(s.page - 1)}>← {t('이전')}</a>{/if}
-			<span class="muted">{s.page} / {s.total_pages}</span>
-			{#if s.page < s.total_pages}<a href={pageUrl(s.page + 1)}>{t('다음')} →</a>{/if}
-		</div>
-	{/if}
+		{/each}
+		{#if s.total_pages > 1}
+			<div class="pager">
+				{#if s.page > 1}<a href={pageUrl(s.page - 1)}>← {t('이전')}</a>{/if}
+				<span class="muted">{s.page} / {s.total_pages}</span>
+				{#if s.page < s.total_pages}<a href={pageUrl(s.page + 1)}>{t('다음')} →</a>{/if}
+			</div>
+		{/if}
+	</div>
 {/if}
 
 <style>
-	.hit {
-		padding: 10px 0;
-		border-bottom: 1px solid var(--border);
+	/* 검색엔진 결과창 스타일 — 가독 폭의 한 컬럼, URL → 큰 제목 링크 → 스니펫 순 */
+	.results {
+		max-width: 640px;
 	}
-	.hit-title {
-		font-size: 15px;
+	.count {
+		font-size: 12px;
+		margin: 4px 0 14px;
+	}
+	.hit {
+		padding: 0 0 20px;
 	}
 	.hit-url {
 		font-size: 12px;
+		color: var(--green);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.hit-title {
+		display: block;
+		font-size: 18px;
+		line-height: 1.3;
+		margin: 1px 0 2px;
+	}
+	.hit-title:hover {
+		text-decoration: underline;
 	}
 	.snippet {
-		margin: 4px 0;
 		font-size: 13px;
+		line-height: 1.6;
+		color: var(--fg);
+	}
+	.snippet :global(mark) {
+		background: var(--amber-bg);
+		color: inherit;
 	}
 	.hit-meta {
 		font-size: 12px;
+		margin-top: 3px;
 	}
 	.pager {
 		display: flex;

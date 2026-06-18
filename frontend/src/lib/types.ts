@@ -7,7 +7,10 @@ export interface MeFlags {
 	can_manage_credentials: boolean;
 	can_archive: boolean;
 	can_delete: boolean;
-	can_view_logs: boolean;
+	can_view_archive_logs: boolean;
+	can_view_system_logs: boolean;
+	can_view_audit_logs: boolean;
+	can_view_any_logs: boolean;
 	can_search: boolean;
 	can_use_api_keys: boolean;
 }
@@ -109,6 +112,7 @@ export interface TrendRow {
 export interface RecentSnap {
 	id: number;
 	page_id: number;
+	site_id: number | null;
 	page_url: string;
 	taken_at: string;
 	is_first: number;
@@ -124,6 +128,7 @@ export interface RecentLog {
 	status: string;
 	url: string;
 	page_id: number | null;
+	page_site_id: number | null;
 	snapshot_id: number | null;
 	duration_ms: number;
 	source: string;
@@ -148,6 +153,7 @@ export interface SiteItem {
 export interface SnapshotRow {
 	id: number;
 	page_id: number;
+	site_id: number | null;
 	taken_at: string;
 	changed: number;
 	content_hash: string;
@@ -279,6 +285,7 @@ export interface CrawlPage {
 	next_attempt_at: string | null;
 	snapshot_id: number | null;
 	snapshot_page_id: number | null;
+	snapshot_site_id: number | null;
 	error: string | null;
 }
 
@@ -308,7 +315,7 @@ export interface CrawlDetail {
 export type DiffRow = [tag: string, left: string, right: string];
 
 export interface DiffData {
-	page: Record<string, unknown> & { id: number; url: string };
+	page: Record<string, unknown> & { id: number; url: string; site_id: number | null };
 	added: number;
 	removed: number;
 	rows: DiffRow[];
@@ -327,6 +334,7 @@ export interface DiffData {
 export interface SearchHit {
 	snapshot_id: number;
 	page_id: number;
+	site_id: number | null;
 	page_url: string;
 	title: string | null;
 	snippet: string;
@@ -351,6 +359,7 @@ export interface DocumentsData {
 		file: string;
 		bytes: number;
 		page_id: number;
+		site_id: number | null;
 		page_url: string;
 		snapshot_id: number;
 		page_count: number;
@@ -364,6 +373,8 @@ export interface DocumentsData {
 
 export interface ScheduleItem extends Record<string, unknown> {
 	label: string;
+	page_id: number;
+	site_id: number | null;
 }
 
 export interface SchedulesData {
@@ -380,6 +391,7 @@ export interface LogItem {
 		url: string;
 		page_id: number | null;
 		snapshot_id: number | null;
+		page_site_id: number | null;
 		duration_ms: number;
 		source: string;
 	};
@@ -421,6 +433,30 @@ export interface SystemLogsData {
 	date_to: string;
 	levels: string[];
 	sources: string[];
+	limit: number;
+	limits: number[];
+	total: number;
+	total_pages: number;
+	page_num: number;
+}
+
+export interface AuditLogsData {
+	logs: {
+		id: number;
+		created_at: string;
+		actor: string;
+		actor_user_id: number | null;
+		action: string;
+		target: string | null;
+		message: string;
+	}[];
+	action: string;
+	actor: string;
+	date_from: string;
+	date_to: string;
+	actions: string[];
+	action_labels: Record<string, string>;
+	actors: string[];
 	limit: number;
 	limits: number[];
 	total: number;
@@ -565,6 +601,7 @@ export interface MyArchiveItem {
 		status: string;
 		url: string;
 		page_id: number | null;
+		page_site_id: number | null;
 		snapshot_id: number | null;
 		duration_ms: number;
 		source: string;

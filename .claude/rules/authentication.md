@@ -69,7 +69,11 @@ Pull 엔드포인트는 `.claude/rules/api-extension.md` 참조. `site_credentia
   사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
   관리자로 권한 변경 불가. **권한은 세분 권한(`db.PERMISSIONS` — view·archive·
   delete·manage_credentials·manage_system·manage_users·view_authenticated_all·
-  use_api_keys, 고정 코드 상수)을 1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다.
+  use_api_keys·view_audit_logs·view_system_logs·view_archive_logs, 고정 코드 상수)을
+  1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다. 로그 열람 3종(view_audit_logs=감사
+  로그 `/log/audit`, view_system_logs=시스템 로그 `/log/system`, view_archive_logs=
+  아카이브 로그 `/log/archive`)은 빌트인 중 **admin 에만 기본 부여**(`_migrate_log_view_
+  permissions` 가 기존 설치도 멱등 보강)하고 다른 빌트인엔 넣지 않는다.
   역할 프리셋은 코드 상수가 아니라 DB `permission_groups` 테이블이 정본 — 관리자가 시스템 →
   권한 그룹(`/system/groups`)에서 빌트인(admin/archive_manager/archiver/viewer) 권한
   묶음을 편집하거나 커스텀 그룹을 추가·삭제할 수 있다(코드 배포 불필요). 코드에서는 `db.role_presets(conn)`
@@ -79,6 +83,10 @@ Pull 엔드포인트는 `.claude/rules/api-extension.md` 참조. `site_credentia
   프리셋과 다른 항목만) 로 사용자별 가감한다. 실효 권한 = 프리셋 ± 오버라이드
   (`db.effective_permissions`), 모든 라우트·메뉴 가드는 `web.permissions.
   has_permission`(실효 권한)으로 판정해 한 곳의 변경이 전 경로에 반영된다.
+  단, **사용자 관리 화면(`/system/users`)은 역할(권한 묶음) 부여만 하고 사용자별
+  세분 권한 편집 UI·라우트는 제거**됐다 — 권한은 역할 단위로만 준다. 오버라이드
+  메커니즘 자체는 db 계층에 남아(역할 변경 시 `{}` 로 초기화) 라스트-관리자 잠김
+  방지에 쓰이며, 화면엔 표시이름·역할만 노출한다(권한 열 없음).
   pending/blocked/withdrawn 은 권한 묶음이 아니라 접근 게이트 상태라
   `permission_groups` 가 아닌 코드 상수(`db.STATE_ROLES`)로 남고 삭제·편집 불가다.
   역할을 바꾸면 오버라이드는 새 프리셋으로 초기화되고, `manage_users` 마지막

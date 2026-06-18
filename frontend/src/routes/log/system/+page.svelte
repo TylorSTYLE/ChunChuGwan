@@ -27,7 +27,7 @@
 		if (cur.level) qs.set('level', cur.level);
 		if (cur.source) qs.set('source', cur.source);
 		if (cur.limit && cur.limit !== '50') qs.set('limit', cur.limit);
-		goto(`${base}/system/logs${qs.toString() ? `?${qs}` : ''}`);
+		goto(`${base}/log/system${qs.toString() ? `?${qs}` : ''}`);
 	}
 
 	function pageUrl(n: number): string {
@@ -36,7 +36,7 @@
 		if (d.source) qs.set('source', d.source);
 		if (d.limit !== 50) qs.set('limit', String(d.limit));
 		if (n > 1) qs.set('page', String(n));
-		return `${base}/system/logs${qs.toString() ? `?${qs}` : ''}`;
+		return `${base}/log/system${qs.toString() ? `?${qs}` : ''}`;
 	}
 </script>
 
@@ -62,7 +62,7 @@
 		<table>
 			<thead>
 				<tr>
-					<th>{t('시각')}</th>
+					<th>{t('시간')}</th>
 					<th>{t('레벨')}</th>
 					<th>{t('출처')}</th>
 					<th>{t('메시지')}</th>
@@ -101,6 +101,12 @@
 <style>
 	.toolbar .spacer {
 		flex: 1;
+	}
+	/* 시간 컬럼은 한 줄 유지 — 폭이 좁아 줄바꿈되던 문제 보정 */
+	th:first-child,
+	td.mono:first-child {
+		white-space: nowrap;
+		min-width: 160px;
 	}
 	.tb {
 		font-size: 11px;

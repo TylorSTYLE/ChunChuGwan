@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pagePath, snapPath } from '$lib/urls';
 	import { base } from '$app/paths';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
@@ -91,7 +92,7 @@
 		<table>
 			<thead>
 				<tr>
-					<th>{t('시각')}</th>
+					<th>{t('시간')}</th>
 					<th>{t('상태')}</th>
 					<th>URL</th>
 					<th>{t('소요')}</th>
@@ -110,7 +111,7 @@
 						</td>
 						<td class="url-cell">
 							{#if it.log.page_id}
-								<a href="{base}/page/{it.log.page_id}" title={it.log.url}>{it.log.url}</a>
+								<a href={pagePath(it.log.page_site_id, it.log.page_id)} title={it.log.url}>{it.log.url}</a>
 							{:else}
 								<span title={it.log.url}>{it.log.url}</span>
 							{/if}
@@ -119,9 +120,11 @@
 						<td class="mono muted">{it.log.source}</td>
 						<td>
 							{#if it.log.snapshot_id}
-								<a href="{base}/snapshot/{it.log.snapshot_id}">{t('보기')}</a>
+								<a href={snapPath(it.log.page_site_id, it.log.page_id, it.log.snapshot_id)}>{t('보기')}</a>
 							{:else if d.can_archive && it.log.status === 'error'}
-								<button onclick={() => retry(it.log.id)} disabled={busy}>{t('재시도')}</button>
+								<button type="button" class="linkbtn" onclick={() => retry(it.log.id)} disabled={busy}
+									>{t('재시도')}</button
+								>
 							{/if}
 						</td>
 					</tr>
@@ -157,6 +160,28 @@
 	}
 	.toolbar .spacer {
 		flex: 1;
+	}
+	/* 첫 컬럼(시간)은 한 줄 유지 — 폭이 좁아 줄바꿈되던 문제 보정 */
+	th:first-child,
+	td.mono:first-child {
+		white-space: nowrap;
+	}
+	/* 재시도: '보기' 링크와 같은 텍스트 링크 모양 (버튼 박스 제거) */
+	.linkbtn {
+		background: none;
+		border: none;
+		padding: 0;
+		color: var(--link);
+		cursor: pointer;
+		font: inherit;
+	}
+	.linkbtn:hover {
+		text-decoration: underline;
+	}
+	.linkbtn:disabled {
+		color: var(--muted);
+		cursor: default;
+		text-decoration: none;
 	}
 	td.url-cell {
 		max-width: 420px;

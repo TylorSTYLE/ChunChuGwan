@@ -312,7 +312,7 @@ def test_schedules_list(tmp_db):
 def test_logs_filter_by_status(tmp_db):
     insert_log("new", started_at="2026-06-01T00:00:00+00:00")
     insert_log("error", started_at="2026-06-02T00:00:00+00:00", error="boom")
-    _, token = make_user()
+    _, token = make_user(role="admin")
     c = client_for(token)
     allrows = c.get("/api/web/logs").json()
     assert allrows["total"] == 2
@@ -323,7 +323,7 @@ def test_logs_filter_by_status(tmp_db):
 
 def test_logs_invalid_status_ignored(tmp_db):
     insert_log("new")
-    _, token = make_user()
+    _, token = make_user(role="admin")
     body = client_for(token).get("/api/web/logs?status=bogus").json()
     assert body["status"] == ""  # 화이트리스트 밖은 무시
     assert body["total"] == 1
@@ -332,7 +332,7 @@ def test_logs_invalid_status_ignored(tmp_db):
 def test_logs_domain_filter(tmp_db):
     insert_log("new", domain="a.example.com")
     insert_log("new", domain="b.example.com")
-    _, token = make_user()
+    _, token = make_user(role="admin")
     body = client_for(token).get("/api/web/logs?domain=a.example.com").json()
     assert body["total"] == 1
     assert set(body["domains"]) == {"a.example.com", "b.example.com"}
@@ -341,7 +341,7 @@ def test_logs_domain_filter(tmp_db):
 def test_logs_pagination(tmp_db):
     for i in range(5):
         insert_log("new", started_at=f"2026-06-0{i + 1}T00:00:00+00:00")
-    _, token = make_user()
+    _, token = make_user(role="admin")
     body = client_for(token).get("/api/web/logs?limit=10&page=1").json()
     assert body["total"] == 5
     assert body["limit"] == 10

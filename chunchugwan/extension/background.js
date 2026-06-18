@@ -658,7 +658,7 @@ async function trackIngestResult(res, url) {
   if (!base_url) return;
   const st = res.data;
   const notifId = `wccg:ingest:${st.snapshot_id || Date.now()}`;
-  await setTarget(notifId, st.page_id ? `${base_url}/page/${st.page_id}` : base_url);
+  await setTarget(notifId, st.page_id ? `${base_url}/extension/page/${st.page_id}` : base_url);
   await showNotification(notifId, msg("notif_capture_done"),
     msg(OUTCOME_KEY[st.status] || "notif_outcome_done") + " — " + shortUrl(st.url || url));
 }
@@ -815,8 +815,8 @@ const HANDLERS = {
     const { base_url } = await getConfig();
     if (!base_url) return { ok: false };
     const url = m.payload.page_id
-      ? `${base_url}/page/${m.payload.page_id}`
-      : `${base_url}/go?url=${encodeURIComponent(m.payload.url)}`;
+      ? `${base_url}/extension/page/${m.payload.page_id}`
+      : `${base_url}/extension/go?url=${encodeURIComponent(m.payload.url)}`;
     await chrome.tabs.create({ url });
     return { ok: true };
   },
@@ -834,7 +834,7 @@ const HANDLERS = {
     // 입력한 주소를 기억해 둔다 (팝업이 닫혀도 다음에 채워지도록). 토큰이 없으면
     // status 의 connected 는 여전히 false 라 연결로 오인되지 않는다.
     if (typed) await chrome.storage.local.set({ base_url: typed });
-    await chrome.tabs.create({ url: base + "/settings/api-keys#ext-token-form" });
+    await chrome.tabs.create({ url: base + "/extension/token" });
     return { ok: true };
   },
 
@@ -937,11 +937,11 @@ function shortUrl(u) {
 
 // 알림 클릭 시 열 대시보드 딥링크.
 function clickTarget(base, kind, st, w) {
-  if (kind === "crawl") return `${base}/crawls/${w.id}`;
-  if (st.state === "needs_human") return `${base}/archive/needs-human`;
-  if (st.state === "failed") return `${base}/settings/archives`; // 내 아카이브에서 실패 확인
-  if (st.page_id) return `${base}/page/${st.page_id}`;
-  return `${base}/go?url=${encodeURIComponent(st.url || w.url || "")}`;
+  if (kind === "crawl") return `${base}/extension/crawl/${w.id}`;
+  if (st.state === "needs_human") return `${base}/extension/needs-human`;
+  if (st.state === "failed") return `${base}/extension/archives`; // 내 아카이브에서 실패 확인
+  if (st.page_id) return `${base}/extension/page/${st.page_id}`;
+  return `${base}/extension/go?url=${encodeURIComponent(st.url || w.url || "")}`;
 }
 
 async function setTarget(notifId, url) {

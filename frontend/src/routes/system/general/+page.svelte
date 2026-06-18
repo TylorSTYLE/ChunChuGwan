@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { base } from '$app/paths';
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize } from '$lib/format';
@@ -7,6 +8,14 @@
 
 	let { data }: { data: { sys: SystemOverview } } = $props();
 	const s = $derived(data.sys);
+
+	// 저장 용량 미터 차트 — 각 영역이 전체에서 차지하는 비율
+	const usageTotal = $derived(
+		(s.usage.db + s.usage.sites + s.usage.resources + s.usage.documents) || 1
+	);
+	function pct(n: number): string {
+		return `${Math.round((n / usageTotal) * 100)}%`;
+	}
 
 	let error = $state('');
 	let notice = $state('');
@@ -240,10 +249,13 @@
 	}
 </script>
 
-<h2>{t('시스템')}</h2>
+<h2>{t('시스템 설정')}</h2>
 {#if error}<div class="error">{error}</div>{/if}
 {#if notice}<div class="notice">{notice}</div>{/if}
 
+<!-- ── 시스템 상태 ── -->
+<h3 class="group">{t('시스템 상태')}</h3>
+<p class="desc">{t('현재 버전과 저장된 데이터 규모입니다.')}</p>
 <div class="stat-grid">
 	<div class="stat-card"><div class="label">{t('버전')}</div><div class="value">{s.version}</div></div>
 	<div class="stat-card"><div class="label">{t('페이지')}</div><div class="value">{s.counts.pages}</div></div>
@@ -251,36 +263,49 @@
 	<div class="stat-card"><div class="label">{t('사용자')}</div><div class="value">{s.counts.users}</div></div>
 </div>
 
-<h3>{t('저장 용량')}</h3>
-<table style="max-width:480px">
-	<tbody>
-		<tr><th>DB</th><td class="num mono">{filesize(s.usage.db)}</td></tr>
-		<tr><th>{t('사이트')}</th><td class="num mono">{filesize(s.usage.sites)}</td></tr>
-		<tr><th>{t('공유 자원')}</th><td class="num mono">{filesize(s.usage.resources)}</td></tr>
-		<tr><th>{t('문서')}</th><td class="num mono">{filesize(s.usage.documents)}</td></tr>
-	</tbody>
-</table>
+<div class="meter-box">
+	<div class="meter-head">
+		<span>{t('저장 용량')}</span>
+		<span class="mono muted">{filesize(usageTotal)}</span>
+	</div>
+	<div class="meter">
+		<span class="seg seg-db" style="width:{pct(s.usage.db)}" title="DB {filesize(s.usage.db)}"></span>
+		<span class="seg seg-sites" style="width:{pct(s.usage.sites)}" title="{t('사이트')} {filesize(s.usage.sites)}"></span>
+		<span class="seg seg-res" style="width:{pct(s.usage.resources)}" title="{t('공유 자원')} {filesize(s.usage.resources)}"></span>
+		<span class="seg seg-docs" style="width:{pct(s.usage.documents)}" title="{t('문서')} {filesize(s.usage.documents)}"></span>
+	</div>
+	<ul class="legend-list mono">
+		<li><span class="dot seg-db"></span>DB {filesize(s.usage.db)}</li>
+		<li><span class="dot seg-sites"></span>{t('사이트')} {filesize(s.usage.sites)}</li>
+		<li><span class="dot seg-res"></span>{t('공유 자원')} {filesize(s.usage.resources)}</li>
+		<li><span class="dot seg-docs"></span>{t('문서')} {filesize(s.usage.documents)}</li>
+	</ul>
+</div>
 
+<!-- ── 유지관리 ── -->
+<h3 class="group">{t('유지관리')}</h3>
+<p class="desc">{t('검색 인덱스와 저장공간을 정리합니다.')}</p>
 <fieldset class="sec">
-	<legend>{t('가입 설정')}</legend>
-	<label class="ck"><input type="checkbox" bind:checked={signupEnabled} /> {t('회원 가입 허용')}</label>
-	<label>{t('가입 초기 권한')}
-		<select bind:value={signupRole}>
-			{#each s.signup_roles as r}<option value={r}>{s.role_labels[r] ?? r}</option>{/each}
-		</select>
-	</label>
-	<button disabled={busy} onclick={() => save('/system/settings', { signup_enabled: signupEnabled, signup_default_role: signupRole })}>{t('저장')}</button>
+	<legend>{t('검색 인덱스')}</legend>
+	<p class="desc">{t('아직 색인되지 않은 스냅샷을 다시 색인합니다.')}</p>
+	<div class="btn-row">
+		<button disabled={busy || reindexRunning} onclick={startReindex}>{t('검색 인덱스 전체 재색인')}</button>
+		{#if reindexRunning}<span class="muted">{t('재색인 중')} {reindexDone}/{reindexTotal}</span>{/if}
+	</div>
+</fieldset>
+<fieldset class="sec">
+	<legend>{t('저장공간 최적화')}</legend>
+	<p class="desc">{t('압축·자원 공유로 저장공간을 줄입니다 (내용은 그대로).')}</p>
+	<button disabled={busy} onclick={compact}>{t('저장공간 최적화')}</button>
 </fieldset>
 
-<fieldset class="sec">
-	<legend>{t('이메일 본인 인증')}</legend>
-	<label class="ck"><input type="checkbox" bind:checked={evEnabled} /> {t('사용')}</label>
-	<label>{t('코드 만료(분)')} <input type="number" bind:value={evTtl} min={s.email_verification_ttl_limits.min} max={s.email_verification_ttl_limits.max} /></label>
-	<button disabled={busy} onclick={() => save('/system/email-verification-settings', { email_verification_enabled: evEnabled, email_verification_ttl_minutes: evTtl })}>{t('저장')}</button>
-</fieldset>
+<!-- ── 아카이브 설정 ── -->
+<h3 class="group">{t('아카이브 설정')}</h3>
+<p class="desc">{t('아카이빙·크롤·문서 수집·로컬 네트워크 동작을 설정합니다.')}</p>
 
 <fieldset class="sec">
 	<legend>{t('사이트 아카이브 기본값')}</legend>
+	<p class="desc">{t('사이트 전체 아카이브(크롤)의 기본 범위·간격입니다.')}</p>
 	<label>{t('최대 페이지')} <input type="number" bind:value={crawlMaxPages} /></label>
 	<label>{t('최대 깊이')} <input type="number" bind:value={crawlMaxDepth} /></label>
 	<label>{t('지연(초)')} <input type="number" bind:value={crawlDelay} /></label>
@@ -289,28 +314,31 @@
 </fieldset>
 
 <fieldset class="sec">
-	<legend>{t('확장 자격증명')}</legend>
-	<label>{t('보관 시간(시간)')} <input type="number" bind:value={credTtl} min={s.ext_credential_ttl_limits.min} max={s.ext_credential_ttl_limits.max} /></label>
-	<button disabled={busy} onclick={() => save('/system/credential-settings', { ext_credential_ttl_hours: credTtl })}>{t('저장')}</button>
-</fieldset>
-
-<fieldset class="sec">
 	<legend>{t('캡처')}</legend>
+	<p class="desc">{t('스냅샷을 찍을 때의 추가 캡처 동작입니다.')}</p>
 	<label class="ck"><input type="checkbox" bind:checked={mobileShot} /> {t('모바일 스크린샷도 저장')}</label>
 	<button disabled={busy} onclick={() => save('/system/capture-settings', { mobile_screenshot_enabled: mobileShot })}>{t('저장')}</button>
 </fieldset>
 
 <fieldset class="sec">
+	<legend>{t('확장 자격증명')}</legend>
+	<p class="desc">{t('확장이 보낸 1회성 로그인 자격증명의 보관 시간입니다.')}</p>
+	<label>{t('보관 시간(시간)')} <input type="number" bind:value={credTtl} min={s.ext_credential_ttl_limits.min} max={s.ext_credential_ttl_limits.max} /></label>
+	<button disabled={busy} onclick={() => save('/system/credential-settings', { ext_credential_ttl_hours: credTtl })}>{t('저장')}</button>
+</fieldset>
+
+<fieldset class="sec">
 	<legend>{t('문서 아카이브 한도')}</legend>
+	<p class="desc">{t('페이지가 링크한 문서 파일을 받을 때의 한도입니다.')}</p>
 	<label>{t('스냅샷당 수')} <input type="number" bind:value={docCount} /></label>
 	<label>{t('개당 크기(MB)')} <input type="number" bind:value={docMb} /></label>
 	<label>{t('다운로드 타임아웃(초)')} <input type="number" bind:value={docTimeout} /></label>
 	<button disabled={busy} onclick={() => save('/system/document-settings', { document_max_count: docCount, document_max_mb: docMb, document_fetch_timeout: docTimeout })}>{t('저장')}</button>
 </fieldset>
 
-<h3>{t('로컬 네트워크 태그')}</h3>
 <fieldset class="sec">
-	<legend>{t('태그 추가')}</legend>
+	<legend>{t('로컬 네트워크 태그')}</legend>
+	<p class="desc">{t('사설 IP(로컬 네트워크) 주소를 아카이빙할 때 붙이는 태그입니다.')}</p>
 	<label>{t('이름')} <input type="text" bind:value={newTagName} maxlength="60" /></label>
 	<label>{t('설명')} <input type="text" bind:value={newTagDesc} maxlength="200" /></label>
 	<button disabled={busy || !newTagName.trim()} onclick={createTag}>{t('추가')}</button>
@@ -347,9 +375,34 @@
 	{/if}
 {/if}
 
-<h3>{t('메일(SMTP)')}</h3>
+<!-- ── 사용자 설정 ── -->
+<h3 class="group">{t('사용자 설정')}</h3>
+<p class="desc">{t('회원 가입과 이메일 본인 인증 정책입니다.')}</p>
 <fieldset class="sec">
-	<legend>{s.smtp_config.enabled ? t('사용 중') : t('미설정')}</legend>
+	<legend>{t('가입 설정')}</legend>
+	<p class="desc">{t('회원 가입 허용 여부와 가입 시 초기 권한입니다.')}</p>
+	<label class="ck"><input type="checkbox" bind:checked={signupEnabled} /> {t('회원 가입 허용')}</label>
+	<label>{t('가입 초기 권한')}
+		<select bind:value={signupRole}>
+			{#each s.signup_roles as r}<option value={r}>{s.role_labels[r] ?? r}</option>{/each}
+		</select>
+	</label>
+	<button disabled={busy} onclick={() => save('/system/settings', { signup_enabled: signupEnabled, signup_default_role: signupRole })}>{t('저장')}</button>
+</fieldset>
+<fieldset class="sec">
+	<legend>{t('이메일 본인 인증')}</legend>
+	<p class="desc">{t('패스워드 계정이 로그인 전에 메일로 이메일을 검증하게 합니다.')}</p>
+	<label class="ck"><input type="checkbox" bind:checked={evEnabled} /> {t('사용')}</label>
+	<label>{t('코드 만료(분)')} <input type="number" bind:value={evTtl} min={s.email_verification_ttl_limits.min} max={s.email_verification_ttl_limits.max} /></label>
+	<button disabled={busy} onclick={() => save('/system/email-verification-settings', { email_verification_enabled: evEnabled, email_verification_ttl_minutes: evTtl })}>{t('저장')}</button>
+</fieldset>
+
+<!-- ── 서버 환경설정 ── -->
+<h3 class="group">{t('서버 환경설정')}</h3>
+<p class="desc">{t('메일 발송과 API 키 등 서버 연동 설정입니다.')}</p>
+<fieldset class="sec">
+	<legend>{t('메일(SMTP)')} — {s.smtp_config.enabled ? t('사용 중') : t('미설정')}</legend>
+	<p class="desc">{t('초대·이메일 인증 메일을 보내는 SMTP 서버입니다.')}</p>
 	<label>{t('호스트')} <input type="text" bind:value={smtpHost} /></label>
 	<label>{t('포트')} <input type="number" bind:value={smtpPort} min="1" max="65535" /></label>
 	<label>{t('사용자')} <input type="text" bind:value={smtpUser} /></label>
@@ -371,10 +424,14 @@
 		<button disabled={busy || !s.smtp_config.enabled} onclick={testSmtp}>{t('테스트 메일 보내기')}</button>
 	</div>
 </fieldset>
+<p class="desc"><a href="{base}/system/api-keys">{t('API 키 관리로 이동')}</a></p>
 
-<h3>{t('백업·복원')}</h3>
-<fieldset class="sec">
+<!-- ── 위험 구역 ── -->
+<h3 class="group danger-title">{t('위험 구역')}</h3>
+<p class="desc">{t('데이터 전체를 바꾸는 작업입니다 — 신중히 사용하세요.')}</p>
+<fieldset class="sec danger">
 	<legend>{t('데이터 관리')}</legend>
+	<p class="desc">{t('전체 백업·복원과 아카이브 내보내기·가져오기입니다.')}</p>
 	<div class="btn-row">
 		<button disabled={busy} onclick={() => doDownload('/system/backup')}>{t('전체 백업 다운로드')}</button>
 		<button disabled={busy} onclick={() => doDownload('/system/export')}>{t('아카이브 내보내기')}</button>
@@ -395,19 +452,9 @@
 	</label>
 </fieldset>
 
-<h3>{t('유지보수')}</h3>
-<fieldset class="sec">
-	<legend>{t('저장공간·검색')}</legend>
-	<button disabled={busy} onclick={compact}>{t('저장공간 최적화')}</button>
-	<div class="btn-row">
-		<button disabled={busy || reindexRunning} onclick={startReindex}>{t('검색 인덱스 전체 재색인')}</button>
-		{#if reindexRunning}<span class="muted">{t('재색인 중')} {reindexDone}/{reindexTotal}</span>{/if}
-	</div>
-</fieldset>
-
-<h3>{t('데이터 이전')}</h3>
-<fieldset class="sec">
-	<legend>{s.migration_mode ? t('이전 모드 켜짐') : t('이전 모드 꺼짐')}</legend>
+<fieldset class="sec danger">
+	<legend>{t('다른 춘추관으로 이전')} — {s.migration_mode ? t('이전 모드 켜짐') : t('이전 모드 꺼짐')}</legend>
+	<p class="desc">{t('다른 춘추관 인스턴스로 전체 데이터를 옮길 때 켭니다 — 켜면 아카이빙이 중단됩니다.')}</p>
 	{#if migrationToken}
 		<p class="mono mtoken">{migrationToken}</p>
 		<p class="muted">{t('이 토큰은 다시 표시되지 않습니다 — 받는 쪽에 안전하게 전달하세요.')}</p>
@@ -430,6 +477,86 @@
 		padding: 8px 12px;
 		margin-bottom: 12px;
 		font-size: 13px;
+	}
+	/* 그룹 제목 — 설정 섹션들을 묶는 상단 헤더 */
+	h3.group {
+		font-size: 13px;
+		font-weight: 700;
+		text-transform: none;
+		letter-spacing: 0;
+		color: var(--fg);
+		border-bottom: 1px solid var(--border);
+		padding-bottom: 4px;
+		margin: 28px 0 4px;
+	}
+	h3.group.danger-title {
+		color: var(--red-text);
+		border-color: var(--red);
+	}
+	.desc {
+		font-size: 12px;
+		color: var(--muted);
+		margin: 0 0 8px;
+		max-width: 560px;
+	}
+	/* 저장 용량 미터 차트 */
+	.meter-box {
+		max-width: 560px;
+		margin: 8px 0 4px;
+	}
+	.meter-head {
+		display: flex;
+		justify-content: space-between;
+		font-size: 12px;
+		margin-bottom: 4px;
+	}
+	.meter {
+		display: flex;
+		height: 14px;
+		border-radius: 7px;
+		overflow: hidden;
+		background: var(--bg-soft);
+	}
+	.meter .seg {
+		height: 100%;
+	}
+	.seg-db {
+		background: var(--blue);
+	}
+	.seg-sites {
+		background: var(--green);
+	}
+	.seg-res {
+		background: var(--amber);
+	}
+	.seg-docs {
+		background: var(--gray);
+	}
+	.legend-list {
+		list-style: none;
+		padding: 0;
+		margin: 8px 0 0;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 16px;
+		font-size: 12px;
+	}
+	.legend-list li {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.legend-list .dot {
+		width: 10px;
+		height: 10px;
+		border-radius: 2px;
+		display: inline-block;
+	}
+	.sec.danger {
+		border-color: var(--red);
+	}
+	.sec.danger legend {
+		color: var(--red-text);
 	}
 	.sec {
 		border: 1px solid var(--border);

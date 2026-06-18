@@ -11,9 +11,8 @@
 	let notice = $state('');
 	let busy = $state(false);
 
-	// 권한 편집 펼침 상태 (user_id → 편집 중 권한 set)
-	let editing = $state<number | null>(null);
-	let editPerms = $state<Set<string>>(new Set());
+	// 표시이름 편집 (user_id → 입력값). 권한은 역할 단위로만 부여한다(세분 권한 편집 없음).
+	let nameEdit = $state<Record<number, string>>({});
 	let deleteEmail = $state<Record<number, string>>({});
 
 	// 초대 폼
@@ -46,24 +45,14 @@
 			t('세션을 로그아웃했습니다.')
 		);
 
-	function startEdit(u: SystemUser) {
-		editing = u.id;
-		editPerms = new Set(d.user_perms[u.id]?.effective ?? []);
-	}
-	function togglePerm(p: string) {
-		const s = new Set(editPerms);
-		if (s.has(p)) s.delete(p);
-		else s.add(p);
-		editPerms = s;
-	}
-	const savePerms = (u: SystemUser) =>
-		run(() =>
-			api(`/system/users/${u.id}/permissions`, {
-				method: 'POST',
-				body: JSON.stringify({ permissions: [...editPerms] })
-			}).then(() => {
-				editing = null;
-			})
+	const saveName = (u: SystemUser) =>
+		run(
+			() =>
+				api(`/system/users/${u.id}/name`, {
+					method: 'POST',
+					body: JSON.stringify({ display_name: nameEdit[u.id] ?? '' })
+				}),
+			t('표시이름을 저장했습니다.')
 		);
 
 	const deleteUser = (u: SystemUser) =>
@@ -107,15 +96,25 @@
 <div class="table-wrap wide">
 	<table>
 		<thead>
-			<tr><th>{t('이메일')}</th><th>{t('역할')}</th><th>{t('권한')}</th><th></th></tr>
+			<tr><th>{t('이메일')}</th><th>{t('표시이름')}</th><th>{t('역할')}</th><th></th></tr>
 		</thead>
 		<tbody>
 			{#each d.users as u}
 				<tr>
 					<td>
 						{u.email}
-						{#if u.display_name}<span class="muted"> · {u.display_name}</span>{/if}
 						{#if u.is_founder}<span class="badge same">{t('최초 관리자')}</span>{/if}
+					</td>
+					<td>
+						<div class="name-edit">
+							<input
+								type="text"
+								placeholder="-"
+								value={nameEdit[u.id] ?? u.display_name ?? ''}
+								oninput={(e) => (nameEdit = { ...nameEdit, [u.id]: e.currentTarget.value })}
+							/>
+							<button onclick={() => saveName(u)} disabled={busy}>{t('저장')}</button>
+						</div>
 					</td>
 					<td>
 						{#if u.is_founder}
@@ -131,30 +130,6 @@
 										>{d.role_labels[u.role] ?? u.role}</option
 									>{/if}
 							</select>
-						{/if}
-					</td>
-					<td>
-						{#if editing === u.id}
-							<div class="perms">
-								{#each d.permissions_catalog as p}
-									<label
-										><input
-											type="checkbox"
-											checked={editPerms.has(p)}
-											onchange={() => togglePerm(p)}
-										/> {d.permission_labels[p] ?? p}</label
-									>
-								{/each}
-								<div>
-									<button onclick={() => savePerms(u)} disabled={busy}>{t('저장')}</button>
-									<button onclick={() => (editing = null)}>{t('취소')}</button>
-								</div>
-							</div>
-						{:else}
-							<span class="muted">{(d.user_perms[u.id]?.effective ?? []).length} {t('개')}</span>
-							{#if d.permission_roles.includes(u.role) && !u.is_founder}
-								<button onclick={() => startEdit(u)}>{t('편집')}</button>
-							{/if}
 						{/if}
 					</td>
 					<td>
@@ -213,11 +188,14 @@
 		margin-bottom: 12px;
 		font-size: 13px;
 	}
-	.perms {
+	.name-edit {
 		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		font-size: 12px;
+		gap: 6px;
+		align-items: center;
+	}
+	.name-edit input {
+		width: 9rem;
+		max-width: 100%;
 	}
 	button.danger {
 		color: #fff;

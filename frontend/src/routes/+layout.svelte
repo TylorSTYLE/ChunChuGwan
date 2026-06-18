@@ -14,7 +14,7 @@
 	const chrome = $derived(me && me.user?.role !== 'pending');
 
 	// 로그·설정 그룹은 하위에 보일 항목이 하나라도 있을 때만 노출한다.
-	const showLogs = $derived(!!me && (me.flags.can_view_logs || me.flags.can_manage_system));
+	const showLogs = $derived(!!me && me.flags.can_view_any_logs);
 	const showSettings = $derived(!!me && (me.flags.can_manage_users || me.flags.can_manage_system));
 
 	// 테마 토글 — 자동(시스템) → 라이트 → 다크 순환 (app.html 의 wccgTheme 재사용).
@@ -85,9 +85,9 @@
 				{#if me.flags.can_archive}
 					<a href="{base}/archive/new" onclick={close}>{t('새 아카이빙')}</a>
 				{/if}
-				<a href="{base}/archives" onclick={close}>{t('아카이브 사이트 목록')}</a>
-				<a href="{base}/documents" onclick={close}>{t('전체 문서(파일)')}</a>
-				<a href="{base}/schedules" onclick={close}>{t('스케줄')}</a>
+				<a href="{base}/archive/list" onclick={close}>{t('아카이브 사이트 목록')}</a>
+				<a href="{base}/archive/documents" onclick={close}>{t('전체 문서(파일)')}</a>
+				<a href="{base}/archive/schedules" onclick={close}>{t('스케줄')}</a>
 				{#if me.flags.can_manage_system && me.needs_human_count > 0}
 					<a href="{base}/archive/needs-human" class="needs-human" onclick={close}>
 						{t('사람 확인')}<span class="nh-badge">{me.needs_human_count}</span>
@@ -99,11 +99,14 @@
 		{#if showLogs}
 			<NavMenu label={t('로그')}>
 				{#snippet children(close)}
-					{#if me.flags.can_view_logs}
-						<a href="{base}/logs" onclick={close}>{t('아카이브 로그')}</a>
+					{#if me.flags.can_view_archive_logs}
+						<a href="{base}/log/archive" onclick={close}>{t('아카이브 로그')}</a>
 					{/if}
-					{#if me.flags.can_manage_system}
-						<a href="{base}/system/logs" onclick={close}>{t('시스템 로그')}</a>
+					{#if me.flags.can_view_system_logs}
+						<a href="{base}/log/system" onclick={close}>{t('시스템 로그')}</a>
+					{/if}
+					{#if me.flags.can_view_audit_logs}
+						<a href="{base}/log/audit" onclick={close}>{t('감사 로그')}</a>
 					{/if}
 				{/snippet}
 			</NavMenu>
@@ -122,7 +125,7 @@
 						<a href="{base}/system/api-keys" onclick={close}>{t('API Key 관리')}</a>
 					{/if}
 					{#if me.flags.can_manage_system}
-						<a href="{base}/system" onclick={close}>{t('시스템 설정')}</a>
+						<a href="{base}/system/general" onclick={close}>{t('시스템 설정')}</a>
 					{/if}
 				{/snippet}
 			</NavMenu>

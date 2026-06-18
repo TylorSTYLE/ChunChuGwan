@@ -23,6 +23,9 @@ from . import config, db
 
 # chunchugwan 네임스페이스 로거에만 단다 — uvicorn 액세스 로그 등은 제외.
 _LOGGER_NAME = "chunchugwan"
+# 감사 로그(web.audit)는 전용 audit_logs 테이블·/log/audit 화면으로 분리됐다 —
+# 같은 네임스페이스라 핸들러가 잡지만 시스템 로그엔 중복 적재하지 않도록 제외한다.
+_AUDIT_LOGGER_NAME = "chunchugwan.web.audit"
 _PRUNE_EVERY = 500   # 이 횟수 적재마다 보관 한도 초과분 정리
 
 _source = "cli"      # 적재 프로세스 종류 — install() 이 설정
@@ -46,6 +49,9 @@ class DBLogHandler(logging.Handler):
         self._writer.start()
 
     def emit(self, record: logging.LogRecord) -> None:
+        # 감사 로그는 전용 테이블로만 — 시스템 로그 화면에서 분리한다.
+        if record.name == _AUDIT_LOGGER_NAME:
+            return
         try:
             traceback = None
             if record.exc_info and record.exc_info != (None, None, None):

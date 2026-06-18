@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pagePath } from '$lib/urls';
 	import { base } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
@@ -22,7 +23,7 @@
 			<tbody>
 				{#each s.items as item}
 					<tr>
-						<td class="url-cell"><a href="{base}/page/{item.page_id}">{item.url}</a></td>
+						<td class="url-cell"><a href={pagePath(item.site_id, item.page_id)}>{item.url}</a></td>
 						<td>{item.label}</td>
 						<td class="mono">{item.next_run_at ? ts(String(item.next_run_at)) : '-'}</td>
 					</tr>
