@@ -68,6 +68,8 @@ button, select, input[type='text'], input[type='url'], input[type='number'] {
 }
 button { cursor: pointer; }
 button:hover { background: var(--bg-soft); }
+button:disabled { cursor: not-allowed; opacity: 0.55; }
+button:disabled:hover { background: var(--surface); }
 
 .stat-grid {
 	display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

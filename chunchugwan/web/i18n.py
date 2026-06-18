@@ -1237,6 +1237,8 @@ _EN: dict[str, str] = {
         "Retry queued — this proceeds in the background.",
     "재시도할 실패 작업이 없습니다.": "No failed runs to retry.",
     "이 사이트 내보내기": "Export this site",
+    "파일 준비중…": "Preparing file…",
+    "내보내기 파일을 다운로드했습니다.": "Export file downloaded.",
     "— 이 사이트의 페이지·스냅샷만 담은 .ccg.export 파일":
         "— a .ccg.export file with only this site's pages and snapshots",
     "다시 아카이빙": "Re-archive",
