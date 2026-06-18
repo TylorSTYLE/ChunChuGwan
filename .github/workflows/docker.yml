@@ -167,7 +167,10 @@ jobs:
           echo "매핑된 호스트 포트: $port"
           ok=0
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$port/" || echo 000)
+            # 연결 실패 시 curl 이 -w 로 이미 000 을 찍으므로 `|| echo 000` 을 덧붙이면
+            # "000000" 이 돼 != "000" 비교를 거짓 통과한다 — curl 출력만 쓰고 빈값만 000 으로.
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$port/" 2>/dev/null)
+            code=${code:-000}
             echo "try $i -> $code"
             if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
               echo "대시보드 응답 OK ($code)"; ok=1; break
