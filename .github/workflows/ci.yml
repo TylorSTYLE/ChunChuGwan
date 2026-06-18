@@ -20,7 +20,7 @@ jobs:
       - name: Node 설치
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -50,7 +50,7 @@ jobs:
           # enable-cache 를 켜면 post 단계의 uv cache prune 이 공유 캐시 락을 300s 기다리다
           # 타임아웃(exit 2)나 잡이 빨개진다 — 셀프 호스트에선 끈다.
           enable-cache: false
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: 의존성 설치
         run: uv sync --locked
@@ -58,7 +58,7 @@ jobs:
       - name: Node 설치 (대시보드 SPA 빌드용)
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 

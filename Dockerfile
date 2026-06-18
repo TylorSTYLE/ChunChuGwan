@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1
 
 # ── SvelteKit SPA 빌드 — 정적 산출물(frontend/build)을 다음 스테이지가 동봉한다 ──
-FROM node:22-slim AS frontend
+FROM node:24-slim AS frontend
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \

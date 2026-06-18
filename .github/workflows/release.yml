@@ -91,7 +91,7 @@ jobs:
           # 셀프 호스트 러너는 로컬 uv 캐시가 보존돼 GHA 캐시가 불필요하다.
           # (켜면 post 단계 uv cache prune 이 락 타임아웃으로 잡을 실패시킴)
           enable-cache: false
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: pyproject.toml · uv.lock 갱신 · 태그 · 푸시
         if: steps.bump.outputs.skip != 'true'
