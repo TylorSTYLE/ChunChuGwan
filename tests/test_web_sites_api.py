@@ -4,10 +4,10 @@ Phase C2 컷오버로 제거되는 SSR 사이트 화면(app.index/site_view)의 
 API 기준으로 대체한다. SSR test_web.py(site·pagination·byte)·test_deletion(권한 플래그)
 의 사이트 화면 단정에 대응한다.
 
-주의(갭): SSR /sites/{id} 는 db.list_site_certificates 로 TLS 인증서 이력을 노출하지만
-/api/web/sites/{id} 와 SPA 사이트 화면에는 인증서 표시가 없다 — 컷오버 전 SPA 기능
-보강이 필요한 항목으로, 테스트가 아닌 별도 결정 사항이다(test_certs.py 는 컷오버 후에도
-.pem 다운로드 바이너리 라우트가 유지되므로 깨지지 않는다).
+인증서: SSR /sites/{id} 가 노출하던 TLS 인증서 이력을 /api/web/sites/{id} 가 cert_rows 로
+내려주고(주체·발급자·SAN·유효/확인 기간·일련번호·서명 알고리즘·지문·현재/검증 플래그) SPA
+사이트 화면이 호스트별 카드로 상세 표시한다 — test_site_detail_certificates 가 카드가 쓰는
+응답 필드를 검증하고, .pem 다운로드 바이너리 라우트는 test_certs.py 가 본다.
 """
 import json
 
@@ -139,9 +139,18 @@ def test_site_detail_certificates(tmp_db):
     cert = body["certificates"][0]
     assert cert["is_current"] is True
     assert cert["san"] == ["example.com", "www.example.com"]
-    assert cert["cert"]["subject"] == "CN=example.com"
-    assert cert["cert"]["verified"] == 1
     assert cert["pem_url"] == f"/sites/{site_id}/certificates/{cert['cert']['id']}.pem"
+    # SPA 카드가 표시하는 상세 필드를 응답이 모두 담아야 한다 (표시 회귀 방지)
+    c = cert["cert"]
+    assert c["subject"] == "CN=example.com"
+    assert c["issuer"] == "CN=Test CA"
+    assert c["serial"] == "1a2b"
+    assert c["fingerprint"] == "ab" * 32
+    assert c["not_before"] == "2026-01-01T00:00:00+00:00"
+    assert c["not_after"] == "2026-12-31T23:59:59+00:00"
+    assert c["signature_algorithm"] == "sha256"
+    assert c["verified"] == 1
+    assert c["first_seen_at"] and c["last_seen_at"]
 
 
 def test_site_detail_no_certificates(tmp_db):

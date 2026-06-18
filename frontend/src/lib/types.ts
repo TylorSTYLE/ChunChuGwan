@@ -219,10 +219,16 @@ export interface SiteDetail {
 		cert: Record<string, unknown> & {
 			id: number;
 			host: string;
-			issuer: string;
 			subject: string;
+			issuer: string;
+			serial: string;
+			fingerprint: string;
+			not_before: string;
 			not_after: string;
+			signature_algorithm: string | null;
 			verified: number;
+			first_seen_at: string;
+			last_seen_at: string;
 		};
 		san: string[];
 		is_current: boolean;
