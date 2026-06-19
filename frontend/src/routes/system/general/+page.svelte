@@ -41,6 +41,15 @@
 	let docMb = $state(0);
 	let docTimeout = $state(0);
 
+	// 인증 보호(rate limit)
+	let atEnabled = $state(true);
+	let atLoginLimit = $state(10);
+	let atLoginIpLimit = $state(30);
+	let atLoginWindow = $state(15);
+	let atTotpLimit = $state(10);
+	let atEmailVerifyLimit = $state(5);
+	let atEmailResendLimit = $state(5);
+
 	// 네트워크 태그 폼
 	let newTagName = $state('');
 	let newTagDesc = $state('');
@@ -72,6 +81,13 @@
 		signupRole = s.signup_default_role;
 		evEnabled = s.email_verification_enabled;
 		evTtl = s.email_verification_ttl_minutes;
+		atEnabled = s.auth_throttle_enabled;
+		atLoginLimit = s.auth_throttle.login_limit;
+		atLoginIpLimit = s.auth_throttle.login_ip_limit;
+		atLoginWindow = s.auth_throttle.login_window_minutes;
+		atTotpLimit = s.auth_throttle.totp_limit;
+		atEmailVerifyLimit = s.auth_throttle.email_verify_limit;
+		atEmailResendLimit = s.auth_throttle.email_resend_limit;
 		crawlMaxPages = s.crawl_defaults.max_pages;
 		crawlMaxDepth = s.crawl_defaults.max_depth;
 		crawlDelay = s.crawl_defaults.delay;
@@ -407,6 +423,18 @@
 	<label class="ck"><input type="checkbox" bind:checked={evEnabled} /> {t('사용')}</label>
 	<label>{t('코드 만료(분)')} <input type="number" bind:value={evTtl} min={s.email_verification_ttl_limits.min} max={s.email_verification_ttl_limits.max} /></label>
 	<button disabled={busy} onclick={() => save('/system/email-verification-settings', { email_verification_enabled: evEnabled, email_verification_ttl_minutes: evTtl })}>{t('저장')}</button>
+</fieldset>
+<fieldset class="sec">
+	<legend>{t('인증 보호 (무차별 대입 방어)')}</legend>
+	<p class="desc">{t('로그인·2단계 인증·이메일 코드의 시도 횟수를 제한합니다. 한도를 넘으면 잠시 차단됩니다.')}</p>
+	<label class="ck"><input type="checkbox" bind:checked={atEnabled} /> {t('사용')}</label>
+	<label>{t('로그인 시도 한도(이메일별)')} <input type="number" bind:value={atLoginLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
+	<label>{t('로그인 시도 한도(IP별)')} <input type="number" bind:value={atLoginIpLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
+	<label>{t('로그인 카운트 창(분)')} <input type="number" bind:value={atLoginWindow} min={s.auth_throttle_limits.window_min} max={s.auth_throttle_limits.window_max} /></label>
+	<label>{t('2단계 인증 시도 한도')} <input type="number" bind:value={atTotpLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
+	<label>{t('이메일 코드 오답 한도')} <input type="number" bind:value={atEmailVerifyLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
+	<label>{t('이메일 코드 재발송 한도(시간당)')} <input type="number" bind:value={atEmailResendLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
+	<button disabled={busy} onclick={() => save('/system/auth-throttle-settings', { auth_throttle_enabled: atEnabled, login_limit: atLoginLimit, login_ip_limit: atLoginIpLimit, login_window_minutes: atLoginWindow, totp_limit: atTotpLimit, email_verify_limit: atEmailVerifyLimit, email_resend_limit: atEmailResendLimit })}>{t('저장')}</button>
 </fieldset>
 
 <!-- ── 서버 환경설정 ── -->

@@ -1691,6 +1691,8 @@ def system_overview(
         role_labels = db.role_labels(conn)
         email_verification_enabled = db.email_verification_enabled(conn)
         email_verification_ttl_minutes = db.email_verification_ttl_minutes(conn)
+        auth_throttle_enabled = db.auth_throttle_enabled(conn)
+        auth_throttle = db.auth_throttle_settings(conn)
         crawl_defaults = crawler.crawl_defaults(conn)
         crawl_backoff = crawler.retry_backoff(conn)
         network_tags = db.list_network_tags(conn)
@@ -1716,6 +1718,14 @@ def system_overview(
         "email_verification_ttl_limits": {
             "min": config.EMAIL_VERIFICATION_TTL_MINUTES_MIN,
             "max": config.EMAIL_VERIFICATION_TTL_MINUTES_MAX,
+        },
+        "auth_throttle_enabled": auth_throttle_enabled,
+        "auth_throttle": auth_throttle,
+        "auth_throttle_limits": {
+            "limit_min": config.AUTH_THROTTLE_LIMIT_MIN,
+            "limit_max": config.AUTH_THROTTLE_LIMIT_MAX,
+            "window_min": config.AUTH_THROTTLE_WINDOW_MIN,
+            "window_max": config.AUTH_THROTTLE_WINDOW_MAX,
         },
         "crawl_defaults": {
             "max_pages": crawl_defaults["max_pages"],
@@ -1816,6 +1826,50 @@ def system_email_verification(
             str(body.email_verification_ttl_minutes),
         )
     audit.log(request, "이메일 본인 인증 설정 변경")
+    return {"ok": True}
+
+
+class AuthThrottleReq(BaseModel):
+    auth_throttle_enabled: bool = True
+    login_limit: int
+    login_ip_limit: int
+    login_window_minutes: int
+    totp_limit: int
+    email_verify_limit: int
+    email_resend_limit: int
+
+
+@router.post("/system/auth-throttle-settings")
+def system_auth_throttle(
+    request: Request, body: AuthThrottleReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """인증 무차별 대입 방어(rate limit) 설정 — 한도·창·전체 토글."""
+    _require_manage_system(user)
+    lo, hi = config.AUTH_THROTTLE_LIMIT_MIN, config.AUTH_THROTTLE_LIMIT_MAX
+    wlo, whi = config.AUTH_THROTTLE_WINDOW_MIN, config.AUTH_THROTTLE_WINDOW_MAX
+    limits = {
+        db.AUTH_LOGIN_LIMIT_KEY: body.login_limit,
+        db.AUTH_LOGIN_IP_LIMIT_KEY: body.login_ip_limit,
+        db.AUTH_TOTP_LIMIT_KEY: body.totp_limit,
+        db.AUTH_EMAIL_VERIFY_LIMIT_KEY: body.email_verify_limit,
+        db.AUTH_EMAIL_RESEND_LIMIT_KEY: body.email_resend_limit,
+    }
+    for value in limits.values():
+        if not (lo <= value <= hi):
+            raise HTTPException(400, f"시도 한도는 {lo} ~ {hi} 사이여야 합니다")
+    if not (wlo <= body.login_window_minutes <= whi):
+        raise HTTPException(400, f"로그인 카운트 창은 {wlo} ~ {whi}분 사이여야 합니다")
+    with db.connect() as conn:
+        db.set_setting(
+            conn, db.AUTH_THROTTLE_ENABLED_KEY,
+            "on" if body.auth_throttle_enabled else "off",
+        )
+        for key, value in limits.items():
+            db.set_setting(conn, key, str(value))
+        db.set_setting(
+            conn, db.AUTH_LOGIN_WINDOW_MINUTES_KEY, str(body.login_window_minutes))
+    audit.log(request, "인증 보호(rate limit) 설정 변경")
     return {"ok": True}
 
 

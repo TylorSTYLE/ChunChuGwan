@@ -209,6 +209,26 @@ EMAIL_VERIFICATION_TTL_MINUTES_MIN = 5
 EMAIL_VERIFICATION_TTL_MINUTES_MAX = 1440  # 24시간
 EMAIL_VERIFICATION_CODE_LENGTH = 6         # 숫자 코드 자릿수
 
+# 인증 무차별 대입 방어(rate limit) 기본값 — 시스템 설정(settings)으로 오버라이드한다
+# (db.auth_throttle_settings 가 [MIN, MAX] 로 클램핑). 고정 윈도우 카운터 방식.
+AUTH_LOGIN_LIMIT_DEFAULT = 10              # 이메일별 로그인 실패 허용 횟수/창
+AUTH_LOGIN_IP_LIMIT_DEFAULT = 30          # IP별 로그인 시도 허용 횟수/창
+AUTH_LOGIN_WINDOW_MINUTES_DEFAULT = 15    # 로그인 카운트 창(분)
+AUTH_TOTP_LIMIT_DEFAULT = 10              # 2단계(TOTP·패스키) 시도 허용 횟수/창(=pending 수명)
+AUTH_EMAIL_VERIFY_LIMIT_DEFAULT = 5      # 이메일 코드 오답 허용 횟수(초과 시 코드 폐기)
+AUTH_EMAIL_RESEND_LIMIT_DEFAULT = 5      # 코드 재발송 시간당 허용 횟수
+AUTH_THROTTLE_LIMIT_MIN = 1               # 한도 설정 허용 범위 (시도 횟수)
+AUTH_THROTTLE_LIMIT_MAX = 1000
+AUTH_THROTTLE_WINDOW_MIN = 1              # 창 설정 허용 범위 (분)
+AUTH_THROTTLE_WINDOW_MAX = 1440
+# throttle 행 GC 기준 — 가장 긴 창(로그인)의 안전 마진. delete_expired_throttle 호출에 쓴다.
+AUTH_THROTTLE_GC_SECONDS = 86400
+
+# 최초 설정(first-run) 보호 토큰. 설정하면 /setup 흐름(관리자 생성·복원·이전)이
+# 일치 토큰을 요구한다 — 셋업 완료 전 외부 노출 인스턴스 선점·SSRF 방지. 빈값이면
+# 종전대로 토큰 없이 셋업 가능(로컬 단독 사용 편의). 셋업이 끝나면 무의미해진다.
+SETUP_TOKEN = os.environ.get("WCCG_SETUP_TOKEN", "").strip()
+
 # 외부 사이트 로그인 자격증명 암호화 키 (대칭 — CLAUDE.md 원칙 6 예외).
 # 설정 시에만 자격증명 기능이 활성화된다. DB·저장소엔 암호문만 남고 키는
 # 여기(환경변수)에만 둔다. 바꾸면 기존 자격증명을 복호화할 수 없다.

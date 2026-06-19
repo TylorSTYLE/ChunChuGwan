@@ -17,7 +17,7 @@ paths:
 | `snapshot_resources`·`snapshot_documents` | `.claude/rules/storage.md` |
 | `snapshot_fts` | `.claude/rules/search.md` |
 | `network_tags`·`site_certificates`·`archive_jobs`·`live_commands`·`schedules`·`crawls`/`crawl_pages`·`crawl_schedules` | `.claude/rules/capture-crawl.md` |
-| `users`/`identities`/`sessions`/`oidc_states`·`permission_groups`·`email_verifications`·`webauthn_credentials`·`site_credentials` | `.claude/rules/authentication.md` |
+| `users`/`identities`/`sessions`/`oidc_states`·`permission_groups`·`email_verifications`·`webauthn_credentials`·`site_credentials`·`auth_throttle` | `.claude/rules/authentication.md` |
 | `api_keys` | `.claude/rules/api-extension.md` |
 
 ## 코어·구조 테이블
@@ -109,4 +109,9 @@ paths:
   크롤 전면 중단, `db.migration_mode_enabled`/`set_migration_mode`. `migration_token_hash`
   — 발급한 이전 토큰의 SHA-256 해시만 저장(세션·API 키와 같은 단방향, 원칙 6),
   `migration_token_created_at` — 발급 시각 표시용. 모드를 끄면 토큰 키들이 삭제된다.
-  흐름은 `.claude/rules/authentication.md`·`.claude/rules/capture-crawl.md` 참조)
+  흐름은 `.claude/rules/authentication.md`·`.claude/rules/capture-crawl.md` 참조)와
+  인증 보호 설정 (`auth_throttle_enabled` on/off 기본 on, `auth_login_limit`/
+  `auth_login_ip_limit`/`auth_login_window_minutes`/`auth_totp_limit`/
+  `auth_email_verify_limit`/`auth_email_resend_limit` — 무차별 대입 방어 한도·창,
+  해석·클램핑은 `db.auth_throttle_settings`, 오염·범위 밖이면 config 기본값. 카운터는
+  `auth_throttle` 테이블, 상세는 `.claude/rules/authentication.md`)

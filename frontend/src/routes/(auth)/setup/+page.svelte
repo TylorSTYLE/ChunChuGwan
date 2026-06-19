@@ -7,8 +7,9 @@
 	import { afterAuth } from '$lib/auth';
 	import type { LoginResult, MigrationStatus } from '$lib/types';
 
-	let { data }: { data: { migration: MigrationStatus } } = $props();
+	let { data }: { data: { migration: MigrationStatus; tokenRequired: boolean } } = $props();
 	const m = $derived(data.migration);
+	const tokenRequired = $derived(data.tokenRequired);
 	const ACTIVE = ['connecting', 'manifest', 'downloading', 'restoring'];
 	const active = $derived(ACTIVE.includes(m.status));
 	const ongoing = $derived(m.status && m.status !== 'idle');
@@ -23,6 +24,10 @@
 	let sourceUrl = $state('');
 	let token = $state('');
 	let restoreFiles = $state<FileList | null>(null);
+	// 최초 설정 보호 토큰 (WCCG_SETUP_TOKEN 설정 시 요구 — F3)
+	let setupToken = $state('');
+	const setupHeaders = (): Record<string, string> =>
+		tokenRequired ? { 'X-Setup-Token': setupToken.trim() } : {};
 
 	async function createAdmin(e: SubmitEvent) {
 		e.preventDefault();
@@ -32,6 +37,7 @@
 			const res = await api<LoginResult>('/auth/setup', {
 				method: 'POST',
 				body: JSON.stringify({ email: email.trim(), password }),
+				headers: setupHeaders(),
 				redirectOn401: false
 			});
 			await afterAuth(res.status);
@@ -49,7 +55,12 @@
 		try {
 			const fd = new FormData();
 			fd.set('file', restoreFiles[0]);
-			await api('/auth/setup/restore', { method: 'POST', body: fd, redirectOn401: false });
+			await api('/auth/setup/restore', {
+				method: 'POST',
+				body: fd,
+				headers: setupHeaders(),
+				redirectOn401: false
+			});
 			await goto(`${base}/login`, { invalidateAll: true });
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
@@ -65,6 +76,7 @@
 			await api('/auth/setup/migrate', {
 				method: 'POST',
 				body: JSON.stringify({ source_url: sourceUrl.trim(), token: token.trim() }),
+				headers: setupHeaders(),
 				redirectOn401: false
 			});
 			await invalidateAll();
@@ -86,7 +98,7 @@
 		busy = true;
 		error = '';
 		try {
-			await api(path, { method: 'POST', redirectOn401: false });
+			await api(path, { method: 'POST', headers: setupHeaders(), redirectOn401: false });
 			await invalidateAll();
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
@@ -158,6 +170,15 @@
 	{/if}
 
 	{#if !active}
+		{#if tokenRequired}
+			<label class="setup-token"
+				>{t('최초 설정 토큰')} <span class="muted">{t('(WCCG_SETUP_TOKEN)')}</span>
+				<input type="password" bind:value={setupToken} autocomplete="off" />
+			</label>
+			<p class="muted sm">
+				{t('이 서버는 최초 설정 보호 토큰을 요구합니다. 아래 작업에 서버 환경변수 WCCG_SETUP_TOKEN 값을 입력하세요.')}
+			</p>
+		{/if}
 		<h3>{t('관리자 계정 생성')}</h3>
 		<form onsubmit={createAdmin}>
 			<label

@@ -36,6 +36,43 @@ from .auth_routes import (
 
 router = APIRouter(prefix="/api/web/auth")
 
+_RATE_MSG = "너무 많은 시도가 있었습니다 — 잠시 후 다시 시도하세요."
+
+
+def _client_ip(request: Request) -> str:
+    """요청 출처 IP (rate limit 키). 리버스 프록시 뒤면 프록시 IP 가 잡힐 수 있어
+    이메일·세션 키와 함께 보조로만 쓴다 (X-Forwarded-For 는 위조 가능해 신뢰 안 함)."""
+    client = request.client
+    return client.host if client is not None else "unknown"
+
+
+def _throttle(request: Request, build) -> None:
+    """인증 시도 rate limit — build(settings)->[(bucket, key, limit, window_seconds)].
+
+    카운터 증가는 **독립 트랜잭션으로 커밋**되어, 호출부가 인증 실패로 4xx 를 던져
+    롤백돼도 시도 횟수가 누적된다. 하나라도 한도 초과면 429(Retry-After). 전체
+    토글이 off 면 통과. (무차별 대입 방어 — 보안 검토 F1)
+    """
+    retry_after = 0
+    with db.connect() as conn:
+        if not db.auth_throttle_enabled(conn):
+            return
+        settings = db.auth_throttle_settings(conn)
+        for bucket, key, limit, window in build(settings):
+            allowed, retry = db.throttle_hit(conn, bucket, key, limit, window)
+            if not allowed:
+                retry_after = max(retry_after, retry)
+        db.delete_expired_throttle(conn, config.AUTH_THROTTLE_GC_SECONDS)
+    if retry_after:
+        raise HTTPException(429, _RATE_MSG, headers={"Retry-After": str(retry_after)})
+
+
+def _throttle_clear(buckets_keys: list[tuple[str, str]]) -> None:
+    """인증 성공 시 카운터 삭제 — 정상 사용자가 누적 차단되지 않게 한다."""
+    with db.connect() as conn:
+        for bucket, key in buckets_keys:
+            db.throttle_clear(conn, bucket, key)
+
 
 class MigrateReq(BaseModel):
     source_url: str
@@ -49,6 +86,21 @@ def _require_first_run() -> None:
             raise HTTPException(403, "이미 설정이 완료되었습니다")
 
 
+def _require_setup_token(request: Request) -> None:
+    """최초 설정 보호 — WCCG_SETUP_TOKEN 이 설정돼 있으면 일치 토큰을 요구한다.
+
+    셋업 완료 전 외부 노출 인스턴스에서 공격자가 첫 관리자를 선점하거나 임의 URL
+    Pull(SSRF)을 트리거하는 것을 막는다. 토큰은 헤더 `X-Setup-Token` 으로 받는다.
+    미설정(빈값)이면 종전대로 토큰 없이 허용한다 (로컬 단독 사용 편의). 보안 검토 F3.
+    """
+    expected = config.SETUP_TOKEN
+    if not expected:
+        return
+    provided = request.headers.get("x-setup-token", "")
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(403, "최초 설정 토큰이 올바르지 않습니다.")
+
+
 @router.get("/setup")
 def setup_status() -> dict:
     """최초 설정 상태 — 관리자 등록 필요 여부 + 진행 중 네트워크 이전 상태.
@@ -57,12 +109,17 @@ def setup_status() -> dict:
     """
     with db.connect() as conn:
         needed = db.count_users(conn) == 0
-    return {"needed": needed, "migration": migration.pull_status()}
+    return {
+        "needed": needed,
+        "migration": migration.pull_status(),
+        "token_required": bool(config.SETUP_TOKEN),  # 최초 설정 토큰 요구 여부 (F3)
+    }
 
 
 @router.post("/setup")
 def setup_create(request: Request, body: LoginReq) -> JSONResponse:
     """최초 구동 관리자 등록 → 세션 발급. users 가 비어 있지 않으면 거부."""
+    _require_setup_token(request)
     email = body.email.strip()
     err = auth.validate_credentials(email, body.password)
     if err is not None:
@@ -80,6 +137,7 @@ def setup_create(request: Request, body: LoginReq) -> JSONResponse:
 @router.post("/setup/restore")
 def setup_restore(request: Request, file: UploadFile = File(...)) -> dict:
     """최초 설정에서 전체 백업 업로드로 복원 — 완료되면 SPA 가 로그인으로 보낸다."""
+    _require_setup_token(request)
     _require_first_run()
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
         shutil.copyfileobj(file.file, tmp)
@@ -99,6 +157,7 @@ def setup_restore(request: Request, file: UploadFile = File(...)) -> dict:
 @router.post("/setup/migrate")
 def setup_migrate(request: Request, body: MigrateReq) -> dict:
     """다른 춘추관에서 네트워크로 데이터를 가져온다 (백그라운드 시작)."""
+    _require_setup_token(request)
     _require_first_run()
     err = migration.start_pull(body.source_url, body.token)
     if err is not None:
@@ -115,6 +174,7 @@ def setup_migrate_status() -> dict:
 @router.post("/setup/migrate/retry")
 def setup_migrate_retry(request: Request) -> dict:
     """실패한 파일만 다시 받는다 (전체 재시도)."""
+    _require_setup_token(request)
     _require_first_run()
     migration.retry_failed()
     return {"ok": True}
@@ -123,6 +183,7 @@ def setup_migrate_retry(request: Request) -> dict:
 @router.post("/setup/migrate/finish")
 def setup_migrate_finish(request: Request) -> dict:
     """실패를 무시하고 이전을 마무리 — 받은 데이터로 서비스를 시작한다."""
+    _require_setup_token(request)
     _require_first_run()
     migration.finish_pull()
     return {"ok": True}
@@ -172,19 +233,31 @@ def _active_or_verify(conn: sqlite3.Connection, user: sqlite3.Row) -> JSONRespon
 def login(request: Request, body: LoginReq) -> JSONResponse:
     """이메일·패스워드 로그인 — 2FA/이메일인증 필요 시 pending 상태와 다음 단계를 반환."""
     email = body.email.strip()
+    ip = _client_ip(request)
+    key_email = email.lower()
+    # 무차별 대입 방어 — 이메일별·IP별 시도 한도 (F1)
+    window = lambda s: s["login_window_minutes"] * 60  # noqa: E731
+    _throttle(request, lambda s: [
+        ("login", key_email, s["login_limit"], window(s)),
+        ("login_ip", ip, s["login_ip_limit"], window(s)),
+    ])
     with db.connect() as conn:
         user = db.get_user_by_email(conn, email)
-        ok = (
-            user is not None
-            and user["password_hash"] is not None
-            and auth.verify_password(user["password_hash"], body.password)
-        )
+        if user is not None and user["password_hash"] is not None:
+            ok = auth.verify_password(user["password_hash"], body.password)
+        else:
+            # 계정 없음/SSO 전용 — 더미 검증으로 응답 시간을 평탄화 (사용자 열거 방지, F2)
+            auth.verify_password_dummy(body.password)
+            ok = False
         if not ok:
             raise HTTPException(401, "이메일 또는 패스워드가 올바르지 않습니다.")
         if user["role"] == "blocked":
             raise HTTPException(403, "차단된 계정입니다. 관리자에게 문의하세요.")
         if user["role"] == "withdrawn":
             raise HTTPException(403, "탈퇴한 계정입니다.")
+        # 패스워드 검증 통과 — 로그인 카운터 초기화 (정상 사용자 누적 차단 방지)
+        db.throttle_clear(conn, "login", key_email)
+        db.throttle_clear(conn, "login_ip", ip)
         if user["totp_secret"] is not None or db.count_passkeys(conn, user["id"]) > 0:
             # 2단계: TOTP/패스키 확인 전까지 pending 세션(짧은 수명)
             token = auth.issue_session(
@@ -221,14 +294,19 @@ def login_totp(request: Request, body: CodeReq) -> JSONResponse:
     sess = _pending_session(request)
     if sess is None:
         raise HTTPException(401, "패스워드 인증이 필요합니다")
+    # 2단계 코드 무차별 대입 방어 — 세션별 시도 한도 (F1, 창=pending 세션 수명)
+    _throttle(request, lambda s: [
+        ("totp", sess["token_hash"], s["totp_limit"], config.PENDING_TOTP_TTL_SECONDS),
+    ])
     with db.connect() as conn:
         user = db.get_user_by_id(conn, sess["user_id"])
-        window = user["totp_secret"] is not None and auth.verify_totp(
+        totp_window = user["totp_secret"] is not None and auth.verify_totp(
             user["totp_secret"], body.code, user["totp_last_used_at"]
         )
-        if not window:
+        if not totp_window:
             raise HTTPException(401, "코드가 올바르지 않습니다.")
-        db.set_totp_last_used(conn, user["id"], window)
+        db.set_totp_last_used(conn, user["id"], totp_window)
+        db.throttle_clear(conn, "totp", sess["token_hash"])
         status = "email_verify" if _email_verification_required(conn, user) else "active"
         # 세션을 active 로 승격(또는 pending_email_verify 전환) — 쿠키는 그대로 재설정
         _two_factor_target(conn, sess["token_hash"], user, None)
@@ -253,6 +331,10 @@ async def login_passkey(request: Request) -> JSONResponse:
     sess = _pending_session(request)
     if sess is None:
         raise HTTPException(401, "패스워드 인증이 필요합니다")
+    # 2단계 무차별 대입 방어 — TOTP 와 같은 세션 버킷·한도 공유 (F1)
+    _throttle(request, lambda s: [
+        ("totp", sess["token_hash"], s["totp_limit"], config.PENDING_TOTP_TTL_SECONDS),
+    ])
     body = await request.json()
     credential = body.get("credential")
     if not isinstance(credential, dict):
@@ -270,6 +352,7 @@ async def login_passkey(request: Request) -> JSONResponse:
         if new_count is None:
             raise HTTPException(401, "패스키 인증에 실패했습니다")
         db.touch_passkey(conn, cred["id"], new_count)
+        db.throttle_clear(conn, "totp", sess["token_hash"])
         user = db.get_user_by_id(conn, sess["user_id"])
         status = "email_verify" if _email_verification_required(conn, user) else "active"
         _two_factor_target(conn, sess["token_hash"], user, None)
@@ -280,16 +363,41 @@ async def login_passkey(request: Request) -> JSONResponse:
 
 @router.post("/signup")
 def signup(request: Request, body: LoginReq) -> JSONResponse:
-    """회원 가입 — 가입 즉시 로그인(또는 이메일 인증 단계). 가입 비활성/중복은 거부."""
+    """회원 가입 — 가입 즉시 로그인(또는 이메일 인증 단계).
+
+    사용자 열거 방지(F2): 이메일 인증+SMTP 가 켜진 경우 신규/중복 모두 동일하게
+    email_verify 상태를 반환한다 (중복이면 계정을 만들지 않고 응답만 일치시킨다 —
+    Set-Cookie 유무의 잔여 차이는 docs/AUTHENTICATION.md 에 명시). 메일을 못 쓰면
+    즉시 로그인 구조라 완전 일반화가 불가해, 메시지를 중립화하고 IP throttle 로 대량
+    열거를 차단한다(차선).
+    """
     email = body.email.strip()
     err = auth.validate_credentials(email, body.password)
     if err is not None:
         raise HTTPException(400, err)
+    ip = _client_ip(request)
+    _throttle(request, lambda s: [
+        ("signup_ip", ip, s["login_ip_limit"], s["login_window_minutes"] * 60),
+    ])
     with db.connect() as conn:
         if not db.signup_enabled(conn):
             raise HTTPException(403, "회원 가입이 비활성화되어 있습니다.")
-        if db.get_user_by_email(conn, email) is not None:
-            raise HTTPException(400, "이미 가입된 이메일입니다.")
+        existing = db.get_user_by_email(conn, email) is not None
+        mail_verify = db.email_verification_enabled(conn) and mailer.mail_enabled(conn)
+        if mail_verify:
+            if existing:
+                # 계정 생성·로그인 없이 동일 응답 — 존재 여부를 노출하지 않는다.
+                return JSONResponse({"status": "email_verify"})
+            uid = db.create_user(
+                conn, email, auth.hash_password(body.password),
+                role=db.signup_default_role(conn),
+            )
+            user = db.get_user_by_id(conn, uid)
+            return _active_or_verify(conn, user)  # 항상 email_verify 분기
+        # 메일 미사용 — 완전 일반화 불가. 중복은 중립 메시지로 거부(차선).
+        if existing:
+            raise HTTPException(
+                400, "가입을 완료할 수 없습니다. 다른 이메일을 쓰거나 로그인하세요.")
         uid = db.create_user(
             conn, email, auth.hash_password(body.password),
             role=db.signup_default_role(conn),
@@ -363,6 +471,27 @@ def verify_email_status(request: Request) -> dict:
 @router.post("/verify-email")
 def verify_email(request: Request, body: CodeReq) -> JSONResponse:
     """인증 코드 검증 → 완료. 로그인 도중이면 pending 세션을 active 로 승격한다."""
+    # 코드 무차별 대입 방어 (F1) — 대상 사용자별 오답 한도. 별도 트랜잭션으로
+    # 카운트를 커밋하고, 초과 시 코드를 폐기(재발송 강제)한 뒤 429.
+    with db.connect() as conn:
+        target, _ = _verify_target(request, conn)
+        if target is None:
+            raise HTTPException(401, "인증 대상이 없습니다")
+        verify_uid = target["id"]
+        needs_code = not target["email_verified"]
+        retry_after = 0
+        if needs_code and db.auth_throttle_enabled(conn):
+            settings = db.auth_throttle_settings(conn)
+            window = db.email_verification_ttl_minutes(conn) * 60
+            allowed, retry = db.throttle_hit(
+                conn, "email_verify", str(verify_uid),
+                settings["email_verify_limit"], window,
+            )
+            if not allowed:
+                retry_after = retry
+                db.delete_email_verification(conn, verify_uid)  # 코드 폐기
+    if retry_after:
+        raise HTTPException(429, _RATE_MSG, headers={"Retry-After": str(retry_after)})
     with db.connect() as conn:
         user, sess = _verify_target(request, conn)
         if user is None:
@@ -376,6 +505,7 @@ def verify_email(request: Request, body: CodeReq) -> JSONResponse:
                 raise HTTPException(401, "코드가 올바르지 않거나 만료되었습니다.")
             db.set_email_verified(conn, user["id"])
             db.delete_email_verification(conn, user["id"])
+            db.throttle_clear(conn, "email_verify", str(user["id"]))
         if _is_pending_verify(sess):
             db.activate_session(
                 conn, sess["token_hash"], ttl_seconds=config.SESSION_TTL_DAYS * 86400
@@ -388,13 +518,18 @@ def verify_email(request: Request, body: CodeReq) -> JSONResponse:
 
 @router.post("/verify-email/resend")
 def verify_email_resend(request: Request) -> dict:
-    """인증 코드 재발송 — SMTP 미설정이면 400."""
+    """인증 코드 재발송 — SMTP 미설정이면 400. 시간당 재발송 한도(F1)."""
     with db.connect() as conn:
         user, sess = _verify_target(request, conn)
         if user is None:
             raise HTTPException(401, "인증 대상이 없습니다")
         if user["email_verified"]:
             return {"sent": False, "verified": True}
+    # 재발송 남용·메일 폭탄 방어 — 사용자별 시간당 한도 (별도 커밋 트랜잭션)
+    _throttle(request, lambda s: [
+        ("email_resend", str(user["id"]), s["email_resend_limit"], 3600),
+    ])
+    with db.connect() as conn:
         if not mailer.mail_enabled(conn):
             raise HTTPException(400, "메일 발송이 설정되지 않아 코드를 보낼 수 없습니다.")
         sent = _issue_and_send_code(conn, user)
