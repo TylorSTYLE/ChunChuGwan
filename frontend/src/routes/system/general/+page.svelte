@@ -6,6 +6,7 @@
 	import { api, ApiError, download } from '$lib/api';
 	import type { SystemOverview } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
+	import Spinner from '$lib/components/Spinner.svelte';
 
 	let { data }: { data: { sys: SystemOverview } } = $props();
 	const s = $derived(data.sys);
@@ -21,6 +22,9 @@
 	let error = $state('');
 	let notice = $state('');
 	let busy = $state(false);
+	// busy 는 모든 버튼을 동시에 잠그지만, 스피너는 지금 눌린 버튼에만 떠야 한다 —
+	// 진행 중 작업 식별자(compact·/system/backup·/system/export)를 따로 둔다.
+	let pending = $state('');
 
 	// 설정 폼 로컬 상태 — load 결과로 초기화/동기화
 	let signupEnabled = $state(false);
@@ -147,6 +151,7 @@
 
 	async function doDownload(path: string) {
 		busy = true;
+		pending = path;
 		error = '';
 		notice = '';
 		try {
@@ -155,6 +160,7 @@
 			error = err instanceof ApiError ? err.message : String(err);
 		} finally {
 			busy = false;
+			pending = '';
 		}
 	}
 
@@ -176,6 +182,7 @@
 
 	async function compact() {
 		busy = true;
+		pending = 'compact';
 		error = '';
 		notice = '';
 		try {
@@ -186,6 +193,7 @@
 			error = err instanceof ApiError ? err.message : String(err);
 		} finally {
 			busy = false;
+			pending = '';
 		}
 	}
 
@@ -289,14 +297,18 @@
 	<legend>{t('검색 인덱스')}</legend>
 	<p class="desc">{t('아직 색인되지 않은 스냅샷을 다시 색인합니다.')}</p>
 	<div class="btn-row">
-		<button disabled={busy || reindexRunning} onclick={startReindex}>{t('검색 인덱스 전체 재색인')}</button>
+		<button disabled={busy || reindexRunning} onclick={startReindex} aria-busy={reindexRunning}>
+			{#if reindexRunning}<Spinner />{/if}{t('검색 인덱스 전체 재색인')}
+		</button>
 		{#if reindexRunning}<span class="muted">{t('재색인 중')} {reindexDone}/{reindexTotal}</span>{/if}
 	</div>
 </fieldset>
 <fieldset class="sec">
 	<legend>{t('저장공간 최적화')}</legend>
 	<p class="desc">{t('압축·자원 공유로 저장공간을 줄입니다 (내용은 그대로).')}</p>
-	<button disabled={busy} onclick={compact}>{t('저장공간 최적화')}</button>
+	<button disabled={busy} onclick={compact} aria-busy={pending === 'compact'}>
+		{#if pending === 'compact'}<Spinner />{t('최적화 중…')}{:else}{t('저장공간 최적화')}{/if}
+	</button>
 </fieldset>
 
 <!-- ── 아카이브 설정 ── -->
@@ -433,8 +445,12 @@
 	<legend>{t('데이터 관리')}</legend>
 	<p class="desc">{t('전체 백업·복원과 아카이브 내보내기·가져오기입니다.')}</p>
 	<div class="btn-row">
-		<button disabled={busy} onclick={() => doDownload('/system/backup')}>{t('전체 백업 다운로드')}</button>
-		<button disabled={busy} onclick={() => doDownload('/system/export')}>{t('아카이브 내보내기')}</button>
+		<button disabled={busy} onclick={() => doDownload('/system/backup')} aria-busy={pending === '/system/backup'}>
+			{#if pending === '/system/backup'}<Spinner />{t('백업 준비중…')}{:else}{t('전체 백업 다운로드')}{/if}
+		</button>
+		<button disabled={busy} onclick={() => doDownload('/system/export')} aria-busy={pending === '/system/export'}>
+			{#if pending === '/system/export'}<Spinner />{t('내보내기 준비중…')}{:else}{t('아카이브 내보내기')}{/if}
+		</button>
 	</div>
 	<label>{t('백업 복원')}
 		<input type="file" accept=".ccg.backup" disabled={busy}
@@ -604,6 +620,13 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 8px;
+	}
+	/* 로딩 시 버튼 안 스피너+텍스트 정렬 (export 페이지의 .export-link button 패턴) */
+	.btn-row button,
+	.sec > button {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
 	}
 	.mtoken {
 		background: var(--code-bg, var(--border));
