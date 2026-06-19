@@ -190,3 +190,11 @@ uv run pytest                            # 테스트 (네트워크 불필요, ~1
 
 PyCharm 실행/디버그 구성과 모듈 구성은 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md),
 아키텍처 원칙·DB 스키마·코딩 컨벤션은 [CLAUDE.md](CLAUDE.md) 참조.
+
+## 라이선스
+
+[MIT License](LICENSE) © 2026 Tylor, Seo.
+
+서드파티 의존성의 라이선스 목록(전부 MIT 호환)은
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) 참조. 릴리스마다 CycloneDX SBOM 이
+GitHub Release 자산으로 자동 첨부된다.

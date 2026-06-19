@@ -122,6 +122,21 @@ jobs:
             --notes "$PR_TITLE ($PR_URL)" \
             --generate-notes
 
+      - name: SBOM 생성·릴리스 첨부 (CycloneDX)
+        if: steps.bump.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          NEXT: ${{ steps.ver.outputs.next }}
+        run: |
+          # 런타임 전용 의존성 폐포를 설치한 뒤 그 환경의 패키지 메타데이터로 SBOM 생성.
+          # environment 모드라야 컴포넌트별 라이선스가 채워진다(requirements 모드는 비움).
+          # 실패해도 릴리스 자체는 막지 않는다(이미 태그·Release 가 찍힌 뒤이므로).
+          uv sync --frozen --no-dev
+          sbom="chunchugwan-v$NEXT.cdx.json"
+          uvx --from 'cyclonedx-bom>=7,<8' cyclonedx-py environment .venv/bin/python \
+            --of JSON -o "$sbom" --pyproject pyproject.toml
+          gh release upload "v$NEXT" "$sbom" --clobber
+
       - name: develop 를 릴리스 커밋으로 동기화 (FF)
         if: steps.bump.outputs.skip != 'true'
         run: |
