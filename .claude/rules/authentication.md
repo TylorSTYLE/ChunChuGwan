@@ -36,6 +36,32 @@ IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origi
 `export` 에는 제외한다. 이것이 양방향(복원 가능) 저장을 허용하는
 **유일한** 예외이며, 사용자 인증 데이터에는 절대 적용하지 않는다.
 
+## 무차별 대입 방어 · 사용자 열거 완화 · 최초 설정 토큰 (보안 검토 F1·F2·F3)
+
+인증 시도 rate limit 은 `auth_throttle` 테이블(고정 윈도우 카운터)에 둔다.
+`db.throttle_hit`(증가+허용 판정)·`throttle_clear`(성공 시 초기화)·
+`delete_expired_throttle`(GC)가 코어이고, 적용은 `web_auth_routes` 의 `_throttle`
+헬퍼(로그인·2단계·이메일코드·재발송·가입). **핵심: 카운터 증가는 인증 핸들러의
+주 트랜잭션과 분리된 별도 `db.connect()` 블록에서** 한다 — 인증 실패로 4xx 를
+던지면 핸들러 conn 이 롤백되므로(원칙: `db.connect` 는 예외 시 커밋 안 함), 같은
+conn 에서 증가시키면 시도 횟수가 사라진다. 한도·창은 시스템 설정
+(`db.auth_throttle_settings`, 키 `auth_throttle_enabled`/`auth_login_limit`/
+`auth_login_ip_limit`/`auth_login_window_minutes`/`auth_totp_limit`/
+`auth_email_verify_limit`/`auth_email_resend_limit`)으로 조정하고 오염·범위 밖이면
+`config.AUTH_*` 기본값으로 클램핑한다. 관리자 화면은 `/system/general` 의 "인증 보호".
+
+사용자 열거 완화: 로그인은 계정 부재/SSO 전용일 때도 `auth.verify_password_dummy`
+로 응답 시간을 평탄화하고 메시지로 존재를 구분하지 않는다. 회원 가입은 이메일
+인증+SMTP 가 켜진 경우 신규/중복 모두 `email_verify` 응답으로 일반화한다(중복이면
+계정 미생성 — Set-Cookie 유무의 잔여 차이만 남고 docs/AUTHENTICATION.md 에 명시).
+메일 미사용 시는 즉시 로그인 구조라 완전 일반화 불가 → 중립 메시지 + IP throttle.
+
+최초 설정 보호: `config.SETUP_TOKEN`(env `WCCG_SETUP_TOKEN`)이 있으면
+`web_auth_routes._require_setup_token`(헤더 `X-Setup-Token`, `hmac.compare_digest`)이
+모든 setup 액션(create/restore/migrate/retry/finish)을 게이트한다. GET 상태/폴링은
+SPA 부트스트랩을 위해 열어 두고, `setup_status` 가 `token_required` 를 내려 셋업
+화면이 토큰 입력 칸을 띄운다. 미설정이면 종전대로 토큰 없이 셋업.
+
 ## 최초 설정 · 춘추관 간 이전
 
 최초 구동(사용자 0명 + `WCCG_ADMIN_*` 미설정)의 `/setup` 은 세 갈래 — 관리자

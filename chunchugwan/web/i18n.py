@@ -81,6 +81,9 @@ _EN: dict[str, str] = {
     "사설 IP(로컬 네트워크) 주소를 아카이빙할 때 붙이는 태그입니다.":
         "Tags attached when archiving private-IP (local-network) addresses.",
     "회원 가입과 이메일 본인 인증 정책입니다.": "Sign-up and email-verification policy.",
+    "주의: 초기 권한이 승인 대기(pending)가 아니면 가입·SSO 자동 생성 계정이 관리자 승인 없이 곧바로 권한을 갖습니다.":
+        "Caution: if the initial role is not pending (approval required), sign-up and "
+        "auto-provisioned SSO accounts gain permissions immediately without admin approval.",
     "회원 가입 허용 여부와 가입 시 초기 권한입니다.":
         "Whether sign-up is allowed and the initial role on sign-up.",
     "패스워드 계정이 로그인 전에 메일로 이메일을 검증하게 합니다.":
@@ -620,6 +623,18 @@ _EN: dict[str, str] = {
     "사이트 아카이브 설정을 저장했습니다.": "Site archive settings saved.",
     "재시도 대기는 쉼표로 구분한 초 단위 숫자 목록이어야 합니다 (예: 300, 900)":
         "Retry waits must be a comma-separated list of seconds (e.g. 300, 900)",
+    # ---- 인증 보호 (rate limit) ----
+    "인증 보호 (무차별 대입 방어)": "Authentication protection (brute-force defense)",
+    "로그인·2단계 인증·이메일 코드의 시도 횟수를 제한합니다. 한도를 넘으면 잠시 차단됩니다.":
+        "Limits the number of attempts for login, two-factor, and email codes. "
+        "Exceeding a limit blocks further attempts for a while.",
+    "로그인 시도 한도(이메일별)": "Login attempt limit (per email)",
+    "로그인 시도 한도(IP별)": "Login attempt limit (per IP)",
+    "로그인 카운트 창(분)": "Login count window (minutes)",
+    "2단계 인증 시도 한도": "Two-factor attempt limit",
+    "이메일 코드 오답 한도": "Email code wrong-answer limit",
+    "이메일 코드 재발송 한도(시간당)": "Email code resend limit (per hour)",
+
     # ---- 이메일 본인 인증 ----
     "이메일 본인 인증": "Email verification",
     "회원 가입(패스워드 계정)으로 만든 계정이 메일로 받은 코드로 이메일 소유를 확인하게 합니다. SSO(OIDC) 계정은 IdP 가 검증하므로 제외됩니다.":
@@ -1343,6 +1358,11 @@ _EN: dict[str, str] = {
 
     # ---- 최초 설정(setup.html) ----
     "최초 설정": "Initial setup",
+    "최초 설정 토큰": "Initial setup token",
+    "(WCCG_SETUP_TOKEN)": "(WCCG_SETUP_TOKEN)",
+    "이 서버는 최초 설정 보호 토큰을 요구합니다. 아래 작업에 서버 환경변수 WCCG_SETUP_TOKEN 값을 입력하세요.":
+        "This server requires an initial-setup protection token. Enter the server's "
+        "WCCG_SETUP_TOKEN environment variable value for the actions below.",
     "최초 구동입니다. 새 관리자 계정을 만들거나, 백업 파일에서 복원하거나, 다른 춘추관에서 네트워크로 데이터를 가져올 수 있습니다.":
         "This is the first run. You can create a new admin account, restore from a "
         "backup file, or pull all data over the network from another ChunChuGwan.",

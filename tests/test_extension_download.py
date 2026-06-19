@@ -24,7 +24,7 @@ def tmp_db(tmp_path, monkeypatch):
 def client(tmp_db):
     with db.connect() as conn:
         db.create_first_admin(conn, "boss@test.co", auth.hash_password("bosspass1234"))
-    yield TestClient(web_app.app)
+    yield TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
 
 
 def _login(client):

@@ -135,7 +135,12 @@ async def auth_gate(request: Request, call_next):
     _csrf_exempt = path.startswith("/api/") and not path.startswith("/api/web/")
     if request.method == "POST" and not _csrf_exempt:
         origin = request.headers.get("origin") or request.headers.get("referer")
-        if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
+        if origin:
+            if urlsplit(origin).netloc != request.headers.get("host", ""):
+                return PlainTextResponse(t(request, "CSRF 검증 실패"), status_code=403)
+        elif not request.headers.get("x-requested-with"):
+            # Origin/Referer 둘 다 없으면(이중 방어 공백) SPA 가 항상 싣는 커스텀 헤더를
+            # 요구한다 — 크로스오리진에서 커스텀 헤더는 프리플라이트 없이 못 붙는다(F4).
             return PlainTextResponse(t(request, "CSRF 검증 실패"), status_code=403)
 
     if config.AUTH_ENABLED:
@@ -361,6 +366,7 @@ def extension_download(request: Request) -> Response:
 @app.get("/extension/page/{page_id}")
 def extension_page(request: Request, page_id: int):
     """확장: 아카이브된 페이지 타임라인 열기 → 사이트 계층 정식 경로로 이동."""
+    _require_viewer(request)
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
     if page is None:
@@ -373,6 +379,7 @@ def extension_page(request: Request, page_id: int):
 @app.get("/extension/crawl/{crawl_id}")
 def extension_crawl(request: Request, crawl_id: int):
     """확장: 사이트 아카이브(크롤) 회차 열기."""
+    _require_viewer(request)
     return RedirectResponse(f"/crawls/{crawl_id}", status_code=302)
 
 
@@ -699,6 +706,7 @@ def api_archive_active(request: Request) -> dict:
     관리자에게는 needs_human(사람 확인 대기) 작업도 내려보낸다 — serve 의
     LIVE_CHALLENGE 설정과 무관하게 DB 사실 기준. url 코드포인트 순 정렬로
     폴링이 재정렬 없이 비교하게 한다(비-BMP 문자 무한 새로고침 방지)."""
+    _require_viewer(request)
     data: dict = {"active": sorted(_active_snapshot())}
     if permissions.can_manage_system(getattr(request.state, "user", None)):
         data["needs_human"] = [
@@ -1365,6 +1373,7 @@ _CRAWL_PAGE_STATUSES = ("pending", "in_progress", "done", "failed")
 @app.get("/api/web/crawls/{crawl_id}")
 def api_crawl_view(request: Request, crawl_id: int, status: str = "") -> dict:
     """크롤 회차 상세 — 상태별 집계·페이지 목록·재시도 정책 (SPA)."""
+    _require_viewer(request)
     crawl = _load_crawl(request, crawl_id)
     status_filter = status if status in _CRAWL_PAGE_STATUSES else ""
     with db.connect() as conn:
@@ -1454,6 +1463,7 @@ def api_crawl_rerun(request: Request, site_id: int, crawl_id: int) -> dict:
 @app.get("/api/web/crawls/{crawl_id}/status")
 def api_crawl_status(request: Request, crawl_id: int) -> dict:
     """크롤 진행 상태 JSON (SPA 진행 화면 폴링용)."""
+    _require_viewer(request)
     crawl = _load_crawl(request, crawl_id)
     with db.connect() as conn:
         counts = db.crawl_page_counts(conn, crawl_id)

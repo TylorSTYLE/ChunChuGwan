@@ -89,8 +89,19 @@ router = APIRouter()
 
 
 def safe_next(next_url: str | None) -> str:
-    """리다이렉트 대상 검증 — 사이트 내부 경로만 허용 (open redirect 방지)."""
-    if next_url and next_url.startswith("/") and not next_url.startswith("//"):
+    """리다이렉트 대상 검증 — 사이트 내부 절대경로만 허용 (open redirect 방지).
+
+    `//`(프로토콜 상대)뿐 아니라 백슬래시(`/\\evil.com` — 브라우저가 `/` 로 정규화해
+    `//evil.com` 우회)와 제어·비출력 문자도 막고, 단일 `/` 로 시작하는 출력 가능한
+    내부 경로만 통과시킨다. (보안 검토 F5)
+    """
+    if (
+        next_url
+        and next_url.startswith("/")
+        and not next_url.startswith("//")
+        and "\\" not in next_url
+        and next_url.isprintable()
+    ):
         return next_url
     return "/"
 

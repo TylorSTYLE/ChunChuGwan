@@ -528,6 +528,21 @@ export interface SystemOverview {
 	email_verification_enabled: boolean;
 	email_verification_ttl_minutes: number;
 	email_verification_ttl_limits: { min: number; max: number };
+	auth_throttle_enabled: boolean;
+	auth_throttle: {
+		login_limit: number;
+		login_ip_limit: number;
+		login_window_minutes: number;
+		totp_limit: number;
+		email_verify_limit: number;
+		email_resend_limit: number;
+	};
+	auth_throttle_limits: {
+		limit_min: number;
+		limit_max: number;
+		window_min: number;
+		window_max: number;
+	};
 	crawl_defaults: { max_pages: number; max_depth: number; delay: number };
 	crawl_retry_backoff: string;
 	crawl_limits: Record<string, number>;

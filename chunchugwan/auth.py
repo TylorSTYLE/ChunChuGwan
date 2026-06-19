@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 _hasher = PasswordHasher()  # Argon2id, 라이브러리 권장 기본 파라미터
 
+# 사용자 열거 방지용 더미 해시 — 존재하지 않는 계정(또는 SSO 전용 계정)으로
+# 로그인 시도해도 실제 검증과 같은 비용을 치르게 해 타이밍 오라클을 없앤다.
+# 모듈 로드 시 1회 생성한다 (값은 노출돼도 무방 — 평탄화 목적뿐).
+_DUMMY_HASH = _hasher.hash("wccg-timing-equalizer-placeholder")
+
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 TOTP_PERIOD = 30  # 초 단위 시간창 (Google Authenticator 기본)
@@ -47,6 +52,17 @@ def verify_password(password_hash: str, password: str) -> bool:
         return _hasher.verify(password_hash, password)
     except VerificationError:
         return False
+
+
+def verify_password_dummy(password: str) -> None:
+    """더미 해시로 검증을 수행해 응답 시간을 평탄화한다 (사용자 열거 방지).
+
+    계정이 없거나 패스워드 계정이 아닐 때(SSO 전용) 호출한다 — 결과는 버린다.
+    """
+    try:
+        _hasher.verify(_DUMMY_HASH, password)
+    except VerificationError:
+        pass
 
 
 def validate_email(email: str) -> str | None:
