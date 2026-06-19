@@ -81,6 +81,9 @@ _EN: dict[str, str] = {
     "사설 IP(로컬 네트워크) 주소를 아카이빙할 때 붙이는 태그입니다.":
         "Tags attached when archiving private-IP (local-network) addresses.",
     "회원 가입과 이메일 본인 인증 정책입니다.": "Sign-up and email-verification policy.",
+    "주의: 초기 권한이 승인 대기(pending)가 아니면 가입·SSO 자동 생성 계정이 관리자 승인 없이 곧바로 권한을 갖습니다.":
+        "Caution: if the initial role is not pending (approval required), sign-up and "
+        "auto-provisioned SSO accounts gain permissions immediately without admin approval.",
     "회원 가입 허용 여부와 가입 시 초기 권한입니다.":
         "Whether sign-up is allowed and the initial role on sign-up.",
     "패스워드 계정이 로그인 전에 메일로 이메일을 검증하게 합니다.":

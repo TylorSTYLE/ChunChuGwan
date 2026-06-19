@@ -84,3 +84,35 @@ def test_routes_ok_when_authenticated(tmp_db):
     assert c.get(f"/api/web/crawls/{cid}/status").status_code == 200
     # 확장 리다이렉트는 로그인 시 302
     assert c.get(f"/extension/crawl/{cid}", follow_redirects=False).status_code == 302
+
+
+# ---- F4: CSRF — /api/web POST 헤더 게이트 ----
+
+
+def test_csrf_blocks_post_without_origin_or_custom_header(tmp_db):
+    # Origin/Referer·X-Requested-With 모두 없는 /api/web POST → 403(CSRF)
+    r = client().post("/api/web/auth/login", json={"email": "x@test.co", "password": "p"})
+    assert r.status_code == 403
+
+
+def test_csrf_blocks_cross_origin_post(tmp_db):
+    r = client().post(
+        "/api/web/auth/login", json={"email": "x@test.co", "password": "p"},
+        headers={"Origin": "http://evil.example", "X-Requested-With": "fetch"},
+    )
+    assert r.status_code == 403
+
+
+def test_csrf_allows_custom_header_without_origin(tmp_db):
+    # 동일 출처 SPA 패턴 — Origin 없이도 커스텀 헤더가 있으면 통과(인증 자체는 401)
+    r = client().post(
+        "/api/web/auth/login", json={"email": "x@test.co", "password": "p"},
+        headers={"X-Requested-With": "fetch"},
+    )
+    assert r.status_code == 401  # CSRF 통과 후 자격 불일치
+
+
+def test_csrf_exempt_for_api_v1(tmp_db):
+    # /api/v1 은 Bearer/X-API-Key 자격이라 Origin 검사 면제 (쿠키 CSRF 무관)
+    r = client().post("/api/v1/archive", json={"url": "https://example.com"})
+    assert r.status_code != 403  # 401(키 없음)이지 CSRF 403 아님

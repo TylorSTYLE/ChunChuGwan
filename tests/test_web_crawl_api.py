@@ -24,7 +24,7 @@ def client(tmp_path, monkeypatch):
     with db.connect():
         pass
     web_app._active_jobs.clear()
-    yield TestClient(web_app.app)
+    yield TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
     web_app._active_jobs.clear()
 
 
@@ -134,7 +134,7 @@ def test_action_requires_archiver(tmp_path, monkeypatch):
         db.create_first_admin(conn, "boss@test.co", auth.hash_password("bosspass1234"))
         db.create_user(conn, "viewer@test.co", auth.hash_password("password1234"), role="viewer")
     web_app._active_jobs.clear()
-    c = TestClient(web_app.app)
+    c = TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
     crawl, _ = crawler.start_crawl(START, source="web")
     c.post("/api/web/auth/login", json={"email": "viewer@test.co", "password": "password1234"})
     # viewer 는 상세는 보지만 액션(취소)은 막힌다

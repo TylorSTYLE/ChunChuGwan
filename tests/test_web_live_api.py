@@ -26,7 +26,7 @@ def client(tmp_path, monkeypatch):
         db.create_user(conn, "boss2@test.co", auth.hash_password("boss2pass1234"), role="admin")
         db.create_user(conn, "viewer@test.co", auth.hash_password("password1234"), role="viewer")
     web_app._active_jobs.clear()
-    yield TestClient(web_app.app)
+    yield TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
     web_app._active_jobs.clear()
 
 
@@ -106,7 +106,7 @@ def test_click_blocked_for_non_owner_admin(client):
     jid = _make_needs_human()
     _login(client, "boss@test.co", "bosspass1234")
     client.get(f"/api/web/live/{jid}")  # boss 소유
-    other = TestClient(web_app.app)
+    other = TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
     _login(other, "boss2@test.co", "boss2pass1234")
     r = other.post(f"/api/web/live/{jid}/click", json={"x": 1, "y": 2}, headers=POST)
     assert r.status_code == 403
@@ -139,7 +139,7 @@ def test_solve_blocked_for_non_owner_admin(client):
     jid = _make_needs_human()
     _login(client, "boss@test.co", "bosspass1234")
     client.get(f"/api/web/live/{jid}")
-    other = TestClient(web_app.app)
+    other = TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
     _login(other, "boss2@test.co", "boss2pass1234")
     assert other.post(f"/api/web/live/{jid}/solve", headers=POST).status_code == 403
 

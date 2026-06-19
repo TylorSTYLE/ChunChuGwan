@@ -34,7 +34,7 @@ def client(tmp_db):
         db.create_user(conn, "viewer@test.co", auth.hash_password("password1234"), role="viewer")
         db.get_or_create_page(conn, URL, "example.com", storage.url_to_slug(URL))
     web_app._active_jobs.clear()
-    yield TestClient(web_app.app)
+    yield TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
     web_app._active_jobs.clear()
 
 
@@ -173,6 +173,6 @@ def test_delete_admin_only(client):
     )
     with db.connect() as conn:
         cid = db.list_site_credentials(conn, sid)[0]["id"]
-    other = TestClient(web_app.app)
+    other = TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
     _login(other, "viewer@test.co", "password1234")
     assert other.post(f"/api/web/sites/{sid}/credentials/{cid}/delete", headers=POST).status_code == 403

@@ -30,7 +30,7 @@ def _seed():
 def client(tmp_db):
     _seed()
     web_app._active_jobs.clear()
-    yield TestClient(web_app.app)
+    yield TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
     web_app._active_jobs.clear()
 
 

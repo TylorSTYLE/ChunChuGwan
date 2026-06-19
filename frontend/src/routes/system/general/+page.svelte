@@ -415,6 +415,9 @@
 			{#each s.signup_roles as r}<option value={r}>{s.role_labels[r] ?? r}</option>{/each}
 		</select>
 	</label>
+	{#if signupEnabled && signupRole !== 'pending'}
+		<p class="desc warn">{t('주의: 초기 권한이 승인 대기(pending)가 아니면 가입·SSO 자동 생성 계정이 관리자 승인 없이 곧바로 권한을 갖습니다.')}</p>
+	{/if}
 	<button disabled={busy} onclick={() => save('/system/settings', { signup_enabled: signupEnabled, signup_default_role: signupRole })}>{t('저장')}</button>
 </fieldset>
 <fieldset class="sec">
@@ -534,6 +537,9 @@
 		color: var(--muted);
 		margin: 0 0 8px;
 		max-width: 560px;
+	}
+	.desc.warn {
+		color: var(--warn, #b4690e);
 	}
 	/* 저장 용량 미터 차트 */
 	.meter-box {

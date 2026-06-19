@@ -32,7 +32,7 @@ def tmp_db(tmp_path, monkeypatch):
 
 
 def client():
-    return TestClient(web_app.app)
+    return TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
 
 
 # ---- first_run: setup ----

@@ -135,7 +135,12 @@ async def auth_gate(request: Request, call_next):
     _csrf_exempt = path.startswith("/api/") and not path.startswith("/api/web/")
     if request.method == "POST" and not _csrf_exempt:
         origin = request.headers.get("origin") or request.headers.get("referer")
-        if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
+        if origin:
+            if urlsplit(origin).netloc != request.headers.get("host", ""):
+                return PlainTextResponse(t(request, "CSRF 검증 실패"), status_code=403)
+        elif not request.headers.get("x-requested-with"):
+            # Origin/Referer 둘 다 없으면(이중 방어 공백) SPA 가 항상 싣는 커스텀 헤더를
+            # 요구한다 — 크로스오리진에서 커스텀 헤더는 프리플라이트 없이 못 붙는다(F4).
             return PlainTextResponse(t(request, "CSRF 검증 실패"), status_code=403)
 
     if config.AUTH_ENABLED:
