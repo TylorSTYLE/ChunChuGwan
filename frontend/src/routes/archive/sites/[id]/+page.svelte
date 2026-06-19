@@ -11,6 +11,7 @@
 	import StatGrid from '$lib/components/StatGrid.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import Pager from '$lib/components/Pager.svelte';
+	import Spinner from '$lib/components/Spinner.svelte';
 	import { createAction } from '$lib/action.svelte';
 
 	let { data }: { data: { site: SiteDetail } } = $props();
@@ -241,7 +242,7 @@
 {#if s.can_archive}
 	<p class="export-link">
 		<button onclick={exportSite} disabled={action.busy} aria-busy={exporting}>
-			{#if exporting}<span class="spinner" aria-hidden="true"></span>{t('파일 준비중…')}{:else}{t('이 사이트 내보내기')}{/if}
+			{#if exporting}<Spinner />{t('파일 준비중…')}{:else}{t('이 사이트 내보내기')}{/if}
 		</button>
 		<span class="muted">{t('— 이 사이트의 페이지·스냅샷만 담은 .ccg.export 파일')}</span>
 	</p>
@@ -331,24 +332,6 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-	}
-	.spinner {
-		width: 11px;
-		height: 11px;
-		border: 2px solid var(--border);
-		border-top-color: var(--fg);
-		border-radius: 50%;
-		animation: export-spin 0.7s linear infinite;
-	}
-	@keyframes export-spin {
-		to {
-			transform: rotate(360deg);
-		}
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.spinner {
-			animation-duration: 2.5s;
-		}
 	}
 	.danger-zone {
 		border: 1px solid var(--red);
