@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import NavMenu from '$lib/components/NavMenu.svelte';
+	import UpdateNoticeModal from '$lib/components/UpdateNoticeModal.svelte';
 	import type { Snippet } from 'svelte';
 	import type { Me } from '$lib/types';
 
@@ -12,6 +13,32 @@
 	// 미인증은 (auth) 로그인·setup, pending 은 안내 화면이 children 으로 들어온다.
 	const me = $derived(data.me);
 	const chrome = $derived(me && me.user?.role !== 'pending');
+
+	// 업데이트 안내 — 로그인 후 현재 버전 노트를 1회 모달로 띄운다. "봤음"은
+	// localStorage(본 버전 문자열)로만 추적해 같은 버전은 다시 뜨지 않는다(브라우저
+	// 기준). 새 버전이면 다시 뜬다. 백엔드(/me)가 현재 버전 노트가 없으면 null 을 준다.
+	const UPDATE_SEEN_KEY = 'wccg-seen-update';
+	function seenUpdateVersion(): string | null {
+		if (typeof window === 'undefined') return null;
+		try {
+			return localStorage.getItem(UPDATE_SEEN_KEY);
+		} catch {
+			return null;
+		}
+	}
+	let seenUpdate = $state(seenUpdateVersion());
+	const updateNote = $derived(me?.release_note ?? null);
+	const showUpdate = $derived(!!updateNote && seenUpdate !== updateNote.version);
+	function dismissUpdate() {
+		const v = updateNote?.version;
+		if (!v) return;
+		try {
+			localStorage.setItem(UPDATE_SEEN_KEY, v);
+		} catch {
+			/* localStorage 불가 — 이 탭에서만 닫힘 유지 */
+		}
+		seenUpdate = v; // localStorage 실패해도 이 탭에선 즉시 닫힘
+	}
 
 	// 로그·설정 그룹은 하위에 보일 항목이 하나라도 있을 때만 노출한다.
 	const showLogs = $derived(!!me && me.flags.can_view_any_logs);
@@ -226,6 +253,10 @@
 		>
 	</div>
 </header>
+{/if}
+
+{#if chrome && showUpdate && updateNote}
+	<UpdateNoticeModal note={updateNote} onclose={dismissUpdate} />
 {/if}
 
 <main class:plain={!chrome}>

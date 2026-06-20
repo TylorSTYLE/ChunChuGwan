@@ -25,6 +25,20 @@
 헤더 우측의 이메일/표시이름을 누르면 **개인설정 드롭다운**이 열려
 계정·개인 API Key·내 아카이브·로그아웃으로 이동한다.
 
+**업데이트 안내 모달(`frontend/src/lib/components/UpdateNoticeModal.svelte`)** 은
+로그인(승인 대기 제외) 후 첫 진입 시 현재 실행 중인 앱 버전의 릴리스 노트를 화면
+가운데 모달로 1회 띄운다(닫기 버튼·× ·Esc·배경 클릭으로 닫음). 표시 내용은 **GitHub
+Release 기준**이다 — 릴리스 시 CI(`release.yml`)가 그 버전의 릴리즈 노트를 받아
+수정자(`@user`)·원본 링크를 빼고 **PR 번호만** 남기도록 변환해
+`chunchugwan/web/release_notes.json`(버전 → `items[{text, pr, url}]`)으로 이미지에
+동봉한다(`release_notes.parse_github_notes` + `scripts/gen_release_notes.py`). `/api/web/me`
+가 현재 버전(`__version__`)의 항목을 그대로 내려주고(제목 `"{버전} 새 소식"`만 로케일
+처리 — 항목 본문은 PR 제목 원문) 모달이 각 항목 끝에 `#번호` PR 링크를 건다. 해당 버전
+항목이 없으면 노트를 표시하지 않는다(**런타임 외부 호출 없음** — JSON 만 읽음). "봤음"은
+브라우저 `localStorage`(`wccg-seen-update` = 마지막으로 본 버전)로만 추적해 같은 버전은
+다시 뜨지 않고 새 버전이면 다시 뜬다(닫을 때 현재 버전을 기록). 콘텐츠 자동화 상세는
+`.claude/rules/release-docker.md` 참조.
+
 - **현황** (dashboard) — 첫 화면 `/`(= `/dashboard`). 본문은 사이트·
   페이지·스냅샷 수, 총 용량(실제 저장공간 — DB·스냅샷·자원/문서 CAS 합,
   시스템 화면의 저장 용량 분해와 같은 기준 `storage.archive_disk_usage`),

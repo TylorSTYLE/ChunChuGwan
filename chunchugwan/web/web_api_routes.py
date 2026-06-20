@@ -33,7 +33,7 @@ from .. import (
     __version__, auth, config, crawler, crypto, db, deletion, differ, documents,
     mailer, optimize, resources, scheduler, searchindex, storage,
 )
-from . import audit, i18n, permissions
+from . import audit, i18n, permissions, release_notes
 
 router = APIRouter(prefix="/api/web")
 
@@ -106,6 +106,22 @@ def _user_public(user: sqlite3.Row | None) -> dict | None:
     }
 
 
+def _release_note(request: Request) -> dict | None:
+    """로그인 후 1회 표시할 현재 버전 업데이트 노트 — 없으면 None.
+
+    콘텐츠(항목)는 언어 중립(PR 제목 원문)이고, 제목만 요청 로케일로 붙인다.
+    "봤음" 추적은 프론트(localStorage)가 담당한다.
+    """
+    note = release_notes.note_for(__version__)
+    if note is None:
+        return None
+    return {
+        "version": note["version"],
+        "title": i18n.t(request, "{version} 새 소식", version=note["version"]),
+        "items": note["items"],
+    }
+
+
 @router.get("/me")
 def me(request: Request, user: sqlite3.Row | None = Depends(require_session)) -> dict:
     """현재 세션·권한 컨텍스트 — SPA 의 메뉴/버튼 노출 게이팅 소스.
@@ -124,6 +140,7 @@ def me(request: Request, user: sqlite3.Row | None = Depends(require_session)) ->
         "needs_human": ctx["needs_human_jobs"],
         "needs_human_count": ctx["needs_human_count"],
         "version": __version__,
+        "release_note": _release_note(request),
     }
 
 
