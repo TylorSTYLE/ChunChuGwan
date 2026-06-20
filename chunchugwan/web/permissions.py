@@ -89,6 +89,15 @@ def can_view_authenticated_all(user: sqlite3.Row | None) -> bool:
     return has_permission(user, "view_authenticated_all")
 
 
+def can_manage_trash(user: sqlite3.Row | None) -> bool:
+    """휴지통(삭제 보류 아카이브) 열람·복원·영구삭제 가능 여부 — 기본 admin 만.
+
+    삭제(=휴지통으로 보내기)는 종전 delete 권한이 게이트하고, 휴지통을 보고
+    되돌리거나 영구삭제하는 것은 이 권한으로 분리한다.
+    """
+    return has_permission(user, "manage_trash")
+
+
 def can_use_api_keys(user: sqlite3.Row | None) -> bool:
     """개인 API Key(확장 토큰) 발급·사용 가능 여부 — 크롬 확장 캡처도 이 권한.
 
@@ -147,6 +156,7 @@ def menu_flags(user: sqlite3.Row | None) -> dict[str, bool]:
         ),
         "can_search": has("view"),
         "can_use_api_keys": has("use_api_keys"),
+        "can_manage_trash": has("manage_trash"),
     }
 
 

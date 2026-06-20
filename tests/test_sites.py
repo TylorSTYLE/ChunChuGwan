@@ -177,7 +177,7 @@ def test_delete_site_removes_everything(archive_env):
             conn, "https://example.com/", max_pages=10, max_depth=2,
             delay_seconds=5, interval_seconds=3600, next_run_at="2026-01-01T00:00:00+00:00",
         )
-    result = deletion.delete_site(site_id)
+    result = deletion.delete_site(site_id, hard=True)
     assert result.pages_deleted == 2
     assert result.crawls_deleted == 1
     with db.connect() as conn:

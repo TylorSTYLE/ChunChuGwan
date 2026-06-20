@@ -254,32 +254,50 @@ def diff(url: str, from_idx: int | None, to_idx: int | None) -> None:
     "--site", "whole_site", is_flag=True,
     help="URL 이 속한 사이트(서브도메인) 전체 삭제 — 페이지·크롤 회차·크롤 스케줄 포함",
 )
+@click.option(
+    "--hard", is_flag=True,
+    help="휴지통을 거치지 않고 즉시 영구 삭제 (휴지통 기능이 켜져 있어도)",
+)
 @click.option("--yes", is_flag=True, help="확인 없이 진행")
-def delete(url: str, snapshot_idx: int | None, whole_site: bool, yes: bool) -> None:
+def delete(
+    url: str, snapshot_idx: int | None, whole_site: bool, hard: bool, yes: bool
+) -> None:
     """아카이브 삭제 — 페이지 전체, 단일 스냅샷(--snapshot N), 사이트 전체(--site).
 
-    단일 스냅샷 삭제 시 다음 스냅샷의 변경 표시는 새 직전 스냅샷 기준으로
-    자동 보정된다. 실행 로그(archive_logs)는 이력으로 남는다.
+    휴지통 기능이 켜져 있으면 페이지·사이트 삭제는 즉시 지우지 않고 휴지통으로
+    옮긴다(wccg trash 로 복원/영구삭제, 보관 기간 경과 시 자동 삭제). --hard 는
+    휴지통을 건너뛰고 즉시 영구 삭제한다. 단일 스냅샷(--snapshot)은 휴지통을 거치지
+    않고 항상 즉시 삭제된다. 단일 스냅샷 삭제 시 다음 스냅샷의 변경 표시는 새 직전
+    스냅샷 기준으로 자동 보정된다. 실행 로그(archive_logs)는 이력으로 남는다.
     """
     from . import deletion
     if whole_site:
         if snapshot_idx is not None:
             raise click.ClickException("--site 와 --snapshot 은 함께 쓸 수 없습니다")
-        _delete_site(url, yes)
+        _delete_site(url, hard=hard, yes=yes)
         return
     with db.connect() as conn:
         page = _find_page(conn, url)
         snaps = db.list_snapshots(conn, page["id"])
+        soft = (not hard) and db.trash_enabled(conn)
 
     if snapshot_idx is None:
         if not yes:
+            verb = "휴지통으로 이동" if soft else "영구 삭제"
+            tail = "" if soft else " 되돌릴 수 없습니다."
             click.confirm(
                 f"{page['url']} — 스냅샷 {len(snaps)}개를 포함한 아카이브 전체를 "
-                "삭제합니다. 되돌릴 수 없습니다. 계속할까요?",
+                f"{verb}합니다.{tail} 계속할까요?",
                 abort=True,
             )
-        result = deletion.delete_page(page["id"])
-        click.echo(f"삭제됨: {result.url} (스냅샷 {result.snapshots_deleted}개)")
+        result = deletion.delete_page(page["id"], hard=hard)
+        if result.trashed:
+            click.echo(
+                f"휴지통으로 이동: {result.url} (스냅샷 {result.snapshots_deleted}개)"
+                " — wccg trash 로 복원/영구삭제"
+            )
+        else:
+            click.echo(f"영구 삭제됨: {result.url} (스냅샷 {result.snapshots_deleted}개)")
         return
 
     if not (1 <= snapshot_idx <= len(snaps)):
@@ -297,7 +315,7 @@ def delete(url: str, snapshot_idx: int | None, whole_site: bool, yes: bool) -> N
     click.echo(f"삭제됨: {snap['dir_name']}")
 
 
-def _delete_site(url: str, yes: bool) -> None:
+def _delete_site(url: str, *, hard: bool, yes: bool) -> None:
     """URL 이 속한 사이트 전체 삭제 (delete --site 본체)."""
     from . import deletion
     key = storage.site_key(storage.normalize_url(url))
@@ -307,17 +325,127 @@ def _delete_site(url: str, yes: bool) -> None:
             raise click.ClickException(f"사이트 아카이브가 없습니다: {key}")
         pages = db.list_site_pages(conn, site["id"])
         crawls = db.list_site_crawls(conn, site["id"])
+        soft = (not hard) and db.trash_enabled(conn)
     if not yes:
+        verb = "휴지통으로 이동" if soft else "영구 삭제"
+        tail = "" if soft else " 되돌릴 수 없습니다."
         click.confirm(
             f"{key} — 페이지 {len(pages)}개, 크롤 회차 {len(crawls)}개를 포함한 "
-            "사이트 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다. 계속할까요?",
+            f"사이트 아카이브 전체를 {verb}합니다.{tail} 계속할까요?",
             abort=True,
         )
-    result = deletion.delete_site(site["id"])
+    result = deletion.delete_site(site["id"], hard=hard)
+    head = "휴지통으로 이동" if result.trashed else "영구 삭제됨"
     click.echo(
-        f"삭제됨: {result.site_key} (페이지 {result.pages_deleted}개, "
+        f"{head}: {result.site_key} (페이지 {result.pages_deleted}개, "
         f"스냅샷 {result.snapshots_deleted}개, 크롤 {result.crawls_deleted}개)"
+        + (" — wccg trash 로 복원/영구삭제" if result.trashed else "")
     )
+
+
+@main.group()
+def trash() -> None:
+    """휴지통(삭제 보류 아카이브) 관리 — 목록·복원·영구삭제."""
+
+
+def _resolve_trash_entry(conn, target: str):
+    """id(숫자) 또는 label(URL/사이트키)로 휴지통 항목을 찾는다. 없으면 ClickException."""
+    if target.isdigit():
+        entry = db.get_trash_entry(conn, int(target))
+        if entry is not None:
+            return entry
+    matches = [e for e in db.list_trash_entries(conn) if e["label"] == target]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise click.ClickException(
+            f"여러 항목이 '{target}' 와 일치합니다 — id 로 지정하세요 (trash list)"
+        )
+    raise click.ClickException(f"휴지통 항목을 찾을 수 없습니다: {target}")
+
+
+@trash.command("list")
+def trash_list() -> None:
+    """휴지통 항목 목록 (id·종류·대상·삭제 시각)."""
+    with db.connect() as conn:
+        entries = db.list_trash_entries(conn)
+        retention = db.trash_retention_days(conn)
+        enabled = db.trash_enabled(conn)
+    if not entries:
+        click.echo("휴지통이 비어 있습니다.")
+        return
+    state = "켜짐" if enabled else "꺼짐 (삭제 시 즉시 영구삭제)"
+    auto = f"{retention}일 경과 시 자동 영구삭제" if retention > 0 else "자동 삭제 꺼짐"
+    click.echo(f"휴지통: {state} · {auto}")
+    for e in entries:
+        kind = "사이트" if e["kind"] == "site" else "페이지"
+        click.echo(
+            f"  [{e['id']}] {kind}  {e['label']}  "
+            f"(페이지 {e['page_count']}·스냅샷 {e['snapshot_count']}, "
+            f"삭제 {e['deleted_at']})"
+        )
+
+
+@trash.command("restore")
+@click.argument("target")
+def trash_restore(target: str) -> None:
+    """휴지통 항목 복원 — id 또는 URL/사이트키로 지정."""
+    from . import deletion
+    with db.connect() as conn:
+        entry = _resolve_trash_entry(conn, target)
+    restored = deletion.restore(entry["id"])
+    click.echo(f"복원됨: {restored['label']} ({restored['kind']})")
+
+
+@trash.command("purge")
+@click.argument("target", required=False)
+@click.option("--expired", is_flag=True, help="보관 기간이 지난 항목만 영구 삭제")
+@click.option("--all", "all_entries", is_flag=True, help="휴지통의 모든 항목 영구 삭제")
+@click.option("--yes", is_flag=True, help="확인 없이 진행")
+def trash_purge(
+    target: str | None, expired: bool, all_entries: bool, yes: bool
+) -> None:
+    """휴지통 항목 영구 삭제 — 되돌릴 수 없음.
+
+    대상은 하나만: <id|URL> 단건 / --expired(보관 기간 경과분) / --all(전체).
+    """
+    from . import deletion
+    if sum([bool(target), expired, all_entries]) != 1:
+        raise click.ClickException(
+            "대상을 하나만 지정하세요: <id|URL> | --expired | --all"
+        )
+    if expired:
+        n = deletion.purge_expired()
+        click.echo(
+            f"보관 기간이 지난 {n}개 항목을 영구 삭제했습니다."
+            if n else "영구 삭제할(기한 경과) 항목이 없습니다."
+        )
+        return
+    if all_entries:
+        with db.connect() as conn:
+            ids = [e["id"] for e in db.list_trash_entries(conn)]
+        if not ids:
+            click.echo("휴지통이 비어 있습니다.")
+            return
+        if not yes:
+            click.confirm(
+                f"휴지통의 {len(ids)}개 항목을 모두 영구 삭제합니다. "
+                "되돌릴 수 없습니다. 계속할까요?",
+                abort=True,
+            )
+        for tid in ids:
+            deletion.purge(tid)
+        click.echo(f"{len(ids)}개 항목을 영구 삭제했습니다.")
+        return
+    with db.connect() as conn:
+        entry = _resolve_trash_entry(conn, target)
+    if not yes:
+        click.confirm(
+            f"{entry['label']} 을(를) 영구 삭제합니다. 되돌릴 수 없습니다. 계속할까요?",
+            abort=True,
+        )
+    deletion.purge(entry["id"])
+    click.echo(f"영구 삭제됨: {entry['label']} ({entry['kind']})")
 
 
 @main.group()

@@ -277,7 +277,7 @@ def test_certificate_pem_download(client):
 
 def test_site_delete_removes_certificates(archive_env):
     site_id, _ = _seed_site_with_cert()
-    deletion.delete_site(site_id)
+    deletion.delete_site(site_id, hard=True)
     with db.connect() as conn:
         rows = conn.execute("SELECT * FROM site_certificates").fetchall()
     assert rows == []

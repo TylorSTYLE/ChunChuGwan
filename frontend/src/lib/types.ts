@@ -13,6 +13,7 @@ export interface MeFlags {
 	can_view_any_logs: boolean;
 	can_search: boolean;
 	can_use_api_keys: boolean;
+	can_manage_trash: boolean;
 }
 
 export interface MeUser {
@@ -182,6 +183,7 @@ export interface PageTimeline {
 	checks: Record<string, unknown>[];
 	can_archive: boolean;
 	can_delete: boolean;
+	trash_enabled: boolean;
 }
 
 export interface SnapshotDoc {
@@ -240,6 +242,7 @@ export interface SiteDetail {
 	can_archive: boolean;
 	can_delete: boolean;
 	can_manage_credentials: boolean;
+	trash_enabled: boolean;
 }
 
 export interface FailedItem {
@@ -549,6 +552,9 @@ export interface SystemOverview {
 	ext_credential_ttl_hours: number;
 	ext_credential_ttl_limits: { min: number; max: number };
 	mobile_screenshot_enabled: boolean;
+	trash_enabled: boolean;
+	trash_retention_days: number;
+	trash_retention_limits: { min: number; max: number };
 	document_limits: { max_count: number; max_mb: number; timeout_seconds: number };
 	document_limit_ranges: Record<string, number>;
 	network_tags: (Record<string, unknown> & { id: string; name: string })[];
@@ -570,6 +576,27 @@ export interface SystemOverview {
 	migration_mode: boolean;
 	migration_token_created_at: string | null;
 	public_url: string | null;
+}
+
+export interface TrashEntry {
+	id: number;
+	kind: 'page' | 'site';
+	label: string;
+	site_id: number | null;
+	page_id: number | null;
+	page_count: number;
+	snapshot_count: number;
+	bytes: number;
+	deleted_at: string;
+	expires_at: string | null;
+	deleted_by_email: string | null;
+	deleted_by_name: string | null;
+}
+
+export interface TrashData {
+	entries: TrashEntry[];
+	trash_enabled: boolean;
+	retention_days: number;
 }
 
 export interface Dashboard {

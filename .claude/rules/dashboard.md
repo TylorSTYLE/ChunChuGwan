@@ -54,6 +54,9 @@ meta.json documents 목록 검증, `/document/{sha256}/{name}` — snapshot_docu
   사이트 상세(`/archive/sites/{id}` — 소속 페이지·문서·크롤 회차·스케줄·사이트 삭제),
   사이트 로그인 자격증명(`/archive/sites/{id}/credentials` — 관리자 전용),
   문서(`/archive/documents` — 문서 파일 통합 목록),
+  휴지통(`/archive/trash` — 삭제 보류 아카이브 목록·복원·영구삭제, `manage_trash` 권한 기본
+  admin, 헤더 '아카이브' 메뉴에 `can_manage_trash` 게이트로 노출 — `.claude/rules/database.md`
+  `trash_entries`·`.claude/rules/authentication.md`),
   검색(`/search` — 본문·문서 전문 검색, viewer 이상), 새 아카이빙(`/archive/new`),
   사이트 아카이브 진행(`/crawls/{id}` — 크롤 회차 상세), 스케줄(`/archive/schedules`),
   타임라인(`/archive/sites/{id}/page/{pageId}`), 스냅샷 뷰어

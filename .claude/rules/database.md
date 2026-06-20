@@ -13,7 +13,7 @@ paths:
 
 | 테이블 | 상세 |
 |---|---|
-| `sites`·`pages`·`snapshots`·`checks`·`settings`·`archive_logs`·`system_logs`·`audit_logs` | 이 파일 |
+| `sites`·`pages`·`snapshots`·`checks`·`settings`·`archive_logs`·`system_logs`·`audit_logs`·`trash_entries` | 이 파일 |
 | `snapshot_resources`·`snapshot_documents` | `.claude/rules/storage.md` |
 | `snapshot_fts` | `.claude/rules/search.md` |
 | `network_tags`·`site_certificates`·`archive_jobs`·`live_commands`·`schedules`·`crawls`/`crawl_pages`·`crawl_schedules` | `.claude/rules/capture-crawl.md` |
@@ -114,4 +114,22 @@ paths:
   `auth_login_ip_limit`/`auth_login_window_minutes`/`auth_totp_limit`/
   `auth_email_verify_limit`/`auth_email_resend_limit` — 무차별 대입 방어 한도·창,
   해석·클램핑은 `db.auth_throttle_settings`, 오염·범위 밖이면 config 기본값. 카운터는
-  `auth_throttle` 테이블, 상세는 `.claude/rules/authentication.md`)
+  `auth_throttle` 테이블, 상세는 `.claude/rules/authentication.md`)와 휴지통 설정
+  (`trash_enabled` on/off 기본 on — off 면 페이지·사이트 삭제가 휴지통을 거치지 않고 즉시
+  영구삭제. `trash_retention_days` — 보관 기간(일, 기본 30, 0=자동삭제 끔), 경과 시
+  스케줄러가 자동 영구삭제. 해석은 `db.trash_enabled`/`trash_retention_days`, 상세는
+  `trash_entries` 항목 참조)
+- `trash_entries` — 아카이브 휴지통. 페이지·사이트 삭제(`deletion.delete_page`/`delete_site`,
+  `trash_enabled` on + `hard=False`)는 즉시 지우지 않고 이 테이블에 항목을 남기고 연결
+  행의 `trash_id`(`pages`·`crawls`·`crawl_schedules` 에 추가된 FK)를 세팅해 **모든 목록·
+  집계·검색·서빙에서 숨긴다**(파일·CAS 는 그대로). `kind`(page|site)·`label`(URL/site_key)·
+  page/snapshot/bytes 카운트·`deleted_by`·`deleted_at`. site_id·page_id·deleted_by 는
+  표시·복원용 상관 키(FK 아님 — prune·사용자 삭제가 막히지 않게, `archive_logs.job_id` 와
+  같은 이유). 숨김의 정본은 id 게터 4종(`get_page_by_id`/`get_snapshot`/`get_crawl` 기본
+  숨김 + `include_trashed=True` 탈출구, `get_page` 는 재아카이브 복원 앵커라 미필터)과
+  목록/검색/집계 쿼리의 `trash_id IS NULL` 필터. 복원(`deletion.restore`)은 `trash_id`
+  해제, 영구삭제(`purge`/`purge_expired`)는 기존 하드삭제 기구 재사용(CAS GC·FTS·diff·
+  prune). 휴지통 페이지의 URL 을 다시 아카이빙하면 `get_or_create_page` 가 자동 복원한다.
+  자동 purge 는 `scheduler.run_due`(=`wccg schedule run`)가 보관 기간 경과분에 호출.
+  관리 화면은 `/archive/trash`(`manage_trash` 권한 — `.claude/rules/authentication.md`),
+  전체 백업은 보존하되 `export` 는 제외. 마이그레이션·삭제 흐름은 `.claude/rules/storage.md`

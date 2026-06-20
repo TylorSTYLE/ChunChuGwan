@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Callable
 
-from . import db, pipeline, storage
+from . import db, deletion, pipeline, storage
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +185,13 @@ def run_due(
         # 만료된 확장 1회성 세션 자격증명 정리 (캡처 직후 삭제 누락 안전망)
         db.delete_expired_ext_credentials(conn)
         due = db.list_due_schedules(conn, _iso(_utcnow()))
+
+    # 보관 기간이 지난 휴지통 항목을 영구 삭제 — 커넥션 밖에서(파일 I/O 포함, 자체
+    # 커넥션). 이전 모드면 위에서 빈 결과로 반환됐으므로 여기 도달하지 않는다.
+    try:
+        deletion.purge_expired()
+    except Exception:
+        logger.exception("휴지통 자동 영구삭제 실패")
 
     results: list[DueResult] = []
     for sched in due:

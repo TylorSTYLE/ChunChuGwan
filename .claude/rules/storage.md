@@ -78,5 +78,18 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   저장되고, 삭제 시 참조가 0 이 된 CAS 파일은 deletion.py 가 GC 한다.
   대시보드 `/documents` 통합 목록의 데이터 소스
 
+## 삭제·휴지통 (deletion.py)
+
+페이지·사이트 삭제는 기본적으로 **휴지통(소프트 삭제)**으로 간다 — `deletion.delete_page`/
+`delete_site` 가 `trash_enabled`(시스템 설정, 기본 on)이고 `hard=False` 면 즉시 지우지 않고
+`trash_entries` 항목을 만들고 연결 행의 `trash_id` 를 세팅한다(파일·CAS·CAS 참조행 모두
+보존). `trash_enabled` off 또는 `hard=True`(CLI `--hard`)면 종전처럼 즉시 영구삭제. 단일
+스냅샷 삭제(`delete_snapshot`·CLI `--snapshot`)는 휴지통을 거치지 않고 항상 즉시 삭제(범위
+밖). 복원(`restore`)은 `trash_id` 만 되돌리고, 영구삭제(`purge`/`purge_expired`)·즉시삭제는
+**DB 확정(커밋) → 파일 삭제** 순서로 기존 하드삭제 기구(고아 문서/자원 CAS GC·FTS·diff
+캐시·`prune_site_if_empty`)를 그대로 쓴다. 휴지통에 머무는 동안 CAS 참조행이 남아 공유
+CAS 가 GC 되지 않으므로(저장공간 최적화의 고아 정리도 안전), 영구삭제 때 비로소 GC 된다.
+테이블·숨김 표면·자동 purge 상세는 `.claude/rules/database.md` 의 `trash_entries` 참조.
+
 > /resource/ 공유 자원 CAS 와 문서 CAS 의 **서빙·보안**(인증 예외 경로·미디어
 > 타입 화이트리스트·인증 라우트) 규칙은 원칙 5 — `.claude/rules/dashboard.md` 참조.

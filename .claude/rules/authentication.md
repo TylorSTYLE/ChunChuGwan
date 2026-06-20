@@ -95,11 +95,14 @@ Pull 엔드포인트는 `.claude/rules/api-extension.md` 참조. `site_credentia
   사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
   관리자로 권한 변경 불가. **권한은 세분 권한(`db.PERMISSIONS` — view·archive·
   delete·manage_credentials·manage_system·manage_users·view_authenticated_all·
-  use_api_keys·view_audit_logs·view_system_logs·view_archive_logs, 고정 코드 상수)을
-  1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다. 로그 열람 3종(view_audit_logs=감사
+  use_api_keys·view_audit_logs·view_system_logs·view_archive_logs·manage_trash, 고정 코드
+  상수)을 1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다. 로그 열람 3종(view_audit_logs=감사
   로그 `/log/audit`, view_system_logs=시스템 로그 `/log/system`, view_archive_logs=
-  아카이브 로그 `/log/archive`)은 빌트인 중 **admin 에만 기본 부여**(`_migrate_log_view_
-  permissions` 가 기존 설치도 멱등 보강)하고 다른 빌트인엔 넣지 않는다.
+  아카이브 로그 `/log/archive`)과 휴지통 관리(`manage_trash` — `/archive/trash` 열람·복원·
+  영구삭제, `.claude/rules/database.md` 의 `trash_entries`)는 빌트인 중 **admin 에만 기본
+  부여**(`_migrate_log_view_permissions`·`_migrate_trash_permission` 가 기존 설치도 멱등
+  보강)하고 다른 빌트인엔 넣지 않는다. 삭제(=휴지통으로 보내기)는 종전 `delete` 권한이,
+  휴지통 조회·복원·영구삭제는 `manage_trash` 가 게이트한다.
   역할 프리셋은 코드 상수가 아니라 DB `permission_groups` 테이블이 정본 — 관리자가 시스템 →
   권한 그룹(`/system/groups`)에서 빌트인(admin/archive_manager/archiver/viewer) 권한
   묶음을 편집하거나 커스텀 그룹을 추가·삭제할 수 있다(코드 배포 불필요). 코드에서는 `db.role_presets(conn)`

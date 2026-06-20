@@ -57,7 +57,7 @@
 
 | 역할 | 설명(=권한 프리셋, 신규 설치 기본값) |
 |---|---|
-| `admin` (관리자) | 전체 권한 (아래 8개 권한 모두) |
+| `admin` (관리자) | 전체 권한 (아래 권한 모두 — `manage_trash` 포함) |
 | `archive_manager` (아카이브 관리) | `view` + `archive` + `delete` + `use_api_keys` |
 | `archiver` (아카이브) | `view` + `archive` + `use_api_keys` (삭제 없음) |
 | `viewer` (보기 전용) | `view` (열람·검색·로그) — 아카이빙 버튼이 숨겨지고 API 도 403 |
@@ -69,18 +69,28 @@
 > 자동 보강된다. 삭제 없이 아카이빙만 시키려면 `archive_manager` 가 아닌
 > `archiver` 로 두거나 사용자별 오버라이드로 `delete` 를 떼면 된다.
 
-세분 권한(`db.PERMISSIONS`)은 다음 8가지다.
+세분 권한(`db.PERMISSIONS`)의 주요 항목은 다음과 같다.
 
 | 권한 | 의미 |
 |---|---|
 | `view` | 아카이브 열람 + 전문 검색 + 아카이빙 로그 |
 | `archive` | 아카이빙 추가·재아카이브·스케줄·크롤·재시도 |
-| `delete` | 스냅샷·페이지·사이트 삭제 |
+| `delete` | 스냅샷·페이지·사이트 삭제 (= 휴지통으로 보내기) |
+| `manage_trash` | 휴지통 열람·복원·영구삭제 (`/archive/trash`) — 기본 admin |
 | `manage_credentials` | 사이트 로그인 자격증명 관리 + 자격증명 연결 아카이빙 |
 | `manage_system` | 시스템 설정·백업·복원·네트워크 태그·시스템 로그·라이브 챌린지 |
 | `manage_users` | 사용자·초대·시스템 API 키 관리 |
 | `view_authenticated_all` | 다른 사용자가 로그인 캡처한 인증 스냅샷 열람 |
 | `use_api_keys` | 개인 API Key(확장 토큰) 발급·사용 — 크롬 확장 캡처도 이 권한 |
+
+**삭제 vs 휴지통 관리.** 페이지·사이트 삭제는 기본적으로 즉시 영구삭제가 아니라
+**휴지통(소프트 삭제)**으로 가며, 이 "삭제(= 휴지통으로 보내기)"는 종전처럼
+`delete` 권한이 게이트한다. 반면 휴지통 화면(`/archive/trash`)의 **열람·복원·
+영구삭제**는 별도 세분 권한 `manage_trash` 가 게이트한다 — 빌트인 중 **관리자
+(admin)만 기본 보유**하고 다른 빌트인 그룹(archive_manager·archiver·viewer)은
+갖지 않는다. 즉 archiver 가 아카이브를 휴지통으로 보낼 수는 있어도, 휴지통을
+들여다보거나 복원·영구삭제하려면 관리자가 권한 그룹 화면(`/system/groups`)에서
+`manage_trash` 를 부여해야 한다. (휴지통·보관 기간 동작은 docs/STORAGE.md 참조.)
 
 사용자 관리 화면의 각 사용자 행에서 **세분 권한**(`<details>`)을 펼치면 권한별
 체크박스로 가감할 수 있다 (별표 = 프리셋과 다른 항목). 예: "아카이빙은 시키되

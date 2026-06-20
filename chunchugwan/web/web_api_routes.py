@@ -19,7 +19,7 @@ import dataclasses
 import json
 import sqlite3
 import zoneinfo
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import (
     APIRouter, Depends, File, Form, HTTPException, Query, Request, Response,
@@ -350,6 +350,7 @@ def page_timeline(
         "checks": [dict(c) for c in checks],
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
+        "trash_enabled": _trash_enabled_now(),
     }
 
 
@@ -503,6 +504,7 @@ def site_detail(
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
         "can_manage_credentials": permissions.can_manage_credentials(user),
+        "trash_enabled": _trash_enabled_now(),
     }
 
 
@@ -828,6 +830,22 @@ def _require_delete(user: sqlite3.Row | None) -> None:
         raise HTTPException(403, "삭제 권한이 없습니다")
 
 
+def _require_manage_trash(user: sqlite3.Row | None) -> None:
+    if not permissions.can_manage_trash(user):
+        raise HTTPException(403, "휴지통 관리 권한이 없습니다")
+
+
+def _actor_id(user: sqlite3.Row | None) -> int | None:
+    """삭제·복원 기록용 사용자 id (인증 off/loopback 이면 None)."""
+    return user["id"] if user is not None else None
+
+
+def _trash_enabled_now() -> bool:
+    """휴지통 기능 on/off — 상세 화면이 삭제 확인 문구를 맞추는 데 쓴다."""
+    with db.connect() as conn:
+        return db.trash_enabled(conn)
+
+
 def _require_not_migrating() -> None:
     with db.connect() as conn:
         if db.migration_mode_enabled(conn):
@@ -1033,12 +1051,19 @@ def page_delete(
     page_id: int,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """페이지(전체 스냅샷) 삭제 — app.page_delete 의 JSON 판."""
+    """페이지(전체 스냅샷) 삭제 — 기본은 휴지통으로 이동(시스템 설정 off 면 즉시 삭제)."""
     _require_delete(user)
-    result = deletion.delete_page(page_id)
+    result = deletion.delete_page(page_id, deleted_by=_actor_id(user))
+    if result is None:
+        raise HTTPException(404, "페이지 없음")
+    audit.log(
+        request, "페이지 %s: %s",
+        "휴지통 이동" if result.trashed else "영구 삭제", result.url,
+    )
     return {
         "ok": True,
-        "snapshots_deleted": getattr(result, "snapshots_deleted", None),
+        "snapshots_deleted": result.snapshots_deleted,
+        "trashed": result.trashed,
     }
 
 
@@ -1048,15 +1073,102 @@ def site_delete(
     site_id: int,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """사이트 전체(페이지·크롤·스케줄) 삭제 — app.site_delete 의 JSON 판."""
+    """사이트 전체(페이지·크롤·스케줄) 삭제 — 기본은 휴지통으로 이동(설정 off 면 즉시 삭제)."""
     _require_delete(user)
-    result = deletion.delete_site(site_id)
+    result = deletion.delete_site(site_id, deleted_by=_actor_id(user))
+    if result is None:
+        raise HTTPException(404, "사이트 없음")
+    audit.log(
+        request, "사이트 %s: %s",
+        "휴지통 이동" if result.trashed else "영구 삭제", result.site_key,
+    )
     return {
         "ok": True,
-        "site_key": getattr(result, "site_key", None),
-        "pages_deleted": getattr(result, "pages_deleted", None),
-        "snapshots_deleted": getattr(result, "snapshots_deleted", None),
+        "site_key": result.site_key,
+        "pages_deleted": result.pages_deleted,
+        "snapshots_deleted": result.snapshots_deleted,
+        "trashed": result.trashed,
     }
+
+
+# ---- 휴지통 (trash) ----
+
+
+def _trash_entry_public(entry: sqlite3.Row, retention_days: int) -> dict:
+    """휴지통 항목을 SPA 응답 형태로 — 보관 기한(expires_at)은 동적 계산."""
+    expires_at: str | None = None
+    if retention_days > 0:
+        try:
+            base = datetime.fromisoformat(entry["deleted_at"])
+            expires_at = (base + timedelta(days=retention_days)).isoformat(
+                timespec="seconds"
+            )
+        except (TypeError, ValueError):
+            expires_at = None
+    return {
+        "id": entry["id"],
+        "kind": entry["kind"],
+        "label": entry["label"],
+        "site_id": entry["site_id"],
+        "page_id": entry["page_id"],
+        "page_count": entry["page_count"],
+        "snapshot_count": entry["snapshot_count"],
+        "bytes": entry["bytes"],
+        "deleted_at": entry["deleted_at"],
+        "expires_at": expires_at,
+        "deleted_by_email": entry["deleted_by_email"],
+        "deleted_by_name": entry["deleted_by_name"],
+    }
+
+
+@router.get("/trash")
+def trash_list(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """휴지통 항목 목록 + 현재 설정(보관 기간·기능 on/off) — 휴지통 관리 권한."""
+    _require_manage_trash(user)
+    with db.connect() as conn:
+        retention_days = db.trash_retention_days(conn)
+        entries = [
+            _trash_entry_public(e, retention_days)
+            for e in db.list_trash_entries(conn)
+        ]
+        trash_enabled = db.trash_enabled(conn)
+    return {
+        "entries": entries,
+        "trash_enabled": trash_enabled,
+        "retention_days": retention_days,
+    }
+
+
+@router.post("/trash/{trash_id}/restore")
+def trash_restore(
+    request: Request,
+    trash_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """휴지통 항목 복원 — 숨김 해제. 휴지통 관리 권한."""
+    _require_manage_trash(user)
+    entry = deletion.restore(trash_id)
+    if entry is None:
+        raise HTTPException(404, "휴지통 항목 없음")
+    audit.log(request, "휴지통 복원: %s (%s)", entry["label"], entry["kind"])
+    return {"ok": True, "label": entry["label"], "kind": entry["kind"]}
+
+
+@router.post("/trash/{trash_id}/purge")
+def trash_purge(
+    request: Request,
+    trash_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """휴지통 항목 영구 삭제 — 되돌릴 수 없음. 휴지통 관리 권한."""
+    _require_manage_trash(user)
+    entry = deletion.purge(trash_id)
+    if entry is None:
+        raise HTTPException(404, "휴지통 항목 없음")
+    audit.log(request, "휴지통 영구삭제: %s (%s)", entry["label"], entry["kind"])
+    return {"ok": True, "label": entry["label"], "kind": entry["kind"]}
 
 
 @router.post("/sites/{site_id}/failed/{log_id}/retry")
@@ -1698,6 +1810,8 @@ def system_overview(
         network_tags = db.list_network_tags(conn)
         ext_credential_ttl_hours = db.ext_credential_ttl_hours(conn)
         mobile_screenshot_enabled = db.mobile_screenshot_enabled(conn)
+        trash_enabled = db.trash_enabled(conn)
+        trash_retention_days = db.trash_retention_days(conn)
         doc_limits = documents.limits(conn)
         smtp = mailer.resolve_config(conn)
         smtp_has_password = db.get_setting(conn, db.SMTP_PASSWORD_KEY) not in (None, "")
@@ -1745,6 +1859,12 @@ def system_overview(
             "max": config.EXT_CREDENTIAL_TTL_HOURS_MAX,
         },
         "mobile_screenshot_enabled": mobile_screenshot_enabled,
+        "trash_enabled": trash_enabled,
+        "trash_retention_days": trash_retention_days,
+        "trash_retention_limits": {
+            "min": config.TRASH_RETENTION_DAYS_MIN,
+            "max": config.TRASH_RETENTION_DAYS_MAX,
+        },
         "document_limits": {
             "max_count": doc_limits.max_count,
             "max_mb": doc_limits.max_bytes // (1024 * 1024),
@@ -1826,6 +1946,33 @@ def system_email_verification(
             str(body.email_verification_ttl_minutes),
         )
     audit.log(request, "이메일 본인 인증 설정 변경")
+    return {"ok": True}
+
+
+class TrashSettingsReq(BaseModel):
+    trash_enabled: bool = True
+    trash_retention_days: int
+
+
+@router.post("/system/trash-settings")
+def system_trash_settings(
+    request: Request, body: TrashSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """휴지통 설정 — 기능 on/off + 보관 기간(일, 0=자동삭제 끔). JSON 판."""
+    _require_manage_system(user)
+    lo = config.TRASH_RETENTION_DAYS_MIN
+    hi = config.TRASH_RETENTION_DAYS_MAX
+    if not (lo <= body.trash_retention_days <= hi):
+        raise HTTPException(400, f"보관 기간은 {lo} ~ {hi}일 사이여야 합니다")
+    with db.connect() as conn:
+        db.set_setting(
+            conn, db.TRASH_ENABLED_KEY, "on" if body.trash_enabled else "off"
+        )
+        db.set_setting(
+            conn, db.TRASH_RETENTION_DAYS_KEY, str(body.trash_retention_days)
+        )
+    audit.log(request, "휴지통 설정 변경")
     return {"ok": True}
 
 

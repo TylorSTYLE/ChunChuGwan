@@ -33,7 +33,10 @@
 	const removeSchedule = () => action.run(() => api(`/pages/${tl.page.id}/schedule/delete`, { method: 'POST' }));
 
 	async function deletePage() {
-		if (!confirm(t('이 페이지의 모든 스냅샷을 삭제할까요? 되돌릴 수 없습니다.'))) return;
+		const msg = tl.trash_enabled
+			? t('이 페이지의 모든 스냅샷을 휴지통으로 옮길까요? 휴지통에서 복원할 수 있습니다.')
+			: t('이 페이지의 모든 스냅샷을 삭제할까요? 되돌릴 수 없습니다.');
+		if (!confirm(msg)) return;
 		action.busy = true;
 		action.error = '';
 		try {

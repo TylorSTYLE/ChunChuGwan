@@ -96,8 +96,10 @@ uv run wccg diff <url>               # 최신 2개 스냅샷 비교 (+ 스크린
 uv run wccg diff <url> --from 1 --to 3
 uv run wccg search <검색어>          # 본문·첨부 문서 전문 검색 (docs/SEARCH.md)
 uv run wccg search reindex          # 기존/가져온 스냅샷을 검색 인덱스에 색인
-uv run wccg delete <url>             # 아카이브 전체 삭제 (모든 스냅샷, 확인 후 진행)
-uv run wccg delete <url> --snapshot 2  # history 번호의 스냅샷 하나만 삭제
+uv run wccg delete <url>             # 아카이브 삭제 — 휴지통이 켜져 있으면 휴지통으로 이동
+uv run wccg delete <url> --hard      # 휴지통을 거치지 않고 즉시 영구 삭제
+uv run wccg delete <url> --snapshot 2  # history 번호의 스냅샷 하나만 삭제 (항상 즉시)
+uv run wccg trash list               # 휴지통 목록 / restore·purge 로 복원·영구삭제
 uv run wccg serve                    # 대시보드 (http://127.0.0.1:8765)
 uv run wccg serve --host 0.0.0.0     # 외부 노출 (인증 켜진 상태에서만 허용)
 uv run wccg worker                   # 아카이빙 워커 — 단발·스케줄·크롤 큐를 별도 프로세스에서 소비
