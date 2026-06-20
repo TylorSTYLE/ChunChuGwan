@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "춘추관 아카이버",
-  "version": "0.7.0",
+  "version": "1.0.0",
   "default_locale": "ko",
   "description": "__MSG_ext_description__",
   "action": {
@@ -23,6 +23,16 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["storage", "cookies", "tabs", "activeTab", "notifications", "alarms", "scripting", "debugger"],
-  "optional_host_permissions": ["*://*/*"]
+  "permissions": ["storage", "cookies", "tabs", "activeTab", "notifications", "alarms", "scripting", "debugger", "contextMenus"],
+  "optional_host_permissions": ["*://*/*"],
+  "commands": {
+    "archive-page-server": {
+      "suggested_key": { "default": "Ctrl+Shift+S", "mac": "Command+Shift+S" },
+      "description": "__MSG_cmd_archive_page__"
+    },
+    "capture-page-browser": {
+      "suggested_key": { "default": "Ctrl+Shift+E", "mac": "Command+Shift+E" },
+      "description": "__MSG_cmd_capture_page__"
+    }
+  }
 }

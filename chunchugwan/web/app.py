@@ -325,23 +325,16 @@ _EXTENSION_DIR = Path(__file__).resolve().parent.parent / "extension"
 def _build_extension_zip() -> bytes:
     """chunchugwan/extension/ 를 요청 시 zip 으로 묶는다.
 
-    manifest 의 version 은 서버 버전으로 맞춰 항상 최신을 서빙한다 (깃에
-    빌드 산출물·바이너리를 두지 않는다). 크롬은 자체호스팅 .crx 드래그 설치를
-    막으므로 unpacked ZIP 으로 주고, 사용자는 압축 해제 후 '개발자 모드 →
-    압축해제된 확장 프로그램을 로드' 로 설치한다.
+    manifest 의 version 은 확장 정본(서버 앱 버전과 독립 버저닝)이라 덮어쓰지 않고
+    원본 그대로 담는다. 크롬은 자체호스팅 .crx 드래그 설치를 막으므로 unpacked ZIP
+    으로 주고, 사용자는 압축 해제 후 '개발자 모드 → 압축해제된 확장 프로그램을
+    로드' 로 설치한다.
     """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in sorted(_EXTENSION_DIR.rglob("*")):
-            if not path.is_file():
-                continue
-            arc = path.relative_to(_EXTENSION_DIR).as_posix()
-            if arc == "manifest.json":
-                data = json.loads(path.read_text(encoding="utf-8"))
-                data["version"] = __version__
-                zf.writestr(arc, json.dumps(data, ensure_ascii=False, indent=2))
-            else:
-                zf.write(path, arc)
+            if path.is_file():
+                zf.write(path, path.relative_to(_EXTENSION_DIR).as_posix())
     return buf.getvalue()
 
 
@@ -351,7 +344,7 @@ def extension_download(request: Request) -> Response:
     _require_viewer(request)
     if not _EXTENSION_DIR.is_dir():
         raise HTTPException(404, t(request, "확장 파일을 찾을 수 없습니다"))
-    filename = f"wccg-chrome-extension-v{__version__}.zip"
+    filename = f"wccg-chrome-extension-v{api_routes._extension_version()}.zip"
     return Response(
         content=_build_extension_zip(),
         media_type="application/zip",

@@ -62,9 +62,10 @@ def test_api_archive_logs_key_name(client, monkeypatch, audit_logs):
     """REST API 아카이빙 트리거는 API 키 이름이 요청 주체로 기록된다."""
     _fake_archive(monkeypatch)
     with db.connect() as conn:
+        aid = db.get_user_by_email(conn, "boss@test.co")["id"]
         token = auth.issue_api_key(
             conn, "bot", can_view=True, can_archive=True,
-            created_by=None, ttl_seconds=None,
+            created_by=aid, owner_user_id=aid, ttl_seconds=None,
         )
     res = client.post(
         "/api/v1/archive", json={"url": "https://example.com/api-page"},
