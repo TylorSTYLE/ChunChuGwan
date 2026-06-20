@@ -32,14 +32,41 @@ setup 흐름은 `.claude/rules/authentication.md`·`.claude/rules/capture-crawl.
 사용자에게 보일 수 있음을 캡처 시 고지. 서버측 구현은 `ingest.py`, 설계는
 `docs/EXTENSION_CLIENT_CAPTURE_PLAN.md` (확장은 `chunchugwan/extension/`).
 
-## 확장 버전 체크
+## 확장 버전 (서버 앱 버전과 독립)
 
-확장은 웹스토어 미등록 unpacked 로드라 자동 업데이트가 없다(`/extension/download`
-zip 빌드 시 manifest version 을 서버 `__version__` 으로 덮어쓴다 → 설치 버전 =
-다운로드 당시 서버 버전). `GET /api/v1/version` 이 서버 버전을 주고, 확장 background
-(`checkVersion`)가 `chrome.runtime.getManifest().version` 과 비교해 서버가 더
-최신이면 팝업 배너로 재설치를 안내한다(`openDownload` → `/extension/download` 새 탭).
-버전 조회는 권한 불필요(토큰만). 비교는 서버 > 확장일 때만 안내(오탐 방지).
+확장은 웹스토어 미등록 unpacked 로드라 자동 업데이트가 없다. 확장 버전은
+`chunchugwan/extension/manifest.json` 의 `version` 이 정본이며 **서버 앱 버전
+(`__version__`)과 독립**이다 — `/extension/download` zip 은 manifest 를 덮어쓰지 않고
+원본 그대로 담는다(`app._build_extension_zip`). `GET /api/v1/version` 은
+`{version: 서버앱버전, extension_version: 확장버전}`(서버가 패키지 manifest 에서 읽어
+캐시 — `api_routes._extension_version`)을 주고, 확장 background(`checkVersion`)가
+`chrome.runtime.getManifest().version` 과 `extension_version` 을 비교해 서버가 아는
+확장 버전이 더 최신이면 팝업 배너로 재설치를 안내한다(`openDownload` →
+`/extension/download` 새 탭). 구버전 서버 호환: `extension_version` 없으면 비교 생략.
+비교는 더 높을 때만(오탐 방지). 조회는 권한 불필요(토큰만).
+
+**확장 버전 자동 결정 정책.** Claude Code 가 확장(`chunchugwan/extension/**`)을 변경할
+때마다 영향도로 manifest `version` 을 semver 상향한다 — **major**=재설치가 필요한 호환성
+영향(권한 추가/변경·API 계약·저장 형식 파괴·기존 동작 깨짐), **minor**=하위호환 신기능,
+**patch**=버그·문구·리팩토링(동작 동일). 확장 독립 버전 체계는 `1.0.0` 에서 시작했다.
+
+## 확장 클라이언트 동작 (빠른 캡처·상태 배지·태그 사전선택·진행률·자동 해제)
+
+- **빠른 캡처**: 팝업 없이 단축키(`commands`: `archive-page-server`/`capture-page-browser`)·
+  우클릭 메뉴(`contextMenus`: 페이지 아카이브·브라우저 캡처·링크 아카이브)로 즉시 아카이브.
+  연결(인증)된 동안에만 활성(`setConnectedUI` 가 메뉴 생성/제거). 서버 위임 아카이브·링크
+  아카이브는 대상 host 권한 불필요, 브라우저 캡처는 `*://*/*` 보유 시만(없으면 알림 + 팝업
+  유도 — 비팝업 컨텍스트는 권한 요청 불가). 결과는 notify 토글과 무관하게 즉시 알림.
+- **아카이브 상태 배지**: 활성 탭 URL 을 `GET /api/v1/pages?url=` 로 조회해 아카이브됐으면
+  툴바 아이콘에 per-tab `✓`(단기 캐시+디바운스, 추적 개수 배지가 있으면 양보). 토글
+  `status_badge_enabled`(기본 on). "변경됨"은 라이브 해시를 서버 정규화와 동일 계산 불가라 미표시.
+- **네트워크 태그 사전선택**: 사설 호스트는 팝업 진입 시 태그 picker 를 미리 띄워 캡처 전에
+  고르게 한다(2회 캡처 방지). 선택값을 브라우저 캡처·`/archive`·`/crawl`·`/auth-profiles` 에 전달.
+- **캡처 진행률**: 브라우저 캡처가 단계(grab→resources→inline→screenshot→documents→upload)를
+  `chrome.runtime.sendMessage({type:"capture_progress"})` 로 팝업에 푸시(열렸을 때만).
+- **자동 연결 해제**: 모든 `/api/v1` 호출(`apiFetch`/`uploadIngest`)이 **401**(토큰 만료·
+  use_api_keys 회수)을 받으면 확장이 자동 연결 해제(`handleAuthLost`)하고 팝업에 `auth_lost`
+  를 알린다(연결 검증 호출만 `noAutoLogout` 예외). 429(인증보호 차단)는 연결 유지 + 재시도 안내.
 
 ## 확장 진입 경로 (`/extension/*`)
 
@@ -67,8 +94,10 @@ zip 빌드 시 manifest version 을 서버 `__version__` 으로 덮어쓴다 →
   API Key(확장 토큰, 본인이 `/settings/api-keys` 에서 발급, 권한은 _api_auth 가
   소유자 현재 역할로 매 요청 재평가). 개인 API Key 의 발급·사용은 세분 권한
   `use_api_keys` 가 게이트한다 — 발급 화면(GET/POST 403)과 토큰 사용(_api_auth 가
-  소유자에게 권한 없으면 401) 양쪽. 시스템 키(owner=NULL)는 이 권한과 무관하게
-  저장 컬럼만 본다. 빌트인 기본 보유는 admin·archive_manager·archiver, viewer 제외
+  소유자에게 권한 없으면 401) 양쪽. **`/api/v1` 은 개인 키 전용** — 시스템 키(owner=NULL)는
+  인증 대상이 아니다(`_api_auth` 가 401). 인증 실패는 IP 별 인증보호(`auth_throttle` 의
+  `api_key_ip` 버킷, 실패 시에만 카운트, 한도 초과 429 — `_api_auth_throttle`)로 무차별
+  대입을 막는다. 빌트인 기본 보유는 admin·archive_manager·archiver, viewer 제외
   (상세 → `.claude/rules/authentication.md`). REST 쓰기 엔드포인트: `/archive`·`/crawl`·
   `/auth-profiles`(모두 URL 만 받아 서버가 캡처)와 **`/ingest`**(확장이 브라우저에서
   직접 캡처한 멀티파트 산출물을 받아 `ingest.py` 가 서버 무요청으로 적재 — 사용자

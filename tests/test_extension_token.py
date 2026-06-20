@@ -149,12 +149,12 @@ def test_owner_token_dies_with_owner(client):
     assert client.get("/api/v1/pages", headers=_headers(token)).status_code == 401
 
 
-def test_system_key_permissions_use_stored_columns(client):
-    """owner=NULL 시스템 키는 기존대로 저장 컬럼만 본다 (재평가 비대상)."""
+def test_system_key_rejected_on_api(client):
+    """owner=NULL 시스템 키는 /api/v1 인증 대상이 아니다 — 401 (개인 키 전용)."""
     with db.connect() as conn:
-        token = auth.issue_api_key(conn, "sys", can_view=False, can_archive=False,
+        token = auth.issue_api_key(conn, "sys", can_view=True, can_archive=True,
                                    created_by=1, ttl_seconds=None)
-    assert client.get("/api/v1/pages", headers=_headers(token)).status_code == 403
+    assert client.get("/api/v1/pages", headers=_headers(token)).status_code == 401
 
 
 # ---- 계정 화면 발급/폐기 ----
@@ -224,7 +224,7 @@ def test_auth_profile_rejects_system_key(client, monkeypatch):
         sys_token = auth.issue_api_key(
             conn, "sys", can_view=True, can_archive=True, created_by=1, ttl_seconds=None
         )
-    assert _auth_profile(client, sys_token).status_code == 403  # 사용자 토큰만
+    assert _auth_profile(client, sys_token).status_code == 401  # 개인 키 전용(시스템 키 거부)
 
 
 def test_auth_profile_https_only(client, monkeypatch):
@@ -290,7 +290,7 @@ def test_crawl_session_rejects_system_key(client, monkeypatch):
         sys_token = auth.issue_api_key(
             conn, "sys", can_view=True, can_archive=True, created_by=1, ttl_seconds=None
         )
-    assert _auth_crawl(client, sys_token).status_code == 403  # 사용자 토큰만
+    assert _auth_crawl(client, sys_token).status_code == 401  # 개인 키 전용(시스템 키 거부)
 
 
 def test_crawl_session_https_only(client, monkeypatch):

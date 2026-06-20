@@ -115,7 +115,7 @@ def test_api_authenticated_snapshot_owner_only(client):
     # 메타데이터: 소유자만
     assert client.get("/api/v1/snapshots/1", headers=_headers(owner_tok)).status_code == 200
     assert client.get("/api/v1/snapshots/1", headers=_headers(other_tok)).status_code == 404
-    assert client.get("/api/v1/snapshots/1", headers=_headers(sys_tok)).status_code == 404
+    assert client.get("/api/v1/snapshots/1", headers=_headers(sys_tok)).status_code == 401  # 시스템 키 인증 거부
     # 파일(content): 소유자만 (_load_snapshot 가드)
     r = client.get("/api/v1/snapshots/1/file/content.md", headers=_headers(owner_tok))
     assert r.status_code == 200 and "일급비밀" in r.text

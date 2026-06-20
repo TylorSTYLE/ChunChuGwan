@@ -40,8 +40,11 @@ def client(tmp_db):
 
 
 def _issue(**kwargs) -> str:
+    """admin 귀속 개인 API Key (/api/v1 은 개인 키 전용). 권한 제어 테스트는
+    owner_user_id 로 다른 역할 사용자를, 시스템 키 거부 테스트는 owner_user_id=None 을 준다."""
+    aid = _admin_id()
     options = {"can_view": True, "can_archive": True,
-               "created_by": None, "ttl_seconds": None}
+               "owner_user_id": aid, "created_by": aid, "ttl_seconds": None}
     options.update(kwargs)
     with db.connect() as conn:
         return auth.issue_api_key(conn, "key", **options)
@@ -62,14 +65,33 @@ def _login_admin(client):
 
 
 def test_api_version_returns_server_version(client):
-    token = _issue(can_view=False, can_archive=False)  # 권한 없는 토큰도 가능
+    token = _issue()
     r = client.get("/api/v1/version", headers=_headers(token))
     assert r.status_code == 200
-    assert r.json() == {"version": __version__}
+    body = r.json()
+    assert body["version"] == __version__
+    assert "extension_version" in body  # 확장 버전(서버 앱 버전과 독립)
 
 
 def test_api_version_requires_token(client):
     assert client.get("/api/v1/version").status_code == 401
+
+
+def test_api_invalid_token_ip_throttled(client):
+    """무효 토큰 반복 인증 실패 → IP 인증보호로 429 (auth_throttle, api_key_ip 버킷)."""
+    with db.connect() as conn:
+        limit = db.auth_throttle_settings(conn)["login_ip_limit"]
+    last = None
+    for _ in range(limit + 1):
+        last = client.get("/api/v1/version", headers=_headers("wccg_bad_token"))
+    assert last.status_code == 429
+    assert "retry-after" in {k.lower() for k in last.headers}
+
+
+def test_api_system_key_rejected(client):
+    """시스템 키(owner=NULL)는 /api/v1 인증 대상이 아니다 — 401 (개인 키 전용)."""
+    token = _issue(owner_user_id=None, created_by=None)
+    assert client.get("/api/v1/version", headers=_headers(token)).status_code == 401
 
 
 # ---- POST /api/v1/crawl ----
@@ -96,7 +118,11 @@ def test_api_crawl_registers_and_merges(client):
 
 
 def test_api_crawl_requires_archive_perm(client):
-    token = _issue(can_archive=False)
+    # 개인 키 권한은 소유자 역할에서 재평가 — archive 없는 viewer 라 403 (use_api_keys 는 부여).
+    with db.connect() as conn:
+        uid = db.create_user(conn, "viewer-crawl@test.co", password_hash="x", role="viewer")
+        db.set_permission_overrides(conn, uid, {"use_api_keys": True})
+    token = _issue(owner_user_id=uid, created_by=uid)
     r = client.post(
         "/api/v1/crawl", json={"url": "https://example.com/x/"}, headers=_headers(token)
     )
@@ -217,13 +243,13 @@ def test_api_ingest_creates_extension_snapshot(client):
 
 
 def test_api_ingest_requires_user_token(client):
-    """시스템 키(owner=NULL)로는 적재 불가 — 403."""
-    token = _issue()  # created_by/owner_user_id 없음 = 시스템 키
+    """시스템 키(owner=NULL)는 /api/v1 인증 자체가 거부된다 — 401 (개인 키 전용)."""
+    token = _issue(owner_user_id=None, created_by=None)
     r = client.post(
         "/api/v1/ingest", data={"url": "https://example.com/x"},
         files=_ingest_files(), headers=_headers(token),
     )
-    assert r.status_code == 403
+    assert r.status_code == 401
 
 
 def test_api_ingest_requires_archive_perm(client):

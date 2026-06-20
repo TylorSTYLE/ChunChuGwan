@@ -41,7 +41,8 @@ IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origi
 인증 시도 rate limit 은 `auth_throttle` 테이블(고정 윈도우 카운터)에 둔다.
 `db.throttle_hit`(증가+허용 판정)·`throttle_clear`(성공 시 초기화)·
 `delete_expired_throttle`(GC)가 코어이고, 적용은 `web_auth_routes` 의 `_throttle`
-헬퍼(로그인·2단계·이메일코드·재발송·가입). **핵심: 카운터 증가는 인증 핸들러의
+헬퍼(로그인·2단계·이메일코드·재발송·가입)와 `/api/v1` 개인 키 인증
+(`api_routes._api_auth_throttle`, `api_key_ip` 버킷 — 인증 실패 시에만 카운트, 한도 초과 429). **핵심: 카운터 증가는 인증 핸들러의
 주 트랜잭션과 분리된 별도 `db.connect()` 블록에서** 한다 — 인증 실패로 4xx 를
 던지면 핸들러 conn 이 롤백되므로(원칙: `db.connect` 는 예외 시 커밋 안 함), 같은
 conn 에서 증가시키면 시도 횟수가 사라진다. 한도·창은 시스템 설정
