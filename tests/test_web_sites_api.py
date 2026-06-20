@@ -186,3 +186,38 @@ def test_site_detail_pagination(tmp_db):
     # 범위 초과 page 는 마지막 페이지로 클램프
     clamped = c.get(f"/api/web/sites/{site_id}?page=99").json()
     assert clamped["pager"]["page"] == clamped["pager"]["total_pages"]
+
+
+# ---- 린 페이지목록 엔드포인트 (상세 화면 페이저 in-place 갱신용) ----
+
+
+def test_site_pages_endpoint(tmp_db):
+    """GET /sites/{id}/pages — pages/pager 만 반환(통계·인증서 등 제외)하고 슬라이싱·클램프 동작."""
+    site_id = seed_site(n_pages=30)
+    _, token = make_user()
+    c = client_for(token)
+    # 1페이지(per_page 25) → 25개, 메타 정확, 린 응답(무거운 키 없음)
+    body = c.get(f"/api/web/sites/{site_id}/pages?per_page=25&page=1").json()
+    assert set(body.keys()) == {"pages", "pager"}
+    assert len(body["pages"]) == 25
+    assert body["pager"] == {"page": 1, "total_pages": 2, "per_page": 25, "total": 30}
+    assert body["pages"][0]["bytes"] > 0 and "url" in body["pages"][0]
+    # 2페이지 → 나머지 5개, 1페이지와 겹치지 않음(오프셋 슬라이싱)
+    page1_ids = {p["id"] for p in body["pages"]}
+    body2 = c.get(f"/api/web/sites/{site_id}/pages?per_page=25&page=2").json()
+    assert len(body2["pages"]) == 5 and body2["pager"]["page"] == 2
+    assert page1_ids.isdisjoint({p["id"] for p in body2["pages"]})
+    # site_detail 과 동일한 페이징 규칙: 잘못된 per_page→50, 범위초과 page→마지막으로 클램프
+    assert c.get(f"/api/web/sites/{site_id}/pages?per_page=999").json()["pager"]["per_page"] == 50
+    clamped = c.get(f"/api/web/sites/{site_id}/pages?page=99&per_page=25").json()
+    assert clamped["pager"]["page"] == clamped["pager"]["total_pages"] == 2
+
+
+def test_site_pages_endpoint_requires_session(tmp_db):
+    site_id = seed_site()
+    assert client_for().get(f"/api/web/sites/{site_id}/pages").status_code == 401
+
+
+def test_site_pages_endpoint_404(tmp_db):
+    _, token = make_user()
+    assert client_for(token).get("/api/web/sites/9999/pages").status_code == 404

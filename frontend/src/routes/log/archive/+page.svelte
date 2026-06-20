@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { pagePath, snapPath } from '$lib/urls';
-	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
 	import { api } from '$lib/api';
 	import { filterUrl } from '$lib/filters';
+	import { createList } from '$lib/list.svelte';
 	import type { LogsData } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import Toolbar from '$lib/components/Toolbar.svelte';
@@ -13,8 +13,19 @@
 	import { createAction } from '$lib/action.svelte';
 
 	let { data }: { data: { logs: LogsData } } = $props();
-	const d = $derived(data.logs);
 	const act = createAction();
+
+	const ROUTE = '/log/archive';
+	const FILTER_DEF = { limit: 25, page: 1 };
+	const list = createList({
+		source: () => data.logs,
+		api: '/logs',
+		route: ROUTE,
+		params: (d) => ({ domain: d.domain, status: d.status, limit: d.limit, page: d.page_num }),
+		defaults: FILTER_DEF,
+		onError: (m) => (act.error = m)
+	});
+	const d = $derived(list.data);
 
 	const retry = (logId: number) =>
 		act.run(
@@ -37,12 +48,9 @@
 		error: 'error'
 	};
 
-	const FILTER_DEF = { limit: 25, page: 1 };
-	function applyFilter(patch: Record<string, string>) {
-		goto(filterUrl('/logs', { domain: d.domain, status: d.status, limit: d.limit, ...patch }, FILTER_DEF));
-	}
+	const applyFilter = (patch: Record<string, string>) => list.go({ ...patch, page: 1 });
 	const pageUrl = (n: number) =>
-		filterUrl('/logs', { domain: d.domain, status: d.status, limit: d.limit, page: n }, FILTER_DEF);
+		filterUrl(ROUTE, { domain: d.domain, status: d.status, limit: d.limit, page: n }, FILTER_DEF);
 </script>
 
 <h2>{t('아카이빙 로그')}</h2>
@@ -104,7 +112,13 @@
 			</tbody>
 		</table>
 	</div>
-	<Pager page={d.page_num} totalPages={d.total_pages} href={pageUrl} />
+	<Pager
+		page={d.page_num}
+		totalPages={d.total_pages}
+		href={pageUrl}
+		onpage={(n) => list.go({ page: n })}
+		busy={list.busy}
+	/>
 {/if}
 
 <style>
