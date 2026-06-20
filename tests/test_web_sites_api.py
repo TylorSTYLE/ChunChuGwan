@@ -118,7 +118,7 @@ def test_site_detail(tmp_db):
     assert len(body["pages"]) == 1
     assert body["pages"][0]["bytes"] > 0
     assert body["site_bytes"] > 0
-    assert body["pager"]["page"] == 1 and body["pager"]["per_page"] == 50
+    assert body["pager"]["page"] == 1 and body["pager"]["per_page"] == 10
     assert body["can_archive"] is True
     assert body["can_delete"] is False  # archiver
     assert "can_manage_credentials" in body
@@ -180,44 +180,145 @@ def test_site_detail_pagination(tmp_db):
     assert body["pager"]["total"] == 5
     assert body["pager"]["per_page"] == 25
     assert body["pager"]["total_pages"] == 1
-    # 잘못된 per_page 는 기본값 50 으로 폴백
+    # 잘못된 per_page 는 기본값 10 으로 폴백
     bad = c.get(f"/api/web/sites/{site_id}?per_page=999").json()
-    assert bad["pager"]["per_page"] == 50
+    assert bad["pager"]["per_page"] == 10
     # 범위 초과 page 는 마지막 페이지로 클램프
     clamped = c.get(f"/api/web/sites/{site_id}?page=99").json()
     assert clamped["pager"]["page"] == clamped["pager"]["total_pages"]
 
 
-# ---- 린 페이지목록 엔드포인트 (상세 화면 페이저 in-place 갱신용) ----
+# ---- 린 목록 엔드포인트 (상세 화면 페이저 in-place 갱신용) ----
 
 
-def test_site_pages_endpoint(tmp_db):
-    """GET /sites/{id}/pages — pages/pager 만 반환(통계·인증서 등 제외)하고 슬라이싱·클램프 동작."""
+def test_site_lists_endpoint(tmp_db):
+    """GET /sites/{id}/lists — 3개 목록(페이지·회차·실패)과 각 페이저만 반환(통계·인증서 등 제외)."""
     site_id = seed_site(n_pages=30)
     _, token = make_user()
     c = client_for(token)
-    # 1페이지(per_page 25) → 25개, 메타 정확, 린 응답(무거운 키 없음)
-    body = c.get(f"/api/web/sites/{site_id}/pages?per_page=25&page=1").json()
-    assert set(body.keys()) == {"pages", "pager"}
+    # 1페이지(per_page 25) → 25개, 메타 정확, 린 응답(6개 키만)
+    body = c.get(f"/api/web/sites/{site_id}/lists?per_page=25&page=1").json()
+    assert set(body.keys()) == {
+        "pages", "pager", "crawls", "crawls_pager", "failed_items", "failed_pager"
+    }
     assert len(body["pages"]) == 25
     assert body["pager"] == {"page": 1, "total_pages": 2, "per_page": 25, "total": 30}
     assert body["pages"][0]["bytes"] > 0 and "url" in body["pages"][0]
     # 2페이지 → 나머지 5개, 1페이지와 겹치지 않음(오프셋 슬라이싱)
     page1_ids = {p["id"] for p in body["pages"]}
-    body2 = c.get(f"/api/web/sites/{site_id}/pages?per_page=25&page=2").json()
+    body2 = c.get(f"/api/web/sites/{site_id}/lists?per_page=25&page=2").json()
     assert len(body2["pages"]) == 5 and body2["pager"]["page"] == 2
     assert page1_ids.isdisjoint({p["id"] for p in body2["pages"]})
-    # site_detail 과 동일한 페이징 규칙: 잘못된 per_page→50, 범위초과 page→마지막으로 클램프
-    assert c.get(f"/api/web/sites/{site_id}/pages?per_page=999").json()["pager"]["per_page"] == 50
-    clamped = c.get(f"/api/web/sites/{site_id}/pages?page=99&per_page=25").json()
+    # site_detail 과 동일한 페이징 규칙: 잘못된 per_page→10, 범위초과 page→마지막으로 클램프
+    assert c.get(f"/api/web/sites/{site_id}/lists?per_page=999").json()["pager"]["per_page"] == 10
+    clamped = c.get(f"/api/web/sites/{site_id}/lists?page=99&per_page=25").json()
     assert clamped["pager"]["page"] == clamped["pager"]["total_pages"] == 2
 
 
-def test_site_pages_endpoint_requires_session(tmp_db):
+def test_site_lists_endpoint_requires_session(tmp_db):
     site_id = seed_site()
-    assert client_for().get(f"/api/web/sites/{site_id}/pages").status_code == 401
+    assert client_for().get(f"/api/web/sites/{site_id}/lists").status_code == 401
 
 
-def test_site_pages_endpoint_404(tmp_db):
+def test_site_lists_endpoint_404(tmp_db):
     _, token = make_user()
-    assert client_for(token).get("/api/web/sites/9999/pages").status_code == 404
+    assert client_for(token).get("/api/web/sites/9999/lists").status_code == 404
+
+
+# ---- archive/list 필터·페이징 (전체 사이트 대상) ----
+
+
+def _seed_named_sites(domains):
+    """각 도메인에 페이지 1개씩 시드 (목록·필터 페이징 테스트용)."""
+    with db.connect() as conn:
+        for dom in domains:
+            url = f"https://{dom}/p0"
+            db.get_or_create_page(conn, url, dom, storage.url_to_slug(url))
+
+
+def test_sites_filter_applies_to_whole_list(tmp_db):
+    """q 는 현재 페이지가 아니라 전체 사이트에서 site_key 부분 일치로 거른다."""
+    _seed_named_sites(
+        [f"shop{i:02d}.example" for i in range(30)] + ["blog.example", "news.example"]
+    )
+    _, token = make_user()
+    c = client_for(token)
+    # 필터 없음: 기본 per_page 25, 총 32, 2페이지
+    body = c.get("/api/web/sites").json()
+    assert body["total"] == 32 and body["limit"] == 25 and body["total_pages"] == 2
+    assert len(body["items"]) == 25 and body["limits"] == [10, 25, 50, 100]
+    # q=shop → 전체에서 30개 매칭(현재 페이지에 안 보이던 것 포함), 2페이지로 분할
+    p1 = c.get("/api/web/sites?q=shop&per_page=25&page=1").json()
+    assert p1["q"] == "shop" and p1["total"] == 30 and p1["total_pages"] == 2
+    assert len(p1["items"]) == 25 and all("shop" in it["site_key"] for it in p1["items"])
+    p2 = c.get("/api/web/sites?q=shop&per_page=25&page=2").json()
+    assert len(p2["items"]) == 5 and all("shop" in it["site_key"] for it in p2["items"])
+    assert {it["site_key"] for it in p1["items"]}.isdisjoint(
+        {it["site_key"] for it in p2["items"]}
+    )
+    # 매칭 없으면 0
+    assert c.get("/api/web/sites?q=nomatch").json()["total"] == 0
+
+
+def test_sites_pagination_clamp_and_bad_per_page(tmp_db):
+    _seed_named_sites([f"s{i:02d}.example" for i in range(12)])
+    _, token = make_user()
+    c = client_for(token)
+    assert c.get("/api/web/sites?per_page=10&page=1").json()["total_pages"] == 2
+    # 허용 밖 per_page → 기본 25
+    assert c.get("/api/web/sites?per_page=999").json()["limit"] == 25
+    # 범위 초과 page → 마지막으로 클램프
+    clamped = c.get("/api/web/sites?per_page=10&page=99").json()
+    assert clamped["page_num"] == clamped["total_pages"] == 2
+
+
+# ---- 사이트 상세: 회차·실패 목록 페이징 (각각 독립) ----
+
+
+def _seed_crawls(n):
+    with db.connect() as conn:
+        for _ in range(n):
+            db.insert_crawl(
+                conn, start_url=f"https://{DOMAIN}/", scope_host=DOMAIN,
+                scope_path="/", max_pages=10, max_depth=2, delay_seconds=0, source="cli",
+            )
+        return db.get_site_by_key(conn, DOMAIN)["id"]
+
+
+def _seed_failed(n):
+    with db.connect() as conn:
+        for i in range(n):
+            url = f"https://{DOMAIN}/fail{i}"
+            pid = db.get_or_create_page(conn, url, DOMAIN, storage.url_to_slug(url))
+            db.insert_archive_log(
+                conn, url=url, domain=DOMAIN, source="web", status="error",
+                page_id=pid, started_at=f"2026-06-10T00:{i:02d}:00+00:00", duration_ms=10,
+            )
+        return db.get_site_by_key(conn, DOMAIN)["id"]
+
+
+def test_site_lists_crawls_pagination(tmp_db):
+    sid = _seed_crawls(13)
+    _, token = make_user()
+    c = client_for(token)
+    body = c.get(f"/api/web/sites/{sid}/lists?crawls_per_page=10&crawls_page=1").json()
+    assert body["crawls_pager"] == {"page": 1, "total_pages": 2, "per_page": 10, "total": 13}
+    assert len(body["crawls"]) == 10
+    body2 = c.get(f"/api/web/sites/{sid}/lists?crawls_per_page=10&crawls_page=2").json()
+    assert len(body2["crawls"]) == 3 and body2["crawls_pager"]["page"] == 2
+    # site_detail 도 같은 회차 페이저를 내려준다
+    detail = c.get(f"/api/web/sites/{sid}?crawls_per_page=10").json()
+    assert detail["crawls_pager"]["total"] == 13 and len(detail["crawls"]) == 10
+
+
+def test_site_lists_failed_pagination(tmp_db):
+    sid = _seed_failed(13)
+    _, token = make_user()
+    c = client_for(token)
+    body = c.get(f"/api/web/sites/{sid}/lists?failed_per_page=10&failed_page=1").json()
+    assert body["failed_pager"]["total"] == 13 and body["failed_pager"]["total_pages"] == 2
+    assert len(body["failed_items"]) == 10
+    body2 = c.get(f"/api/web/sites/{sid}/lists?failed_per_page=10&failed_page=2").json()
+    assert len(body2["failed_items"]) == 3
+    # 한 목록 페이징은 다른 목록 위치에 영향 없음(독립 파라미터)
+    assert body["pager"]["page"] == 1 and body["crawls_pager"]["page"] == 1

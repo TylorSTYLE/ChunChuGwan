@@ -9,6 +9,7 @@
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import Toolbar from '$lib/components/Toolbar.svelte';
 	import Pager from '$lib/components/Pager.svelte';
+	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { createAction } from '$lib/action.svelte';
 
@@ -67,6 +68,7 @@
 	</select>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
+	<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
 </Toolbar>
 
 {#if d.items.length === 0}

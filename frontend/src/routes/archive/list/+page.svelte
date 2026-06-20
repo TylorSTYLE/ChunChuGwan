@@ -5,14 +5,32 @@
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
 	import { api } from '$lib/api';
-	import type { SiteItem } from '$lib/types';
+	import { filterUrl } from '$lib/filters';
+	import { createList } from '$lib/list.svelte';
+	import type { SitesData } from '$lib/types';
+	import Toolbar from '$lib/components/Toolbar.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 
-	let { data }: { data: { sites: SiteItem[] } } = $props();
-	const sites = $derived(data.sites);
+	let { data }: { data: { sites: SitesData } } = $props();
 
-	// 진행 중 아카이빙·사람 확인 대기 집합이 바뀌면 목록을 새로 불러 상태를 갱신한다
-	// (크롤이 끝나거나 새 작업이 시작되면 행의 활동·진행 표시가 최신이 된다).
+	const ROUTE = '/archive/list';
+	const FILTER_DEF = { limit: 25, page: 1 };
+	// 필터(q)·페이지는 서버에서 전체 사이트 대상으로 적용한다 — 현재 페이지 클라이언트 필터가 아님.
+	const list = createList({
+		source: () => data.sites,
+		api: '/sites',
+		route: ROUTE,
+		params: (d) => ({ q: d.q, limit: d.limit, page: d.page_num }),
+		defaults: FILTER_DEF
+	});
+	const d = $derived(list.data);
+
+	const pageUrl = (n: number) => filterUrl(ROUTE, { q: d.q, limit: d.limit, page: n }, FILTER_DEF);
+
+	// 진행 중 아카이빙·사람 확인 대기 집합이 바뀌면 현재 페이지/필터를 다시 불러 상태를 갱신한다
+	// (createList load 가 URL 의 q/page/limit 을 읽으므로 보고 있던 페이지·필터가 유지된다).
 	type Active = { active: string[]; needs_human?: { id: number; url: string }[] };
 	onMount(() => {
 		let last = '';
@@ -33,8 +51,20 @@
 
 <h2>{t('아카이브 사이트 목록')}</h2>
 
-{#if sites.length === 0}
-	<EmptyState message={t('아직 아카이브가 없습니다.')} />
+<Toolbar>
+	<input
+		type="search"
+		value={d.q}
+		placeholder={t('사이트 검색')}
+		onchange={(e) => list.go({ q: e.currentTarget.value, page: 1 })}
+	/>
+	<span class="spacer"></span>
+	<span class="muted">{t('총')} {d.total}{t('건')}</span>
+	<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
+</Toolbar>
+
+{#if d.items.length === 0}
+	<EmptyState message={d.q ? t('검색 결과가 없습니다.') : t('아직 아카이브가 없습니다.')} />
 {:else}
 	<div class="table-wrap wide">
 		<table>
@@ -49,7 +79,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each sites as s}
+				{#each d.items as s}
 					<tr>
 						<td>
 							{#if s.site_id}
@@ -70,6 +100,13 @@
 			</tbody>
 		</table>
 	</div>
+	<Pager
+		page={d.page_num}
+		totalPages={d.total_pages}
+		href={pageUrl}
+		onpage={(n) => list.go({ page: n })}
+		busy={list.busy}
+	/>
 {/if}
 
 <style>

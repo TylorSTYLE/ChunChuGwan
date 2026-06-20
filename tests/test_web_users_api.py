@@ -179,3 +179,21 @@ def test_invite_delete_404(tmp_db):
     r = client_for(admin).post("/api/web/system/users/invite/9999/delete",
                                headers=POST_HEADERS)
     assert r.status_code == 404
+
+
+def test_users_pagination(tmp_db):
+    """사용자 목록 페이징 — 기본 25, 선택지 10/25/50/100, clamp. (초대는 페이징 대상 아님)"""
+    _, admin = make_user("admin@test.co", role="admin")
+    for i in range(12):
+        make_user(f"u{i:02d}@test.co", role="viewer")
+    c = client_for(admin)
+    body = c.get("/api/web/system/users?per_page=10&page=1").json()
+    assert body["total"] == 13 and body["total_pages"] == 2  # admin + 12
+    assert len(body["users"]) == 10 and body["limit"] == 10
+    assert body["limits"] == [10, 25, 50, 100] and body["page_num"] == 1
+    body2 = c.get("/api/web/system/users?per_page=10&page=2").json()
+    assert len(body2["users"]) == 3
+    # 허용 밖 per_page → 기본 25, 범위 초과 page → 마지막으로 클램프
+    assert c.get("/api/web/system/users?per_page=999").json()["limit"] == 25
+    clamped = c.get("/api/web/system/users?per_page=10&page=99").json()
+    assert clamped["page_num"] == clamped["total_pages"] == 2

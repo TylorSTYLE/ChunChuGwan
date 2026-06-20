@@ -3,14 +3,32 @@
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
 	import { api } from '$lib/api';
+	import { filterUrl } from '$lib/filters';
+	import { createList } from '$lib/list.svelte';
 	import type { TrashData, TrashEntry } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
+	import Toolbar from '$lib/components/Toolbar.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { createAction } from '$lib/action.svelte';
 
 	let { data }: { data: { trash: TrashData } } = $props();
-	const d = $derived(data.trash);
 	const act = createAction();
+
+	// 복원/영구삭제 액션 후 invalidateAll → 현재 페이지로 reseed.
+	const ROUTE = '/archive/trash';
+	const FILTER_DEF = { limit: 25, page: 1 };
+	const list = createList({
+		source: () => data.trash,
+		api: '/trash',
+		route: ROUTE,
+		params: (d) => ({ limit: d.limit, page: d.page_num }),
+		defaults: FILTER_DEF,
+		onError: (m) => (act.error = m)
+	});
+	const d = $derived(list.data);
+	const pageUrl = (n: number) => filterUrl(ROUTE, { limit: d.limit, page: n }, FILTER_DEF);
 
 	function restore(e: TrashEntry) {
 		return act.run(
@@ -49,6 +67,11 @@
 {#if d.entries.length === 0}
 	<EmptyState message={t('휴지통이 비어 있습니다.')} />
 {:else}
+	<Toolbar>
+		<span class="spacer"></span>
+		<span class="muted">{t('총')} {d.total}{t('건')}</span>
+		<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
+	</Toolbar>
 	<div class="table-wrap wide">
 		<table>
 			<thead>
@@ -86,6 +109,13 @@
 			</tbody>
 		</table>
 	</div>
+	<Pager
+		page={d.page_num}
+		totalPages={d.total_pages}
+		href={pageUrl}
+		onpage={(n) => list.go({ page: n })}
+		busy={list.busy}
+	/>
 {/if}
 
 <style>
