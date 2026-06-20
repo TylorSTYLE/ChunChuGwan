@@ -140,13 +140,13 @@ def test_resource_gc_on_delete(archive_env, monkeypatch):
 
     with db.connect() as conn:
         page_a = db.get_page(conn, "https://example.com/a")
-    deletion.delete_page(page_a["id"])
+    deletion.delete_page(page_a["id"], hard=True)
     # 다른 스냅샷이 아직 참조 — CAS 파일 유지
     assert resources.resource_path(IMG_NAME).is_file()
 
     with db.connect() as conn:
         page_b = db.get_page(conn, "https://example.com/b")
-    deletion.delete_page(page_b["id"])
+    deletion.delete_page(page_b["id"], hard=True)
     # 참조 0 — CAS 파일 GC
     assert not resources.resource_path(IMG_NAME).exists()
 

@@ -282,7 +282,15 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
     def _site_where(alias: str) -> str:
         return "" if site_id is None else f" WHERE {alias}.site_id = ?"
 
-    where = _site_where("p")
+    def _page_where(alias: str) -> str:
+        # 휴지통(trash_id) 행은 내보내기에서 제외한다 — 삭제 대기 데이터는 아카이브의
+        # 실제 콘텐츠가 아니다. (전체 백업은 DB 파일째 복사라 휴지통을 그대로 보존한다.)
+        cond = f"{alias}.trash_id IS NULL"
+        if site_id is not None:
+            cond += f" AND {alias}.site_id = ?"
+        return " WHERE " + cond
+
+    where = _page_where("p")
     with db.connect() as conn:
         if site_id is not None:
             site = db.get_site(conn, site_id)
@@ -347,7 +355,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
         # 로컬 네트워크 태그·클레임 상태는 인스턴스 로컬이라 내보내지 않는다.
         crawls = []
         for c in conn.execute(
-            f"SELECT * FROM crawls c{_site_where('c')} ORDER BY c.id", args
+            f"SELECT * FROM crawls c{_page_where('c')} ORDER BY c.id", args
         ).fetchall():
             crawl_pages = [
                 {
@@ -420,7 +428,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 {"JOIN" if site_id is not None else "LEFT JOIN"} pages p
                     ON p.id = al.page_id
                 LEFT JOIN snapshots s ON s.id = al.snapshot_id
-                {_site_where("p")} ORDER BY al.id
+                {_page_where("p")} ORDER BY al.id
                 """,
                 args,
             )
@@ -434,7 +442,7 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 FROM snapshot_resources sr
                 JOIN snapshots s ON s.id = sr.snapshot_id
                 JOIN pages p ON p.id = s.page_id
-                WHERE p.site_id = ? ORDER BY sr.name
+                WHERE p.site_id = ? AND p.trash_id IS NULL ORDER BY sr.name
                 """,
                 (site_id,),
             )

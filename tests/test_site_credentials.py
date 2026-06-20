@@ -106,7 +106,7 @@ def test_delete_site_with_credentials(tmp_db):
     with db.connect() as conn:
         site_id = _make_site(conn)
         db.create_site_credential(conn, site_id, "c", "http_basic", "E", created_by=None)
-    assert deletion.delete_site(site_id) is not None
+    assert deletion.delete_site(site_id, hard=True) is not None
     with db.connect() as conn:
         assert db.get_site(conn, site_id) is None
         assert db.count_site_credentials(conn, site_id) == 0

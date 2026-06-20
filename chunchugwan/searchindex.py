@@ -97,7 +97,9 @@ def index_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> bool:
     """
     if not db.search_index_available(conn):
         return False
-    snap = db.get_snapshot(conn, snapshot_id)
+    # 휴지통 스냅샷도 색인한다 — 검색 결과는 쿼리의 trash 필터가 가리고, 복원 시
+    # 다시 색인할 필요가 없게 한다.
+    snap = db.get_snapshot(conn, snapshot_id, include_trashed=True)
     if snap is None:
         return False
     _index_row(conn, snap)
@@ -146,7 +148,7 @@ def backfill_all(progress: Callable[[int, int], None] | None = None) -> int:
     with db.connect() as conn:
         for snap in targets:
             sid = snap["id"]
-            current = db.get_snapshot(conn, sid)
+            current = db.get_snapshot(conn, sid, include_trashed=True)
             if current is not None:  # 처리 전 동시 삭제됐으면 건너뜀(orphan 방지)
                 try:
                     _index_row(conn, current)

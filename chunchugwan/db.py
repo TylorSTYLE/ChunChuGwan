@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS pages (
     site_id     INTEGER REFERENCES sites(id),  -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id),  -- 사설 대역 페이지의 로컬 네트워크 태그
     credential_id INTEGER REFERENCES site_credentials(id),  -- 아카이빙 시 쓸 로그인 자격증명(선택)
+    trash_id    INTEGER REFERENCES trash_entries(id),  -- 휴지통 항목 (NULL=활성, 값=숨김·삭제 대기)
     created_at  TEXT NOT NULL           -- ISO 8601 UTC
 );
 -- 주의: 마이그레이션으로 추가되는 컬럼(site_id 등)의 인덱스는 SCHEMA 가
@@ -178,6 +179,7 @@ CREATE TABLE IF NOT EXISTS crawls (
     site_id        INTEGER REFERENCES sites(id),     -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id TEXT REFERENCES network_tags(id), -- 사설 대역 크롤의 로컬 네트워크 태그
     credential_id  INTEGER REFERENCES site_credentials(id), -- 크롤 페이지에 적용할 로그인 자격증명(선택)
+    trash_id       INTEGER REFERENCES trash_entries(id),  -- 휴지통 항목 (NULL=활성, 사이트 휴지통 시 세팅)
     created_at     TEXT NOT NULL,
     finished_at    TEXT,
     next_page_at   TEXT NOT NULL       -- 다음 페이지 처리 가능 시각 (ISO 8601 UTC)
@@ -261,9 +263,30 @@ CREATE TABLE IF NOT EXISTS crawl_schedules (
     site_id          INTEGER REFERENCES sites(id),       -- 소속 사이트 (생성 시 자동 연결)
     network_tag_id   TEXT REFERENCES network_tags(id),  -- 사설 대역 사이트의 로컬 네트워크 태그
     credential_id    INTEGER REFERENCES site_credentials(id),  -- 주기 크롤에 적용할 로그인 자격증명(선택)
+    trash_id         INTEGER REFERENCES trash_entries(id),  -- 휴지통 항목 (NULL=활성, 사이트 휴지통 시 세팅)
     created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_crawl_schedules_next ON crawl_schedules(next_run_at);
+
+-- 휴지통 — 페이지·사이트 삭제 시 즉시 지우지 않고 항목으로 남겨 숨기고(연결된
+-- pages/crawls/crawl_schedules.trash_id), 보관 기간 경과·수동 영구삭제 때 실제 삭제.
+-- pages 등이 이 테이블을 FK 참조하므로 그쪽 ALTER 보다 먼저 존재해야 한다(executescript).
+CREATE TABLE IF NOT EXISTS trash_entries (
+    id             INTEGER PRIMARY KEY,
+    kind           TEXT NOT NULL,                 -- 'page' | 'site'
+    -- site_id·page_id·deleted_by 는 표시·복원 참조용 상관 키(FK 아님 — archive_logs.job_id
+    -- 와 같은 이유). FK 면 영구삭제 중 prune_site_if_empty 의 사이트 행 삭제나 사용자
+    -- 삭제가 막힌다. 실제 숨김/연결은 pages·crawls·crawl_schedules.trash_id(FK)가 한다.
+    site_id        INTEGER,                       -- 대상/소속 사이트 (표시·복원용)
+    page_id        INTEGER,                       -- page-kind 대상 페이지 (site-kind 은 NULL)
+    label          TEXT NOT NULL,                 -- 표시용 (페이지 URL 또는 site_key — 삭제 시점 사본)
+    page_count     INTEGER NOT NULL DEFAULT 0,    -- 삭제 시점 페이지 수
+    snapshot_count INTEGER NOT NULL DEFAULT 0,    -- 삭제 시점 스냅샷 수
+    bytes          INTEGER NOT NULL DEFAULT 0,    -- 삭제 시점 용량 합
+    deleted_by     INTEGER,                       -- 삭제한 사용자 id (CLI/시스템은 NULL — 표시용)
+    deleted_at     TEXT NOT NULL                  -- ISO 8601 UTC
+);
+CREATE INDEX IF NOT EXISTS idx_trash_entries_deleted ON trash_entries(deleted_at);
 
 CREATE TABLE IF NOT EXISTS archive_logs (
     id           INTEGER PRIMARY KEY,
@@ -493,6 +516,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN credential_id INTEGER REFERENCES site_credentials(id)"
             )
+    # 휴지통 항목 참조 — trash_entries 는 SCHEMA 가 먼저 만든다. NULL=활성,
+    # 값=그 휴지통 항목에 속해 숨김(삭제 대기). 인덱스는 컬럼 추가 후 만든다(아래).
+    for table in ("pages", "crawls", "crawl_schedules"):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if cols and "trash_id" not in cols:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN trash_id INTEGER REFERENCES trash_entries(id)"
+            )
     # 자원 참조 인덱스 여부 — 0 인 스냅샷은 저장공간 최적화가 백필한다
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
     if cols and "resources_indexed" not in cols:
@@ -647,11 +678,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # 로그 목록 무필터 정렬 / 만료 세션 정리
         "CREATE INDEX IF NOT EXISTS idx_archive_logs_started ON archive_logs(started_at)",
         "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)",
+        # 휴지통 숨김 필터 — 목록·집계·검색이 매번 trash_id IS NULL 로 거른다
+        "CREATE INDEX IF NOT EXISTS idx_pages_trash ON pages(trash_id)",
+        "CREATE INDEX IF NOT EXISTS idx_crawls_trash ON crawls(trash_id)",
+        "CREATE INDEX IF NOT EXISTS idx_crawl_schedules_trash ON crawl_schedules(trash_id)",
     ):
         conn.execute(ddl)
     _seed_permission_groups(conn)
     _migrate_api_key_permission(conn)
     _migrate_log_view_permissions(conn)
+    _migrate_trash_permission(conn)
     _backfill_sites(conn)
 
 
@@ -731,6 +767,30 @@ def _migrate_log_view_permissions(conn: sqlite3.Connection) -> None:
     added = [p for p in LOG_VIEW_PERMISSIONS if p not in perms]
     if added:
         perms.extend(added)
+        conn.execute(
+            "UPDATE permission_groups SET permissions = ? WHERE name = 'admin'",
+            (json.dumps(perms),),
+        )
+        _bump_permission_groups_version(conn)
+
+
+def _migrate_trash_permission(conn: sqlite3.Connection) -> None:
+    """기존 빌트인 admin 그룹에 휴지통 관리 권한(manage_trash)을 보강 — 멱등.
+
+    manage_trash 는 신규 추가 권한이라 기존 설치의 admin 그룹 permissions JSON 에는
+    없다. '관리자 그룹만 기본 보유'라 admin 에만 보강하고 다른 빌트인에는 넣지
+    않는다(필요하면 관리자가 권한 그룹 화면에서 부여). 신규 설치는
+    _seed_permission_groups 가 list(PERMISSIONS) 로 이미 포함하므로 no-op.
+    """
+    row = conn.execute(
+        "SELECT permissions FROM permission_groups "
+        "WHERE name = 'admin' AND is_builtin = 1"
+    ).fetchone()
+    if row is None:
+        return
+    perms = _parse_permission_list(row["permissions"])
+    if "manage_trash" not in perms:
+        perms.append("manage_trash")
         conn.execute(
             "UPDATE permission_groups SET permissions = ? WHERE name = 'admin'",
             (json.dumps(perms),),
@@ -886,18 +946,34 @@ def get_page(conn: sqlite3.Connection, url: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM pages WHERE url = ?", (url,)).fetchone()
 
 
-def get_page_by_id(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
-    """id로 page row 조회 (없으면 None)."""
-    return conn.execute("SELECT * FROM pages WHERE id = ?", (page_id,)).fetchone()
+def get_page_by_id(
+    conn: sqlite3.Connection, page_id: int, *, include_trashed: bool = False
+) -> sqlite3.Row | None:
+    """id로 page row 조회 (없으면 None).
+
+    기본은 휴지통(trash_id 세팅) 페이지를 숨겨 None 을 돌려준다 — 뷰어·상세·diff·
+    스케줄 등 모든 읽기 경로가 자동으로 휴지통을 못 보게 한다. 복원/영구삭제 등
+    휴지통 항목을 직접 다뤄야 하는 곳만 include_trashed=True 로 가져온다.
+    """
+    where = "id = ?" if include_trashed else "id = ? AND trash_id IS NULL"
+    return conn.execute(f"SELECT * FROM pages WHERE {where}", (page_id,)).fetchone()
 
 
-def get_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> sqlite3.Row | None:
-    """스냅샷 row + 소속 페이지 정보(page_url, domain, slug, network_tag_id) 조회."""
+def get_snapshot(
+    conn: sqlite3.Connection, snapshot_id: int, *, include_trashed: bool = False
+) -> sqlite3.Row | None:
+    """스냅샷 row + 소속 페이지 정보(page_url, domain, slug, network_tag_id) 조회.
+
+    기본은 소속 페이지가 휴지통이면 숨긴다(None) — 뷰어/파일·문서 서빙·diff·REST 가
+    이 게터를 거치므로 휴지통 스냅샷이 열람·다운로드되지 않는다. 영구삭제(purge)·
+    재색인처럼 휴지통과 무관하게 행을 다뤄야 하는 곳만 include_trashed=True.
+    """
+    gate = "" if include_trashed else " AND p.trash_id IS NULL"
     return conn.execute(
-        """
+        f"""
         SELECT s.*, p.url AS page_url, p.domain, p.slug, p.site_id, p.network_tag_id
         FROM snapshots s JOIN pages p ON p.id = s.page_id
-        WHERE s.id = ?
+        WHERE s.id = ?{gate}
         """,
         (snapshot_id,),
     ).fetchone()
@@ -993,8 +1069,18 @@ def prune_empty_sites(conn: sqlite3.Connection) -> int:
 
 
 def count_sites(conn: sqlite3.Connection) -> int:
-    """전체 사이트 수 (현황 대시보드용)."""
-    return conn.execute("SELECT COUNT(*) AS c FROM sites").fetchone()["c"]
+    """전체 사이트 수 (현황 대시보드용) — 휴지통 멤버뿐인 사이트는 제외."""
+    return conn.execute(
+        """
+        SELECT COUNT(*) AS c FROM sites st WHERE
+            EXISTS (SELECT 1 FROM pages p
+                     WHERE p.site_id = st.id AND p.trash_id IS NULL)
+         OR EXISTS (SELECT 1 FROM crawls c
+                     WHERE c.site_id = st.id AND c.trash_id IS NULL)
+         OR EXISTS (SELECT 1 FROM crawl_schedules cs
+                     WHERE cs.site_id = st.id AND cs.trash_id IS NULL)
+        """
+    ).fetchone()["c"]
 
 
 _CERT_INFO_COLUMNS = (
@@ -1073,27 +1159,39 @@ def list_sites_overview(
     소유자/관리자만 스냅샷 수·마지막 활동에 반영한다 (메타데이터 누출 차단).
     """
     sv, params = _visible_snapshot_filter(viewer)
+    # 휴지통(trash_id) 멤버는 모든 집계에서 제외하고, 보이는 멤버가 하나도 없는
+    # 사이트는 목록에서 빠진다(소프트 삭제로 행은 남아 있어도 화면엔 안 보임).
     return conn.execute(
         f"""
         SELECT st.*,
-               (SELECT COUNT(*) FROM pages p WHERE p.site_id = st.id) AS page_count,
+               (SELECT COUNT(*) FROM pages p
+                 WHERE p.site_id = st.id AND p.trash_id IS NULL) AS page_count,
                (SELECT COUNT(*) FROM snapshots s JOIN pages p ON p.id = s.page_id
-                 WHERE p.site_id = st.id{sv}) AS snapshot_count,
-               (SELECT COUNT(*) FROM crawls c WHERE c.site_id = st.id) AS crawl_count,
+                 WHERE p.site_id = st.id AND p.trash_id IS NULL{sv}) AS snapshot_count,
                (SELECT COUNT(*) FROM crawls c
-                 WHERE c.site_id = st.id AND c.status = 'running') AS running_crawl_count,
+                 WHERE c.site_id = st.id AND c.trash_id IS NULL) AS crawl_count,
+               (SELECT COUNT(*) FROM crawls c
+                 WHERE c.site_id = st.id AND c.trash_id IS NULL
+                   AND c.status = 'running') AS running_crawl_count,
                (SELECT COUNT(*) FROM schedules sc JOIN pages p ON p.id = sc.page_id
-                 WHERE p.site_id = st.id)
+                 WHERE p.site_id = st.id AND p.trash_id IS NULL)
                  + (SELECT COUNT(*) FROM crawl_schedules cs
-                    WHERE cs.site_id = st.id) AS schedule_count,
+                    WHERE cs.site_id = st.id AND cs.trash_id IS NULL) AS schedule_count,
                MAX(
                    COALESCE((SELECT MAX(s.taken_at) FROM snapshots s
                              JOIN pages p ON p.id = s.page_id
-                             WHERE p.site_id = st.id{sv}), ''),
+                             WHERE p.site_id = st.id AND p.trash_id IS NULL{sv}), ''),
                    COALESCE((SELECT MAX(COALESCE(c.finished_at, c.created_at))
-                             FROM crawls c WHERE c.site_id = st.id), '')
+                             FROM crawls c
+                             WHERE c.site_id = st.id AND c.trash_id IS NULL), '')
                ) AS last_activity_at
         FROM sites st
+        WHERE EXISTS (SELECT 1 FROM pages p
+                       WHERE p.site_id = st.id AND p.trash_id IS NULL)
+           OR EXISTS (SELECT 1 FROM crawls c
+                       WHERE c.site_id = st.id AND c.trash_id IS NULL)
+           OR EXISTS (SELECT 1 FROM crawl_schedules cs
+                       WHERE cs.site_id = st.id AND cs.trash_id IS NULL)
         ORDER BY last_activity_at DESC, st.site_key
         """,
         params,
@@ -1120,9 +1218,17 @@ def get_or_create_page(
     연결하는 경로다. 캡처 연동 단계에서 이 자격증명을 실제 로그인에 쓴다.
     """
     row = conn.execute(
-        "SELECT id, network_tag_id, credential_id FROM pages WHERE url = ?", (url,)
+        "SELECT id, network_tag_id, credential_id, trash_id FROM pages WHERE url = ?",
+        (url,),
     ).fetchone()
     if row is not None:
+        # 휴지통 페이지를 다시 아카이빙하면 자동 복원한다 — 숨겨진 페이지에 스냅샷이
+        # 추가돼 되살아나지만 안 보이는 모순을 막는다. 소속 항목이 사이트면 사이트
+        # 전체가 복원된다(어느 URL이든 다시 아카이빙하면 그 사이트를 되살리려는 의도).
+        if row["trash_id"] is not None:
+            logger.info("재아카이빙으로 휴지통 항목 복원: page=%d trash=%d",
+                        row["id"], row["trash_id"])
+            clear_trash_entry(conn, row["trash_id"])
         if network_tag_id is not None and row["network_tag_id"] != network_tag_id:
             conn.execute(
                 "UPDATE pages SET network_tag_id = ? WHERE id = ?",
@@ -1297,8 +1403,10 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
 
     archive_logs 는 실행 이력으로 보존하되 page_id/snapshot_id 참조만 해제한다.
     사이트의 마지막 소속 행이었다면 사이트 행도 함께 삭제된다.
+
+    영구삭제(purge) 경로가 휴지통 페이지에도 호출하므로 include_trashed=True 로 찾는다.
     """
-    page = get_page_by_id(conn, page_id)
+    page = get_page_by_id(conn, page_id, include_trashed=True)
     if page is None:
         return False
     conn.execute(
@@ -1435,6 +1543,10 @@ def list_archive_logs(
     스냅샷이 생긴 로그에는 디렉토리 위치(snap_domain, snap_slug, snap_dir_name)를
     함께 반환한다 — 대시보드가 저장된 파일 목록/용량을 조회하는 데 쓴다.
     사설 대역 페이지의 로그 구분용으로 로컬 네트워크 태그 이름·설명도 붙인다.
+
+    로그 행 자체는 이력으로 보존하되, 대상 페이지가 휴지통이면 스냅샷·페이지
+    breadcrumb(snap_domain/slug·page_site_id·network_tag)를 비워(JOIN 조건의
+    trash_id IS NULL) 동작하지 않는 파일·뷰어 링크가 렌더되지 않게 한다.
     """
     where_sql, params = _archive_log_where(
         domain=domain, page_id=page_id, snapshot_id=snapshot_id,
@@ -1449,8 +1561,8 @@ def list_archive_logs(
                lp.network_tag_id, lp.site_id AS page_site_id
         FROM archive_logs al
         LEFT JOIN snapshots s ON s.id = al.snapshot_id
-        LEFT JOIN pages sp ON sp.id = s.page_id
-        LEFT JOIN pages lp ON lp.id = al.page_id
+        LEFT JOIN pages sp ON sp.id = s.page_id AND sp.trash_id IS NULL
+        LEFT JOIN pages lp ON lp.id = al.page_id AND lp.trash_id IS NULL
         LEFT JOIN network_tags nt ON nt.id = lp.network_tag_id
     """
     sql += where_sql
@@ -1757,8 +1869,10 @@ def list_snapshots(conn: sqlite3.Connection, page_id: int) -> list[sqlite3.Row]:
 
 
 def count_pages(conn: sqlite3.Connection) -> int:
-    """전체 페이지 수 (현황 대시보드용)."""
-    return conn.execute("SELECT COUNT(*) AS c FROM pages").fetchone()["c"]
+    """전체 페이지 수 (현황 대시보드용) — 휴지통 페이지 제외."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM pages WHERE trash_id IS NULL"
+    ).fetchone()["c"]
 
 
 def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1773,6 +1887,7 @@ def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name,
                s.bytes, s.title
         FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE p.trash_id IS NULL
         """
     ).fetchall()
 
@@ -1797,6 +1912,7 @@ def list_recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sql
         FROM snapshots s
         JOIN pages p ON p.id = s.page_id
         LEFT JOIN network_tags nt ON nt.id = p.network_tag_id
+        WHERE p.trash_id IS NULL
         ORDER BY s.taken_at DESC, s.id DESC LIMIT ?
         """,
         (limit,),
@@ -2123,7 +2239,9 @@ def search_snapshots_fts(
     offset: int = 0,
 ) -> list[sqlite3.Row]:
     """FTS MATCH 검색 (bm25 랭킹 순). match 는 searchindex 가 조립한 안전한 질의."""
-    sql = _SEARCH_SELECT_FTS + " WHERE snapshot_fts MATCH ?"
+    # 휴지통 페이지의 스냅샷은 검색에서 제외(소프트 삭제는 FTS 행을 남기므로 이 필터가
+    # 유일한 숨김 — 영구삭제 때 db.delete_page 가 FTS 행도 지운다).
+    sql = _SEARCH_SELECT_FTS + " WHERE snapshot_fts MATCH ? AND p.trash_id IS NULL"
     params: list[object] = [match]
     if domain:
         sql += " AND p.domain = ?"
@@ -2146,7 +2264,8 @@ def count_search_snapshots_fts(
     sql = (
         "SELECT COUNT(*) AS c FROM snapshot_fts "
         "JOIN snapshots s ON s.id = snapshot_fts.rowid "
-        "JOIN pages p ON p.id = s.page_id WHERE snapshot_fts MATCH ?"
+        "JOIN pages p ON p.id = s.page_id "
+        "WHERE snapshot_fts MATCH ? AND p.trash_id IS NULL"
     )
     params: list[object] = [match]
     if domain:
@@ -2183,7 +2302,7 @@ def search_snapshots_like(
 ) -> list[sqlite3.Row]:
     """LIKE 부분일치 검색 (최신순) — trigram 이 못 잡는 1~2글자 쿼리 폴백."""
     clause, params = _like_where(patterns)
-    sql = _SEARCH_SELECT_LIKE + " WHERE " + clause
+    sql = _SEARCH_SELECT_LIKE + " WHERE " + clause + " AND p.trash_id IS NULL"
     if domain:
         sql += " AND p.domain = ?"
         params.append(domain)
@@ -2207,6 +2326,7 @@ def count_search_snapshots_like(
         "SELECT COUNT(*) AS c FROM snapshot_fts "
         "JOIN snapshots s ON s.id = snapshot_fts.rowid "
         "JOIN pages p ON p.id = s.page_id WHERE " + clause
+        + " AND p.trash_id IS NULL"
     )
     if domain:
         sql += " AND p.domain = ?"
@@ -2257,9 +2377,19 @@ def find_document(
 
     문서 목록 화면의 다운로드 라우트가 임의 (해시, 이름) 조합으로 CAS 파일을
     노출하지 않도록, 실제 기록된 조합만 허용하는 검증에 쓴다.
+
+    휴지통 페이지의 스냅샷만 참조하는 문서는 404 가 되도록, 활성(비휴지통) 페이지가
+    하나라도 참조할 때만 행을 돌려준다. 문서 CAS 는 페이지 간 공유라(같은 sha256),
+    살아있는 참조가 있으면 같은 바이트를 정상 서빙한다.
     """
     return conn.execute(
-        "SELECT * FROM snapshot_documents WHERE sha256 = ? AND file = ? LIMIT 1",
+        """
+        SELECT d.* FROM snapshot_documents d
+        JOIN snapshots s ON s.id = d.snapshot_id
+        JOIN pages p ON p.id = s.page_id
+        WHERE d.sha256 = ? AND d.file = ? AND p.trash_id IS NULL
+        LIMIT 1
+        """,
         (sha256, file),
     ).fetchone()
 
@@ -2316,6 +2446,8 @@ def list_document_groups(
                    COUNT(DISTINCT s2.page_id) AS page_count,
                    MIN(s2.taken_at) AS first_seen, MAX(s2.taken_at) AS last_seen
             FROM snapshot_documents d2 JOIN snapshots s2 ON s2.id = d2.snapshot_id
+            JOIN pages p2 ON p2.id = s2.page_id
+            WHERE p2.trash_id IS NULL
             GROUP BY d2.sha256
         ) g
         JOIN snapshot_documents d ON d.id = g.doc_id
@@ -2350,7 +2482,7 @@ def list_site_document_groups(
             FROM snapshot_documents d2
             JOIN snapshots s2 ON s2.id = d2.snapshot_id
             JOIN pages p2 ON p2.id = s2.page_id
-            WHERE p2.site_id = ?
+            WHERE p2.site_id = ? AND p2.trash_id IS NULL
             GROUP BY d2.sha256
         ) g
         JOIN snapshot_documents d ON d.id = g.doc_id
@@ -2372,7 +2504,7 @@ def count_site_document_groups(conn: sqlite3.Connection, site_id: int) -> int:
             FROM snapshot_documents d2
             JOIN snapshots s2 ON s2.id = d2.snapshot_id
             JOIN pages p2 ON p2.id = s2.page_id
-            WHERE p2.site_id = ?
+            WHERE p2.site_id = ? AND p2.trash_id IS NULL
             GROUP BY d2.sha256
         )
         """,
@@ -2389,8 +2521,12 @@ def document_totals(conn: sqlite3.Connection) -> sqlite3.Row:
                COALESCE(SUM(bytes), 0) AS unique_bytes,
                COALESCE(SUM(bytes * (refs - 1)), 0) AS saved_bytes
         FROM (
-            SELECT MAX(bytes) AS bytes, COUNT(*) AS refs
-            FROM snapshot_documents GROUP BY sha256
+            SELECT MAX(d.bytes) AS bytes, COUNT(*) AS refs
+            FROM snapshot_documents d
+            JOIN snapshots s ON s.id = d.snapshot_id
+            JOIN pages p ON p.id = s.page_id
+            WHERE p.trash_id IS NULL
+            GROUP BY d.sha256
         )
         """
     ).fetchone()
@@ -2423,6 +2559,7 @@ def list_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         FROM schedules sc
         JOIN pages p ON p.id = sc.page_id
         LEFT JOIN network_tags nt ON nt.id = p.network_tag_id
+        WHERE p.trash_id IS NULL
         ORDER BY sc.next_run_at, sc.id
         """
     ).fetchall()
@@ -2432,11 +2569,13 @@ def list_due_schedules(conn: sqlite3.Connection, now_iso: str) -> list[sqlite3.R
     """다음 실행 시각이 지난 스케줄 목록 (+ 페이지 url).
 
     저장 형식이 동일한 ISO 8601 UTC 라 문자열 비교로 기한을 판정한다.
+    휴지통 페이지의 스케줄은 제외한다 — 숨겨진 페이지가 재아카이빙으로
+    되살아나지 않게 한다(복원하면 다시 기한이 되어 자동 재개).
     """
     return conn.execute(
         """
         SELECT sc.*, p.url FROM schedules sc JOIN pages p ON p.id = sc.page_id
-        WHERE sc.next_run_at <= ?
+        WHERE sc.next_run_at <= ? AND p.trash_id IS NULL
         ORDER BY sc.next_run_at, sc.id
         """,
         (now_iso,),
@@ -2530,9 +2669,12 @@ def insert_crawl(
     return cur.lastrowid
 
 
-def get_crawl(conn: sqlite3.Connection, crawl_id: int) -> sqlite3.Row | None:
-    """크롤 row 조회 (없으면 None)."""
-    return conn.execute("SELECT * FROM crawls WHERE id = ?", (crawl_id,)).fetchone()
+def get_crawl(
+    conn: sqlite3.Connection, crawl_id: int, *, include_trashed: bool = False
+) -> sqlite3.Row | None:
+    """크롤 row 조회 (없으면 None). 기본은 휴지통(사이트 삭제로 trash_id 세팅) 크롤을 숨긴다."""
+    where = "id = ?" if include_trashed else "id = ? AND trash_id IS NULL"
+    return conn.execute(f"SELECT * FROM crawls WHERE {where}", (crawl_id,)).fetchone()
 
 
 def list_crawls(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
@@ -2545,6 +2687,7 @@ def list_crawls(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]
                COALESCE(SUM(cp.status = 'failed'), 0) AS failed_count,
                COALESCE(SUM(cp.status IN ('pending', 'in_progress')), 0) AS pending_count
         FROM crawls c LEFT JOIN crawl_pages cp ON cp.crawl_id = c.id
+        WHERE c.trash_id IS NULL
         GROUP BY c.id ORDER BY c.id DESC LIMIT ?
         """,
         (limit,),
@@ -2624,6 +2767,7 @@ def claim_due_crawl_page(
                c.delay_seconds, c.network_tag_id, c.credential_id
         FROM crawl_pages cp JOIN crawls c ON c.id = cp.crawl_id
         WHERE c.status = 'running' AND c.next_page_at <= ?
+          AND c.trash_id IS NULL
           AND cp.status = 'pending'
           AND (cp.next_attempt_at IS NULL OR cp.next_attempt_at <= ?)
           AND NOT EXISTS (
@@ -3245,7 +3389,7 @@ def list_site_pages(
         FROM pages p
         LEFT JOIN snapshots s ON s.page_id = p.id
         LEFT JOIN network_tags nt ON nt.id = p.network_tag_id
-        WHERE p.site_id = ?
+        WHERE p.site_id = ? AND p.trash_id IS NULL
         GROUP BY p.id
         ORDER BY last_taken_at DESC NULLS LAST, p.url
         """
@@ -3262,7 +3406,7 @@ def site_page_totals(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row:
         """
         SELECT COUNT(DISTINCT p.id) AS page_count, COUNT(s.id) AS snapshot_count
         FROM pages p LEFT JOIN snapshots s ON s.page_id = p.id
-        WHERE p.site_id = ?
+        WHERE p.site_id = ? AND p.trash_id IS NULL
         """,
         (site_id,),
     ).fetchone()
@@ -3281,7 +3425,7 @@ def list_site_snapshot_dirs(
         """
         SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name, s.bytes, s.title
         FROM snapshots s JOIN pages p ON p.id = s.page_id
-        WHERE p.site_id = ?
+        WHERE p.site_id = ? AND p.trash_id IS NULL
         """,
         (site_id,),
     ).fetchall()
@@ -3306,7 +3450,7 @@ def list_site_failed_logs(
             SELECT al2.url AS url, MAX(al2.id) AS max_id
             FROM archive_logs al2
             JOIN pages p2 ON p2.id = al2.page_id
-            WHERE p2.site_id = ?
+            WHERE p2.site_id = ? AND p2.trash_id IS NULL
             GROUP BY al2.url
         ) last ON al.id = last.max_id
         WHERE al.status = 'error'
@@ -3327,7 +3471,8 @@ def get_site_failed_log(
         """
         SELECT al.*, p.url AS page_url
         FROM archive_logs al JOIN pages p ON p.id = al.page_id
-        WHERE al.id = ? AND p.site_id = ? AND al.status = 'error'
+        WHERE al.id = ? AND p.site_id = ? AND p.trash_id IS NULL
+          AND al.status = 'error'
         """,
         (log_id, site_id),
     ).fetchone()
@@ -3356,7 +3501,7 @@ def list_site_failed_crawl_pages(
             SELECT cp2.url AS url, MAX(cp2.id) AS max_id
             FROM crawl_pages cp2
             JOIN crawls c2 ON c2.id = cp2.crawl_id
-            WHERE c2.site_id = ?
+            WHERE c2.site_id = ? AND c2.trash_id IS NULL
             GROUP BY cp2.url
         ) last ON cp.id = last.max_id
         WHERE cp.status = 'failed'
@@ -3380,7 +3525,8 @@ def get_site_failed_crawl_page(
     return conn.execute(
         """
         SELECT cp.* FROM crawl_pages cp JOIN crawls c ON c.id = cp.crawl_id
-        WHERE cp.id = ? AND c.site_id = ? AND cp.status = 'failed'
+        WHERE cp.id = ? AND c.site_id = ? AND c.trash_id IS NULL
+          AND cp.status = 'failed'
         """,
         (crawl_page_id, site_id),
     ).fetchone()
@@ -3425,7 +3571,7 @@ def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row
         FROM crawls c
         LEFT JOIN crawl_pages cp ON cp.crawl_id = c.id
         LEFT JOIN network_tags nt ON nt.id = c.network_tag_id
-        WHERE c.site_id = ?
+        WHERE c.site_id = ? AND c.trash_id IS NULL
         GROUP BY c.id ORDER BY c.id DESC
         """,
         (site_id,),
@@ -3437,7 +3583,7 @@ def list_site_schedules(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.
     return conn.execute(
         """
         SELECT sc.*, p.url FROM schedules sc JOIN pages p ON p.id = sc.page_id
-        WHERE p.site_id = ? ORDER BY sc.next_run_at, sc.id
+        WHERE p.site_id = ? AND p.trash_id IS NULL ORDER BY sc.next_run_at, sc.id
         """,
         (site_id,),
     ).fetchall()
@@ -3448,7 +3594,8 @@ def list_site_crawl_schedules(
 ) -> list[sqlite3.Row]:
     """사이트 소속 크롤 스케줄 목록 — 사이트 상세용."""
     return conn.execute(
-        "SELECT * FROM crawl_schedules WHERE site_id = ? ORDER BY next_run_at, id",
+        "SELECT * FROM crawl_schedules "
+        "WHERE site_id = ? AND trash_id IS NULL ORDER BY next_run_at, id",
         (site_id,),
     ).fetchall()
 
@@ -3475,6 +3622,155 @@ def delete_site_crawl_schedules(conn: sqlite3.Connection, site_id: int) -> int:
         "DELETE FROM crawl_schedules WHERE site_id = ?", (site_id,)
     )
     return cur.rowcount
+
+
+# ---- 아카이브 휴지통 (trash) ----
+# 페이지·사이트 삭제를 즉시 지우지 않고 trash_entries 항목으로 남기고, 연결된
+# pages·crawls·crawl_schedules.trash_id 를 세팅해 모든 목록·서빙에서 숨긴다.
+# 복원은 trash_id 해제, 영구삭제(purge)는 기존 하드 삭제 기구 재사용. 쓰기는
+# deletion.py 코어가 트랜잭션으로 묶어 호출한다(원칙 1).
+
+
+def create_trash_entry(
+    conn: sqlite3.Connection,
+    *,
+    kind: str,
+    label: str,
+    site_id: int | None,
+    page_id: int | None,
+    page_count: int,
+    snapshot_count: int,
+    bytes_total: int,
+    deleted_by: int | None,
+) -> int:
+    """휴지통 항목 생성 후 id 반환 (deletion 이 연결 행의 trash_id 세팅 직전에 호출)."""
+    cur = conn.execute(
+        """
+        INSERT INTO trash_entries
+            (kind, site_id, page_id, label, page_count, snapshot_count, bytes,
+             deleted_by, deleted_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (kind, site_id, page_id, label, page_count, snapshot_count, bytes_total,
+         deleted_by, _utcnow()),
+    )
+    return cur.lastrowid
+
+
+def mark_page_trashed(conn: sqlite3.Connection, page_id: int, trash_id: int) -> None:
+    """페이지를 휴지통 항목에 연결(숨김) — 이미 휴지통이면 건드리지 않는다."""
+    conn.execute(
+        "UPDATE pages SET trash_id = ? WHERE id = ? AND trash_id IS NULL",
+        (trash_id, page_id),
+    )
+
+
+def mark_site_trashed(conn: sqlite3.Connection, site_id: int, trash_id: int) -> None:
+    """사이트의 활성 페이지·크롤·크롤 스케줄을 휴지통 항목에 연결(숨김).
+
+    이미 다른 항목에 든(trash_id 세팅) 행은 건드리지 않는다 — 개별 페이지가 먼저
+    휴지통에 들어가 있어도 그 항목을 유지한다.
+    """
+    for table in ("pages", "crawls", "crawl_schedules"):
+        conn.execute(
+            f"UPDATE {table} SET trash_id = ? WHERE site_id = ? AND trash_id IS NULL",
+            (trash_id, site_id),
+        )
+
+
+def get_trash_entry(conn: sqlite3.Connection, trash_id: int) -> sqlite3.Row | None:
+    """휴지통 항목 행 조회 (없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM trash_entries WHERE id = ?", (trash_id,)
+    ).fetchone()
+
+
+def list_trash_entries(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """휴지통 항목 목록 (최근 삭제 순) + 삭제자 표시 정보 — 휴지통 화면용."""
+    return conn.execute(
+        """
+        SELECT t.*, u.email AS deleted_by_email, u.display_name AS deleted_by_name
+        FROM trash_entries t LEFT JOIN users u ON u.id = t.deleted_by
+        ORDER BY t.deleted_at DESC, t.id DESC
+        """
+    ).fetchall()
+
+
+def count_trash_entries(conn: sqlite3.Connection) -> int:
+    """휴지통 항목 수 (현황·뱃지용)."""
+    return conn.execute("SELECT COUNT(*) AS c FROM trash_entries").fetchone()["c"]
+
+
+def trash_purge_cutoff(days: int) -> str:
+    """보관 기간(일) 기준 영구삭제 컷오프 ISO — deleted_at 이 이 값 이하면 만료.
+
+    deleted_at 과 같은 포맷(_utcnow: isoformat timespec=seconds)으로 만들어 문자열
+    비교가 맞아떨어지게 한다.
+    """
+    return (
+        datetime.now(timezone.utc) - timedelta(days=days)
+    ).isoformat(timespec="seconds")
+
+
+def list_expired_trash_entries(
+    conn: sqlite3.Connection, cutoff_iso: str
+) -> list[sqlite3.Row]:
+    """삭제된 지 보관 기간이 지난(deleted_at <= cutoff) 항목 — 자동 영구삭제 대상."""
+    return conn.execute(
+        "SELECT * FROM trash_entries WHERE deleted_at <= ? ORDER BY deleted_at, id",
+        (cutoff_iso,),
+    ).fetchall()
+
+
+def list_trash_entry_page_ids(
+    conn: sqlite3.Connection, trash_id: int
+) -> list[int]:
+    """휴지통 항목에 속한 페이지 id 목록 (복원·영구삭제 대상)."""
+    return [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id FROM pages WHERE trash_id = ?", (trash_id,)
+        )
+    ]
+
+
+def delete_trash_entry_crawls(conn: sqlite3.Connection, trash_id: int) -> int:
+    """항목에 속한 크롤 회차·페이지 큐 영구 삭제. 반환은 삭제된 크롤 수."""
+    conn.execute(
+        "DELETE FROM crawl_pages WHERE crawl_id IN "
+        "(SELECT id FROM crawls WHERE trash_id = ?)",
+        (trash_id,),
+    )
+    cur = conn.execute("DELETE FROM crawls WHERE trash_id = ?", (trash_id,))
+    return cur.rowcount
+
+
+def delete_trash_entry_crawl_schedules(
+    conn: sqlite3.Connection, trash_id: int
+) -> int:
+    """항목에 속한 크롤 스케줄 영구 삭제. 반환은 삭제된 스케줄 수."""
+    cur = conn.execute(
+        "DELETE FROM crawl_schedules WHERE trash_id = ?", (trash_id,)
+    )
+    return cur.rowcount
+
+
+def clear_trash_entry(conn: sqlite3.Connection, trash_id: int) -> None:
+    """복원 — 항목에 연결된 행의 trash_id 를 해제하고 항목 행 삭제.
+
+    FK(pages.trash_id 등)가 항목을 참조하므로 행의 trash_id 를 먼저 NULL 로
+    끊은 뒤 항목 행을 지운다.
+    """
+    for table in ("pages", "crawls", "crawl_schedules"):
+        conn.execute(
+            f"UPDATE {table} SET trash_id = NULL WHERE trash_id = ?", (trash_id,)
+        )
+    conn.execute("DELETE FROM trash_entries WHERE id = ?", (trash_id,))
+
+
+def delete_trash_entry(conn: sqlite3.Connection, trash_id: int) -> None:
+    """휴지통 항목 행만 삭제 (영구삭제 마무리 — 연결 행은 호출자가 이미 하드 삭제)."""
+    conn.execute("DELETE FROM trash_entries WHERE id = ?", (trash_id,))
 
 
 # ---- 사이트 아카이브 스케줄 (주기적 재크롤) ----
@@ -3507,6 +3803,7 @@ def list_crawl_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                nt.description AS network_tag_description
         FROM crawl_schedules cs
         LEFT JOIN network_tags nt ON nt.id = cs.network_tag_id
+        WHERE cs.trash_id IS NULL
         ORDER BY cs.next_run_at, cs.id
         """
     ).fetchall()
@@ -3515,9 +3812,14 @@ def list_crawl_schedules(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def list_due_crawl_schedules(
     conn: sqlite3.Connection, now_iso: str
 ) -> list[sqlite3.Row]:
-    """다음 실행 시각이 지난 크롤 스케줄 목록 (ISO 8601 UTC 문자열 비교)."""
+    """다음 실행 시각이 지난 크롤 스케줄 목록 (ISO 8601 UTC 문자열 비교).
+
+    휴지통(사이트 삭제로 trash_id 세팅) 크롤 스케줄은 제외 — 숨겨진 사이트가
+    재크롤로 되살아나지 않게 한다(복원하면 다시 기한이 되어 자동 재개).
+    """
     return conn.execute(
-        "SELECT * FROM crawl_schedules WHERE next_run_at <= ? ORDER BY next_run_at, id",
+        "SELECT * FROM crawl_schedules "
+        "WHERE next_run_at <= ? AND trash_id IS NULL ORDER BY next_run_at, id",
         (now_iso,),
     ).fetchall()
 
@@ -3649,6 +3951,7 @@ PERMISSIONS = (
     "view_audit_logs",         # 감사 로그(/log/audit) 열람 — 기본 admin 만
     "view_system_logs",        # 시스템 로그(/log/system) 열람 — 기본 admin 만
     "view_archive_logs",       # 아카이브 로그(/log/archive) 열람 — 기본 admin 만
+    "manage_trash",            # 휴지통 열람·복원·영구삭제 — 기본 admin 만
 )
 PERMISSION_LABELS = {
     "view": "보기·검색",
@@ -3662,6 +3965,7 @@ PERMISSION_LABELS = {
     "view_audit_logs": "감사 로그 보기",
     "view_system_logs": "시스템 로그 보기",
     "view_archive_logs": "아카이브 로그 보기",
+    "manage_trash": "휴지통 관리",
 }
 # 로그 열람 3종 — 신규 추가 권한. 빌트인 중 admin 에만 기본 부여하고(관리자 권한
 # 그룹만 기본값), 기존 설치는 _migrate_log_view_permissions 가 보강한다.
@@ -4291,9 +4595,11 @@ def list_site_network_tags(
         FROM (
             SELECT DISTINCT site_id, network_tag_id FROM pages
              WHERE network_tag_id IS NOT NULL AND site_id IS NOT NULL
+               AND trash_id IS NULL
             UNION
             SELECT DISTINCT site_id, network_tag_id FROM crawls
              WHERE network_tag_id IS NOT NULL AND site_id IS NOT NULL
+               AND trash_id IS NULL
         ) refs JOIN network_tags nt ON nt.id = refs.network_tag_id
         """
     params: list[object] = []
@@ -4684,6 +4990,31 @@ def mobile_screenshot_enabled(conn: sqlite3.Connection) -> bool:
     찍는다 (capture._capture_mobile_screenshot).
     """
     return get_setting(conn, MOBILE_SCREENSHOT_ENABLED_KEY) == "on"
+
+
+# ---- 아카이브 휴지통 ----
+
+TRASH_ENABLED_KEY = "trash_enabled"            # 'on' | 'off' (기본 on)
+TRASH_RETENTION_DAYS_KEY = "trash_retention_days"  # 일 (기본·오염 시 config 기본값, 0=자동삭제 끔)
+
+
+def trash_enabled(conn: sqlite3.Connection) -> bool:
+    """휴지통 기능 사용 여부 (기본 on). off 면 페이지·사이트 삭제가 즉시 영구삭제."""
+    return get_setting(conn, TRASH_ENABLED_KEY) != "off"
+
+
+def trash_retention_days(conn: sqlite3.Connection) -> int:
+    """휴지통 보관 기간(일) — 경과 시 자동 영구삭제. 0=자동삭제 끔.
+
+    없거나 오염·범위 밖이면 config 기본값으로 클램핑. 토글(trash_enabled)과 무관하게
+    자동 purge 의 만료 판정에 쓰인다 (끈 상태여도 남은 항목은 기간 경과 시 정리).
+    """
+    return _clamped_int_setting(
+        conn, TRASH_RETENTION_DAYS_KEY,
+        config.TRASH_RETENTION_DAYS_DEFAULT,
+        config.TRASH_RETENTION_DAYS_MIN,
+        config.TRASH_RETENTION_DAYS_MAX,
+    )
 
 
 EXT_CREDENTIAL_TTL_HOURS_KEY = "ext_credential_ttl_hours"

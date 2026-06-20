@@ -63,7 +63,10 @@
 	}
 
 	async function deleteSite() {
-		if (!confirm(t('이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 삭제할까요? 되돌릴 수 없습니다.'))) return;
+		const msg = s.trash_enabled
+			? t('이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 휴지통으로 옮길까요? 휴지통에서 복원할 수 있습니다.')
+			: t('이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 삭제할까요? 되돌릴 수 없습니다.');
+		if (!confirm(msg)) return;
 		action.busy = true;
 		action.error = '';
 		try {

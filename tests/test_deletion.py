@@ -134,9 +134,10 @@ def test_diff_works_after_middle_deletion(archive):
 
 def test_delete_page_removes_all_data(archive):
     page_id = archive["page_id"]
-    result = deletion.delete_page(page_id)
+    result = deletion.delete_page(page_id, hard=True)
     assert result is not None
     assert result.url == URL and result.snapshots_deleted == 3
+    assert result.trashed is False
 
     with db.connect() as conn:
         assert db.get_page_by_id(conn, page_id) is None
@@ -218,7 +219,7 @@ def test_delete_page_garbage_collects_documents(archive):
         )
     _attach_document(other_snap, b"%PDF elsewhere", "b-33333333.pdf")
 
-    deletion.delete_page(archive["page_id"])
+    deletion.delete_page(archive["page_id"], hard=True)
     assert not documents.cas_path(sha_a + ".pdf").exists()   # 참조 0 → 삭제
     assert documents.cas_path(sha_b + ".pdf").is_file()       # 잔존 참조 → 유지
     with db.connect() as conn:

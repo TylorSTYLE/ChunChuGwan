@@ -104,6 +104,21 @@
       `/api/v1/network-tags` 로 태그 선택/추가(생성 `manage_system`). 설계:
       `docs/EXTENSION_CLIENT_CAPTURE_PLAN.md`. 서버측은 테스트로 검증(test_ingest·
       test_extension_api), 확장 런타임(CDP·업로드)은 언팩 로드 후 수동 테스트 필요.
+- [x] **A15 아카이브 휴지통**: 페이지·사이트 삭제를 즉시 영구삭제 대신
+      **휴지통(소프트 삭제)**으로 보낸다 (`deletion.py` — soft/hard/restore/purge).
+      `trash_entries` 테이블 + pages/crawls/crawl_schedules 의 `trash_id` 컬럼으로
+      삭제 보류 항목을 표시하고, 모든 목록·검색·뷰어·문서·서빙에서 숨기되 스냅샷
+      파일·공유 자원/문서 CAS 는 보존한다. 시스템 설정의 보관 기간
+      (`trash_retention_days`, 기본 30일, 0=자동삭제 끔)이 지나면
+      `scheduler.run_due` 자동 purge 훅이 영구삭제하고, 그때 비로소 참조 0 인 CAS
+      를 GC 한다. 휴지통 기능 자체는 `trash_enabled`(기본 on)로 끌 수 있고(끄면
+      삭제가 즉시 영구삭제 — 종전 동작), 단일 스냅샷 삭제(`--snapshot`·
+      `delete_snapshot`)는 범위 밖(항상 즉시 삭제). CLI `wccg delete --hard`(즉시
+      영구삭제) + 새 그룹 `wccg trash list/restore/purge`. 대시보드 휴지통 화면
+      (`/archive/trash`, 새 세분 권한 `manage_trash` — 기본 admin)에서 열람·복원·
+      영구삭제, 시스템 설정에 '휴지통' 섹션(`POST /system/trash-settings`).
+      전체 백업은 휴지통 항목을 보존, 내보내기(`export`)는 제외. 휴지통에 있는
+      URL 을 다시 아카이빙하면 자동 복원(숨겨진 페이지에 스냅샷 누적 방지).
 
 ## SvelteKit SPA 전환 (#13 — C2 빅뱅 컷오버 완료)
 

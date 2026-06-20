@@ -209,6 +209,13 @@ EMAIL_VERIFICATION_TTL_MINUTES_MIN = 5
 EMAIL_VERIFICATION_TTL_MINUTES_MAX = 1440  # 24시간
 EMAIL_VERIFICATION_CODE_LENGTH = 6         # 숫자 코드 자릿수
 
+# 아카이브 휴지통 — 보관 기간(일, 시스템 설정으로 변경). 페이지·사이트 삭제를
+# 즉시 지우지 않고 휴지통에 숨겼다가 이 기간이 지나면 스케줄러가 영구 삭제한다.
+# 0 = 자동 삭제 비활성(수동 영구삭제 전까지 보관). trash_enabled off 면 즉시 삭제.
+TRASH_RETENTION_DAYS_DEFAULT = 30
+TRASH_RETENTION_DAYS_MIN = 0               # 0 = 자동 purge 끔
+TRASH_RETENTION_DAYS_MAX = 365
+
 # 인증 무차별 대입 방어(rate limit) 기본값 — 시스템 설정(settings)으로 오버라이드한다
 # (db.auth_throttle_settings 가 [MIN, MAX] 로 클램핑). 고정 윈도우 카운터 방식.
 AUTH_LOGIN_LIMIT_DEFAULT = 10              # 이메일별 로그인 실패 허용 횟수/창

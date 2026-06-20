@@ -293,6 +293,39 @@ _EN: dict[str, str] = {
     "perm|사용자 관리": "Manage users",
     "perm|인증 스냅샷 전체 열람": "View all authenticated snapshots",
     "perm|개인 API Key": "Personal API Key",
+    "perm|감사 로그 보기": "View audit logs",
+    "perm|시스템 로그 보기": "View system logs",
+    "perm|아카이브 로그 보기": "View archive logs",
+    "perm|휴지통 관리": "Manage trash",
+    # ---- 휴지통 ----
+    "휴지통": "Trash",
+    "삭제한 아카이브가 여기에 보관됩니다 — 복원하거나 영구 삭제할 수 있습니다.":
+        "Deleted archives are kept here — you can restore or permanently delete them.",
+    "휴지통 기능이 꺼져 있어 삭제 시 즉시 영구 삭제됩니다. 아래는 이전에 보관된 항목입니다.":
+        "The trash is off, so deletes are permanent immediately. The items below were kept earlier.",
+    "보관 기간": "Retention",
+    "일": " days",
+    "자동 영구삭제가 꺼져 있습니다 (수동 삭제 전까지 보관).":
+        "Auto-deletion is off (kept until deleted manually).",
+    "휴지통이 비어 있습니다.": "The trash is empty.",
+    "삭제 시각": "Deleted at",
+    "삭제자": "Deleted by",
+    "보관 기한": "Expires",
+    "영구 삭제": "Delete permanently",
+    "복원했습니다.": "Restored.",
+    "영구 삭제했습니다.": "Permanently deleted.",
+    "이 항목을 영구 삭제할까요? 되돌릴 수 없습니다.":
+        "Permanently delete this item? This cannot be undone.",
+    "이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 휴지통으로 옮길까요? 휴지통에서 복원할 수 있습니다.":
+        "Move this site's pages, snapshots, crawls, and schedules to the trash? "
+        "You can restore them from the trash.",
+    "이 페이지의 모든 스냅샷을 휴지통으로 옮길까요? 휴지통에서 복원할 수 있습니다.":
+        "Move this page's snapshots to the trash? You can restore them from the trash.",
+    "아카이브 삭제 시 즉시 지우지 않고 휴지통에 보관했다가 기간 경과 시 자동 삭제합니다. 끄면 삭제가 즉시 영구 삭제됩니다.":
+        "When archives are deleted, they are kept in the trash and auto-deleted after the "
+        "retention period instead of being removed at once. Turn off to delete immediately.",
+    "휴지통 사용": "Use trash",
+    "보관 기간(일, 0=자동삭제 끔)": "Retention (days, 0 = no auto-delete)",
     # ---- 목록 (index) ----
     "아카이브 목록": "Archived pages",
     "아카이빙이 백그라운드에서 시작되었습니다": "Archiving started in the background",

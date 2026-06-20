@@ -37,6 +37,8 @@
 	let crawlBackoff = $state('');
 	let credTtl = $state(0);
 	let mobileShot = $state(false);
+	let trashEnabled = $state(true);
+	let trashRetention = $state(30);
 	let docCount = $state(0);
 	let docMb = $state(0);
 	let docTimeout = $state(0);
@@ -94,6 +96,8 @@
 		crawlBackoff = s.crawl_retry_backoff;
 		credTtl = s.ext_credential_ttl_hours;
 		mobileShot = s.mobile_screenshot_enabled;
+		trashEnabled = s.trash_enabled;
+		trashRetention = s.trash_retention_days;
 		docCount = s.document_limits.max_count;
 		docMb = s.document_limits.max_mb;
 		docTimeout = s.document_limits.timeout_seconds;
@@ -346,6 +350,14 @@
 	<p class="desc">{t('스냅샷을 찍을 때의 추가 캡처 동작입니다.')}</p>
 	<label class="ck"><input type="checkbox" bind:checked={mobileShot} /> {t('모바일 스크린샷도 저장')}</label>
 	<button disabled={busy} onclick={() => save('/system/capture-settings', { mobile_screenshot_enabled: mobileShot })}>{t('저장')}</button>
+</fieldset>
+
+<fieldset class="sec">
+	<legend>{t('휴지통')}</legend>
+	<p class="desc">{t('아카이브 삭제 시 즉시 지우지 않고 휴지통에 보관했다가 기간 경과 시 자동 삭제합니다. 끄면 삭제가 즉시 영구 삭제됩니다.')}</p>
+	<label class="ck"><input type="checkbox" bind:checked={trashEnabled} /> {t('휴지통 사용')}</label>
+	<label>{t('보관 기간(일, 0=자동삭제 끔)')} <input type="number" bind:value={trashRetention} min={s.trash_retention_limits.min} max={s.trash_retention_limits.max} /></label>
+	<button disabled={busy} onclick={() => save('/system/trash-settings', { trash_enabled: trashEnabled, trash_retention_days: trashRetention })}>{t('저장')}</button>
 </fieldset>
 
 <fieldset class="sec">

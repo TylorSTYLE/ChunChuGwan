@@ -88,6 +88,9 @@
 				<a href="{base}/archive/list" onclick={close}>{t('아카이브 사이트 목록')}</a>
 				<a href="{base}/archive/documents" onclick={close}>{t('전체 문서(파일)')}</a>
 				<a href="{base}/archive/schedules" onclick={close}>{t('스케줄')}</a>
+					{#if me.flags.can_manage_trash}
+						<a href="{base}/archive/trash" onclick={close}>{t('휴지통')}</a>
+					{/if}
 				{#if me.flags.can_manage_system && me.needs_human_count > 0}
 					<a href="{base}/archive/needs-human" class="needs-human" onclick={close}>
 						{t('사람 확인')}<span class="nh-badge">{me.needs_human_count}</span>
