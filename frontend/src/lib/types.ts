@@ -205,6 +205,18 @@ export interface SnapshotMeta {
 	has_mobile_screenshot: boolean;
 }
 
+/** 사이트 상세의 크롤 회차 한 줄 (db.list_site_crawls — 회차 + 상태별 페이지 수 집계). */
+export interface SiteCrawl {
+	id: number;
+	status: string;
+	created_at: string;
+	finished_at: string | null;
+	total_count: number;
+	done_count: number;
+	failed_count: number;
+	pending_count: number;
+}
+
 export interface SiteDetail {
 	site: Record<string, unknown> & { id: number; site_key: string };
 	site_title: string | null;
@@ -213,7 +225,7 @@ export interface SiteDetail {
 	snapshot_total: number;
 	site_bytes: number;
 	pager: { page: number; total_pages: number; per_page: number; total: number };
-	crawls: Record<string, unknown>[];
+	crawls: SiteCrawl[];
 	schedules: (Record<string, unknown> & { page_id: number; label: string })[];
 	crawl_schedules: { start_url: string; label: string; next_run_at: string }[];
 	network_tags: Record<string, unknown>[];

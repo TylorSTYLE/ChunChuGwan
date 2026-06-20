@@ -19,6 +19,18 @@
 	const action = createAction();
 	let exporting = $state(false);
 
+	// 크롤 회차 상태 → 색 뱃지·라벨 (crawls/[id] 상세와 동일).
+	const STATUS_BADGE: Record<string, string> = {
+		running: 'running',
+		done: 'new',
+		cancelled: 'same'
+	};
+	const STATUS_LABEL: Record<string, string> = {
+		running: '진행 중',
+		done: '완료됨',
+		cancelled: '취소됨'
+	};
+
 	/** 인증서 만료 상태 — 현재 시각 기준 (만료 30일 전부터 '곧 만료'). */
 	function expiry(notAfter: string): 'expired' | 'soon' | 'ok' {
 		const end = new Date(notAfter).getTime();
@@ -116,13 +128,27 @@
 	<h3>{t('사이트 아카이브 회차')} ({s.crawls.length})</h3>
 	<div class="table-wrap">
 		<table>
-			<thead><tr><th>{t('시작')}</th><th>{t('상태')}</th><th>{t('완료/실패/대기')}</th></tr></thead>
+			<thead>
+				<tr>
+					<th>{t('시작')}</th>
+					<th>{t('상태')}</th>
+					<th class="num">{t('완료')}</th>
+					<th class="num">{t('실패')}</th>
+					<th class="num">{t('대기')}</th>
+				</tr>
+			</thead>
 			<tbody>
 				{#each s.crawls as c}
 					<tr>
-						<td class="mono"><a href="{base}/crawls/{c.id}">{ts(String(c.started_at))}</a></td>
-						<td>{String(c.status)}</td>
-						<td class="num mono">{c.done_count}/{c.failed_count}/{c.pending_count}</td>
+						<td class="mono"><a href="{base}/crawls/{c.id}">{ts(c.created_at)}</a></td>
+						<td>
+							<span class="badge {STATUS_BADGE[c.status] ?? 'same'}">
+								{t(STATUS_LABEL[c.status] ?? c.status)}
+							</span>
+						</td>
+						<td class="num mono cnt done" class:zero={c.done_count === 0}>{c.done_count}</td>
+						<td class="num mono cnt fail" class:zero={c.failed_count === 0}>{c.failed_count}</td>
+						<td class="num mono cnt pend" class:zero={c.pending_count === 0}>{c.pending_count}</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -261,6 +287,19 @@
 <style>
 	.page-key {
 		overflow-wrap: anywhere;
+	}
+	/* 회차별 완료/실패/대기 수 — 색으로 한눈에 구분, 0 은 흐리게. */
+	.cnt.done {
+		color: var(--green);
+	}
+	.cnt.fail {
+		color: var(--red-text);
+	}
+	.cnt.pend {
+		color: var(--amber);
+	}
+	.cnt.zero {
+		color: var(--muted);
 	}
 	.cred-link,
 	.export-link {
