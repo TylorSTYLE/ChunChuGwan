@@ -130,15 +130,20 @@ SEARCH_DOC_TEXT_MAX_CHARS = 2 * 1024 * 1024    # 문서 1개에서 색인할 본
 TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")
 
 # ---- 사이트 전체 아카이브 (crawler.py) ----
-# CRAWL_DEFAULT_* 와 CRAWL_RETRY_BACKOFF_SECONDS 는 시스템 설정(settings 테이블,
-# 대시보드 시스템 화면)으로 오버라이드된다 — crawler.crawl_defaults / retry_backoff 참조.
+# CRAWL_DEFAULT_*(기본값)·CRAWL_MAX_*_LIMIT(설정 없을 때의 기본 상한)·
+# CRAWL_RETRY_BACKOFF_SECONDS 는 시스템 설정(settings 테이블, 대시보드 시스템 화면)으로
+# 오버라이드된다 — crawler.crawl_defaults / crawl_limits / retry_backoff 참조.
+# CRAWL_MAX_*_CEILING 은 관리자가 설정할 수 있는 상한의 절대 천장(설정 불가).
 CRAWL_DEFAULT_MAX_PAGES = 500
-CRAWL_MAX_PAGES_LIMIT = 10000
+CRAWL_MAX_PAGES_LIMIT = 10000        # 상한(crawl_limits) 미설정 시 기본값
+CRAWL_MAX_PAGES_CEILING = 1_000_000  # 상한 설정의 절대 천장
 CRAWL_DEFAULT_MAX_DEPTH = 5
-CRAWL_MAX_DEPTH_LIMIT = 20
+CRAWL_MAX_DEPTH_LIMIT = 20           # 상한 미설정 시 기본값
+CRAWL_MAX_DEPTH_CEILING = 100        # 상한 설정의 절대 천장
 CRAWL_DEFAULT_DELAY_SECONDS = 5      # 페이지 간 최소 간격 (대상 서버 부담 방지)
 CRAWL_MIN_DELAY_SECONDS = 1
-CRAWL_MAX_DELAY_SECONDS = 3600
+CRAWL_MAX_DELAY_SECONDS = 3600       # 지연 상한 미설정 시 기본값
+CRAWL_MAX_DELAY_CEILING = 86400      # 지연 상한 설정의 절대 천장 (1일)
 CRAWL_RETRY_BACKOFF_SECONDS = (300, 900)   # n차 실패 후 재시도 대기 — 최대 시도 = 길이 + 1
 CRAWL_RETRY_BACKOFF_MIN_SECONDS = 10       # 재시도 대기 항목별 허용 범위 (설정 검증용)
 CRAWL_RETRY_BACKOFF_MAX_SECONDS = 86400

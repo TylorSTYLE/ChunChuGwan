@@ -103,6 +103,53 @@ def test_start_crawl_validates_options(archive_env):
         crawler.start_crawl("not a url ::")
 
 
+def test_crawl_limits_defaults_and_clamp(archive_env):
+    """상한(crawl_limits) — 미설정 시 config 기본 상한, 설정 시 그 값, ceiling 초과는 폴백."""
+    with db.connect() as conn:
+        limits = crawler.crawl_limits(conn)
+        assert limits["max_pages"] == config.CRAWL_MAX_PAGES_LIMIT
+        assert limits["max_depth"] == config.CRAWL_MAX_DEPTH_LIMIT
+        assert limits["max_delay"] == config.CRAWL_MAX_DELAY_SECONDS
+        # 설정값이 반영된다 (기본 상한보다 높게도)
+        db.set_setting(conn, db.CRAWL_LIMIT_MAX_PAGES_KEY, "50000")
+        assert crawler.crawl_limits(conn)["max_pages"] == 50000
+        # ceiling 초과·오염값은 config 기본 상한으로 폴백
+        db.set_setting(conn, db.CRAWL_LIMIT_MAX_PAGES_KEY, str(config.CRAWL_MAX_PAGES_CEILING + 1))
+        assert crawler.crawl_limits(conn)["max_pages"] == config.CRAWL_MAX_PAGES_LIMIT
+
+
+def test_validate_limits_bounds():
+    """상한 설정값 자체는 절대 천장(ceiling) 이내여야 한다."""
+    crawler.validate_limits(
+        config.CRAWL_MAX_PAGES_CEILING, config.CRAWL_MAX_DEPTH_CEILING, config.CRAWL_MAX_DELAY_CEILING
+    )
+    with pytest.raises(ValueError):
+        crawler.validate_limits(config.CRAWL_MAX_PAGES_CEILING + 1, 5, 60)
+    with pytest.raises(ValueError):
+        crawler.validate_limits(100, config.CRAWL_MAX_DEPTH_CEILING + 1, 60)
+    with pytest.raises(ValueError):
+        crawler.validate_limits(100, 5, config.CRAWL_MAX_DELAY_CEILING + 1)
+
+
+def test_validate_options_respects_configured_limit(archive_env):
+    """상한을 낮추면 그 이상 옵션은 거부, 기본 한계 이상으로 높이면 그만큼 허용."""
+    with db.connect() as conn:
+        db.set_setting(conn, db.CRAWL_LIMIT_MAX_PAGES_KEY, "100")
+        with pytest.raises(ValueError):
+            crawler.validate_options(200, 1, 5, conn)
+        crawler.validate_options(100, 1, 5, conn)  # 상한 이내는 통과
+        db.set_setting(conn, db.CRAWL_LIMIT_MAX_PAGES_KEY, "50000")
+        crawler.validate_options(20000, 1, 5, conn)  # 기본 한계(10000) 이상도 허용
+
+
+def test_crawl_defaults_clamped_to_limit(archive_env):
+    """기본값은 상한 이내로 클램프된다 — 상한을 기본값보다 낮추면 기본값도 낮아진다."""
+    with db.connect() as conn:
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY, "500")
+        db.set_setting(conn, db.CRAWL_LIMIT_MAX_PAGES_KEY, "100")
+        assert crawler.crawl_defaults(conn)["max_pages"] == 100
+
+
 # ---- 링크 재작성 매핑 ----
 
 

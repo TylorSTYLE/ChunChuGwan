@@ -35,6 +35,9 @@
 	let crawlMaxDepth = $state(0);
 	let crawlDelay = $state(0);
 	let crawlBackoff = $state('');
+	let limitMaxPages = $state(0);
+	let limitMaxDepth = $state(0);
+	let limitMaxDelay = $state(0);
 	let credTtl = $state(0);
 	let mobileShot = $state(false);
 	let trashEnabled = $state(true);
@@ -94,6 +97,9 @@
 		crawlMaxDepth = s.crawl_defaults.max_depth;
 		crawlDelay = s.crawl_defaults.delay;
 		crawlBackoff = s.crawl_retry_backoff;
+		limitMaxPages = s.crawl_limits.max_pages;
+		limitMaxDepth = s.crawl_limits.max_depth;
+		limitMaxDelay = s.crawl_limits.max_delay;
 		credTtl = s.ext_credential_ttl_hours;
 		mobileShot = s.mobile_screenshot_enabled;
 		trashEnabled = s.trash_enabled;
@@ -341,8 +347,17 @@
 	<label>{t('최대 페이지')} <input type="number" bind:value={crawlMaxPages} /></label>
 	<label>{t('최대 깊이')} <input type="number" bind:value={crawlMaxDepth} /></label>
 	<label>{t('지연(초)')} <input type="number" bind:value={crawlDelay} /></label>
+	<button disabled={busy} onclick={() => save('/system/crawl-settings', { crawl_max_pages: crawlMaxPages, crawl_max_depth: crawlMaxDepth, crawl_delay: crawlDelay })}>{t('저장')}</button>
+</fieldset>
+
+<fieldset class="sec">
+	<legend>{t('사이트 아카이브 최대값')}</legend>
+	<p class="desc">{t('새 사이트 아카이브에 허용하는 상한과 실패 시 재시도 대기입니다. 기본값은 이 상한 이내로 조정됩니다.')}</p>
+	<label>{t('최대 페이지')} <input type="number" bind:value={limitMaxPages} /></label>
+	<label>{t('최대 깊이')} <input type="number" bind:value={limitMaxDepth} /></label>
+	<label>{t('지연(초)')} <input type="number" bind:value={limitMaxDelay} /></label>
 	<label>{t('재시도 대기(초, 쉼표)')} <input type="text" bind:value={crawlBackoff} /></label>
-	<button disabled={busy} onclick={() => save('/system/crawl-settings', { crawl_max_pages: crawlMaxPages, crawl_max_depth: crawlMaxDepth, crawl_delay: crawlDelay, crawl_retry_backoff: crawlBackoff })}>{t('저장')}</button>
+	<button disabled={busy} onclick={() => save('/system/crawl-limits', { crawl_max_pages: limitMaxPages, crawl_max_depth: limitMaxDepth, crawl_max_delay: limitMaxDelay, crawl_retry_backoff: crawlBackoff })}>{t('저장')}</button>
 </fieldset>
 
 <fieldset class="sec">

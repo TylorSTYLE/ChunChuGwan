@@ -73,6 +73,9 @@ _EN: dict[str, str] = {
         "Configure archiving, crawling, document fetching, and local-network behavior.",
     "사이트 전체 아카이브(크롤)의 기본 범위·간격입니다.":
         "Default scope and interval for whole-site archiving (crawl).",
+    "새 사이트 아카이브에 허용하는 상한과 실패 시 재시도 대기입니다. 기본값은 이 상한 이내로 조정됩니다.":
+        "Maximum range allowed for new site archives, plus retry waits on failure. "
+        "Defaults are clamped within these limits.",
     "스냅샷을 찍을 때의 추가 캡처 동작입니다.": "Extra capture behavior when taking snapshots.",
     "확장이 보낸 1회성 로그인 자격증명의 보관 시간입니다.":
         "Retention time for one-time login credentials sent by the extension.",
@@ -1575,6 +1578,7 @@ _EN.update({
     "사용 중입니다.": "In use.",
     "사이트 상세": "Site detail",
     "사이트 아카이브 기본값": "Site archive defaults",
+    "사이트 아카이브 최대값": "Site archive limits",
     "사이트 아카이브 회차": "Site archive runs",
     "사이트 재아카이빙": "Re-archive site",
     "사이트 전체 아카이브 (같은 호스트)": "Archive whole site (same host)",
