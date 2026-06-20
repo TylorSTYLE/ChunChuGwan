@@ -1,15 +1,25 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
 	import { filterUrl } from '$lib/filters';
+	import { createList } from '$lib/list.svelte';
 	import type { AuditLogsData } from '$lib/types';
 	import Toolbar from '$lib/components/Toolbar.svelte';
 	import Pager from '$lib/components/Pager.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 
 	let { data }: { data: { audit: AuditLogsData } } = $props();
-	const d = $derived(data.audit);
+
+	const ROUTE = '/log/audit';
+	const FILTER_DEF = { limit: 50, page: 1 };
+	const list = createList({
+		source: () => data.audit,
+		api: '/audit',
+		route: ROUTE,
+		params: (d) => ({ action: d.action, actor: d.actor, limit: d.limit, page: d.page_num }),
+		defaults: FILTER_DEF
+	});
+	const d = $derived(list.data);
 
 	const ACTION_BADGE: Record<string, string> = {
 		archive: 'new',
@@ -18,12 +28,9 @@
 		admin: 'same'
 	};
 
-	const FILTER_DEF = { limit: 50, page: 1 };
-	function applyFilter(patch: Record<string, string>) {
-		goto(filterUrl('/log/audit', { action: d.action, actor: d.actor, limit: d.limit, ...patch }, FILTER_DEF));
-	}
+	const applyFilter = (patch: Record<string, string>) => list.go({ ...patch, page: 1 });
 	const pageUrl = (n: number) =>
-		filterUrl('/log/audit', { action: d.action, actor: d.actor, limit: d.limit, page: n }, FILTER_DEF);
+		filterUrl(ROUTE, { action: d.action, actor: d.actor, limit: d.limit, page: n }, FILTER_DEF);
 
 	function actionLabel(a: string): string {
 		return d.action_labels[a] ?? a;
@@ -73,7 +80,13 @@
 			</tbody>
 		</table>
 	</div>
-	<Pager page={d.page_num} totalPages={d.total_pages} href={pageUrl} />
+	<Pager
+		page={d.page_num}
+		totalPages={d.total_pages}
+		href={pageUrl}
+		onpage={(n) => list.go({ page: n })}
+		busy={list.busy}
+	/>
 {/if}
 
 <style>

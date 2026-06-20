@@ -414,6 +414,37 @@ def _failed_items(site_id: int, failed_logs, failed_crawl_pages) -> list[dict]:
     return items
 
 
+def _site_pages_block(
+    conn: sqlite3.Connection, site_id: int, page: int, per_page: int
+) -> tuple[dict, list, dict[int, int], sqlite3.Row]:
+    """사이트 페이지 목록 슬라이스(바이트 포함) + 페이저를 만든다.
+
+    site_detail 과 린 엔드포인트(/sites/{id}/pages)가 공유 — 한 쪽만 바뀌어 페이징
+    규칙(per_page 허용집합·clamp·바이트 합산)이 어긋나지 않게 단일 출처로 둔다.
+    반환: ({"pages": [...], "pager": {...}}, snap_dirs, page_bytes, totals)
+    (snap_dirs·page_bytes·totals 는 site_detail 의 나머지 필드 계산에 재사용)
+    """
+    per_page = per_page if per_page in (25, 50, 75, 100, 200) else 50
+    totals = db.site_page_totals(conn, site_id)
+    total_pages = max(1, -(-totals["page_count"] // per_page))
+    page = min(max(page, 1), total_pages)
+    pages = db.list_site_pages(
+        conn, site_id, limit=per_page, offset=(page - 1) * per_page
+    )
+    snap_dirs = db.list_site_snapshot_dirs(conn, site_id)
+    page_bytes: dict[int, int] = {}
+    for row in snap_dirs:
+        page_bytes[row["page_id"]] = page_bytes.get(row["page_id"], 0) + row["bytes"]
+    block = {
+        "pages": [{**dict(p), "bytes": page_bytes.get(p["id"], 0)} for p in pages],
+        "pager": {
+            "page": page, "total_pages": total_pages,
+            "per_page": per_page, "total": totals["page_count"],
+        },
+    }
+    return block, snap_dirs, page_bytes, totals
+
+
 @router.get("/sites/{site_id}")
 def site_detail(
     request: Request,
@@ -425,18 +456,13 @@ def site_detail(
     """사이트 상세 — 페이지 목록(페이징) + 크롤/스케줄/문서/실패/네트워크 태그. app.site_view 의 JSON 판."""
     from fastapi import HTTPException
 
-    per_page = per_page if per_page in (25, 50, 75, 100, 200) else 50
     with db.connect() as conn:
         site = db.get_site(conn, site_id)
         if site is None:
             raise HTTPException(404, "사이트 없음")
-        totals = db.site_page_totals(conn, site_id)
-        total_pages = max(1, -(-totals["page_count"] // per_page))
-        page = min(max(page, 1), total_pages)
-        pages = db.list_site_pages(
-            conn, site_id, limit=per_page, offset=(page - 1) * per_page
+        block, snap_dirs, page_bytes, totals = _site_pages_block(
+            conn, site_id, page, per_page
         )
-        snap_dirs = db.list_site_snapshot_dirs(conn, site_id)
         crawls = db.list_site_crawls(conn, site_id)
         schedules = db.list_site_schedules(conn, site_id)
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
@@ -453,9 +479,6 @@ def site_detail(
             conn, site_id, limit=200, offset=0
         )
 
-    page_bytes: dict[int, int] = {}
-    for row in snap_dirs:
-        page_bytes[row["page_id"]] = page_bytes.get(row["page_id"], 0) + row["bytes"]
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
         for s in schedules
@@ -476,14 +499,11 @@ def site_detail(
     return {
         "site": dict(site),
         "site_title": _site_title(snap_dirs),
-        "pages": [{**dict(p), "bytes": page_bytes.get(p["id"], 0)} for p in pages],
+        "pages": block["pages"],
         "page_count": totals["page_count"],
         "snapshot_total": totals["snapshot_count"],
         "site_bytes": sum(page_bytes.values()),
-        "pager": {
-            "page": page, "total_pages": total_pages,
-            "per_page": per_page, "total": totals["page_count"],
-        },
+        "pager": block["pager"],
         "crawls": [dict(c) for c in crawls],
         "schedules": [
             {**dict(s), "label": schedule_labels[s["page_id"]]} for s in schedules
@@ -506,6 +526,27 @@ def site_detail(
         "can_manage_credentials": permissions.can_manage_credentials(user),
         "trash_enabled": _trash_enabled_now(),
     }
+
+
+@router.get("/sites/{site_id}/pages")
+def site_pages(
+    site_id: int,
+    page: int = 1,
+    per_page: int = 50,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사이트 페이지 목록만 (페이징) — 상세 화면 페이저 in-place 갱신용 린 응답.
+
+    site_detail 의 통계·인증서·크롤·스케줄·문서 등을 생략하고 pages/pager 만 내려준다
+    (이전/다음 시 SPA 가 목록만 교체). 가드는 site_detail 과 동일하게 세션만 요구한다.
+    """
+    from fastapi import HTTPException
+
+    with db.connect() as conn:
+        if db.get_site(conn, site_id) is None:
+            raise HTTPException(404, "사이트 없음")
+        block, *_ = _site_pages_block(conn, site_id, page, per_page)
+    return block
 
 
 def _collapse_equal(request: Request, rows, context: int = 3):

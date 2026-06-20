@@ -1,16 +1,26 @@
 <script lang="ts">
 	import { pagePath } from '$lib/urls';
-	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
 	import { filterUrl } from '$lib/filters';
+	import { createList } from '$lib/list.svelte';
 	import type { MyArchivesData } from '$lib/types';
 	import Toolbar from '$lib/components/Toolbar.svelte';
 	import Pager from '$lib/components/Pager.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 
 	let { data }: { data: { data: MyArchivesData } } = $props();
-	const d = $derived(data.data);
+
+	const ROUTE = '/settings/archives';
+	const FILTER_DEF = { limit: 25, page: 1 };
+	const list = createList({
+		source: () => data.data,
+		api: '/settings/archives',
+		route: ROUTE,
+		params: (d) => ({ status: d.status, limit: d.limit, page: d.page_num }),
+		defaults: FILTER_DEF
+	});
+	const d = $derived(list.data);
 
 	const STATUS_LABELS: Record<string, string> = {
 		new: '새 스냅샷',
@@ -20,9 +30,8 @@
 		error: '오류'
 	};
 
-	const FILTER_DEF = { limit: 25, page: 1 };
 	const pageUrl = (n: number) =>
-		filterUrl('/settings/archives', { status: d.status, limit: d.limit, page: n }, FILTER_DEF);
+		filterUrl(ROUTE, { status: d.status, limit: d.limit, page: n }, FILTER_DEF);
 
 	function fmtDuration(ms: number): string {
 		if (!ms) return '';
@@ -34,10 +43,7 @@
 <p class="muted hint">{t('내가 대시보드·확장에서 직접 요청한 단발 아카이빙 이력입니다.')}</p>
 
 <Toolbar>
-	<select
-		value={d.status}
-		onchange={(e) => goto(filterUrl('/settings/archives', { status: e.currentTarget.value, limit: d.limit }, FILTER_DEF))}
-	>
+	<select value={d.status} onchange={(e) => list.go({ status: e.currentTarget.value, page: 1 })}>
 		<option value="">{t('전체 상태')}</option>
 		{#each d.statuses as s}<option value={s}>{t(STATUS_LABELS[s] ?? s)}</option>{/each}
 	</select>
@@ -74,7 +80,13 @@
 			</tbody>
 		</table>
 	</div>
-	<Pager page={d.page_num} totalPages={d.total_pages} href={pageUrl} />
+	<Pager
+		page={d.page_num}
+		totalPages={d.total_pages}
+		href={pageUrl}
+		onpage={(n) => list.go({ page: n })}
+		busy={list.busy}
+	/>
 {:else}
 	<EmptyState message={t('아직 요청한 아카이빙이 없습니다.')} />
 {/if}

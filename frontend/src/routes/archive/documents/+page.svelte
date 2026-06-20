@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { pagePath } from '$lib/urls';
-	import { base } from '$app/paths';
+	import { filterUrl } from '$lib/filters';
+	import { createList } from '$lib/list.svelte';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
 	import type { DocumentsData } from '$lib/types';
@@ -9,7 +10,27 @@
 	import StatCard from '$lib/components/StatCard.svelte';
 
 	let { data }: { data: { docs: DocumentsData } } = $props();
-	const d = $derived(data.docs);
+
+	const ROUTE = '/archive/documents';
+	const FILTER_DEF = { page: 1 };
+	const list = createList({
+		source: () => data.docs,
+		api: '/documents',
+		route: ROUTE,
+		params: (d) => ({ page: d.page }),
+		defaults: FILTER_DEF
+	});
+	const d = $derived(list.data);
+
+	const pageUrl = (n: number) => filterUrl(ROUTE, { page: n }, FILTER_DEF);
+	// Pager 컴포넌트는 total_pages 가 필요 — 문서 목록은 has_next 커서식이라 인라인 페이저를
+	// 직접 두고, 좌클릭만 가로채 in-place 갱신한다(수식키·새 탭은 href 로 실제 이동).
+	function nav(e: MouseEvent, n: number) {
+		if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+		e.preventDefault();
+		if (list.busy) return;
+		list.go({ page: n });
+	}
 </script>
 
 <h2>{t('전체 문서(파일)')}</h2>
@@ -54,10 +75,12 @@
 		</table>
 	</div>
 	{#if d.page > 1 || d.has_next}
-		<nav class="pager">
-			{#if d.page > 1}<a href="{base}/archive/documents?page={d.page - 1}">← {t('이전')}</a>{/if}
+		<nav class="pager" aria-busy={list.busy}>
+			{#if d.page > 1}<a href={pageUrl(d.page - 1)} onclick={(e) => nav(e, d.page - 1)}>← {t('이전')}</a
+				>{/if}
 			<span class="muted">{d.page}</span>
-			{#if d.has_next}<a href="{base}/archive/documents?page={d.page + 1}">{t('다음')} →</a>{/if}
+			{#if d.has_next}<a href={pageUrl(d.page + 1)} onclick={(e) => nav(e, d.page + 1)}>{t('다음')} →</a
+				>{/if}
 		</nav>
 	{/if}
 {/if}

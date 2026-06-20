@@ -6,6 +6,7 @@
 	import { filesize, ts } from '$lib/format';
 	import { api, ApiError, download } from '$lib/api';
 	import { filterUrl } from '$lib/filters';
+	import { createList } from '$lib/list.svelte';
 	import type { SiteDetail, FailedItem } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import StatGrid from '$lib/components/StatGrid.svelte';
@@ -30,6 +31,18 @@
 		done: '완료됨',
 		cancelled: '취소됨'
 	};
+
+	// 페이지 목록만 린 엔드포인트로 in-place 페이징한다 — 통계·인증서·크롤·스케줄 등 나머지
+	// 화면은 data.site 그대로 두고, 이전/다음 시 목록 테이블·페이저만 교체된다(라우트 재로드 없음).
+	type SitePages = { pages: SiteDetail['pages']; pager: SiteDetail['pager'] };
+	const pageList = createList<SitePages>({
+		source: () => ({ pages: data.site.pages, pager: data.site.pager }),
+		api: () => `/sites/${data.site.site.id}/pages`,
+		route: () => `/archive/sites/${data.site.site.id}`,
+		params: (b) => ({ page: b.pager.page }),
+		defaults: { page: 1 },
+		onError: (m) => (action.error = m)
+	});
 
 	/** 인증서 만료 상태 — 현재 시각 기준 (만료 30일 전부터 '곧 만료'). */
 	function expiry(notAfter: string): 'expired' | 'soon' | 'ok' {
@@ -111,7 +124,7 @@
 			<tr><th>URL</th><th>{t('스냅샷')}</th><th>{t('용량')}</th><th>{t('마지막')}</th></tr>
 		</thead>
 		<tbody>
-			{#each s.pages as p}
+			{#each pageList.data.pages as p}
 				<tr>
 					<td class="url-cell"><a href={pagePath(s.site.id, p.id)} title={p.url}>{p.url}</a></td>
 					<td class="num">{p.snapshot_count ?? '-'}</td>
@@ -122,7 +135,13 @@
 		</tbody>
 	</table>
 </div>
-<Pager page={s.pager.page} totalPages={s.pager.total_pages} href={pageUrl} />
+<Pager
+	page={pageList.data.pager.page}
+	totalPages={pageList.data.pager.total_pages}
+	href={pageUrl}
+	onpage={(n) => pageList.go({ page: n })}
+	busy={pageList.busy}
+/>
 
 {#if s.crawls.length > 0}
 	<h3>{t('사이트 아카이브 회차')} ({s.crawls.length})</h3>

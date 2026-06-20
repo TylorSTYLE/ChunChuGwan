@@ -1,19 +1,29 @@
 <script lang="ts">
 	import { pagePath, snapPath } from '$lib/urls';
-	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
 	import { filterUrl } from '$lib/filters';
+	import { createList } from '$lib/list.svelte';
 	import type { SearchData } from '$lib/types';
 	import Pager from '$lib/components/Pager.svelte';
 
 	let { data }: { data: { search: SearchData } } = $props();
-	const s = $derived(data.search);
+
+	const ROUTE = '/search';
+	const FILTER_DEF = { page: 1 };
+	const list = createList({
+		source: () => data.search,
+		api: '/search',
+		route: ROUTE,
+		params: (d) => ({ q: d.q, domain: d.domain, latest: d.latest ? '1' : '', page: d.page }),
+		defaults: FILTER_DEF
+	});
+	const s = $derived(list.data);
 
 	let q = $state('');
 	let domain = $state('');
 	let latest = $state(false);
-	// load 결과가 바뀌면 폼 입력을 동기화
+	// load·검색 결과가 바뀌면 폼 입력을 동기화
 	$effect(() => {
 		q = s.q;
 		domain = s.domain;
@@ -22,11 +32,11 @@
 
 	function submit(e: Event) {
 		e.preventDefault();
-		goto(filterUrl('/search', { q: q.trim(), domain: domain.trim(), latest: latest ? '1' : '' }));
+		list.go({ q: q.trim(), domain: domain.trim(), latest: latest ? '1' : '', page: 1 });
 	}
 
 	const pageUrl = (n: number) =>
-		filterUrl('/search', { q: s.q, domain: s.domain, latest: s.latest ? '1' : '', page: n }, { page: 1 });
+		filterUrl(ROUTE, { q: s.q, domain: s.domain, latest: s.latest ? '1' : '', page: n }, FILTER_DEF);
 </script>
 
 <h2>{t('검색')}</h2>
@@ -57,7 +67,13 @@
 				</div>
 			</div>
 		{/each}
-		<Pager page={s.page} totalPages={s.total_pages} href={pageUrl} />
+		<Pager
+			page={s.page}
+			totalPages={s.total_pages}
+			href={pageUrl}
+			onpage={(n) => list.go({ page: n })}
+			busy={list.busy}
+		/>
 	</div>
 {/if}
 
