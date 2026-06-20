@@ -119,6 +119,23 @@ def test_detail_404(client):
     assert client.get("/api/web/crawls/999999").status_code == 404
 
 
+def test_archive_req_crawl_options_are_strings():
+    """회귀: /archive 는 폼 스타일 all-string 모델 — crawl 옵션은 문자열이어야 한다.
+
+    SPA 의 type=number 입력이 number 로 직렬화되면 422 였다(C2 컷오버 회귀). 프론트가
+    문자열로 변환해 보내므로 모델은 str 만 받고, 빈 문자열은 시스템 기본값을 뜻한다.
+    """
+    from pydantic import ValidationError
+    from chunchugwan.web.web_api_routes import ArchiveReq
+
+    ok = ArchiveReq(url="https://example.com/", site=True,
+                    crawl_max_pages="5000", crawl_max_depth="10", crawl_delay="1")
+    assert ok.crawl_max_pages == "5000"
+    assert ArchiveReq(url="https://example.com/").crawl_max_pages == ""  # 미입력 = 기본값
+    with pytest.raises(ValidationError):  # number 는 거부
+        ArchiveReq(url="https://example.com/", crawl_max_pages=5000)
+
+
 # ---- 권한 게이트 (AUTH on) ----
 
 

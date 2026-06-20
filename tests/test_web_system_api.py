@@ -128,15 +128,45 @@ def test_crawl_settings_validation(tmp_db):
     c = admin_client()
     over = config.CRAWL_MAX_PAGES_LIMIT + 1
     assert c.post("/api/web/system/crawl-settings",
-                  json={"crawl_max_pages": over, "crawl_max_depth": 2,
-                        "crawl_delay": 5, "crawl_retry_backoff": "60, 120"},
+                  json={"crawl_max_pages": over, "crawl_max_depth": 2, "crawl_delay": 5},
                   headers=POST_HEADERS).status_code == 400
     assert c.post("/api/web/system/crawl-settings",
-                  json={"crawl_max_pages": 10, "crawl_max_depth": 2,
-                        "crawl_delay": 5, "crawl_retry_backoff": "60, 120"},
+                  json={"crawl_max_pages": 10, "crawl_max_depth": 2, "crawl_delay": 5},
                   headers=POST_HEADERS).status_code == 200
     body = c.get("/api/web/system").json()
     assert body["crawl_defaults"]["max_pages"] == 10
+
+
+def test_crawl_limits_settings(tmp_db):
+    c = admin_client()
+    # 상한 설정 저장 → GET /system 에 반영 (재시도 대기도 이 섹션에서 저장)
+    assert c.post("/api/web/system/crawl-limits",
+                  json={"crawl_max_pages": 20000, "crawl_max_depth": 30,
+                        "crawl_max_delay": 7200, "crawl_retry_backoff": "60, 120"},
+                  headers=POST_HEADERS).status_code == 200
+    body = c.get("/api/web/system").json()
+    assert body["crawl_limits"]["max_pages"] == 20000
+    assert body["crawl_limits"]["max_depth"] == 30
+    assert body["crawl_limits"]["max_delay"] == 7200
+    assert body["crawl_retry_backoff"] == "60, 120"
+    # 절대 천장(ceiling) 초과는 거부
+    over = config.CRAWL_MAX_PAGES_CEILING + 1
+    assert c.post("/api/web/system/crawl-limits",
+                  json={"crawl_max_pages": over, "crawl_max_depth": 5,
+                        "crawl_max_delay": 60, "crawl_retry_backoff": "60"},
+                  headers=POST_HEADERS).status_code == 400
+
+
+def test_crawl_settings_rejects_above_limit(tmp_db):
+    """기본값은 설정된 상한을 초과할 수 없다 — 상한을 낮춘 뒤 그 이상 기본값은 거부."""
+    c = admin_client()
+    assert c.post("/api/web/system/crawl-limits",
+                  json={"crawl_max_pages": 100, "crawl_max_depth": 5,
+                        "crawl_max_delay": 60, "crawl_retry_backoff": "60"},
+                  headers=POST_HEADERS).status_code == 200
+    assert c.post("/api/web/system/crawl-settings",
+                  json={"crawl_max_pages": 200, "crawl_max_depth": 2, "crawl_delay": 5},
+                  headers=POST_HEADERS).status_code == 400
 
 
 # ---- 자격증명 TTL ----

@@ -15,10 +15,16 @@
 	type Tag = { id: string; name: string; description: string | null };
 	type Cred = { id: number; label: string; kind: string; kind_label: string };
 	type CrawlDefaults = { max_pages: number; max_depth: number; delay: number };
+	type CrawlLimits = { max_pages: number; max_depth: number; max_delay: number };
 	let {
 		data
 	}: {
-		data: { networkTags: Tag[]; canManageCred: boolean; crawlDefaults: CrawlDefaults | null };
+		data: {
+			networkTags: Tag[];
+			canManageCred: boolean;
+			crawlDefaults: CrawlDefaults | null;
+			crawlLimits: CrawlLimits | null;
+		};
 	} = $props();
 	const tags = $derived(data.networkTags);
 	const canManageCred = $derived(data.canManageCred);
@@ -125,6 +131,10 @@
 		interval === '0' ? t('1회') : t(INTERVALS.find(([v]) => v === interval)?.[1] ?? '없음')
 	);
 
+	// type="number" 입력을 Svelte 는 number(빈 값은 null)로 바인딩하지만, /archive 는
+	// 폼 스타일 all-string 모델(ArchiveReq)이라 문자열로 보낸다 (''=서버가 시스템 기본값으로 해석).
+	const numStr = (v: number | string | null): string => (v == null ? '' : String(v));
+
 	async function submit(e: Event) {
 		e.preventDefault();
 		if (!url.trim() || isLoopback) return;
@@ -139,9 +149,9 @@
 					site,
 					interval,
 					network_tag: networkTag,
-					crawl_max_pages: maxPages,
-					crawl_max_depth: maxDepth,
-					crawl_delay: delay,
+					crawl_max_pages: numStr(maxPages),
+					crawl_max_depth: numStr(maxDepth),
+					crawl_delay: numStr(delay),
 					cred_existing_id: credExisting,
 					cred_kind: credKind,
 					cred_label: credLabel,
@@ -196,9 +206,9 @@
 		<Segmented bind:value={scope} options={scopeOptions} />
 		{#if site}
 			<div class="crawl-opts">
-				<Field label={t('최대 페이지')}><input type="number" bind:value={maxPages} min="1" /></Field>
-				<Field label={t('최대 깊이')}><input type="number" bind:value={maxDepth} min="0" /></Field>
-				<Field label={t('지연(초)')}><input type="number" bind:value={delay} min="0" /></Field>
+				<Field label={t('최대 페이지')}><input type="number" bind:value={maxPages} min="1" max={data.crawlLimits?.max_pages} /></Field>
+				<Field label={t('최대 깊이')}><input type="number" bind:value={maxDepth} min="0" max={data.crawlLimits?.max_depth} /></Field>
+				<Field label={t('지연(초)')}><input type="number" bind:value={delay} min="0" max={data.crawlLimits?.max_delay} /></Field>
 			</div>
 			<p class="muted hint">
 				{t('같은 호스트의 경로 프리픽스 이하를 모두 따라가 저장합니다. 비우면 시스템 기본값이 적용됩니다.')}

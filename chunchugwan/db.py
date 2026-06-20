@@ -4727,12 +4727,16 @@ AUTH_TOTP_LIMIT_KEY = "auth_totp_limit"                      # 2단계(TOTP·패
 AUTH_EMAIL_VERIFY_LIMIT_KEY = "auth_email_verify_limit"      # 이메일 코드 오답 한도(초과 시 폐기)
 AUTH_EMAIL_RESEND_LIMIT_KEY = "auth_email_resend_limit"      # 코드 재발송 시간당 한도
 
-# 사이트 전체 아카이브 기본 옵션·실패 재시도 대기. 값 해석과 범위 검증은
-# crawler.crawl_defaults / crawler.retry_backoff 가 맡는다 (오염 시 config 기본값).
+# 사이트 전체 아카이브 기본 옵션·상한(최대값)·실패 재시도 대기. 값 해석과 범위 검증은
+# crawler.crawl_defaults / crawl_limits / retry_backoff 가 맡는다 (오염 시 config 기본값).
 CRAWL_DEFAULT_MAX_PAGES_KEY = "crawl_default_max_pages"
 CRAWL_DEFAULT_MAX_DEPTH_KEY = "crawl_default_max_depth"
 CRAWL_DEFAULT_DELAY_KEY = "crawl_default_delay_seconds"
 CRAWL_RETRY_BACKOFF_KEY = "crawl_retry_backoff_seconds"  # 쉼표 구분 초 목록 (예: '300,900')
+# 크롤 옵션 상한(최대값) — 새 크롤 등록 시 허용 한도. 기본값은 이 상한 이내로 클램프된다.
+CRAWL_LIMIT_MAX_PAGES_KEY = "crawl_limit_max_pages"
+CRAWL_LIMIT_MAX_DEPTH_KEY = "crawl_limit_max_depth"
+CRAWL_LIMIT_MAX_DELAY_KEY = "crawl_limit_max_delay_seconds"
 
 # 링크된 문서 파일 아카이브 한도. 값 해석·클램핑은 documents.limits 가 맡는다
 # (오염·범위 밖이면 config 기본값). max_mb 는 MB 단위 정수로 저장한다.

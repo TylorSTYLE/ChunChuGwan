@@ -85,9 +85,12 @@ paths:
   — 코드 만료 분, SMTP 미설정이면 켜도 무시)과 사이트 아카이브
   설정 (`crawl_default_max_pages`/`crawl_default_max_depth`/
   `crawl_default_delay_seconds` — 새 크롤 옵션 기본값,
+  `crawl_limit_max_pages`/`crawl_limit_max_depth`/`crawl_limit_max_delay_seconds`
+  — 그 옵션의 상한(최대값), 새 크롤 등록 시 강제하고 기본값은 이 상한 이내로
+  클램프(절대 천장은 config.CRAWL_MAX_*_CEILING),
   `crawl_retry_backoff_seconds` — 실패 재시도 대기 쉼표 목록(초), 최대 시도
   = 길이 + 1, 진행 중 크롤에도 즉시 적용. 해석·검증은
-  `crawler.crawl_defaults`/`retry_backoff`, 오염 시 config 기본값 폴백)과
+  `crawler.crawl_defaults`/`crawl_limits`/`retry_backoff`, 오염 시 config 기본값 폴백)과
   캡처 설정 (`mobile_screenshot_enabled` on/off 기본 off — 켜면 캡처가
   데스크탑 외에, 같은 URL 을 안드로이드 크롬으로 위장한 모바일 컨텍스트
   (UA·뷰포트 390×844·isMobile/hasTouch)로 한 번 더 열어 screenshot-mobile 을

@@ -80,13 +80,41 @@ def _validate_range(name: str, value: int, lo: int, hi: int) -> None:
         raise ValueError(f"{name}은(는) {lo} 이상 {hi} 이하여야 합니다 (현재 {value})")
 
 
-def validate_options(max_pages: int, max_depth: int, delay_seconds: int) -> None:
-    """크롤 옵션 범위 검증. 위반 시 ValueError."""
-    _validate_range("최대 페이지 수", max_pages, 1, config.CRAWL_MAX_PAGES_LIMIT)
-    _validate_range("최대 깊이", max_depth, 0, config.CRAWL_MAX_DEPTH_LIMIT)
+def validate_options(
+    max_pages: int,
+    max_depth: int,
+    delay_seconds: int,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """크롤 옵션 범위 검증. 위반 시 ValueError.
+
+    상한(최대값)은 시스템 설정(crawl_limits) 기준 — conn 이 주어지면 설정값을, None
+    이면 config 기본 상한을 쓴다. 지연 하한은 항상 config.CRAWL_MIN_DELAY_SECONDS.
+    """
+    limits = (
+        crawl_limits(conn)
+        if conn is not None
+        else {
+            "max_pages": config.CRAWL_MAX_PAGES_LIMIT,
+            "max_depth": config.CRAWL_MAX_DEPTH_LIMIT,
+            "max_delay": config.CRAWL_MAX_DELAY_SECONDS,
+        }
+    )
+    _validate_range("최대 페이지 수", max_pages, 1, limits["max_pages"])
+    _validate_range("최대 깊이", max_depth, 0, limits["max_depth"])
     _validate_range(
         "페이지 간 간격(초)", delay_seconds,
-        config.CRAWL_MIN_DELAY_SECONDS, config.CRAWL_MAX_DELAY_SECONDS,
+        config.CRAWL_MIN_DELAY_SECONDS, limits["max_delay"],
+    )
+
+
+def validate_limits(max_pages: int, max_depth: int, max_delay: int) -> None:
+    """크롤 상한(최대값) 설정값이 절대 천장(ceiling) 이내인지 검증. 위반 시 ValueError."""
+    _validate_range("최대 페이지 상한", max_pages, 1, config.CRAWL_MAX_PAGES_CEILING)
+    _validate_range("최대 깊이 상한", max_depth, 0, config.CRAWL_MAX_DEPTH_CEILING)
+    _validate_range(
+        "지연(초) 상한", max_delay,
+        config.CRAWL_MIN_DELAY_SECONDS, config.CRAWL_MAX_DELAY_CEILING,
     )
 
 
@@ -106,20 +134,49 @@ def _setting_int(conn: sqlite3.Connection, key: str, default: int, lo: int, hi: 
     return value if lo <= value <= hi else default
 
 
+def crawl_limits(conn: sqlite3.Connection) -> dict[str, int]:
+    """크롤 옵션 상한(최대값) — 시스템 설정 기준, 없으면 config 기본 상한.
+
+    관리자가 설정한 상한이며, 각 값은 절대 천장(ceiling) 이내로 폴백 검증한다.
+    """
+    return {
+        "max_pages": _setting_int(
+            conn, db.CRAWL_LIMIT_MAX_PAGES_KEY,
+            config.CRAWL_MAX_PAGES_LIMIT, 1, config.CRAWL_MAX_PAGES_CEILING,
+        ),
+        "max_depth": _setting_int(
+            conn, db.CRAWL_LIMIT_MAX_DEPTH_KEY,
+            config.CRAWL_MAX_DEPTH_LIMIT, 0, config.CRAWL_MAX_DEPTH_CEILING,
+        ),
+        "max_delay": _setting_int(
+            conn, db.CRAWL_LIMIT_MAX_DELAY_KEY,
+            config.CRAWL_MAX_DELAY_SECONDS,
+            config.CRAWL_MIN_DELAY_SECONDS, config.CRAWL_MAX_DELAY_CEILING,
+        ),
+    }
+
+
 def crawl_defaults(conn: sqlite3.Connection) -> dict[str, int]:
-    """크롤 옵션 기본값 (max_pages, max_depth, delay_seconds) — 시스템 설정 기준."""
+    """크롤 옵션 기본값 (max_pages, max_depth, delay_seconds) — 시스템 설정 기준.
+
+    상한(crawl_limits) 이내로 클램프한다 — 상한을 낮추면 기본값도 그 이하로 읽힌다.
+    """
+    limits = crawl_limits(conn)
     return {
         "max_pages": _setting_int(
             conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY,
-            config.CRAWL_DEFAULT_MAX_PAGES, 1, config.CRAWL_MAX_PAGES_LIMIT,
+            min(config.CRAWL_DEFAULT_MAX_PAGES, limits["max_pages"]),
+            1, limits["max_pages"],
         ),
         "max_depth": _setting_int(
             conn, db.CRAWL_DEFAULT_MAX_DEPTH_KEY,
-            config.CRAWL_DEFAULT_MAX_DEPTH, 0, config.CRAWL_MAX_DEPTH_LIMIT,
+            min(config.CRAWL_DEFAULT_MAX_DEPTH, limits["max_depth"]),
+            0, limits["max_depth"],
         ),
         "delay_seconds": _setting_int(
-            conn, db.CRAWL_DEFAULT_DELAY_KEY, config.CRAWL_DEFAULT_DELAY_SECONDS,
-            config.CRAWL_MIN_DELAY_SECONDS, config.CRAWL_MAX_DELAY_SECONDS,
+            conn, db.CRAWL_DEFAULT_DELAY_KEY,
+            min(config.CRAWL_DEFAULT_DELAY_SECONDS, limits["max_delay"]),
+            config.CRAWL_MIN_DELAY_SECONDS, limits["max_delay"],
         ),
     }
 
@@ -171,7 +228,7 @@ def _resolve_options(
     delay_seconds = (
         defaults["delay_seconds"] if delay_seconds is None else delay_seconds
     )
-    validate_options(max_pages, max_depth, delay_seconds)
+    validate_options(max_pages, max_depth, delay_seconds, conn)
     return max_pages, max_depth, delay_seconds
 
 

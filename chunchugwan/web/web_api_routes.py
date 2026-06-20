@@ -903,6 +903,7 @@ def network_tags_list(
     with db.connect() as conn:
         tags = db.list_network_tags(conn)
         crawl_defaults = crawler.crawl_defaults(conn)
+        crawl_limits = crawler.crawl_limits(conn)
     return {
         "network_tags": [
             {"id": t["id"], "name": t["name"], "description": t["description"]}
@@ -912,6 +913,11 @@ def network_tags_list(
             "max_pages": crawl_defaults["max_pages"],
             "max_depth": crawl_defaults["max_depth"],
             "delay": crawl_defaults["delay_seconds"],
+        },
+        "crawl_limits": {
+            "max_pages": crawl_limits["max_pages"],
+            "max_depth": crawl_limits["max_depth"],
+            "max_delay": crawl_limits["max_delay"],
         },
     }
 
@@ -1848,6 +1854,7 @@ def system_overview(
         auth_throttle = db.auth_throttle_settings(conn)
         crawl_defaults = crawler.crawl_defaults(conn)
         crawl_backoff = crawler.retry_backoff(conn)
+        crawl_limits = crawler.crawl_limits(conn)
         network_tags = db.list_network_tags(conn)
         ext_credential_ttl_hours = db.ext_credential_ttl_hours(conn)
         mobile_screenshot_enabled = db.mobile_screenshot_enabled(conn)
@@ -1889,10 +1896,10 @@ def system_overview(
         },
         "crawl_retry_backoff": ", ".join(str(v) for v in crawl_backoff),
         "crawl_limits": {
-            "max_pages": config.CRAWL_MAX_PAGES_LIMIT,
-            "max_depth": config.CRAWL_MAX_DEPTH_LIMIT,
+            "max_pages": crawl_limits["max_pages"],
+            "max_depth": crawl_limits["max_depth"],
             "min_delay": config.CRAWL_MIN_DELAY_SECONDS,
-            "max_delay": config.CRAWL_MAX_DELAY_SECONDS,
+            "max_delay": crawl_limits["max_delay"],
         },
         "ext_credential_ttl_hours": ext_credential_ttl_hours,
         "ext_credential_ttl_limits": {
@@ -2065,7 +2072,6 @@ class CrawlSettingsReq(BaseModel):
     crawl_max_pages: int
     crawl_max_depth: int
     crawl_delay: int
-    crawl_retry_backoff: str
 
 
 @router.post("/system/crawl-settings")
@@ -2073,19 +2079,49 @@ def system_crawl_settings(
     request: Request, body: CrawlSettingsReq,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """사이트 아카이브 기본 옵션·재시도 대기 — JSON 판."""
+    """사이트 아카이브 기본 옵션 — JSON 판. 상한(crawl_limits) 이내인지 함께 검증."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        try:
+            crawler.validate_options(
+                body.crawl_max_pages, body.crawl_max_depth, body.crawl_delay, conn
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY, str(body.crawl_max_pages))
+        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_DEPTH_KEY, str(body.crawl_max_depth))
+        db.set_setting(conn, db.CRAWL_DEFAULT_DELAY_KEY, str(body.crawl_delay))
+    audit.log(request, "사이트 아카이브 기본값 설정 변경")
+    return {"ok": True}
+
+
+class CrawlLimitsReq(BaseModel):
+    crawl_max_pages: int
+    crawl_max_depth: int
+    crawl_max_delay: int
+    crawl_retry_backoff: str
+
+
+@router.post("/system/crawl-limits")
+def system_crawl_limits(
+    request: Request, body: CrawlLimitsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사이트 아카이브 최대값(상한)·재시도 대기 — JSON 판."""
     _require_manage_system(user)
     try:
-        crawler.validate_options(body.crawl_max_pages, body.crawl_max_depth, body.crawl_delay)
+        crawler.validate_limits(
+            body.crawl_max_pages, body.crawl_max_depth, body.crawl_max_delay
+        )
         backoff = crawler.parse_backoff(body.crawl_retry_backoff)
     except ValueError as e:
         raise HTTPException(400, str(e))
     with db.connect() as conn:
-        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_PAGES_KEY, str(body.crawl_max_pages))
-        db.set_setting(conn, db.CRAWL_DEFAULT_MAX_DEPTH_KEY, str(body.crawl_max_depth))
-        db.set_setting(conn, db.CRAWL_DEFAULT_DELAY_KEY, str(body.crawl_delay))
+        db.set_setting(conn, db.CRAWL_LIMIT_MAX_PAGES_KEY, str(body.crawl_max_pages))
+        db.set_setting(conn, db.CRAWL_LIMIT_MAX_DEPTH_KEY, str(body.crawl_max_depth))
+        db.set_setting(conn, db.CRAWL_LIMIT_MAX_DELAY_KEY, str(body.crawl_max_delay))
         db.set_setting(conn, db.CRAWL_RETRY_BACKOFF_KEY, ",".join(str(v) for v in backoff))
-    audit.log(request, "사이트 아카이브 설정 변경")
+    audit.log(request, "사이트 아카이브 최대값 설정 변경")
     return {"ok": True}
 
 

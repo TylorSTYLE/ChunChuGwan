@@ -560,7 +560,7 @@ export interface SystemOverview {
 	};
 	crawl_defaults: { max_pages: number; max_depth: number; delay: number };
 	crawl_retry_backoff: string;
-	crawl_limits: Record<string, number>;
+	crawl_limits: { max_pages: number; max_depth: number; min_delay: number; max_delay: number };
 	ext_credential_ttl_hours: number;
 	ext_credential_ttl_limits: { min: number; max: number };
 	mobile_screenshot_enabled: boolean;
