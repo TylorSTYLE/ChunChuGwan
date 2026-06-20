@@ -1589,7 +1589,6 @@ _EN.update({
     "아직 요청한 아카이빙이 없습니다.": "No archive requests yet.",
     "아카이빙 등록": "Queue archive",
     "역할": "Role",
-    "완료/실패/대기": "Done / Failed / Pending",
     "이 권한 그룹을 삭제할까요?": "Delete this permission group?",
     "이 사이트 삭제": "Delete this site",
     "이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 삭제할까요? 되돌릴 수 없습니다.": "Delete all pages, snapshots, crawls, and schedules for this site? This cannot be undone.",
