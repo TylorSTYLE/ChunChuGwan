@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   frontend:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
@@ -37,7 +37,7 @@ jobs:
         working-directory: frontend
 
   test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
@@ -46,10 +46,9 @@ jobs:
       - name: uv 설치
         uses: astral-sh/setup-uv@v6
         with:
-          # 셀프 호스트 러너는 ~/.cache/uv 가 런 사이에 로컬로 보존되므로 GHA 캐시가 불필요하다.
-          # enable-cache 를 켜면 post 단계의 uv cache prune 이 공유 캐시 락을 300s 기다리다
-          # 타임아웃(exit 2)나 잡이 빨개진다 — 셀프 호스트에선 끈다.
-          enable-cache: false
+          # 호스티드 러너는 런마다 새 VM 이라 로컬 uv 캐시가 보존되지 않는다.
+          # GHA 캐시를 켜 의존성 다운로드를 런 간 재사용한다.
+          enable-cache: true
           python-version: "3.14"
 
       - name: 의존성 설치

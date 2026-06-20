@@ -22,7 +22,7 @@ jobs:
   release:
     # 머지된 PR 만 (단순 close 는 제외)
     if: github.event.pull_request.merged == true
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
@@ -88,9 +88,9 @@ jobs:
         if: steps.bump.outputs.skip != 'true'
         uses: astral-sh/setup-uv@v6
         with:
-          # 셀프 호스트 러너는 로컬 uv 캐시가 보존돼 GHA 캐시가 불필요하다.
-          # (켜면 post 단계 uv cache prune 이 락 타임아웃으로 잡을 실패시킴)
-          enable-cache: false
+          # 호스티드 러너는 런마다 새 VM 이라 로컬 uv 캐시가 보존되지 않는다.
+          # GHA 캐시를 켜 의존성 다운로드를 런 간 재사용한다.
+          enable-cache: true
           python-version: "3.14"
 
       - name: pyproject.toml · uv.lock 갱신 · 태그 · 푸시
