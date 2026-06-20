@@ -24,7 +24,7 @@ export function createList<T>(opts: {
 	/** load 결과의 목록 페이로드 getter — 외부 변경(최초 진입·invalidateAll) 시 리시드 */
 	source: () => T;
 	/** api() 경로 베이스 (base·쿼리 제외), 예: '/logs'. 라우트 파라미터에 의존하면
-	 *  함수로 줘서 go() 시점의 현재 값으로 평가한다(예: () => `/sites/${s.site.id}/pages`) */
+	 *  함수로 줘서 go() 시점의 현재 값으로 평가한다(예: () => `/sites/${s.site.id}/lists`) */
 	api: string | (() => string);
 	/** filterUrl 라우트 베이스 (base·쿼리 제외), 예: '/log/archive'. api 와 같은 이유로 함수 허용 */
 	route: string | (() => string);

@@ -1,14 +1,31 @@
 <script lang="ts">
 	import { t } from '$lib/i18n';
 	import { api } from '$lib/api';
+	import { filterUrl } from '$lib/filters';
+	import { createList } from '$lib/list.svelte';
 	import type { SystemUsersData, SystemUser } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import Toolbar from '$lib/components/Toolbar.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import PageSize from '$lib/components/PageSize.svelte';
 	import { createAction } from '$lib/action.svelte';
 
 	let { data }: { data: { data: SystemUsersData } } = $props();
-	const d = $derived(data.data);
 	const act = createAction();
+
+	// 사용자 목록만 페이징한다(초대는 전체). 액션 후 invalidateAll → 현재 페이지로 reseed.
+	const ROUTE = '/system/users';
+	const FILTER_DEF = { limit: 25, page: 1 };
+	const list = createList({
+		source: () => data.data,
+		api: '/system/users',
+		route: ROUTE,
+		params: (d) => ({ limit: d.limit, page: d.page_num }),
+		defaults: FILTER_DEF,
+		onError: (m) => (act.error = m)
+	});
+	const d = $derived(list.data);
+	const pageUrl = (n: number) => filterUrl(ROUTE, { limit: d.limit, page: n }, FILTER_DEF);
 
 	// 표시이름 편집 (user_id → 입력값). 권한은 역할 단위로만 부여한다(세분 권한 편집 없음).
 	let nameEdit = $state<Record<number, string>>({});
@@ -62,6 +79,12 @@
 <h2>{t('사용자')}</h2>
 
 <AlertBox error={act.error} notice={act.notice} />
+
+<Toolbar>
+	<span class="spacer"></span>
+	<span class="muted">{t('총')} {d.total}{t('건')}</span>
+	<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
+</Toolbar>
 
 <div class="table-wrap wide">
 	<table>
@@ -120,6 +143,13 @@
 		</tbody>
 	</table>
 </div>
+<Pager
+	page={d.page_num}
+	totalPages={d.total_pages}
+	href={pageUrl}
+	onpage={(n) => list.go({ page: n })}
+	busy={list.busy}
+/>
 
 <h3>{t('초대')}</h3>
 {#if !d.mail_enabled}<p class="muted">{t('SMTP 미설정 — 초대 링크를 직접 전달합니다.')}</p>{/if}

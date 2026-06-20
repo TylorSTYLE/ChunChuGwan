@@ -151,6 +151,25 @@ export interface SiteItem {
 	active: boolean;
 }
 
+/** 목록 페이저 메타 — 모든 페이징 응답이 공유하는 형태. */
+export interface Pager {
+	page: number;
+	total_pages: number;
+	per_page: number;
+	total: number;
+}
+
+/** 아카이브 사이트 목록 (/api/web/sites) — q(site_key 부분 일치) 필터 + 페이징. */
+export interface SitesData {
+	items: SiteItem[];
+	q: string;
+	total: number;
+	total_pages: number;
+	page_num: number;
+	limit: number;
+	limits: number[];
+}
+
 export interface SnapshotRow {
 	id: number;
 	page_id: number;
@@ -224,8 +243,9 @@ export interface SiteDetail {
 	page_count: number;
 	snapshot_total: number;
 	site_bytes: number;
-	pager: { page: number; total_pages: number; per_page: number; total: number };
+	pager: Pager;
 	crawls: SiteCrawl[];
+	crawls_pager: Pager;
 	schedules: (Record<string, unknown> & { page_id: number; label: string })[];
 	crawl_schedules: { start_url: string; label: string; next_run_at: string }[];
 	network_tags: Record<string, unknown>[];
@@ -251,11 +271,18 @@ export interface SiteDetail {
 	documents: Record<string, unknown>[];
 	doc_total: number;
 	failed_items: FailedItem[];
+	failed_pager: Pager;
 	can_archive: boolean;
 	can_delete: boolean;
 	can_manage_credentials: boolean;
 	trash_enabled: boolean;
 }
+
+/** 사이트 상세의 3개 목록만 (/api/web/sites/{id}/lists) — 페이저 in-place 갱신용 린 응답. */
+export type SiteLists = Pick<
+	SiteDetail,
+	'pages' | 'pager' | 'crawls' | 'crawls_pager' | 'failed_items' | 'failed_pager'
+>;
 
 export interface FailedItem {
 	kind: 'log' | 'crawl';
@@ -507,6 +534,11 @@ export interface SystemUsersData {
 	user_perms: Record<string, { effective: string[]; overridden: string[] }>;
 	mail_enabled: boolean;
 	invite_ttl_days: number;
+	total: number;
+	total_pages: number;
+	page_num: number;
+	limit: number;
+	limits: number[];
 }
 
 export interface SystemGroup {
@@ -609,6 +641,11 @@ export interface TrashData {
 	entries: TrashEntry[];
 	trash_enabled: boolean;
 	retention_days: number;
+	total: number;
+	total_pages: number;
+	page_num: number;
+	limit: number;
+	limits: number[];
 }
 
 export interface Dashboard {

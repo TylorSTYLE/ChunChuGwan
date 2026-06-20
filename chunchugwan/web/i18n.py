@@ -1573,6 +1573,7 @@ _EN.update({
     "사설 IP(로컬 네트워크) 대상은 네트워크 태그가 필요하며, 자격증명 연결은 추후 지원됩니다.": "Private-IP (local network) targets need a network tag; credential linking is coming later.",
     "사용 중": "In use",
     "사용 중입니다.": "In use.",
+    "사이트 검색": "Search sites",
     "사이트 상세": "Site detail",
     "사이트 아카이브 기본값": "Site archive defaults",
     "사이트 아카이브 회차": "Site archive runs",
@@ -1646,8 +1647,9 @@ _EN.update({
     "입력한 URL 한 페이지만 스냅샷으로 저장합니다.": "Captures only this single URL as a snapshot.",
     "같은 호스트의 경로 프리픽스 이하를 모두 따라가 저장합니다. 비우면 시스템 기본값이 적용됩니다.": "Follows every page under the same host and path prefix. Leave blank to use system defaults.",
     "기본값은 본문 해시가 바뀐 경우에만 새 스냅샷을 만듭니다.": "By default a new snapshot is created only when the content hash changes.",
-    # ---- 공통 컴포넌트 (Pager 등) ----
+    # ---- 공통 컴포넌트 (Pager·PageSize 등) ----
     "페이지 이동": "Pagination",
+    "페이지당 항목 수": "Items per page",
     # 알림 토스트(run(fn, ok) 의 ok 인자 — t(변수)로 번역)
     "표시 이름을 변경했습니다.": "Display name updated.",
     "인증 앱에 등록한 뒤 코드를 입력하세요.": "Register it in your authenticator app, then enter the code.",

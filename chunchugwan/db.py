@@ -1150,19 +1150,26 @@ def get_site_certificate(
 
 
 def list_sites_overview(
-    conn: sqlite3.Connection, *, viewer: "tuple[int | None, bool] | None" = None
+    conn: sqlite3.Connection,
+    *,
+    viewer: "tuple[int | None, bool] | None" = None,
+    q: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[sqlite3.Row]:
     """사이트 목록 + 페이지·스냅샷·크롤 회차·스케줄 집계 (아카이브 목록 화면용).
 
     last_activity_at 은 마지막 스냅샷과 마지막 크롤 활동(완료 또는 생성) 중
-    더 최근 시각 — 목록 정렬 기준이다. viewer 를 주면 인증(로그인) 스냅샷은
-    소유자/관리자만 스냅샷 수·마지막 활동에 반영한다 (메타데이터 누출 차단).
+    더 최근 시각이다. viewer 를 주면 인증(로그인) 스냅샷은 소유자/관리자만
+    스냅샷 수·마지막 활동에 반영한다 (메타데이터 누출 차단). q 를 주면 site_key
+    부분 일치로 거르고(전체 사이트 대상), limit/offset 으로 페이징한다. 진행 중
+    크롤이 있는 사이트를 맨 위로, 그다음 최근 활동·site_key 순으로 정렬한다.
     """
     sv, params = _visible_snapshot_filter(viewer)
+    params["q"] = q
     # 휴지통(trash_id) 멤버는 모든 집계에서 제외하고, 보이는 멤버가 하나도 없는
     # 사이트는 목록에서 빠진다(소프트 삭제로 행은 남아 있어도 화면엔 안 보임).
-    return conn.execute(
-        f"""
+    sql = f"""
         SELECT st.*,
                (SELECT COUNT(*) FROM pages p
                  WHERE p.site_id = st.id AND p.trash_id IS NULL) AS page_count,
@@ -1186,16 +1193,37 @@ def list_sites_overview(
                              WHERE c.site_id = st.id AND c.trash_id IS NULL), '')
                ) AS last_activity_at
         FROM sites st
-        WHERE EXISTS (SELECT 1 FROM pages p
-                       WHERE p.site_id = st.id AND p.trash_id IS NULL)
-           OR EXISTS (SELECT 1 FROM crawls c
-                       WHERE c.site_id = st.id AND c.trash_id IS NULL)
-           OR EXISTS (SELECT 1 FROM crawl_schedules cs
-                       WHERE cs.site_id = st.id AND cs.trash_id IS NULL)
-        ORDER BY last_activity_at DESC, st.site_key
+        WHERE (EXISTS (SELECT 1 FROM pages p
+                        WHERE p.site_id = st.id AND p.trash_id IS NULL)
+            OR EXISTS (SELECT 1 FROM crawls c
+                        WHERE c.site_id = st.id AND c.trash_id IS NULL)
+            OR EXISTS (SELECT 1 FROM crawl_schedules cs
+                        WHERE cs.site_id = st.id AND cs.trash_id IS NULL))
+          AND (:q IS NULL OR st.site_key LIKE '%' || :q || '%')
+        ORDER BY (running_crawl_count > 0) DESC, last_activity_at DESC, st.site_key
+        """
+    if limit is not None:
+        sql += " LIMIT :limit OFFSET :offset"
+        params["limit"] = limit
+        params["offset"] = offset
+    return conn.execute(sql, params).fetchall()
+
+
+def count_sites_overview(conn: sqlite3.Connection, *, q: str | None = None) -> int:
+    """list_sites_overview 와 같은 가시 조건의 사이트 수 (페이저용; q 부분 일치 반영)."""
+    return conn.execute(
+        """
+        SELECT COUNT(*) AS c FROM sites st
+        WHERE (EXISTS (SELECT 1 FROM pages p
+                        WHERE p.site_id = st.id AND p.trash_id IS NULL)
+            OR EXISTS (SELECT 1 FROM crawls c
+                        WHERE c.site_id = st.id AND c.trash_id IS NULL)
+            OR EXISTS (SELECT 1 FROM crawl_schedules cs
+                        WHERE cs.site_id = st.id AND cs.trash_id IS NULL))
+          AND (:q IS NULL OR st.site_key LIKE '%' || :q || '%')
         """,
-        params,
-    ).fetchall()
+        {"q": q},
+    ).fetchone()["c"]
 
 
 def get_or_create_page(
@@ -3555,13 +3583,19 @@ def retry_failed_crawl_page(conn: sqlite3.Connection, crawl_page_id: int) -> Non
     )
 
 
-def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
+def list_site_crawls(
+    conn: sqlite3.Connection,
+    site_id: int,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
     """사이트 소속 크롤 회차 목록 (최신 순) + 상태별 페이지 수 집계.
 
     사설 대역 크롤 구분용으로 로컬 네트워크 태그 이름·설명도 붙인다.
+    limit 을 주면 offset 부터 그만큼만 반환한다 (사이트 상세 페이징용).
     """
-    return conn.execute(
-        """
+    sql = """
         SELECT c.*, nt.name AS network_tag_name,
                nt.description AS network_tag_description,
                COUNT(cp.id) AS total_count,
@@ -3573,9 +3607,20 @@ def list_site_crawls(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row
         LEFT JOIN network_tags nt ON nt.id = c.network_tag_id
         WHERE c.site_id = ? AND c.trash_id IS NULL
         GROUP BY c.id ORDER BY c.id DESC
-        """,
+        """
+    params: list[object] = [site_id]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    return conn.execute(sql, params).fetchall()
+
+
+def count_site_crawls(conn: sqlite3.Connection, site_id: int) -> int:
+    """사이트 소속 크롤 회차 수 (사이트 상세 페이징용)."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM crawls WHERE site_id = ? AND trash_id IS NULL",
         (site_id,),
-    ).fetchall()
+    ).fetchone()["c"]
 
 
 def list_site_schedules(conn: sqlite3.Connection, site_id: int) -> list[sqlite3.Row]:
@@ -3685,15 +3730,26 @@ def get_trash_entry(conn: sqlite3.Connection, trash_id: int) -> sqlite3.Row | No
     ).fetchone()
 
 
-def list_trash_entries(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """휴지통 항목 목록 (최근 삭제 순) + 삭제자 표시 정보 — 휴지통 화면용."""
-    return conn.execute(
-        """
+def list_trash_entries(
+    conn: sqlite3.Connection,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """휴지통 항목 목록 (최근 삭제 순) + 삭제자 표시 정보 — 휴지통 화면용.
+
+    limit 을 주면 offset 부터 그만큼만 반환한다 (휴지통 화면 페이징용).
+    """
+    sql = """
         SELECT t.*, u.email AS deleted_by_email, u.display_name AS deleted_by_name
         FROM trash_entries t LEFT JOIN users u ON u.id = t.deleted_by
         ORDER BY t.deleted_at DESC, t.id DESC
         """
-    ).fetchall()
+    params: list[object] = []
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    return conn.execute(sql, params).fetchall()
 
 
 def count_trash_entries(conn: sqlite3.Connection) -> int:
@@ -4359,10 +4415,17 @@ def create_first_admin(
     return cur.lastrowid if cur.rowcount == 1 else None
 
 
-def list_users(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """전체 사용자 목록 (등록 순) + 2FA/OIDC/활성 세션 집계 (사용자 관리 화면용)."""
-    return conn.execute(
-        """
+def list_users(
+    conn: sqlite3.Connection,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """전체 사용자 목록 (등록 순) + 2FA/OIDC/활성 세션 집계 (사용자 관리 화면용).
+
+    limit 을 주면 offset 부터 그만큼만 반환한다 (사용자 화면 페이징용).
+    """
+    sql = """
         SELECT u.*,
             (SELECT COUNT(*) FROM webauthn_credentials w WHERE w.user_id = u.id)
                 AS passkey_count,
@@ -4371,9 +4434,12 @@ def list_users(conn: sqlite3.Connection) -> list[sqlite3.Row]:
             (SELECT COUNT(*) FROM sessions s
               WHERE s.user_id = u.id AND s.expires_at > ?) AS session_count
         FROM users u ORDER BY u.created_at, u.id
-        """,
-        (_utcnow(),),
-    ).fetchall()
+        """
+    params: list[object] = [_utcnow()]
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
+    return conn.execute(sql, params).fetchall()
 
 
 def set_role(conn: sqlite3.Connection, user_id: int, role: str) -> bool:

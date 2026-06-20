@@ -208,3 +208,14 @@ def test_system_logs_invalid_level_ignored(tmp_db):
     body = admin_client().get("/api/web/system/logs?level=BOGUS").json()
     assert body["level"] == ""  # 화이트리스트 밖은 무시
     assert body["total"] == 1
+
+
+def test_system_logs_default_page_size(tmp_db):
+    """시스템 로그 기본 페이지 크기 25, 선택지 10/25/50/100 (이전 기본 50 → 25)."""
+    insert_syslog()
+    c = admin_client()
+    body = c.get("/api/web/system/logs").json()
+    assert body["limit"] == 25 and body["limits"] == [10, 25, 50, 100]
+    assert body["page_num"] == 1
+    assert c.get("/api/web/system/logs?limit=10").json()["limit"] == 10  # 10 허용
+    assert c.get("/api/web/system/logs?limit=37").json()["limit"] == 25  # 허용 밖 → 25

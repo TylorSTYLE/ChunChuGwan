@@ -268,3 +268,19 @@ def test_cli_trash_purge_all_and_expired(env):
     assert "2개 항목" in out.output
     with db.connect() as conn:
         assert db.count_trash_entries(conn) == 0
+
+
+def test_list_trash_entries_pagination(env):
+    """list_trash_entries 의 limit/offset 슬라이싱 — 휴지통 화면 페이징의 DB 계층."""
+    for i in range(5):
+        pid = _seed_page(url=f"https://example.com/p{i}", n=1)
+        deletion.delete_page(pid)  # 휴지통으로 (trash_enabled 기본 on)
+    with db.connect() as conn:
+        assert db.count_trash_entries(conn) == 5
+        first2 = db.list_trash_entries(conn, limit=2, offset=0)
+        next2 = db.list_trash_entries(conn, limit=2, offset=2)
+        assert len(first2) == 2 and len(next2) == 2
+        # 최근 삭제 순으로 슬라이스 — 1·2페이지가 겹치지 않음
+        assert {e["id"] for e in first2}.isdisjoint({e["id"] for e in next2})
+        # limit 없으면 전체
+        assert len(db.list_trash_entries(conn)) == 5

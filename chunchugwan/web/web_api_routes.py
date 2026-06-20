@@ -37,6 +37,17 @@ from . import audit, i18n, permissions
 
 router = APIRouter(prefix="/api/web")
 
+# 목록 페이지네이션 — 모든 화면이 공유하는 페이지당 항목 수 선택지(프론트 PageSize 와 일치).
+# 목록 기본은 25, 사이트 상세의 3개 목록(페이지·회차·실패)은 화면이 길어 기본 10.
+_PAGE_SIZES = (10, 25, 50, 100)
+_LIST_PAGE_SIZE_DEFAULT = 25
+_SITE_PAGE_SIZE_DEFAULT = 10
+
+
+def _page_size(value: int, default: int) -> int:
+    """허용 집합(_PAGE_SIZES) 밖이면 기본값으로 clamp."""
+    return value if value in _PAGE_SIZES else default
+
 
 def _snapshot_viewer(request: Request) -> "tuple[int | None, bool] | None":
     """집계에서 인증 스냅샷을 가릴 기준 — (viewer_id, is_admin). app._snapshot_viewer 와 동일.
@@ -233,11 +244,28 @@ def _load_snapshot(request: Request, snapshot_id: int) -> sqlite3.Row:
 
 @router.get("/sites")
 def sites(
-    request: Request, user: sqlite3.Row | None = Depends(require_session)
+    request: Request,
+    q: str | None = None,
+    page: int = 1,
+    per_page: int = _LIST_PAGE_SIZE_DEFAULT,
+    user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """아카이브 목록(사이트 단위) — app.index 의 JSON 판. 진행 중 사이트를 위로."""
+    """아카이브 목록(사이트 단위) — app.index 의 JSON 판. 진행 중 사이트를 위로.
+
+    q 로 site_key 부분 일치 필터(현재 페이지가 아닌 전체 사이트 대상),
+    per_page/page 로 페이징한다.
+    """
+    per_page = _page_size(per_page, _LIST_PAGE_SIZE_DEFAULT)
+    q = q.strip() if q else None
+    viewer = _snapshot_viewer(request)
     with db.connect() as conn:
-        rows = db.list_sites_overview(conn, viewer=_snapshot_viewer(request))
+        total = db.count_sites_overview(conn, q=q)
+        total_pages = max(1, -(-total // per_page))
+        page = max(1, min(page, total_pages))
+        rows = db.list_sites_overview(
+            conn, viewer=viewer, q=q,
+            limit=per_page, offset=(page - 1) * per_page,
+        )
         snap_dirs = db.list_snapshot_dirs(conn)
         tag_rows = db.list_site_network_tags(conn)
 
@@ -270,10 +298,16 @@ def sites(
         }
         for s in rows
     ]
-    items.sort(key=lambda i: i["site_key"])
-    items.sort(key=lambda i: i["activity_at"] or "", reverse=True)
-    items.sort(key=lambda i: not i["active"])
-    return {"items": items}
+    # 정렬(활성 우선 → 최근 활동 → site_key)은 list_sites_overview 가 SQL 로 적용한다.
+    return {
+        "items": items,
+        "q": q or "",
+        "total": total,
+        "total_pages": total_pages,
+        "page_num": page,
+        "limit": per_page,
+        "limits": list(_PAGE_SIZES),
+    }
 
 
 @router.get("/pages/{page_id}")
@@ -419,12 +453,12 @@ def _site_pages_block(
 ) -> tuple[dict, list, dict[int, int], sqlite3.Row]:
     """사이트 페이지 목록 슬라이스(바이트 포함) + 페이저를 만든다.
 
-    site_detail 과 린 엔드포인트(/sites/{id}/pages)가 공유 — 한 쪽만 바뀌어 페이징
+    site_detail 과 린 엔드포인트(/sites/{id}/lists)가 공유 — 한 쪽만 바뀌어 페이징
     규칙(per_page 허용집합·clamp·바이트 합산)이 어긋나지 않게 단일 출처로 둔다.
     반환: ({"pages": [...], "pager": {...}}, snap_dirs, page_bytes, totals)
     (snap_dirs·page_bytes·totals 는 site_detail 의 나머지 필드 계산에 재사용)
     """
-    per_page = per_page if per_page in (25, 50, 75, 100, 200) else 50
+    per_page = _page_size(per_page, _SITE_PAGE_SIZE_DEFAULT)
     totals = db.site_page_totals(conn, site_id)
     total_pages = max(1, -(-totals["page_count"] // per_page))
     page = min(max(page, 1), total_pages)
@@ -445,35 +479,111 @@ def _site_pages_block(
     return block, snap_dirs, page_bytes, totals
 
 
+def _site_crawls_block(
+    conn: sqlite3.Connection, site_id: int, page: int, per_page: int
+) -> dict:
+    """사이트 크롤 회차 목록 슬라이스 + 페이저 (site_detail·린 엔드포인트 공유)."""
+    per_page = _page_size(per_page, _SITE_PAGE_SIZE_DEFAULT)
+    total = db.count_site_crawls(conn, site_id)
+    total_pages = max(1, -(-total // per_page))
+    page = min(max(page, 1), total_pages)
+    crawls = db.list_site_crawls(
+        conn, site_id, limit=per_page, offset=(page - 1) * per_page
+    )
+    return {
+        "crawls": [dict(c) for c in crawls],
+        "crawls_pager": {
+            "page": page, "total_pages": total_pages,
+            "per_page": per_page, "total": total,
+        },
+    }
+
+
+def _site_failed_block(
+    conn: sqlite3.Connection, site_id: int, page: int, per_page: int
+) -> dict:
+    """실패한 작업(직접 아카이빙 + 크롤 페이지, dedup·시각 내림차순 병합) 슬라이스 + 페이저.
+
+    병합·dedup 의미를 보존하려 전체를 만든 뒤 슬라이스한다 — 실패 목록은 'URL별
+    최신 실행이 실패'인 것만이라 유계다. site_detail·린 엔드포인트 공유.
+    """
+    per_page = _page_size(per_page, _SITE_PAGE_SIZE_DEFAULT)
+    failed_logs = db.list_site_failed_logs(conn, site_id)
+    failed_log_urls = {f["page_url"] for f in failed_logs}
+    failed_crawl_pages = [
+        r for r in db.list_site_failed_crawl_pages(conn, site_id)
+        if r["url"] not in failed_log_urls
+    ]
+    items = _failed_items(site_id, failed_logs, failed_crawl_pages)
+    total = len(items)
+    total_pages = max(1, -(-total // per_page))
+    page = min(max(page, 1), total_pages)
+    start = (page - 1) * per_page
+    return {
+        "failed_items": items[start:start + per_page],
+        "failed_pager": {
+            "page": page, "total_pages": total_pages,
+            "per_page": per_page, "total": total,
+        },
+    }
+
+
+def _site_lists_block(
+    conn: sqlite3.Connection,
+    site_id: int,
+    *,
+    page: int,
+    per_page: int,
+    crawls_page: int,
+    crawls_per_page: int,
+    failed_page: int,
+    failed_per_page: int,
+) -> tuple[dict, list, dict[int, int], sqlite3.Row]:
+    """사이트 상세의 3개 목록(페이지·회차·실패)을 한 번에 만든다 — site_detail·린 엔드포인트 공유.
+
+    반환: ({pages,pager,crawls,crawls_pager,failed_items,failed_pager}, snap_dirs, page_bytes, totals)
+    (뒤 3개는 site_detail 의 통계·용량 계산에 재사용)
+    """
+    pages_block, snap_dirs, page_bytes, totals = _site_pages_block(
+        conn, site_id, page, per_page
+    )
+    block = {
+        **pages_block,
+        **_site_crawls_block(conn, site_id, crawls_page, crawls_per_page),
+        **_site_failed_block(conn, site_id, failed_page, failed_per_page),
+    }
+    return block, snap_dirs, page_bytes, totals
+
+
 @router.get("/sites/{site_id}")
 def site_detail(
     request: Request,
     site_id: int,
     page: int = 1,
-    per_page: int = 50,
+    per_page: int = _SITE_PAGE_SIZE_DEFAULT,
+    crawls_page: int = 1,
+    crawls_per_page: int = _SITE_PAGE_SIZE_DEFAULT,
+    failed_page: int = 1,
+    failed_per_page: int = _SITE_PAGE_SIZE_DEFAULT,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """사이트 상세 — 페이지 목록(페이징) + 크롤/스케줄/문서/실패/네트워크 태그. app.site_view 의 JSON 판."""
+    """사이트 상세 — 페이지·회차·실패 목록(각각 페이징) + 스케줄/문서/네트워크 태그/인증서. app.site_view 의 JSON 판."""
     from fastapi import HTTPException
 
     with db.connect() as conn:
         site = db.get_site(conn, site_id)
         if site is None:
             raise HTTPException(404, "사이트 없음")
-        block, snap_dirs, page_bytes, totals = _site_pages_block(
-            conn, site_id, page, per_page
+        lists, snap_dirs, page_bytes, totals = _site_lists_block(
+            conn, site_id,
+            page=page, per_page=per_page,
+            crawls_page=crawls_page, crawls_per_page=crawls_per_page,
+            failed_page=failed_page, failed_per_page=failed_per_page,
         )
-        crawls = db.list_site_crawls(conn, site_id)
         schedules = db.list_site_schedules(conn, site_id)
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
         site_network_tags = db.list_site_network_tags(conn, site_id)
         certificates = db.list_site_certificates(conn, site_id)
-        failed_logs = db.list_site_failed_logs(conn, site_id)
-        failed_log_urls = {f["page_url"] for f in failed_logs}
-        failed_crawl_pages = [
-            r for r in db.list_site_failed_crawl_pages(conn, site_id)
-            if r["url"] not in failed_log_urls
-        ]
         doc_total = db.count_site_document_groups(conn, site_id)
         site_documents = db.list_site_document_groups(
             conn, site_id, limit=200, offset=0
@@ -499,12 +609,10 @@ def site_detail(
     return {
         "site": dict(site),
         "site_title": _site_title(snap_dirs),
-        "pages": block["pages"],
+        **lists,
         "page_count": totals["page_count"],
         "snapshot_total": totals["snapshot_count"],
         "site_bytes": sum(page_bytes.values()),
-        "pager": block["pager"],
-        "crawls": [dict(c) for c in crawls],
         "schedules": [
             {**dict(s), "label": schedule_labels[s["page_id"]]} for s in schedules
         ],
@@ -520,7 +628,6 @@ def site_detail(
         "certificates": cert_rows,
         "documents": [dict(d) for d in site_documents],
         "doc_total": doc_total,
-        "failed_items": _failed_items(site_id, failed_logs, failed_crawl_pages),
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
         "can_manage_credentials": permissions.can_manage_credentials(user),
@@ -528,24 +635,32 @@ def site_detail(
     }
 
 
-@router.get("/sites/{site_id}/pages")
-def site_pages(
+@router.get("/sites/{site_id}/lists")
+def site_lists(
     site_id: int,
     page: int = 1,
-    per_page: int = 50,
+    per_page: int = _SITE_PAGE_SIZE_DEFAULT,
+    crawls_page: int = 1,
+    crawls_per_page: int = _SITE_PAGE_SIZE_DEFAULT,
+    failed_page: int = 1,
+    failed_per_page: int = _SITE_PAGE_SIZE_DEFAULT,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """사이트 페이지 목록만 (페이징) — 상세 화면 페이저 in-place 갱신용 린 응답.
+    """사이트 상세의 3개 목록(페이지·회차·실패)만 — 페이저/크기 in-place 갱신용 린 응답.
 
-    site_detail 의 통계·인증서·크롤·스케줄·문서 등을 생략하고 pages/pager 만 내려준다
-    (이전/다음 시 SPA 가 목록만 교체). 가드는 site_detail 과 동일하게 세션만 요구한다.
+    site_detail 의 통계·인증서·스케줄·문서 등을 생략하고 pages/crawls/failed_items 와
+    각 pager 만 내려준다 (한 목록을 넘겨도 SPA 가 누적 파라미터로 셋 다 함께 갱신).
+    가드는 site_detail 과 동일하게 세션만 요구한다.
     """
-    from fastapi import HTTPException
-
     with db.connect() as conn:
         if db.get_site(conn, site_id) is None:
             raise HTTPException(404, "사이트 없음")
-        block, *_ = _site_pages_block(conn, site_id, page, per_page)
+        block, *_ = _site_lists_block(
+            conn, site_id,
+            page=page, per_page=per_page,
+            crawls_page=crawls_page, crawls_per_page=crawls_per_page,
+            failed_page=failed_page, failed_per_page=failed_per_page,
+        )
     return block
 
 
@@ -1164,21 +1279,35 @@ def _trash_entry_public(entry: sqlite3.Row, retention_days: int) -> dict:
 
 @router.get("/trash")
 def trash_list(
-    request: Request, user: sqlite3.Row | None = Depends(require_session)
+    request: Request,
+    page: int = 1,
+    per_page: int = _LIST_PAGE_SIZE_DEFAULT,
+    user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """휴지통 항목 목록 + 현재 설정(보관 기간·기능 on/off) — 휴지통 관리 권한."""
+    """휴지통 항목 목록(페이징) + 현재 설정(보관 기간·기능 on/off) — 휴지통 관리 권한."""
     _require_manage_trash(user)
+    per_page = _page_size(per_page, _LIST_PAGE_SIZE_DEFAULT)
     with db.connect() as conn:
         retention_days = db.trash_retention_days(conn)
+        total = db.count_trash_entries(conn)
+        total_pages = max(1, -(-total // per_page))
+        page = max(1, min(page, total_pages))
         entries = [
             _trash_entry_public(e, retention_days)
-            for e in db.list_trash_entries(conn)
+            for e in db.list_trash_entries(
+                conn, limit=per_page, offset=(page - 1) * per_page
+            )
         ]
         trash_enabled = db.trash_enabled(conn)
     return {
         "entries": entries,
         "trash_enabled": trash_enabled,
         "retention_days": retention_days,
+        "total": total,
+        "total_pages": total_pages,
+        "page_num": page,
+        "limit": per_page,
+        "limits": list(_PAGE_SIZES),
     }
 
 
@@ -1329,13 +1458,23 @@ def _require_manage_users(user: sqlite3.Row | None) -> None:
 
 @router.get("/system/users")
 def system_users(
-    request: Request, user: sqlite3.Row | None = Depends(require_session)
+    request: Request,
+    page: int = 1,
+    per_page: int = _LIST_PAGE_SIZE_DEFAULT,
+    user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """사용자 목록 + 권한·초대 — system_routes.users_view 의 JSON 판."""
+    """사용자 목록(페이징) + 권한·초대 — system_routes.users_view 의 JSON 판.
+
+    초대(invites)는 보통 적어 전체를 내려준다 — 페이징은 사용자 목록에만 적용한다.
+    """
     _require_manage_users(user)
+    per_page = _page_size(per_page, _LIST_PAGE_SIZE_DEFAULT)
     with db.connect() as conn:
         db.delete_expired_invites(conn)
-        users = db.list_users(conn)
+        total = db.count_users(conn)
+        total_pages = max(1, -(-total // per_page))
+        page = max(1, min(page, total_pages))
+        users = db.list_users(conn, limit=per_page, offset=(page - 1) * per_page)
         invites = db.list_invites(conn)
         mail_on = mailer.mail_enabled(conn)
         assignable = db.assignable_roles(conn)
@@ -1351,6 +1490,11 @@ def system_users(
         "role_labels": dict(role_labels),
         "mail_enabled": mail_on,
         "invite_ttl_days": config.INVITE_TTL_DAYS,
+        "total": total,
+        "total_pages": total_pages,
+        "page_num": page,
+        "limit": per_page,
+        "limits": list(_PAGE_SIZES),
     }
 
 
@@ -1389,8 +1533,8 @@ def system_api_keys(
     return {"keys": [_public_api_key(k) for k in keys]}
 
 
-_SYSLOG_PAGE_SIZES = (25, 50, 100, 200)
-_SYSLOG_PAGE_SIZE_DEFAULT = 50
+_SYSLOG_PAGE_SIZES = _PAGE_SIZES
+_SYSLOG_PAGE_SIZE_DEFAULT = _LIST_PAGE_SIZE_DEFAULT
 
 
 @router.get("/system/logs")

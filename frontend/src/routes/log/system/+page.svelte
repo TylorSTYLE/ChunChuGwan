@@ -6,12 +6,13 @@
 	import type { SystemLogsData } from '$lib/types';
 	import Toolbar from '$lib/components/Toolbar.svelte';
 	import Pager from '$lib/components/Pager.svelte';
+	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 
 	let { data }: { data: { logs: SystemLogsData } } = $props();
 
 	const ROUTE = '/log/system';
-	const FILTER_DEF = { limit: 50, page: 1 };
+	const FILTER_DEF = { limit: 25, page: 1 };
 	const list = createList({
 		source: () => data.logs,
 		api: '/system/logs',
@@ -47,6 +48,7 @@
 	</select>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
+	<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
 </Toolbar>
 
 {#if d.logs.length === 0}

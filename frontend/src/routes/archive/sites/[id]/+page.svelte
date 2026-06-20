@@ -7,11 +7,12 @@
 	import { api, ApiError, download } from '$lib/api';
 	import { filterUrl } from '$lib/filters';
 	import { createList } from '$lib/list.svelte';
-	import type { SiteDetail, FailedItem } from '$lib/types';
+	import type { SiteDetail, FailedItem, SiteLists } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import StatGrid from '$lib/components/StatGrid.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import Pager from '$lib/components/Pager.svelte';
+	import PageSize from '$lib/components/PageSize.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { createAction } from '$lib/action.svelte';
 
@@ -32,17 +33,40 @@
 		cancelled: '취소됨'
 	};
 
-	// 페이지 목록만 린 엔드포인트로 in-place 페이징한다 — 통계·인증서·크롤·스케줄 등 나머지
-	// 화면은 data.site 그대로 두고, 이전/다음 시 목록 테이블·페이저만 교체된다(라우트 재로드 없음).
-	type SitePages = { pages: SiteDetail['pages']; pager: SiteDetail['pager'] };
-	const pageList = createList<SitePages>({
-		source: () => ({ pages: data.site.pages, pager: data.site.pager }),
-		api: () => `/sites/${data.site.site.id}/pages`,
+	// 페이지·회차·실패 목록만 린 엔드포인트(/lists)로 in-place 페이징한다 — 통계·인증서·스케줄
+	// 등 나머지 화면은 data.site 그대로 두고, 목록 테이블·페이저만 교체된다(라우트 재로드 없음).
+	// 단일 createList 라 params 가 누적돼 한 목록을 넘겨도 다른 목록 위치가 URL 에 보존된다.
+	const LIST_DEF = {
+		page: 1,
+		per_page: 10,
+		crawls_page: 1,
+		crawls_per_page: 10,
+		failed_page: 1,
+		failed_per_page: 10
+	};
+	const list = createList<SiteLists>({
+		source: () => ({
+			pages: data.site.pages,
+			pager: data.site.pager,
+			crawls: data.site.crawls,
+			crawls_pager: data.site.crawls_pager,
+			failed_items: data.site.failed_items,
+			failed_pager: data.site.failed_pager
+		}),
+		api: () => `/sites/${data.site.site.id}/lists`,
 		route: () => `/archive/sites/${data.site.site.id}`,
-		params: (b) => ({ page: b.pager.page }),
-		defaults: { page: 1 },
+		params: (b) => ({
+			page: b.pager.page,
+			per_page: b.pager.per_page,
+			crawls_page: b.crawls_pager.page,
+			crawls_per_page: b.crawls_pager.per_page,
+			failed_page: b.failed_pager.page,
+			failed_per_page: b.failed_pager.per_page
+		}),
+		defaults: LIST_DEF,
 		onError: (m) => (action.error = m)
 	});
+	const ld = $derived(list.data);
 
 	/** 인증서 만료 상태 — 현재 시각 기준 (만료 30일 전부터 '곧 만료'). */
 	function expiry(notAfter: string): 'expired' | 'soon' | 'ok' {
@@ -103,7 +127,17 @@
 		}
 	}
 
-	const pageUrl = (n: number) => filterUrl(`/archive/sites/${s.site.id}`, { page: n }, { page: 1 });
+	// 페이저 href(중간클릭·새 탭용)는 세 목록의 현재 위치를 모두 보존해야 한다.
+	const curParams = () => ({
+		page: ld.pager.page,
+		per_page: ld.pager.per_page,
+		crawls_page: ld.crawls_pager.page,
+		crawls_per_page: ld.crawls_pager.per_page,
+		failed_page: ld.failed_pager.page,
+		failed_per_page: ld.failed_pager.per_page
+	});
+	const listUrl = (patch: Record<string, number>) =>
+		filterUrl(`/archive/sites/${s.site.id}`, { ...curParams(), ...patch }, LIST_DEF);
 </script>
 
 <h2 class="mono page-key">{s.site.site_key}</h2>
@@ -117,14 +151,17 @@
 	<StatCard label={t('용량')} value={filesize(s.site_bytes)} />
 </StatGrid>
 
-<h3>{t('페이지')} ({s.page_count})</h3>
+<div class="section-head">
+	<h3>{t('페이지')} ({s.page_count})</h3>
+	<PageSize value={ld.pager.per_page} onchange={(n) => list.go({ per_page: n, page: 1 })} />
+</div>
 <div class="table-wrap">
 	<table>
 		<thead>
 			<tr><th>URL</th><th>{t('스냅샷')}</th><th>{t('용량')}</th><th>{t('마지막')}</th></tr>
 		</thead>
 		<tbody>
-			{#each pageList.data.pages as p}
+			{#each ld.pages as p}
 				<tr>
 					<td class="url-cell"><a href={pagePath(s.site.id, p.id)} title={p.url}>{p.url}</a></td>
 					<td class="num">{p.snapshot_count ?? '-'}</td>
@@ -136,15 +173,21 @@
 	</table>
 </div>
 <Pager
-	page={pageList.data.pager.page}
-	totalPages={pageList.data.pager.total_pages}
-	href={pageUrl}
-	onpage={(n) => pageList.go({ page: n })}
-	busy={pageList.busy}
+	page={ld.pager.page}
+	totalPages={ld.pager.total_pages}
+	href={(n) => listUrl({ page: n })}
+	onpage={(n) => list.go({ page: n })}
+	busy={list.busy}
 />
 
-{#if s.crawls.length > 0}
-	<h3>{t('사이트 아카이브 회차')} ({s.crawls.length})</h3>
+{#if ld.crawls_pager.total > 0}
+	<div class="section-head">
+		<h3>{t('사이트 아카이브 회차')} ({ld.crawls_pager.total})</h3>
+		<PageSize
+			value={ld.crawls_pager.per_page}
+			onchange={(n) => list.go({ crawls_per_page: n, crawls_page: 1 })}
+		/>
+	</div>
 	<div class="table-wrap">
 		<table>
 			<thead>
@@ -157,7 +200,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each s.crawls as c}
+				{#each ld.crawls as c}
 					<tr>
 						<td class="mono"><a href="{base}/crawls/{c.id}">{ts(c.created_at)}</a></td>
 						<td>
@@ -173,6 +216,13 @@
 			</tbody>
 		</table>
 	</div>
+	<Pager
+		page={ld.crawls_pager.page}
+		totalPages={ld.crawls_pager.total_pages}
+		href={(n) => listUrl({ crawls_page: n })}
+		onpage={(n) => list.go({ crawls_page: n })}
+		busy={list.busy}
+	/>
 {/if}
 
 {#if s.schedules.length > 0 || s.crawl_schedules.length > 0}
@@ -187,12 +237,18 @@
 	</ul>
 {/if}
 
-{#if s.failed_items.length > 0}
+{#if ld.failed_pager.total > 0}
 	<div class="section-head">
-		<h3>{t('실패한 작업')} ({s.failed_items.length})</h3>
-		{#if s.can_archive}
-			<button onclick={retryAllFailed} disabled={action.busy}>{t('모두 재시도')}</button>
-		{/if}
+		<h3>{t('실패한 작업')} ({ld.failed_pager.total})</h3>
+		<div class="head-actions">
+			<PageSize
+				value={ld.failed_pager.per_page}
+				onchange={(n) => list.go({ failed_per_page: n, failed_page: 1 })}
+			/>
+			{#if s.can_archive}
+				<button onclick={retryAllFailed} disabled={action.busy}>{t('모두 재시도')}</button>
+			{/if}
+		</div>
 	</div>
 	<div class="table-wrap">
 		<table>
@@ -203,7 +259,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each s.failed_items as f}
+				{#each ld.failed_items as f}
 					<tr>
 						<td class="mono">{f.at ? ts(String(f.at)) : '-'}</td>
 						<td class="url-cell">{f.url}</td>
@@ -216,6 +272,13 @@
 			</tbody>
 		</table>
 	</div>
+	<Pager
+		page={ld.failed_pager.page}
+		totalPages={ld.failed_pager.total_pages}
+		href={(n) => listUrl({ failed_page: n })}
+		onpage={(n) => list.go({ failed_page: n })}
+		busy={list.busy}
+	/>
 {/if}
 
 {#if s.certificates.length > 0}
@@ -388,6 +451,11 @@
 		justify-content: space-between;
 		flex-wrap: wrap;
 		gap: 12px;
+	}
+	.head-actions {
+		display: flex;
+		align-items: center;
+		gap: 8px;
 	}
 	.export-link button {
 		display: inline-flex;

@@ -96,3 +96,14 @@ def test_archive_action_audited_and_separated(tmp_db, monkeypatch):
         system_log.uninstall()
     assert any("example.com/x" in a["message"] for a in audits)
     assert not [r for r in sys_rows if r["logger"] == "chunchugwan.web.audit"]
+
+
+def test_audit_default_page_size(tmp_db):
+    """감사 로그 기본 페이지 크기 25, 선택지 10/25/50/100 (이전 기본 50 → 25)."""
+    admin_t = _user("boss@test.co", "founder")
+    c = _client(admin_t)
+    body = c.get("/api/web/audit").json()
+    assert body["limit"] == 25 and body["limits"] == [10, 25, 50, 100]
+    assert body["page_num"] == 1
+    assert c.get("/api/web/audit?limit=10").json()["limit"] == 10  # 10 허용
+    assert c.get("/api/web/audit?limit=37").json()["limit"] == 25  # 허용 밖 → 25
