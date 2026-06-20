@@ -29,6 +29,20 @@ export interface NeedsHumanJob {
 	url: string;
 }
 
+/** 업데이트 노트 항목 — GitHub Release 의 변경 한 줄. PR 번호가 있으면 링크가 걸린다. */
+export interface ReleaseNoteItem {
+	text: string;
+	pr: number | null;
+	url: string | null;
+}
+
+/** 로그인 후 1회 표시하는 현재 버전 업데이트 노트 (web_api_routes.release_notes). */
+export interface ReleaseNote {
+	version: string;
+	title: string;
+	items: ReleaseNoteItem[];
+}
+
 export interface Me {
 	auth_enabled: boolean;
 	authenticated: boolean;
@@ -39,6 +53,7 @@ export interface Me {
 	needs_human: NeedsHumanJob[];
 	needs_human_count: number;
 	version: string;
+	release_note: ReleaseNote | null;
 }
 
 // ── 미인증 인증 흐름 (/api/web/auth) ──

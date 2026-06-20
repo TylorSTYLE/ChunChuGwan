@@ -30,6 +30,19 @@ docs/tests/.md/.github 만=patch, 커밋에 "BREAKING"·"호환 깨" 있으면 m
 도커 이미지 태그: `:latest`·`:main`(main), `:develop`(develop),
 `:vX.Y.Z`(릴리스 태그)
 
+## 릴리스 노트 (업데이트 안내 모달)
+
+표시 내용은 **GitHub Release 기준**으로 **CI 가 자동 생성**한다(수동 작성 불필요).
+`release.yml` 의 버전 범프 스텝이 `gh api …/releases/generate-notes` 로 그 버전 노트를
+받아 `scripts/gen_release_notes.py`(= `release_notes.parse_github_notes`)로 변환 —
+수정자(`@user`)·원본 링크 제거, 봇 항목 제외, **PR 번호/URL 만 유지** — 후
+`chunchugwan/web/release_notes.json` 의 그 버전 키에 써넣어 **릴리스 커밋에 포함**한다
+(태그 이미지에 동봉 → 런타임 외부 호출 0). 대시보드는 로그인 후 현재 버전(`__version__`)
+항목이 있을 때만 모달을 1회 띄우고 각 항목에 `#번호` PR 링크를 건다 — 항목이 없으면
+조용히 안 뜬다(오류 아님). 표시 동작 상세는 `docs/DASHBOARD.md` 업데이트 안내 모달 절.
+(수동 갱신/백필이 필요하면: `gh release view vX.Y.Z --json body -q .body | python3
+scripts/gen_release_notes.py X.Y.Z`.)
+
 ## Docker 명령
 
 컨테이너 실행 명령(`docker compose up`/`run`, `compose.yaml` 복사)은 CLAUDE.md `## 명령어`

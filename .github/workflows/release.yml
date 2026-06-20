@@ -93,17 +93,31 @@ jobs:
           enable-cache: true
           python-version: "3.14"
 
-      - name: pyproject.toml · uv.lock 갱신 · 태그 · 푸시
+      - name: pyproject.toml · uv.lock · 릴리스 노트 번들 갱신 · 태그 · 푸시
         if: steps.bump.outputs.skip != 'true'
         env:
           NEXT: ${{ steps.ver.outputs.next }}
           PR_NUM: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
+          # 릴리스 노트 번들 — 이 버전의 변경 항목(@수정자·링크 제거, PR 번호만)을
+          # release_notes.json 에 써넣어 이미지에 동봉한다(대시보드 업데이트 안내 모달).
+          # 이전 태그는 GitHub 가 자동 판정한다(release create --generate-notes 와 동일).
+          # 실패해도 릴리스는 막지 않는다(이 버전은 안내 모달만 비게 됨).
+          if notes=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="v$NEXT" -f target_commitish="$(git rev-parse HEAD)" --jq .body) \
+              && [ -n "$notes" ]; then
+            printf '%s\n' "$notes" | python3 scripts/gen_release_notes.py "$NEXT" \
+              || echo "::warning::릴리스 노트 번들 생성 실패 — 안내 모달 없이 진행"
+          else
+            echo "::warning::generate-notes 실패 — 릴리스 노트 번들 건너뜀"
+          fi
           sed -i -E "0,/^version = \".*\"/s//version = \"$NEXT\"/" pyproject.toml
           # uv.lock 안의 자기 버전(editable .)도 동기화
           uv lock
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add chunchugwan/web/release_notes.json
           git commit -am "춘추관 v$NEXT (#$PR_NUM)"
           git tag -a "v$NEXT" -m "v$NEXT"
           git push origin HEAD:main

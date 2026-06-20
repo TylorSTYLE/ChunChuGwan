@@ -174,6 +174,8 @@ _EN: dict[str, str] = {
     "삭제": "Delete",
     "저장": "Save",
     "취소": "Cancel",
+    "닫기": "Close",
+    "{version} 새 소식": "What's new in {version}",
     "확인": "Verify",
     "신규": "New",
     "변경": "Changed",
