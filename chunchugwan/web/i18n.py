@@ -860,6 +860,7 @@ _EN: dict[str, str] = {
         "extension keys are issued by each user on the Personal API Key page.",
     "복사": "Copy",
     "복사됨": "Copied",
+    "복사 실패": "Copy failed",
     "키": "Key",
     "발급자": "Issued by",
     "perm|아카이브": "Archive",

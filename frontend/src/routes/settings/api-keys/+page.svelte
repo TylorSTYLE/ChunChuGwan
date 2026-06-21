@@ -9,12 +9,15 @@
 	import { createAction } from '$lib/action.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { copyText } from '$lib/clipboard';
 
 	let { data }: { data: { data: PersonalApiKeysData } } = $props();
 	const d = $derived(data.data);
 
 	const act = createAction();
 	let newToken = $state('');
+	let copyState = $state<'' | 'ok' | 'fail'>('');
+	let copyTimer: ReturnType<typeof setTimeout>;
 
 	let name = $state('');
 	let canView = $state(true);
@@ -33,6 +36,7 @@
 	function create() {
 		if (!name.trim()) return;
 		newToken = '';
+		copyState = '';
 		return act.run(async () => {
 			const r = await api<{ token: string }>('/settings/api-keys', {
 				method: 'POST',
@@ -49,6 +53,13 @@
 		});
 	}
 
+	async function copyToken() {
+		const ok = await copyText(newToken);
+		copyState = ok ? 'ok' : 'fail';
+		clearTimeout(copyTimer);
+		copyTimer = setTimeout(() => (copyState = ''), 2000);
+	}
+
 	function revoke(id: number) {
 		if (!confirm(t('이 키를 폐기할까요?'))) return;
 		return act.run(() => api(`/settings/api-keys/${id}/delete`, { method: 'POST' }));
@@ -63,7 +74,17 @@
 {#if newToken}
 	<div class="notice">
 		{t('아래 키를 지금 복사하세요. 다시 표시되지 않습니다.')}
-		<div class="mono token">{newToken}</div>
+		<div class="mt-1.5 flex items-start gap-2">
+			<span class="mono token flex-1 min-w-0">{newToken}</span>
+			<Button
+				variant={copyState === 'ok' ? 'default' : copyState === 'fail' ? 'destructive' : 'outline'}
+				size="sm"
+				class="shrink-0"
+				onclick={copyToken}
+			>
+				{copyState === 'ok' ? t('복사됨') : copyState === 'fail' ? t('복사 실패') : t('복사')}
+			</Button>
+		</div>
 	</div>
 {/if}
 
@@ -114,7 +135,6 @@
 		margin: 0 0 12px;
 	}
 	.token {
-		margin-top: 6px;
 		word-break: break-all;
 		font-size: 13px;
 	}
