@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# CI 는 읽기만 필요하다 — PR(신뢰 불가 코드)이 쓰기 토큰과 함께 돌지 않게 최소권한 고정.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
