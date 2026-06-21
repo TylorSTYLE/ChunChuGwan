@@ -69,7 +69,7 @@
 {#if d.recent_snaps.length === 0}
 	<EmptyState message={t('아직 스냅샷이 없습니다.')} />
 {:else}
-	<div class="table-wrap">
+	<div class="table-wrap cards">
 		<table>
 			<thead>
 				<tr><th>{t('시간')}</th><th>{t('상태')}</th><th>URL</th><th>{t('용량')}</th><th></th></tr>
@@ -78,10 +78,10 @@
 				{#each d.recent_snaps as s}
 					{@const b = snapBadge(s)}
 					<tr>
-						<td class="mono">{ts(s.taken_at)}</td>
-						<td><Badge variant={b.cls}>{t(b.label)}</Badge></td>
-						<td class="url-cell"><a href={pagePath(s.site_id, s.page_id)} title={s.page_url}>{s.page_url}</a></td>
-						<td class="num mono">{filesize(s.bytes)}</td>
+						<td class="mono" data-label={t('시간')}>{ts(s.taken_at)}</td>
+						<td data-label={t('상태')}><Badge variant={b.cls}>{t(b.label)}</Badge></td>
+						<td class="url-cell" data-label="URL"><a href={pagePath(s.site_id, s.page_id)} title={s.page_url}>{s.page_url}</a></td>
+						<td class="num mono" data-label={t('용량')}>{filesize(s.bytes)}</td>
 						<td><a href={snapPath(s.site_id, s.page_id, s.id)}>{t('보기')}</a></td>
 					</tr>
 				{/each}
@@ -94,7 +94,7 @@
 {#if d.recent_logs.length === 0}
 	<EmptyState message={t('로그가 없습니다. 아카이빙을 실행하면 결과가 여기에 기록됩니다.')} />
 {:else}
-	<div class="table-wrap wide">
+	<div class="table-wrap wide cards">
 		<table>
 			<thead>
 				<tr><th>{t('시간')}</th><th>{t('상태')}</th><th>URL</th><th>{t('소요')}</th><th>{t('출처')}</th><th></th></tr>
@@ -103,17 +103,17 @@
 				{#each d.recent_logs as log}
 					{@const b = logBadge(log)}
 					<tr>
-						<td class="mono">{ts(log.started_at)}</td>
-						<td><Badge variant={b.cls}>{t(b.label)}</Badge></td>
-						<td class="url-cell">
+						<td class="mono" data-label={t('시간')}>{ts(log.started_at)}</td>
+						<td data-label={t('상태')}><Badge variant={b.cls}>{t(b.label)}</Badge></td>
+						<td class="url-cell" data-label="URL">
 							{#if log.page_id}
 								<a href={pagePath(log.page_site_id, log.page_id)} title={log.url}>{log.url}</a>
 							{:else}
 								<span title={log.url}>{log.url}</span>
 							{/if}
 						</td>
-						<td class="num mono">{log.duration_ms}ms</td>
-						<td class="mono muted">{log.source}</td>
+						<td class="num mono" data-label={t('소요')}>{log.duration_ms}ms</td>
+						<td class="mono muted" data-label={t('출처')}>{log.source}</td>
 						<td>{#if log.snapshot_id}<a href={snapPath(log.page_site_id, log.page_id, log.snapshot_id)}>{t('보기')}</a>{/if}</td>
 					</tr>
 				{/each}

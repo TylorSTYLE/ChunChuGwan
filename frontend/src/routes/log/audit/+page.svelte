@@ -59,7 +59,7 @@
 {#if d.logs.length === 0}
 	<EmptyState message={t('감사 기록이 없습니다.')} />
 {:else}
-	<div class="table-wrap wide">
+	<div class="table-wrap wide cards">
 		<table>
 			<thead>
 				<tr>
@@ -73,11 +73,11 @@
 			<tbody>
 				{#each d.logs as log}
 					<tr>
-						<td class="mono col-time">{ts(log.created_at)}</td>
-						<td><Badge variant={ACTION_BADGE[log.action] ?? 'same'}>{actionLabel(log.action)}</Badge></td>
-						<td class="mono">{log.actor}</td>
-						<td class="mono muted target">{log.target ?? '-'}</td>
-						<td>{log.message}</td>
+						<td class="mono col-time" data-label={t('시간')}>{ts(log.created_at)}</td>
+						<td data-label={t('종류')}><Badge variant={ACTION_BADGE[log.action] ?? 'same'}>{actionLabel(log.action)}</Badge></td>
+						<td class="mono" data-label={t('요청자')}>{log.actor}</td>
+						<td class="mono muted target" data-label={t('대상')}>{log.target ?? '-'}</td>
+						<td data-label={t('내용')}>{log.message}</td>
 					</tr>
 				{/each}
 			</tbody>

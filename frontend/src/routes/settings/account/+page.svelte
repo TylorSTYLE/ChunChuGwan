@@ -338,6 +338,19 @@
 		gap: 6px;
 		align-items: center;
 	}
+	@media (max-width: 599px) {
+		.form {
+			flex-direction: column;
+			align-items: stretch;
+		}
+		.pk-del {
+			flex-direction: column;
+			align-items: stretch;
+		}
+		.pk-del :global(input) {
+			width: 100%;
+		}
+	}
 	.danger-zone {
 		border-top: 1px solid var(--red);
 		padding-top: 16px;

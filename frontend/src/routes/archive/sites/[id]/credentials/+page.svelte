@@ -78,7 +78,7 @@
 	</div>
 {/if}
 
-<div class="table-wrap wide">
+<div class="table-wrap wide cards">
 	<table>
 		<thead>
 			<tr>
@@ -89,10 +89,10 @@
 		<tbody>
 			{#each d.credentials as c}
 				<tr>
-					<td>{c.label}</td>
-					<td>{t(c.kind_label)}</td>
-					<td class="mono muted">{c.creator_email ?? '—'}</td>
-					<td class="mono muted">{ts(c.created_at, true)}</td>
+					<td data-label={t('이름')}>{c.label}</td>
+					<td data-label={t('종류')}>{t(c.kind_label)}</td>
+					<td class="mono muted" data-label={t('만든 사람')}>{c.creator_email ?? '—'}</td>
+					<td class="mono muted" data-label={t('등록')}>{ts(c.created_at, true)}</td>
 					<td>
 						<Button variant="destructive" onclick={() => remove(c.id, c.label)} disabled={act.busy}>{t('삭제')}</Button>
 					</td>

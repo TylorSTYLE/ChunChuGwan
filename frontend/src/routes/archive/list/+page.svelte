@@ -68,7 +68,7 @@
 {#if d.items.length === 0}
 	<EmptyState message={d.q ? t('검색 결과가 없습니다.') : t('아직 아카이브가 없습니다.')} />
 {:else}
-	<div class="table-wrap wide">
+	<div class="table-wrap wide cards">
 		<table>
 			<thead>
 				<tr>
@@ -83,7 +83,7 @@
 			<tbody>
 				{#each d.items as s}
 					<tr>
-						<td>
+						<td data-label={t('사이트')}>
 							{#if s.site_id}
 								<a href="{base}/archive/sites/{s.site_id}">{s.site_key}</a>
 							{:else}
@@ -92,11 +92,11 @@
 							{#if s.crawling}<Badge variant="new">{t('아카이빙 중')}</Badge>{/if}
 							{#if s.title}<div class="muted">{s.title}</div>{/if}
 						</td>
-						<td class="num">{s.page_count}</td>
-						<td class="num">{s.snapshot_count}</td>
-						<td class="num">{s.schedule_count || '-'}</td>
-						<td class="num mono">{filesize(s.bytes)}</td>
-						<td class="mono activity">{s.activity_at ? ts(s.activity_at) : '-'}</td>
+						<td class="num" data-label={t('페이지')}>{s.page_count}</td>
+						<td class="num" data-label={t('스냅샷')}>{s.snapshot_count}</td>
+						<td class="num" data-label={t('스케줄')}>{s.schedule_count || '-'}</td>
+						<td class="num mono" data-label={t('용량')}>{filesize(s.bytes)}</td>
+						<td class="mono activity" data-label={t('마지막 활동')}>{s.activity_at ? ts(s.activity_at) : '-'}</td>
 					</tr>
 				{/each}
 			</tbody>

@@ -55,7 +55,7 @@
 {#if d.logs.length === 0}
 	<EmptyState message={t('로그가 없습니다.')} />
 {:else}
-	<div class="table-wrap wide">
+	<div class="table-wrap wide cards">
 		<table>
 			<thead>
 				<tr>
@@ -68,10 +68,10 @@
 			<tbody>
 				{#each d.logs as log}
 					<tr>
-						<td class="mono">{ts(log.created_at)}</td>
-						<td><Badge variant={LEVEL_BADGE[log.level] ?? 'same'}>{log.level}</Badge></td>
-						<td class="mono muted">{log.source}</td>
-						<td>
+						<td class="mono" data-label={t('시간')}>{ts(log.created_at)}</td>
+						<td data-label={t('레벨')}><Badge variant={LEVEL_BADGE[log.level] ?? 'same'}>{log.level}</Badge></td>
+						<td class="mono muted" data-label={t('출처')}>{log.source}</td>
+						<td data-label={t('메시지')}>
 							<span class="mono muted">{log.logger}</span>
 							<div>{log.message}</div>
 							{#if log.traceback}

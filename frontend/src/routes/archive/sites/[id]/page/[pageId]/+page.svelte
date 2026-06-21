@@ -85,7 +85,7 @@
 {#if snaps.length === 0}
 	<EmptyState message={t('아직 스냅샷이 없습니다.')} />
 {:else}
-	<div class="table-wrap">
+	<div class="table-wrap cards">
 		<table>
 			<thead>
 				<tr>
@@ -95,15 +95,15 @@
 			<tbody>
 				{#each snaps as item}
 					<tr>
-						<td class="num">{item.idx}</td>
-						<td class="mono">{ts(item.snap.taken_at)}</td>
-						<td>
+						<td class="num" data-label="#">{item.idx}</td>
+						<td class="mono" data-label={t('시간')}>{ts(item.snap.taken_at)}</td>
+						<td data-label={t('상태')}>
 							<Badge variant={item.badge as BadgeVariant}>
 								{item.badge === 'new' ? t('신규') : item.badge === 'changed' ? t('변경') : t('동일')}
 							</Badge>
 						</td>
-						<td class="mono muted">{String(item.snap.content_hash).slice(0, 12)}</td>
-						<td class="num mono">{filesize(item.total_bytes)}</td>
+						<td class="mono muted" data-label={t('해시')}>{String(item.snap.content_hash).slice(0, 12)}</td>
+						<td class="num mono" data-label={t('용량')}>{filesize(item.total_bytes)}</td>
 						<td><a href={snapPath(tl.site?.id, tl.page.id, item.snap.id)}>{t('보기')}</a></td>
 					</tr>
 				{/each}

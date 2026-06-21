@@ -116,7 +116,7 @@
 	<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
 </Toolbar>
 
-<div class="table-wrap wide">
+<div class="table-wrap wide cards">
 	<table>
 		<thead>
 			<tr><th>{t('이메일')}</th><th>{t('표시이름')}</th><th>{t('역할')}</th><th></th></tr>
@@ -124,11 +124,11 @@
 		<tbody>
 			{#each d.users as u}
 				<tr>
-					<td>
+					<td data-label={t('이메일')}>
 						{u.email}
 						{#if u.is_founder}<Badge variant="same">{t('최초 관리자')}</Badge>{/if}
 					</td>
-					<td>
+					<td data-label={t('표시이름')}>
 						<div class="name-edit">
 							<Input
 								type="text"
@@ -140,7 +140,7 @@
 							<Button variant="outline" size="sm" onclick={() => saveName(u)} disabled={act.busy}>{t('저장')}</Button>
 						</div>
 					</td>
-					<td>
+					<td data-label={t('역할')}>
 						{#if u.is_founder}
 							<span class="badge">{d.role_labels[u.role] ?? u.role}</span>
 						{:else}
@@ -198,15 +198,15 @@
 {/if}
 
 {#if d.invites.length > 0}
-	<div class="table-wrap">
+	<div class="table-wrap cards">
 		<table>
 			<thead><tr><th>{t('이메일')}</th><th>{t('역할')}</th><th>{t('만료')}</th><th></th></tr></thead>
 			<tbody>
 				{#each d.invites as inv}
 					<tr>
-						<td>{inv.email}</td>
-						<td>{d.role_labels[inv.role] ?? inv.role}</td>
-						<td>
+						<td data-label={t('이메일')}>{inv.email}</td>
+						<td data-label={t('역할')}>{d.role_labels[inv.role] ?? inv.role}</td>
+						<td data-label={t('만료')}>
 							{#if inv.expired}
 								<Badge variant="error">{t('만료됨')}</Badge>
 							{:else}

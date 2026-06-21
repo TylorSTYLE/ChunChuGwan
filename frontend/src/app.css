@@ -180,6 +180,18 @@
 		background: var(--surface); color: var(--fg);
 	}
 	textarea { padding: 5px 10px; resize: vertical; }
+	/* 파일 선택 — 네이티브 컨트롤을 다른 입력과 같은 톤으로 맞춘다 */
+	input[type='file'] {
+		font: inherit; font-size: 13px; max-width: 100%;
+		border: 1px solid var(--border); border-radius: 4px;
+		background: var(--surface); color: var(--fg); padding: 3px 8px;
+	}
+	input[type='file']::file-selector-button {
+		font: inherit; font-size: 12px; margin-right: 10px; cursor: pointer;
+		padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px;
+		background: var(--bg-soft); color: var(--fg);
+	}
+	input[type='file']::file-selector-button:hover { background: var(--surface); }
 	button { cursor: pointer; }
 	button:hover { background: var(--bg-soft); }
 	button:disabled { cursor: not-allowed; opacity: 0.55; }
@@ -201,6 +213,40 @@
 	.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 	.table-wrap > table { min-width: 640px; }
 	.table-wrap.wide > table { min-width: 920px; }
+
+	/* 좁은 화면(≤768px): .cards 가 붙은 테이블은 가로 스크롤 대신 행을 카드로
+	   전환한다. 각 td 의 data-label 속성이 라벨로 표시되고, 라벨 없는 셀(액션
+	   버튼 등)은 라벨을 생략한다. 빈 액션 셀은 숨긴다. */
+	@media (max-width: 768px) {
+		.table-wrap.cards { overflow-x: visible; }
+		.table-wrap.cards > table { min-width: 0; display: block; }
+		.table-wrap.cards thead { display: none; }
+		.table-wrap.cards tbody { display: block; }
+		.table-wrap.cards tr {
+			display: block; border: 1px solid var(--border); border-radius: 6px;
+			padding: 4px 10px; margin-bottom: 8px;
+		}
+		.table-wrap.cards td {
+			display: flex; justify-content: space-between; gap: 12px;
+			padding: 4px 0; border-bottom: none; text-align: right;
+			white-space: normal; overflow-wrap: anywhere;
+		}
+		.table-wrap.cards td::before {
+			content: attr(data-label); flex: 0 0 38%; text-align: left;
+			color: var(--muted); font-weight: 600; font-size: 11px;
+			text-transform: uppercase; letter-spacing: 0.04em;
+			white-space: nowrap; overflow-wrap: normal;
+		}
+		.table-wrap.cards td:not([data-label])::before,
+		.table-wrap.cards td[data-label='']::before { content: none; }
+		.table-wrap.cards td:empty { display: none; }
+		.table-wrap.cards td.url-cell {
+			max-width: none; white-space: normal; overflow: visible; text-overflow: clip;
+		}
+		/* 빈 상태 행(EmptyState tag="tr" — colspan 셀)은 라벨 없이 가운데 정렬 */
+		.table-wrap.cards td[colspan] { display: block; text-align: center; }
+		.table-wrap.cards td[colspan]::before { content: none; }
+	}
 
 	@media (max-width: 599px) {
 		main { padding: 12px; }
