@@ -1,187 +1,285 @@
-/* 전역 스타일 — 기존 base.html 의 테마 변수·기본 요소·뱃지·테이블·카드 스타일을
-   이식한다. 시각적 회귀를 최소화하는 것이 목표(도구다운 밀도 UI). 화면별
-   세부 스타일은 각 Svelte 컴포넌트의 scoped <style> 에 둔다. */
+/* 춘추관 대시보드 전역 스타일 — Tailwind v4 + shadcn-svelte(vega 프리셋).
+   구성: shadcn 표준 토큰(:root/.dark) + 춘추관 시맨틱 색(상태/관인) +
+   점진 마이그레이션용 레거시 클래스(@layer base). 레거시 전역 클래스
+   (.badge·.toolbar·.auth-card 등)와 별칭 변수는 화면별 .svelte 가 shadcn
+   컴포넌트로 옮겨가면 제거한다. 다크모드는 .dark 클래스(mode-watcher) 기준. */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:is(.dark *));
+
 :root {
 	color-scheme: light;
-	--bg: #ffffff; --fg: #1a1a1a; --muted: #6b7280; --border: #e2e2e2;
-	--bg-soft: #f7f7f7; --surface: #ffffff;
-	--amber: #92400e; --amber-bg: #fef3c7;
-	--green: #166534; --green-bg: #dcfce7;
-	--gray: #374151;  --gray-bg: #e5e7eb;
-	--blue: #1e40af;  --blue-bg: #dbeafe;
-	--red-bg: #fee2e2; --red: #dc2626; --red-text: #991b1b; --red-hover: #b91c1c;
-	--link: #1d4ed8;
-	--accent: #16a34a; --accent-hover: #15803d;
+	/* shadcn 표준 토큰 — neutral 기반 (라이트) */
+	--background: oklch(1 0 0);
+	--foreground: oklch(0.145 0 0);
+	--card: oklch(1 0 0);
+	--card-foreground: oklch(0.145 0 0);
+	--popover: oklch(1 0 0);
+	--popover-foreground: oklch(0.145 0 0);
+	--primary: oklch(0.205 0 0);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.97 0 0);
+	--secondary-foreground: oklch(0.205 0 0);
+	--bg-muted: oklch(0.97 0 0); /* shadcn muted 배경 (bg-muted) */
+	--muted: oklch(0.556 0 0); /* 보조 텍스트 회색 (muted-foreground + 레거시 --muted) */
+	--bg-accent: oklch(0.97 0 0); /* shadcn accent 배경 (bg-accent) */
+	--accent-foreground: oklch(0.205 0 0);
+	--destructive: oklch(0.577 0.245 27.325);
+	--destructive-foreground: oklch(0.985 0 0);
+	--border: oklch(0.922 0 0);
+	--input: oklch(0.922 0 0);
+	--ring: oklch(0.708 0 0);
+	--radius: 0.5rem;
+
+	/* 춘추관 시맨틱 — 상태 색(변경/동일/신규/실행/위험) + 관인 + 링크 (라이트) */
+	--changed: #92400e; --changed-bg: #fef3c7;
+	--same: #374151; --same-bg: #e5e7eb;
+	--new: #166534; --new-bg: #dcfce7;
+	--running: #1e40af; --running-bg: #dbeafe;
+	--danger: #dc2626; --danger-bg: #fee2e2; --danger-fg: #991b1b; --danger-hover: #b91c1c;
 	--seal: #c2410c;
+	--link: #1d4ed8;
+
+	/* 레거시 별칭 — 기존 scoped style(var(--fg)·var(--accent) 등) 호환. 마이그레이션 시 제거 */
+	--fg: var(--foreground);
+	--bg: var(--background);
+	--surface: var(--card);
+	--bg-soft: var(--bg-muted);
+	--accent: var(--new); /* 기존 초록 액션 버튼 */
+	--accent-hover: #15803d;
+	--amber: var(--changed); --amber-bg: var(--changed-bg);
+	--green: var(--new); --green-bg: var(--new-bg);
+	--gray: var(--same); --gray-bg: var(--same-bg);
+	--blue: var(--running); --blue-bg: var(--running-bg);
+	--red: var(--danger); --red-bg: var(--danger-bg); --red-text: var(--danger-fg); --red-hover: var(--danger-hover);
 }
-:root[data-theme='dark'] {
+
+.dark {
 	color-scheme: dark;
-	--bg: #14171a; --fg: #dde1e6; --muted: #8b929b; --border: #2c3138;
-	--bg-soft: #1c2025; --surface: #1c2025;
-	--amber: #fbbf24; --amber-bg: #423008;
-	--green: #4ade80; --green-bg: #15301f;
-	--gray: #c3c9d1;  --gray-bg: #343a42;
-	--blue: #93c5fd;  --blue-bg: #1e3a5f;
-	--red-bg: #3f181b; --red: #dc2626; --red-text: #f87171; --red-hover: #b91c1c;
-	--link: #60a5fa;
-	--accent: #16a34a; --accent-hover: #22c55e;
+	/* shadcn 표준 토큰 — neutral 기반 (다크) */
+	--background: oklch(0.145 0 0);
+	--foreground: oklch(0.985 0 0);
+	--card: oklch(0.205 0 0);
+	--card-foreground: oklch(0.985 0 0);
+	--popover: oklch(0.205 0 0);
+	--popover-foreground: oklch(0.985 0 0);
+	--primary: oklch(0.922 0 0);
+	--primary-foreground: oklch(0.205 0 0);
+	--secondary: oklch(0.269 0 0);
+	--secondary-foreground: oklch(0.985 0 0);
+	--bg-muted: oklch(0.269 0 0);
+	--muted: oklch(0.708 0 0);
+	--bg-accent: oklch(0.269 0 0);
+	--accent-foreground: oklch(0.985 0 0);
+	--destructive: oklch(0.704 0.191 22.216);
+	--destructive-foreground: oklch(0.985 0 0);
+	--border: oklch(1 0 0 / 10%);
+	--input: oklch(1 0 0 / 15%);
+	--ring: oklch(0.556 0 0);
+
+	/* 춘추관 시맨틱 (다크) */
+	--changed: #fbbf24; --changed-bg: #423008;
+	--same: #c3c9d1; --same-bg: #343a42;
+	--new: #4ade80; --new-bg: #15301f;
+	--running: #93c5fd; --running-bg: #1e3a5f;
+	--danger: #dc2626; --danger-bg: #3f181b; --danger-fg: #f87171; --danger-hover: #b91c1c;
 	--seal: #ea7c4f;
-}
-* { box-sizing: border-box; }
-body {
-	font-family: system-ui, sans-serif; margin: 0; color: var(--fg);
-	font-size: 14px; background: var(--bg);
-}
-main { padding: 16px; max-width: 1280px; margin: 0 auto; }
-h2 { font-size: 16px; margin: 0 0 12px; }
-h3 {
-	font-size: 13px; color: var(--muted); margin: 24px 0 8px;
-	text-transform: uppercase; letter-spacing: 0.04em;
-}
-a { color: var(--link); text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-table { border-collapse: collapse; width: 100%; font-size: 13px; }
-th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); }
-td { overflow-wrap: anywhere; }
-th {
-	color: var(--muted); font-weight: 600; font-size: 11px;
-	text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap;
-}
-td.num { text-align: right; color: var(--muted); white-space: nowrap; }
-td.mono.muted { white-space: nowrap; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.muted { color: var(--muted); }
-
-.badge {
-	display: inline-block; font-size: 11px; font-weight: 600;
-	padding: 1px 7px; border-radius: 9px; white-space: nowrap;
-}
-.badge.changed { color: var(--amber); background: var(--amber-bg); }
-.badge.same { color: var(--gray); background: var(--gray-bg); }
-.badge.new { color: var(--green); background: var(--green-bg); }
-.badge.error { color: var(--red-text); background: var(--red-bg); }
-.badge.running { color: var(--blue); background: var(--blue-bg); }
-
-button, select, textarea,
-input[type='text'], input[type='url'], input[type='number'],
-input[type='password'], input[type='email'] {
-	font: inherit; font-size: 13px; padding: 3px 10px;
-	border: 1px solid var(--border); border-radius: 4px;
-	background: var(--surface); color: var(--fg);
-}
-textarea { padding: 5px 10px; resize: vertical; }
-button { cursor: pointer; }
-button:hover { background: var(--bg-soft); }
-button:disabled { cursor: not-allowed; opacity: 0.55; }
-button:disabled:hover { background: var(--surface); }
-
-.stat-grid {
-	display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-	gap: 10px; margin-bottom: 8px;
-}
-.stat-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; }
-.stat-card .label {
-	font-size: 11px; color: var(--muted); font-weight: 600;
-	text-transform: uppercase; letter-spacing: 0.04em;
-}
-.stat-card .value {
-	font-size: 22px; font-weight: 600; margin-top: 2px;
-	font-variant-numeric: tabular-nums;
-}
-.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.table-wrap > table { min-width: 640px; }
-.table-wrap.wide > table { min-width: 920px; }
-
-@media (max-width: 599px) {
-	main { padding: 12px; }
-	.stat-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
-	.stat-card .value { font-size: 19px; }
+	--link: #60a5fa;
+	--accent-hover: #22c55e;
 }
 
-/* 미인증 화면(로그인·가입·2단계·이메일 인증) — base.html auth_base 스타일 이식.
-   (auth) 라우트 그룹 레이아웃과 각 화면이 공유하므로 전역에 둔다. */
-main.plain { max-width: none; padding: 0; }
-.auth-shell { max-width: 392px; margin: 7vh auto 48px; padding: 0 16px; }
-.auth-brand { text-align: center; margin-bottom: 22px; }
-.auth-brand .logo { color: var(--fg); }
-.auth-brand .auth-title {
-	font-size: 21px; font-weight: 700; margin-top: 10px; letter-spacing: 0.1em;
-}
-.auth-brand .auth-tagline {
-	font-size: 12px; margin-top: 3px; color: var(--muted); letter-spacing: 0.05em;
-}
-.auth-card {
-	border: 1px solid var(--border); border-top: 2px solid var(--seal);
-	border-radius: 8px; padding: 20px 24px; background: var(--surface);
-}
-.auth-card h2 { font-size: 16px; margin: 0 0 14px; }
-.auth-card label { display: block; margin-bottom: 10px; font-size: 13px; }
-.auth-card input {
-	display: block; width: 100%; margin-top: 3px; padding: 5px 10px;
-	font: inherit; font-size: 13px; border: 1px solid var(--border);
-	border-radius: 4px; background: var(--surface); color: var(--fg);
-}
-.auth-card button[type='submit'] { width: 100%; margin-top: 4px; padding: 6px; }
-.auth-card .alt {
-	margin-top: 14px; padding-top: 12px;
-	border-top: 1px solid var(--border); font-size: 13px;
-}
-.auth-card .alt.muted { color: var(--muted); }
-.auth-card div.error {
-	background: var(--red-bg); color: var(--red-text); border-radius: 4px;
-	padding: 6px 12px; margin-bottom: 12px; font-size: 13px;
-}
-.auth-card .notice {
-	background: var(--green-bg); color: var(--green); border-radius: 4px;
-	padding: 6px 12px; margin-bottom: 12px; font-size: 13px;
+@theme inline {
+	/* shadcn 표준 매핑 — bg-/text-/border- 유틸이 위 토큰을 참조 */
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--bg-muted);
+	--color-muted-foreground: var(--muted);
+	--color-accent: var(--bg-accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+
+	/* 춘추관 시맨틱 유틸 노출 — bg-changed/text-new/bg-seal 등 */
+	--color-changed: var(--changed); --color-changed-bg: var(--changed-bg);
+	--color-same: var(--same); --color-same-bg: var(--same-bg);
+	--color-new: var(--new); --color-new-bg: var(--new-bg);
+	--color-running: var(--running); --color-running-bg: var(--running-bg);
+	--color-danger: var(--danger); --color-danger-bg: var(--danger-bg);
+	--color-seal: var(--seal);
+	--color-link: var(--link);
+
+	--font-sans: "Inter Variable", system-ui, sans-serif;
+	--font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
 
-/* ── 공통 UI 프리미티브 (톤앤매너 확산·반응형) ───────────────────────
-   여러 페이지에서 중복 정의하던 버튼·알림·필터바·페이지헤더·페이지네이션
-   스타일을 전역으로 통합한다. 모바일/태블릿에서 줄바꿈·풀폭으로 흐른다. */
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground font-sans;
+	}
 
-/* 액션 버튼 — primary(초록)·danger(빨강). 보조 버튼은 기본 button 스타일. */
-button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
-button.primary:hover { background: var(--accent-hover); }
-button.danger { color: #fff; background: var(--red); border-color: var(--red); }
-button.danger:hover { background: var(--red-hover); }
+	/* ── 레거시 base 요소·클래스 (점진 마이그레이션용, @layer base 라 shadcn 유틸이 우선) ── */
+	* { box-sizing: border-box; }
+	body { margin: 0; font-size: 14px; }
+	main { padding: 16px; max-width: 1280px; margin: 0 auto; }
+	h2 { font-size: 16px; margin: 0 0 12px; }
+	h3 {
+		font-size: 13px; color: var(--muted); margin: 24px 0 8px;
+		text-transform: uppercase; letter-spacing: 0.04em;
+	}
+	a { color: var(--link); text-decoration: none; }
+	a:hover { text-decoration: underline; }
 
-/* 알림 박스 — error·notice·warn. */
-.error, .notice, .warn {
-	border-radius: 4px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px;
+	table { border-collapse: collapse; width: 100%; font-size: 13px; }
+	th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--border); }
+	td { overflow-wrap: anywhere; }
+	th {
+		color: var(--muted); font-weight: 600; font-size: 11px;
+		text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap;
+	}
+	td.num { text-align: right; color: var(--muted); white-space: nowrap; }
+	td.mono.muted { white-space: nowrap; }
+	.mono { font-family: var(--font-mono); font-size: 12px; }
+	.muted { color: var(--muted); }
+
+	.badge {
+		display: inline-block; font-size: 11px; font-weight: 600;
+		padding: 1px 7px; border-radius: 9px; white-space: nowrap;
+	}
+	.badge.changed { color: var(--changed); background: var(--changed-bg); }
+	.badge.same { color: var(--same); background: var(--same-bg); }
+	.badge.new { color: var(--new); background: var(--new-bg); }
+	.badge.error { color: var(--danger-fg); background: var(--danger-bg); }
+	.badge.running { color: var(--running); background: var(--running-bg); }
+
+	button, select, textarea,
+	input[type='text'], input[type='url'], input[type='number'],
+	input[type='password'], input[type='email'] {
+		font: inherit; font-size: 13px; padding: 3px 10px;
+		border: 1px solid var(--border); border-radius: 4px;
+		background: var(--surface); color: var(--fg);
+	}
+	textarea { padding: 5px 10px; resize: vertical; }
+	button { cursor: pointer; }
+	button:hover { background: var(--bg-soft); }
+	button:disabled { cursor: not-allowed; opacity: 0.55; }
+	button:disabled:hover { background: var(--surface); }
+
+	.stat-grid {
+		display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+		gap: 10px; margin-bottom: 8px;
+	}
+	.stat-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; }
+	.stat-card .label {
+		font-size: 11px; color: var(--muted); font-weight: 600;
+		text-transform: uppercase; letter-spacing: 0.04em;
+	}
+	.stat-card .value {
+		font-size: 22px; font-weight: 600; margin-top: 2px;
+		font-variant-numeric: tabular-nums;
+	}
+	.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+	.table-wrap > table { min-width: 640px; }
+	.table-wrap.wide > table { min-width: 920px; }
+
+	@media (max-width: 599px) {
+		main { padding: 12px; }
+		.stat-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+		.stat-card .value { font-size: 19px; }
+	}
+
+	/* 미인증 화면(로그인·가입·2단계·이메일 인증) */
+	main.plain { max-width: none; padding: 0; }
+	.auth-shell { max-width: 392px; margin: 7vh auto 48px; padding: 0 16px; }
+	.auth-brand { text-align: center; margin-bottom: 22px; }
+	.auth-brand .logo { color: var(--fg); }
+	.auth-brand .auth-title {
+		font-size: 21px; font-weight: 700; margin-top: 10px; letter-spacing: 0.1em;
+	}
+	.auth-brand .auth-tagline {
+		font-size: 12px; margin-top: 3px; color: var(--muted); letter-spacing: 0.05em;
+	}
+	.auth-card {
+		border: 1px solid var(--border); border-top: 2px solid var(--seal);
+		border-radius: 8px; padding: 20px 24px; background: var(--surface);
+	}
+	.auth-card h2 { font-size: 16px; margin: 0 0 14px; }
+	.auth-card label { display: block; margin-bottom: 10px; font-size: 13px; }
+	.auth-card input {
+		display: block; width: 100%; margin-top: 3px; padding: 5px 10px;
+		font: inherit; font-size: 13px; border: 1px solid var(--border);
+		border-radius: 4px; background: var(--surface); color: var(--fg);
+	}
+	.auth-card button[type='submit'] { width: 100%; margin-top: 4px; padding: 6px; }
+	.auth-card .alt {
+		margin-top: 14px; padding-top: 12px;
+		border-top: 1px solid var(--border); font-size: 13px;
+	}
+	.auth-card .alt.muted { color: var(--muted); }
+	.auth-card div.error {
+		background: var(--danger-bg); color: var(--danger-fg); border-radius: 4px;
+		padding: 6px 12px; margin-bottom: 12px; font-size: 13px;
+	}
+	.auth-card .notice {
+		background: var(--new-bg); color: var(--new); border-radius: 4px;
+		padding: 6px 12px; margin-bottom: 12px; font-size: 13px;
+	}
+
+	/* 공통 UI 프리미티브 (버튼·알림·필터바·페이지헤더·페이지네이션) */
+	button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+	button.primary:hover { background: var(--accent-hover); }
+	button.danger { color: #fff; background: var(--danger); border-color: var(--danger); }
+	button.danger:hover { background: var(--danger-hover); }
+
+	.error, .notice, .warn {
+		border-radius: 4px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px;
+	}
+	.error { background: var(--danger-bg); color: var(--danger-fg); }
+	.notice { background: var(--new-bg); color: var(--new); }
+	.warn { background: var(--changed-bg); color: var(--changed); }
+
+	.page-head {
+		display: flex; flex-wrap: wrap; gap: 10px;
+		align-items: baseline; justify-content: space-between; margin: 0 0 12px;
+	}
+	.page-head h2 { margin: 0; }
+	.page-head .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+	.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+	.toolbar .spacer { flex: 1 1 auto; }
+	@media (max-width: 599px) {
+		.toolbar > select,
+		.toolbar > input[type='text'],
+		.toolbar > input[type='url'] { flex: 1 1 100%; min-width: 0; }
+	}
+
+	.action-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+
+	.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+	.form-grid input, .form-grid select { width: 100%; min-width: 0; }
+
+	.pager { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 12px; }
+
+	td.url-cell { max-width: min(56vw, 460px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	@media (max-width: 599px) { td.url-cell { max-width: 64vw; } }
 }
-.error { background: var(--red-bg); color: var(--red-text); }
-.notice { background: var(--green-bg); color: var(--green); }
-.warn { background: var(--amber-bg); color: var(--amber); }
-
-/* 페이지 헤더 — 제목 + 우측 액션(모바일 줄바꿈). */
-.page-head {
-	display: flex; flex-wrap: wrap; gap: 10px;
-	align-items: baseline; justify-content: space-between; margin: 0 0 12px;
-}
-.page-head h2 { margin: 0; }
-.page-head .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-
-/* 필터/검색 바 — 좁은 화면에서 줄바꿈, 모바일에선 입력이 풀폭. */
-.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
-.toolbar .spacer { flex: 1 1 auto; }
-@media (max-width: 599px) {
-	.toolbar > select,
-	.toolbar > input[type='text'],
-	.toolbar > input[type='url'] { flex: 1 1 100%; min-width: 0; }
-}
-
-/* 액션 버튼 바 — 여러 버튼이 좁은 화면에서 줄바꿈. */
-.action-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-
-/* 반응형 폼 그리드 — 여러 입력을 나란히, 모바일에서 자동 1열. */
-.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
-.form-grid input, .form-grid select { width: 100%; min-width: 0; }
-
-/* 페이지네이션. */
-.pager { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 12px; }
-
-/* URL 셀 — 고정폭 대신 화면폭 비례(모바일 오버플로·잘림 방지). */
-td.url-cell { max-width: min(56vw, 460px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 599px) { td.url-cell { max-width: 64vw; } }

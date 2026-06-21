@@ -7,14 +7,6 @@ declare global {
 		// interface PageState {}
 		// interface Platform {}
 	}
-
-	interface Window {
-		wccgTheme: {
-			KEY: string;
-			stored: () => 'light' | 'dark' | null;
-			apply: () => void;
-		};
-	}
 }
 
 export {};

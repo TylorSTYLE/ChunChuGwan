@@ -3,6 +3,7 @@
 	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
+	import { ModeWatcher, userPrefersMode, setMode } from 'mode-watcher';
 	import NavMenu from '$lib/components/NavMenu.svelte';
 	import UpdateNoticeModal from '$lib/components/UpdateNoticeModal.svelte';
 	import type { Snippet } from 'svelte';
@@ -44,29 +45,20 @@
 	const showLogs = $derived(!!me && me.flags.can_view_any_logs);
 	const showSettings = $derived(!!me && (me.flags.can_manage_users || me.flags.can_manage_system));
 
-	// 테마 토글 — 자동(시스템) → 라이트 → 다크 순환 (app.html 의 wccgTheme 재사용).
+	// 테마 토글 — 자동(시스템) → 라이트 → 다크 순환 (mode-watcher). .dark 클래스·
+	// localStorage 저장·FOUC 방지는 mode-watcher(ModeWatcher)가 담당한다.
 	const THEME_LABELS: Record<string, string> = {
-		auto: '테마: 자동',
+		system: '테마: 자동',
 		light: '테마: 라이트',
 		dark: '테마: 다크'
 	};
-	const NEXT: Record<string, string> = { auto: 'light', light: 'dark', dark: 'auto' };
-	let themeMode = $state(getMode());
-
-	function getMode(): string {
-		if (typeof window === 'undefined') return 'auto';
-		return window.wccgTheme?.stored() ?? 'auto';
-	}
+	const NEXT: Record<string, 'light' | 'dark' | 'system'> = {
+		system: 'light',
+		light: 'dark',
+		dark: 'system'
+	};
 	function cycleTheme() {
-		const next = NEXT[getMode()];
-		try {
-			if (next === 'auto') localStorage.removeItem(window.wccgTheme.KEY);
-			else localStorage.setItem(window.wccgTheme.KEY, next);
-		} catch {
-			/* localStorage 불가 — 시스템 설정 유지 */
-		}
-		window.wccgTheme.apply();
-		themeMode = getMode();
+		setMode(NEXT[userPrefersMode.current]);
 	}
 
 	// 좁은 화면 메뉴 토글
@@ -100,6 +92,8 @@
 		return () => document.removeEventListener('click', onDocClick);
 	});
 </script>
+
+<ModeWatcher />
 
 {#if me && me.user?.role !== 'pending'}
 <header>
@@ -224,7 +218,7 @@
 			</div>
 		</details>
 
-		<button type="button" class="theme-btn" onclick={cycleTheme}>{t(THEME_LABELS[themeMode])}</button>
+		<button type="button" class="theme-btn" onclick={cycleTheme}>{t(THEME_LABELS[userPrefersMode.current])}</button>
 
 		{#if me.user}
 			<details class="user-menu" name="hdrmenu" bind:open={userMenuOpen}>

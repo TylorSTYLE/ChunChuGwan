@@ -1,22 +1,19 @@
 <script lang="ts">
 	import { t } from '$lib/i18n';
+	import { userPrefersMode, setMode } from 'mode-watcher';
 	import type { Snippet } from 'svelte';
 
 	let { children }: { children: Snippet } = $props();
 
 	// 테마 토글 — 미인증 화면도 자동 → 라이트 → 다크 순환(루트 헤더가 없으므로 자체 제공).
-	const NEXT: Record<string, string> = { auto: 'light', light: 'dark', dark: 'auto' };
+	// 실제 적용·저장은 루트 레이아웃의 mode-watcher(ModeWatcher)가 담당한다.
+	const NEXT: Record<string, 'light' | 'dark' | 'system'> = {
+		system: 'light',
+		light: 'dark',
+		dark: 'system'
+	};
 	function cycleTheme() {
-		if (typeof window === 'undefined') return;
-		const cur = window.wccgTheme?.stored() ?? 'auto';
-		const next = NEXT[cur];
-		try {
-			if (next === 'auto') localStorage.removeItem(window.wccgTheme.KEY);
-			else localStorage.setItem(window.wccgTheme.KEY, next);
-		} catch {
-			/* localStorage 불가 — 시스템 설정 유지 */
-		}
-		window.wccgTheme.apply();
+		setMode(NEXT[userPrefersMode.current]);
 	}
 </script>
 
