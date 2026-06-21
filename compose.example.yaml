@@ -47,6 +47,7 @@ services:
     environment:
       TZ: "Asia/Seoul"
       WCCG_LOG_FILE: "/data/logs/worker.log"   # 캡처/아카이빙 로그가 여기에 남는다 (트레이스백 포함)
+      # worker 는 작업 시작/완료·실패를 콘솔(docker compose logs worker)에도 INFO 로 남긴다 (--quiet 로 끔)
       # WCCG_CRAWL_WORKERS: "2"     # 동시 진행 크롤(사이트) 수 (1~8, 기본 2)
       # --- 스텔스 캡처 (Cloudflare Turnstile 등 봇차단 페이지 통과 시도) ---
       # 모든 캡처(새/재아카이빙·스케줄·크롤)가 worker 에서 실행되므로 여기에만 켜면 된다.

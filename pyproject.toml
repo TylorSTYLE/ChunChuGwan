@@ -2,6 +2,9 @@
 name = "chunchugwan"
 version = "0.6.1"
 description = "개인 웹 아카이빙 시스템 — 스냅샷 히스토리와 diff 지원"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Tylor, Seo", email = "tylorstyle@gmail.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "click>=8.1",
@@ -9,7 +12,6 @@ dependencies = [
     "lxml>=5.0",
     "fastapi>=0.111",
     "uvicorn>=0.30",
-    "jinja2>=3.1",
     "pillow>=10.3",
     "argon2-cffi>=23.1",
     "pyotp>=2.9",

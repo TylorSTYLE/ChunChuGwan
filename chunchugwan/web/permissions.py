@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import sqlite3
 
+from fastapi import Request
+
 from .. import config, db
 
 
@@ -47,13 +49,23 @@ def can_delete(user: sqlite3.Row | None) -> bool:
     return has_permission(user, "delete")
 
 
-def can_view_logs(user: sqlite3.Row | None) -> bool:
-    """아카이빙 로그(/logs)·열람 가능 여부 — viewer 이상."""
-    return has_permission(user, "view")
+def can_view_archive_logs(user: sqlite3.Row | None) -> bool:
+    """아카이브 로그(/log/archive) 열람 가능 여부 — 기본 admin 만."""
+    return has_permission(user, "view_archive_logs")
+
+
+def can_view_system_logs(user: sqlite3.Row | None) -> bool:
+    """시스템 로그(/log/system) 열람 가능 여부 — 기본 admin 만."""
+    return has_permission(user, "view_system_logs")
+
+
+def can_view_audit_logs(user: sqlite3.Row | None) -> bool:
+    """감사 로그(/log/audit) 열람 가능 여부 — 기본 admin 만."""
+    return has_permission(user, "view_audit_logs")
 
 
 def can_search(user: sqlite3.Row | None) -> bool:
-    """아카이브 전문 검색(/search) 가능 여부 — 로그 열람과 같은 하한(view)."""
+    """아카이브 전문 검색(/search) 가능 여부 — 아카이브 열람과 같은 하한(view)."""
     return has_permission(user, "view")
 
 
@@ -75,6 +87,15 @@ def can_manage_users(user: sqlite3.Row | None) -> bool:
 def can_view_authenticated_all(user: sqlite3.Row | None) -> bool:
     """다른 사용자가 로그인 캡처한 인증 스냅샷까지 열람 가능 여부."""
     return has_permission(user, "view_authenticated_all")
+
+
+def can_manage_trash(user: sqlite3.Row | None) -> bool:
+    """휴지통(삭제 보류 아카이브) 열람·복원·영구삭제 가능 여부 — 기본 admin 만.
+
+    삭제(=휴지통으로 보내기)는 종전 delete 권한이 게이트하고, 휴지통을 보고
+    되돌리거나 영구삭제하는 것은 이 권한으로 분리한다.
+    """
+    return has_permission(user, "manage_trash")
 
 
 def can_use_api_keys(user: sqlite3.Row | None) -> bool:
@@ -126,9 +147,16 @@ def menu_flags(user: sqlite3.Row | None) -> dict[str, bool]:
         "can_manage_credentials": can_manage_credentials,
         "can_archive": has("archive"),
         "can_delete": has("delete"),
-        "can_view_logs": has("view"),
+        "can_view_archive_logs": has("view_archive_logs"),
+        "can_view_system_logs": has("view_system_logs"),
+        "can_view_audit_logs": has("view_audit_logs"),
+        "can_view_any_logs": (
+            has("view_archive_logs") or has("view_system_logs")
+            or has("view_audit_logs")
+        ),
         "can_search": has("view"),
         "can_use_api_keys": has("use_api_keys"),
+        "can_manage_trash": has("manage_trash"),
     }
 
 
@@ -146,3 +174,30 @@ def token_permissions_for_user(user: sqlite3.Row | None) -> tuple[bool, bool]:
     """사용자 실효 권한에서 확장 토큰 권한(can_view, can_archive)을 파생 (오버라이드 반영)."""
     perms = effective_permissions(user)
     return "view" in perms, "archive" in perms
+
+
+def auth_context(request: Request) -> dict:
+    """로그인 사용자 + 메뉴/버튼 노출 플래그 + 사람 확인 대기 작업.
+
+    SPA 세션 컨텍스트(/api/web/me)가 쓰는 권한·needs-human 묶음. 실효 권한을
+    1회 계산해 메뉴 플래그를 모두 파생하고, manage_system 권한자에겐 워커가 DB 에
+    기록한 needs_human(사람 확인 대기) 작업을 함께 내려보낸다 (serve 의
+    LIVE_CHALLENGE 설정과 무관 — DB 사실 기준)."""
+    user = getattr(request.state, "user", None)
+    flags = menu_flags(user)
+    needs_human_jobs: list = []
+    if flags["can_manage_system"]:
+        try:
+            with db.connect() as conn:
+                needs_human_jobs = [
+                    {"id": j["id"], "url": j["url"]}
+                    for j in db.list_needs_human_jobs(conn)
+                ]
+        except Exception:
+            needs_human_jobs = []
+    return {
+        "user": user,
+        **flags,
+        "needs_human_jobs": needs_human_jobs,
+        "needs_human_count": len(needs_human_jobs),
+    }

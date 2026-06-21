@@ -1,5 +1,14 @@
 # syntax=docker/dockerfile:1
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+# ── SvelteKit SPA 빌드 — 정적 산출물(frontend/build)을 다음 스테이지가 동봉한다 ──
+FROM node:24-slim AS frontend
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -42,6 +51,9 @@ RUN set -eux; \
 
 COPY pyproject.toml uv.lock ./
 COPY chunchugwan/ chunchugwan/
+# SvelteKit SPA 정적 산출물 — app.py 가 web/frontend_dist 를 루트(/)로 서빙한다(C2 컷오버).
+# editable 설치라 소스 경로의 이 디렉토리를 런타임에 그대로 읽는다.
+COPY --from=frontend /frontend/build chunchugwan/web/frontend_dist
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --extra stealth
 

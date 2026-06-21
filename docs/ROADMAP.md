@@ -104,3 +104,44 @@
       `/api/v1/network-tags` 로 태그 선택/추가(생성 `manage_system`). 설계:
       `docs/EXTENSION_CLIENT_CAPTURE_PLAN.md`. 서버측은 테스트로 검증(test_ingest·
       test_extension_api), 확장 런타임(CDP·업로드)은 언팩 로드 후 수동 테스트 필요.
+- [x] **A15 아카이브 휴지통**: 페이지·사이트 삭제를 즉시 영구삭제 대신
+      **휴지통(소프트 삭제)**으로 보낸다 (`deletion.py` — soft/hard/restore/purge).
+      `trash_entries` 테이블 + pages/crawls/crawl_schedules 의 `trash_id` 컬럼으로
+      삭제 보류 항목을 표시하고, 모든 목록·검색·뷰어·문서·서빙에서 숨기되 스냅샷
+      파일·공유 자원/문서 CAS 는 보존한다. 시스템 설정의 보관 기간
+      (`trash_retention_days`, 기본 30일, 0=자동삭제 끔)이 지나면
+      `scheduler.run_due` 자동 purge 훅이 영구삭제하고, 그때 비로소 참조 0 인 CAS
+      를 GC 한다. 휴지통 기능 자체는 `trash_enabled`(기본 on)로 끌 수 있고(끄면
+      삭제가 즉시 영구삭제 — 종전 동작), 단일 스냅샷 삭제(`--snapshot`·
+      `delete_snapshot`)는 범위 밖(항상 즉시 삭제). CLI `wccg delete --hard`(즉시
+      영구삭제) + 새 그룹 `wccg trash list/restore/purge`. 대시보드 휴지통 화면
+      (`/archive/trash`, 새 세분 권한 `manage_trash` — 기본 admin)에서 열람·복원·
+      영구삭제, 시스템 설정에 '휴지통' 섹션(`POST /system/trash-settings`).
+      전체 백업은 휴지통 항목을 보존, 내보내기(`export`)는 제외. 휴지통에 있는
+      URL 을 다시 아카이빙하면 자동 복원(숨겨진 페이지에 스냅샷 누적 방지).
+- [x] **A16 확장 보안·UX 강화 + 독립 버저닝**: (1) `/api/v1` 인증을 **개인 API Key
+      전용**으로(시스템 키 거부) + 인증 실패에 IP 별 인증보호(`auth_throttle` 의
+      `api_key_ip` 버킷, 실패 시에만 카운트·한도 초과 429), 발급 권한(`use_api_keys`)
+      회수 시 매 요청 재평가로 즉시 401 → 확장 자동 연결 해제(`handleAuthLost`). (2) 확장
+      UX: 단축키·우클릭 빠른 캡처(`commands`/`contextMenus`, 연결 시에만 활성), 툴바
+      아카이브 여부 ✓ 배지, 사설 호스트 태그 사전 선택(2회 캡처 제거), 브라우저 캡처
+      진행률 표시, 마지막 선택 탭 유지. (3) 확장 버전을 서버 앱 버전과 분리(manifest
+      정본, `/api/v1/version` 의 `extension_version`, zip 덮어쓰기 제거) — `1.0.0` 시작 +
+      영향도 기반 자동 버저닝 정책(`.claude/rules/api-extension.md`). 서버측 테스트 갱신
+      (개인 키 전용·시스템 키 401·무효 토큰 429), 확장 런타임은 언팩 로드 후 수동.
+
+## SvelteKit SPA 전환 (#13 — C2 빅뱅 컷오버 완료)
+
+- [x] **Phase A~C1 + 보강**: 기존 Jinja2 SSR 대시보드 전 화면을 SvelteKit SPA(`frontend/`,
+      Svelte 5 + adapter-static)로 재구축하고, 데이터 계층을 `/api/web/*` JSON API
+      (`web_api_routes`·`web_auth_routes`)로 분리. 인증(로그인·2FA·패스키·가입·이메일
+      인증·최초설정·네트워크 이전)·읽기 10화면·쓰기 액션·관리(사용자·권한그룹·시스템
+      설정·네트워크태그·SMTP·백업/복원/내보내기/가져오기·compact/재색인·이전 모드)를
+      JSON+SPA 로 보강. 인증 라우팅은 SPA 루트 레이아웃이 `/api/web/me` 로 단일 결정.
+- [x] **C2 빅뱅 컷오버**: `svelte.config.js` base `/ui`→`''`, SPA 를 루트(/)로 서빙
+      (`app.py` catch-all). SSR 전면 제거 — Jinja 템플릿 43개·`templating.py`·SSR HTML
+      라우트(app/auth/system_routes)·`system_routes.py`·`jinja2` 의존 삭제. `auth_gate`
+      미들웨어 단순화(리다이렉트 제거→SPA 권위, pending /api 게이트), 아카이브 자원
+      라우트에 `_require_viewer` 가드, 초대 수락 SPA 흐름 추가, 실패 재시도·사이트 export
+      를 `/api/web` 으로 보강. 공용 헬퍼(tar_download·재색인 상태)는 `web/maintenance.py`.
+      SSR 테스트는 `/api/web` 스위트로 대체.

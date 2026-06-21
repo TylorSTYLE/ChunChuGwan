@@ -130,15 +130,20 @@ SEARCH_DOC_TEXT_MAX_CHARS = 2 * 1024 * 1024    # 문서 1개에서 색인할 본
 TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "igshid", "ref_src")
 
 # ---- 사이트 전체 아카이브 (crawler.py) ----
-# CRAWL_DEFAULT_* 와 CRAWL_RETRY_BACKOFF_SECONDS 는 시스템 설정(settings 테이블,
-# 대시보드 시스템 화면)으로 오버라이드된다 — crawler.crawl_defaults / retry_backoff 참조.
+# CRAWL_DEFAULT_*(기본값)·CRAWL_MAX_*_LIMIT(설정 없을 때의 기본 상한)·
+# CRAWL_RETRY_BACKOFF_SECONDS 는 시스템 설정(settings 테이블, 대시보드 시스템 화면)으로
+# 오버라이드된다 — crawler.crawl_defaults / crawl_limits / retry_backoff 참조.
+# CRAWL_MAX_*_CEILING 은 관리자가 설정할 수 있는 상한의 절대 천장(설정 불가).
 CRAWL_DEFAULT_MAX_PAGES = 500
-CRAWL_MAX_PAGES_LIMIT = 10000
+CRAWL_MAX_PAGES_LIMIT = 10000        # 상한(crawl_limits) 미설정 시 기본값
+CRAWL_MAX_PAGES_CEILING = 1_000_000  # 상한 설정의 절대 천장
 CRAWL_DEFAULT_MAX_DEPTH = 5
-CRAWL_MAX_DEPTH_LIMIT = 20
+CRAWL_MAX_DEPTH_LIMIT = 20           # 상한 미설정 시 기본값
+CRAWL_MAX_DEPTH_CEILING = 100        # 상한 설정의 절대 천장
 CRAWL_DEFAULT_DELAY_SECONDS = 5      # 페이지 간 최소 간격 (대상 서버 부담 방지)
 CRAWL_MIN_DELAY_SECONDS = 1
-CRAWL_MAX_DELAY_SECONDS = 3600
+CRAWL_MAX_DELAY_SECONDS = 3600       # 지연 상한 미설정 시 기본값
+CRAWL_MAX_DELAY_CEILING = 86400      # 지연 상한 설정의 절대 천장 (1일)
 CRAWL_RETRY_BACKOFF_SECONDS = (300, 900)   # n차 실패 후 재시도 대기 — 최대 시도 = 길이 + 1
 CRAWL_RETRY_BACKOFF_MIN_SECONDS = 10       # 재시도 대기 항목별 허용 범위 (설정 검증용)
 CRAWL_RETRY_BACKOFF_MAX_SECONDS = 86400
@@ -208,6 +213,33 @@ EMAIL_VERIFICATION_TTL_MINUTES_DEFAULT = 30
 EMAIL_VERIFICATION_TTL_MINUTES_MIN = 5
 EMAIL_VERIFICATION_TTL_MINUTES_MAX = 1440  # 24시간
 EMAIL_VERIFICATION_CODE_LENGTH = 6         # 숫자 코드 자릿수
+
+# 아카이브 휴지통 — 보관 기간(일, 시스템 설정으로 변경). 페이지·사이트 삭제를
+# 즉시 지우지 않고 휴지통에 숨겼다가 이 기간이 지나면 스케줄러가 영구 삭제한다.
+# 0 = 자동 삭제 비활성(수동 영구삭제 전까지 보관). trash_enabled off 면 즉시 삭제.
+TRASH_RETENTION_DAYS_DEFAULT = 30
+TRASH_RETENTION_DAYS_MIN = 0               # 0 = 자동 purge 끔
+TRASH_RETENTION_DAYS_MAX = 365
+
+# 인증 무차별 대입 방어(rate limit) 기본값 — 시스템 설정(settings)으로 오버라이드한다
+# (db.auth_throttle_settings 가 [MIN, MAX] 로 클램핑). 고정 윈도우 카운터 방식.
+AUTH_LOGIN_LIMIT_DEFAULT = 10              # 이메일별 로그인 실패 허용 횟수/창
+AUTH_LOGIN_IP_LIMIT_DEFAULT = 30          # IP별 로그인 시도 허용 횟수/창
+AUTH_LOGIN_WINDOW_MINUTES_DEFAULT = 15    # 로그인 카운트 창(분)
+AUTH_TOTP_LIMIT_DEFAULT = 10              # 2단계(TOTP·패스키) 시도 허용 횟수/창(=pending 수명)
+AUTH_EMAIL_VERIFY_LIMIT_DEFAULT = 5      # 이메일 코드 오답 허용 횟수(초과 시 코드 폐기)
+AUTH_EMAIL_RESEND_LIMIT_DEFAULT = 5      # 코드 재발송 시간당 허용 횟수
+AUTH_THROTTLE_LIMIT_MIN = 1               # 한도 설정 허용 범위 (시도 횟수)
+AUTH_THROTTLE_LIMIT_MAX = 1000
+AUTH_THROTTLE_WINDOW_MIN = 1              # 창 설정 허용 범위 (분)
+AUTH_THROTTLE_WINDOW_MAX = 1440
+# throttle 행 GC 기준 — 가장 긴 창(로그인)의 안전 마진. delete_expired_throttle 호출에 쓴다.
+AUTH_THROTTLE_GC_SECONDS = 86400
+
+# 최초 설정(first-run) 보호 토큰. 설정하면 /setup 흐름(관리자 생성·복원·이전)이
+# 일치 토큰을 요구한다 — 셋업 완료 전 외부 노출 인스턴스 선점·SSRF 방지. 빈값이면
+# 종전대로 토큰 없이 셋업 가능(로컬 단독 사용 편의). 셋업이 끝나면 무의미해진다.
+SETUP_TOKEN = os.environ.get("WCCG_SETUP_TOKEN", "").strip()
 
 # 외부 사이트 로그인 자격증명 암호화 키 (대칭 — CLAUDE.md 원칙 6 예외).
 # 설정 시에만 자격증명 기능이 활성화된다. DB·저장소엔 암호문만 남고 키는

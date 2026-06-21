@@ -149,230 +149,18 @@ def test_owner_token_dies_with_owner(client):
     assert client.get("/api/v1/pages", headers=_headers(token)).status_code == 401
 
 
-def test_system_key_permissions_use_stored_columns(client):
-    """owner=NULL 시스템 키는 기존대로 저장 컬럼만 본다 (재평가 비대상)."""
+def test_system_key_rejected_on_api(client):
+    """owner=NULL 시스템 키는 /api/v1 인증 대상이 아니다 — 401 (개인 키 전용)."""
     with db.connect() as conn:
-        token = auth.issue_api_key(conn, "sys", can_view=False, can_archive=False,
+        token = auth.issue_api_key(conn, "sys", can_view=True, can_archive=True,
                                    created_by=1, ttl_seconds=None)
-    assert client.get("/api/v1/pages", headers=_headers(token)).status_code == 403
+    assert client.get("/api/v1/pages", headers=_headers(token)).status_code == 401
 
 
 # ---- 계정 화면 발급/폐기 ----
 
 
-def test_account_issues_owner_token(client):
-    _login(client, "arch@test.co")
-    r = client.post(
-        "/settings/api-keys",
-        data={"name": "chrome-ext", "can_view": "on", "expiry": "permanent"},
-        follow_redirects=False,
-    )
-    assert r.status_code == 303
-    assert "new_token=wccg_" in r.headers["location"]
-    uid = _uid("arch@test.co")
-    with db.connect() as conn:
-        owned = db.list_api_keys_for_owner(conn, uid)
-    assert len(owned) == 1 and owned[0]["name"] == "chrome-ext"
-    # 보기만 선택 → 보기 권한만
-    assert owned[0]["can_view"] == 1 and owned[0]["can_archive"] == 0
-
-
-def test_account_archiver_can_select_archive_perm(client):
-    _login(client, "arch@test.co")
-    client.post(
-        "/settings/api-keys",
-        data={"name": "ext", "can_archive": "on", "expiry": "1d"},
-        follow_redirects=False,
-    )
-    with db.connect() as conn:
-        owned = db.list_api_keys_for_owner(conn, _uid("arch@test.co"))
-    assert owned[0]["can_view"] == 0 and owned[0]["can_archive"] == 1
-    assert owned[0]["expires_at"] is not None
-
-
-def test_account_archiver_can_select_both_perms(client):
-    _login(client, "arch@test.co")
-    client.post(
-        "/settings/api-keys",
-        data={"name": "ext", "can_view": "on", "can_archive": "on",
-              "expiry": "permanent"},
-        follow_redirects=False,
-    )
-    with db.connect() as conn:
-        owned = db.list_api_keys_for_owner(conn, _uid("arch@test.co"))
-    assert owned[0]["can_view"] == 1 and owned[0]["can_archive"] == 1
-
-
-def test_account_requires_one_permission(client):
-    _login(client, "arch@test.co")
-    r = client.post(
-        "/settings/api-keys",
-        data={"name": "ext", "expiry": "permanent"}, follow_redirects=False,
-    )
-    assert r.status_code == 400
-    with db.connect() as conn:
-        assert db.list_api_keys_for_owner(conn, _uid("arch@test.co")) == []
-
-
-def test_account_viewer_cannot_use_api_keys(client):
-    """viewer 는 개인 API Key 사용 권한이 없어 화면·발급이 모두 403."""
-    _login(client, "viewer@test.co")
-    assert client.get("/settings/api-keys").status_code == 403
-    r = client.post(
-        "/settings/api-keys",
-        data={"name": "ext", "can_view": "on", "expiry": "permanent"},
-        follow_redirects=False,
-    )
-    assert r.status_code == 403
-    with db.connect() as conn:
-        assert db.list_api_keys_for_owner(conn, _uid("viewer@test.co")) == []
-
-
-def test_account_clamps_to_role_scope(client):
-    """use_api_keys 는 있으나 아카이브 권한이 없는 사용자가 아카이브를 골라도 보기로 클램프."""
-    with db.connect() as conn:
-        db.set_permission_overrides(
-            conn, _uid("viewer@test.co"), {"use_api_keys": True}
-        )
-    _login(client, "viewer@test.co")
-    r = client.post(
-        "/settings/api-keys",
-        data={"name": "ext", "can_view": "on", "can_archive": "on",
-              "expiry": "permanent"},
-        follow_redirects=False,
-    )
-    assert r.status_code == 303
-    with db.connect() as conn:
-        owned = db.list_api_keys_for_owner(conn, _uid("viewer@test.co"))
-    assert owned[0]["can_view"] == 1 and owned[0]["can_archive"] == 0
-
-
-def test_account_archive_only_rejected_when_no_archive_perm(client):
-    """아카이브 권한 없는 사용자(use_api_keys 만)가 아카이브만 고르면 클램프 후 거부."""
-    with db.connect() as conn:
-        db.set_permission_overrides(
-            conn, _uid("viewer@test.co"), {"use_api_keys": True}
-        )
-    _login(client, "viewer@test.co")
-    r = client.post(
-        "/settings/api-keys",
-        data={"name": "ext", "can_archive": "on", "expiry": "permanent"},
-        follow_redirects=False,
-    )
-    assert r.status_code == 400
-    with db.connect() as conn:
-        assert db.list_api_keys_for_owner(conn, _uid("viewer@test.co")) == []
-
-
-def test_account_revokes_own_token(client):
-    _login(client, "arch@test.co")
-    client.post(
-        "/settings/api-keys",
-        data={"name": "ext", "can_view": "on", "expiry": "permanent"},
-        follow_redirects=False,
-    )
-    uid = _uid("arch@test.co")
-    with db.connect() as conn:
-        token_id = db.list_api_keys_for_owner(conn, uid)[0]["id"]
-    r = client.post(
-        f"/settings/api-keys/{token_id}/delete", follow_redirects=False
-    )
-    assert r.status_code == 303
-    with db.connect() as conn:
-        assert db.list_api_keys_for_owner(conn, uid) == []
-
-
-def test_idor_cannot_delete_others_token(client):
-    _issue_owned("vtok", "viewer@test.co")
-    with db.connect() as conn:
-        tok_id = db.list_api_keys_for_owner(conn, _uid("viewer@test.co"))[0]["id"]
-    _login(client, "arch@test.co")  # 다른 사용자
-    r = client.post(
-        f"/settings/api-keys/{tok_id}/delete", follow_redirects=False
-    )
-    assert r.status_code == 404
-    with db.connect() as conn:
-        assert len(db.list_api_keys_for_owner(conn, _uid("viewer@test.co"))) == 1
-
-
-def test_account_cannot_delete_system_key(client):
-    with db.connect() as conn:
-        auth.issue_api_key(conn, "sys", can_view=True, can_archive=False,
-                           created_by=1, ttl_seconds=None)
-        sys_id = db.list_system_api_keys(conn)[0]["id"]
-    _login(client, "viewer@test.co")
-    r = client.post(
-        f"/settings/api-keys/{sys_id}/delete", follow_redirects=False
-    )
-    assert r.status_code == 404
-
-
-def test_pending_cannot_issue(client):
-    _login(client, "pend@test.co")
-    r = client.post(
-        "/settings/api-keys",
-        data={"name": "x", "expiry": "permanent"}, follow_redirects=False,
-    )
-    # pending 은 미들웨어가 /pending 으로 돌린다 — 어떤 경로로든 토큰은 생기지 않는다
-    assert r.status_code in (302, 303, 403)
-    with db.connect() as conn:
-        assert db.list_api_keys_for_owner(conn, _uid("pend@test.co")) == []
-
-
-def test_api_keys_page_shows_section(client):
-    _login(client, "arch@test.co")
-    res = client.get("/settings/api-keys")
-    assert res.status_code == 200
-    assert "개인 API Key" in res.text
-    # 발급 폼(이름 입력)이 보여야 한다 — use_api_keys 권한 보유 시
-    assert 'action="/settings/api-keys"' in res.text
-
-
-def test_account_page_links_to_api_keys(client):
-    """계정 화면은 토큰 표 대신 개인 API Key 화면으로의 링크만 남긴다 (권한 보유 시)."""
-    _login(client, "arch@test.co")
-    res = client.get("/settings/account")
-    assert res.status_code == 200
-    assert 'href="/settings/api-keys"' in res.text
-    # 발급 표/폼은 더 이상 계정 화면에 없다
-    assert 'action="/settings/api-keys"' not in res.text
-
-
-def test_account_page_hides_api_keys_for_viewer(client):
-    """use_api_keys 권한이 없는 viewer 는 계정 화면에 개인 API Key 링크가 없다."""
-    _login(client, "viewer@test.co")
-    res = client.get("/settings/account")
-    assert res.status_code == 200
-    assert 'href="/settings/api-keys"' not in res.text
-
-
 # ---- 관리 화면 격리 / 사용자 삭제 ----
-
-
-def test_system_screen_hides_user_tokens(client):
-    uid = _uid("viewer@test.co")
-    with db.connect() as conn:
-        auth.issue_api_key(conn, "syskey", can_view=True, can_archive=False,
-                           created_by=1, ttl_seconds=None)
-        auth.issue_api_key(conn, "usertok", can_view=True, can_archive=False,
-                           created_by=uid, owner_user_id=uid, ttl_seconds=None)
-    _login(client, "boss@test.co", "bosspass1234")
-    res = client.get("/system/api-keys")
-    assert "syskey" in res.text
-    assert "usertok" not in res.text
-
-
-def test_admin_cannot_delete_user_token_via_system(client):
-    uid = _uid("viewer@test.co")
-    with db.connect() as conn:
-        auth.issue_api_key(conn, "usertok", can_view=True, can_archive=False,
-                           created_by=uid, owner_user_id=uid, ttl_seconds=None)
-        tok_id = db.list_api_keys_for_owner(conn, uid)[0]["id"]
-    _login(client, "boss@test.co", "bosspass1234")
-    r = client.post(f"/system/api-keys/{tok_id}/delete", follow_redirects=False)
-    assert r.status_code == 404
-    with db.connect() as conn:
-        assert len(db.list_api_keys_for_owner(conn, uid)) == 1
 
 
 def test_delete_user_cleans_owner_tokens_keeps_system_keys(client):
@@ -436,7 +224,7 @@ def test_auth_profile_rejects_system_key(client, monkeypatch):
         sys_token = auth.issue_api_key(
             conn, "sys", can_view=True, can_archive=True, created_by=1, ttl_seconds=None
         )
-    assert _auth_profile(client, sys_token).status_code == 403  # 사용자 토큰만
+    assert _auth_profile(client, sys_token).status_code == 401  # 개인 키 전용(시스템 키 거부)
 
 
 def test_auth_profile_https_only(client, monkeypatch):
@@ -502,7 +290,7 @@ def test_crawl_session_rejects_system_key(client, monkeypatch):
         sys_token = auth.issue_api_key(
             conn, "sys", can_view=True, can_archive=True, created_by=1, ttl_seconds=None
         )
-    assert _auth_crawl(client, sys_token).status_code == 403  # 사용자 토큰만
+    assert _auth_crawl(client, sys_token).status_code == 401  # 개인 키 전용(시스템 키 거부)
 
 
 def test_crawl_session_https_only(client, monkeypatch):

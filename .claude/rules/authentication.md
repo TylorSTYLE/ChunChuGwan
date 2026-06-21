@@ -36,6 +36,33 @@ IdP 의 2FA 를 신뢰한다. 패스키는 공개키만 저장하며 RP ID/origi
 `export` 에는 제외한다. 이것이 양방향(복원 가능) 저장을 허용하는
 **유일한** 예외이며, 사용자 인증 데이터에는 절대 적용하지 않는다.
 
+## 무차별 대입 방어 · 사용자 열거 완화 · 최초 설정 토큰 (보안 검토 F1·F2·F3)
+
+인증 시도 rate limit 은 `auth_throttle` 테이블(고정 윈도우 카운터)에 둔다.
+`db.throttle_hit`(증가+허용 판정)·`throttle_clear`(성공 시 초기화)·
+`delete_expired_throttle`(GC)가 코어이고, 적용은 `web_auth_routes` 의 `_throttle`
+헬퍼(로그인·2단계·이메일코드·재발송·가입)와 `/api/v1` 개인 키 인증
+(`api_routes._api_auth_throttle`, `api_key_ip` 버킷 — 인증 실패 시에만 카운트, 한도 초과 429). **핵심: 카운터 증가는 인증 핸들러의
+주 트랜잭션과 분리된 별도 `db.connect()` 블록에서** 한다 — 인증 실패로 4xx 를
+던지면 핸들러 conn 이 롤백되므로(원칙: `db.connect` 는 예외 시 커밋 안 함), 같은
+conn 에서 증가시키면 시도 횟수가 사라진다. 한도·창은 시스템 설정
+(`db.auth_throttle_settings`, 키 `auth_throttle_enabled`/`auth_login_limit`/
+`auth_login_ip_limit`/`auth_login_window_minutes`/`auth_totp_limit`/
+`auth_email_verify_limit`/`auth_email_resend_limit`)으로 조정하고 오염·범위 밖이면
+`config.AUTH_*` 기본값으로 클램핑한다. 관리자 화면은 `/system/general` 의 "인증 보호".
+
+사용자 열거 완화: 로그인은 계정 부재/SSO 전용일 때도 `auth.verify_password_dummy`
+로 응답 시간을 평탄화하고 메시지로 존재를 구분하지 않는다. 회원 가입은 이메일
+인증+SMTP 가 켜진 경우 신규/중복 모두 `email_verify` 응답으로 일반화한다(중복이면
+계정 미생성 — Set-Cookie 유무의 잔여 차이만 남고 docs/AUTHENTICATION.md 에 명시).
+메일 미사용 시는 즉시 로그인 구조라 완전 일반화 불가 → 중립 메시지 + IP throttle.
+
+최초 설정 보호: `config.SETUP_TOKEN`(env `WCCG_SETUP_TOKEN`)이 있으면
+`web_auth_routes._require_setup_token`(헤더 `X-Setup-Token`, `hmac.compare_digest`)이
+모든 setup 액션(create/restore/migrate/retry/finish)을 게이트한다. GET 상태/폴링은
+SPA 부트스트랩을 위해 열어 두고, `setup_status` 가 `token_required` 를 내려 셋업
+화면이 토큰 입력 칸을 띄운다. 미설정이면 종전대로 토큰 없이 셋업.
+
 ## 최초 설정 · 춘추관 간 이전
 
 최초 구동(사용자 0명 + `WCCG_ADMIN_*` 미설정)의 `/setup` 은 세 갈래 — 관리자
@@ -69,7 +96,14 @@ Pull 엔드포인트는 `.claude/rules/api-extension.md` 참조. `site_credentia
   사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
   관리자로 권한 변경 불가. **권한은 세분 권한(`db.PERMISSIONS` — view·archive·
   delete·manage_credentials·manage_system·manage_users·view_authenticated_all·
-  use_api_keys, 고정 코드 상수)을 1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다.
+  use_api_keys·view_audit_logs·view_system_logs·view_archive_logs·manage_trash, 고정 코드
+  상수)을 1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다. 로그 열람 3종(view_audit_logs=감사
+  로그 `/log/audit`, view_system_logs=시스템 로그 `/log/system`, view_archive_logs=
+  아카이브 로그 `/log/archive`)과 휴지통 관리(`manage_trash` — `/archive/trash` 열람·복원·
+  영구삭제, `.claude/rules/database.md` 의 `trash_entries`)는 빌트인 중 **admin 에만 기본
+  부여**(`_migrate_log_view_permissions`·`_migrate_trash_permission` 가 기존 설치도 멱등
+  보강)하고 다른 빌트인엔 넣지 않는다. 삭제(=휴지통으로 보내기)는 종전 `delete` 권한이,
+  휴지통 조회·복원·영구삭제는 `manage_trash` 가 게이트한다.
   역할 프리셋은 코드 상수가 아니라 DB `permission_groups` 테이블이 정본 — 관리자가 시스템 →
   권한 그룹(`/system/groups`)에서 빌트인(admin/archive_manager/archiver/viewer) 권한
   묶음을 편집하거나 커스텀 그룹을 추가·삭제할 수 있다(코드 배포 불필요). 코드에서는 `db.role_presets(conn)`
@@ -79,6 +113,10 @@ Pull 엔드포인트는 `.claude/rules/api-extension.md` 참조. `site_credentia
   프리셋과 다른 항목만) 로 사용자별 가감한다. 실효 권한 = 프리셋 ± 오버라이드
   (`db.effective_permissions`), 모든 라우트·메뉴 가드는 `web.permissions.
   has_permission`(실효 권한)으로 판정해 한 곳의 변경이 전 경로에 반영된다.
+  단, **사용자 관리 화면(`/system/users`)은 역할(권한 묶음) 부여만 하고 사용자별
+  세분 권한 편집 UI·라우트는 제거**됐다 — 권한은 역할 단위로만 준다. 오버라이드
+  메커니즘 자체는 db 계층에 남아(역할 변경 시 `{}` 로 초기화) 라스트-관리자 잠김
+  방지에 쓰이며, 화면엔 표시이름·역할만 노출한다(권한 열 없음).
   pending/blocked/withdrawn 은 권한 묶음이 아니라 접근 게이트 상태라
   `permission_groups` 가 아닌 코드 상수(`db.STATE_ROLES`)로 남고 삭제·편집 불가다.
   역할을 바꾸면 오버라이드는 새 프리셋으로 초기화되고, `manage_users` 마지막

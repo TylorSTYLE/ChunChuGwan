@@ -40,19 +40,20 @@
   저장소(CAS)로 중복 제거, HTML 은 gzip, 스크린샷은 WebP 로 저장 공간 절약
 - 페이지가 링크한 문서 파일(PDF·워드·파워포인트·한글·키노트 등)도 함께 저장 —
   같은 내용은 한 번만 저장(문서 CAS)하고, 스냅샷 뷰어의 "첨부 문서" 목록과
-  대시보드 "문서" 통합 목록(`/documents`)에서 다운로드. 참조하는 스냅샷이
+  대시보드 "문서" 통합 목록(`/archive/documents`)에서 다운로드. 참조하는 스냅샷이
   모두 삭제되면 문서 파일도 자동 정리
 - 사이트(섹션) 전체를 링크 따라 수집하는 크롤, 페이지/사이트 주기적 재아카이빙
 - 전문(full-text) 검색 — 페이지 본문 + 첨부 문서(PDF·워드·한글 등) 본문을
   SQLite FTS5(trigram, 한국어 부분문자열)로 검색 (CLI `wccg search`, 대시보드 `/search`)
-- 읽기 전용 대시보드 (목록/타임라인/스냅샷 뷰어/diff 뷰어/검색/로그 + 재아카이빙·삭제 버튼)
+- 읽기 전용 대시보드 — SvelteKit SPA (목록/타임라인/스냅샷 뷰어/diff 뷰어/검색/로그 +
+  재아카이빙·삭제 버튼). FastAPI 가 정적 SPA 를 루트(/)로 서빙하고 데이터는 `/api/web` JSON
 - 아카이브 실행 로그 — 모든 실행(성공/실패)을 단계별 소요시간과 함께 DB에 기록
 - 사용자 인증 — 이메일/패스워드(+선택 TOTP 2FA), Authentik OIDC SSO 지원
 - 세분 권한 — 관리자/아카이브 관리/아카이브/보기 전용/권한없음(가입 승인 대기)/차단
   역할 프리셋 + 사용자별 권한 가감(오버라이드)·커스텀 권한 그룹, 대시보드에서
   사용자 관리 + 가입 설정(회원 가입 허용·초기 권한)
-- 외부 소프트웨어 연동용 `/api/v1` REST API (API 키)
-- 크롬 확장 — 현재 페이지·사이트 전체를 바로 아카이브하고, 완료·실패·사람 확인 결과를 데스크톱 알림으로 받음. 서버가 닿기 어려운 페이지는 **브라우저에서 직접 캡처**해 올릴 수도 있다(CDP 풀페이지 + 자원 재요청 → `/api/v1/ingest`, 서버 무요청 — `docs/API.md`)
+- 자작 소프트웨어 연동용 `/api/v1` REST API (개인 API Key 전용 — 발급 권한 회수 시 키 비활성)
+- 크롬 확장 — 현재 페이지·사이트 전체를 바로 아카이브(단축키·우클릭 메뉴로 팝업 없이도)하고, 완료·실패·사람 확인 결과를 데스크톱 알림으로 받음. 툴바 아이콘에 현재 페이지의 아카이브 여부(✓)를 표시한다. 서버가 닿기 어려운 페이지는 **브라우저에서 직접 캡처**해 올릴 수도 있다(CDP 풀페이지 + 자원 재요청 → `/api/v1/ingest`, 서버 무요청 — `docs/API.md`)
 
 ## 문서
 
@@ -77,6 +78,10 @@
 ```bash
 uv sync                                  # 의존성 설치
 uv run playwright install chromium       # 최초 1회
+npm --prefix frontend ci                 # 대시보드 SPA 의존성 (최초 1회, Node 18+)
+npm --prefix frontend run build          # 대시보드(SvelteKit) 빌드 → frontend/build
+                                         #   serve 가 이 산출물을 루트(/)로 서빙한다
+                                         #   (Docker 이미지는 빌드 단계에서 자동 동봉)
 ```
 
 ## 사용법
@@ -91,12 +96,15 @@ uv run wccg diff <url>               # 최신 2개 스냅샷 비교 (+ 스크린
 uv run wccg diff <url> --from 1 --to 3
 uv run wccg search <검색어>          # 본문·첨부 문서 전문 검색 (docs/SEARCH.md)
 uv run wccg search reindex          # 기존/가져온 스냅샷을 검색 인덱스에 색인
-uv run wccg delete <url>             # 아카이브 전체 삭제 (모든 스냅샷, 확인 후 진행)
-uv run wccg delete <url> --snapshot 2  # history 번호의 스냅샷 하나만 삭제
+uv run wccg delete <url>             # 아카이브 삭제 — 휴지통이 켜져 있으면 휴지통으로 이동
+uv run wccg delete <url> --hard      # 휴지통을 거치지 않고 즉시 영구 삭제
+uv run wccg delete <url> --snapshot 2  # history 번호의 스냅샷 하나만 삭제 (항상 즉시)
+uv run wccg trash list               # 휴지통 목록 / restore·purge 로 복원·영구삭제
 uv run wccg serve                    # 대시보드 (http://127.0.0.1:8765)
 uv run wccg serve --host 0.0.0.0     # 외부 노출 (인증 켜진 상태에서만 허용)
 uv run wccg worker                   # 아카이빙 워커 — 단발·스케줄·크롤 큐를 별도 프로세스에서 소비
-uv run wccg -v archive run           # 캡처 단계별 상세 로그를 stderr 로 출력
+                                     #   (serve·worker 는 작업 시작/완료·실패를 콘솔에 INFO 로 기본 출력, --quiet 로 끔)
+uv run wccg -v archive run           # 그 외 단발 명령에서도 INFO 상세 로그를 stderr 로 출력
 ```
 
 `wccg add` 는 작업을 큐에 넣을 뿐 캡처는 `wccg worker`(또는 대시보드/`wccg archive
@@ -108,7 +116,7 @@ run`)가 소비해 실행한다 — `crawl add`/`crawl run` 과 같은 모델이
 있다 — 인증이 켜진 환경에서는 삭제 권한(`delete`)이 있는 사용자(admin/아카이브
 관리)만 가능하다 (보기 전용·차단 계정은 불가). 스냅샷 하나를
 지우면 바로 다음 스냅샷의 변경 표시(변경/동일)가 새 직전 스냅샷 기준으로 자동
-보정되고, 실행 로그(`/logs`)는 이력으로 남는다.
+보정되고, 실행 로그(`/log/archive`)는 이력으로 남는다.
 
 사이트 전체 아카이브(크롤)와 주기적 자동 재아카이빙은
 [docs/CRAWLING.md](docs/CRAWLING.md) 참조.
@@ -137,10 +145,10 @@ docker compose down                    # 대시보드 중지
 스크립트가 대시보드 컨텍스트에서 실행되지 않는다. 재아카이빙 버튼은
 백그라운드로 코어 파이프라인을 호출한다.
 
-- **아카이빙 로그**(`/logs`, viewer 이상) — 모든 실행을 성공/실패와 관계없이
+- **아카이브 로그**(`/log/archive`, 관리자) — 모든 실행을 성공/실패와 관계없이
   단계별(normalize → capture → extract → hash → store) 소요시간과 함께 기록.
   도메인·페이지·스냅샷·상태(신규/변경/동일/실패)로 필터.
-- **시스템 로그**(`/system/logs`, 관리자 전용) — 앱 자체의 동작 기록(serve·
+- **시스템 로그**(`/log/system`, 관리자) — 앱 자체의 동작 기록(serve·
   worker·CLI 의 경고/오류와 INFO 로그). 보관 한도 초과분은 자동 정리
   (`WCCG_SYSTEM_LOG_MAX_ROWS`, 기본 2만 행).
 - **다국어(i18n)** — 한국어·영어. 헤더의 언어 선택은 `wccg_lang` 쿠키에
@@ -156,7 +164,11 @@ docker compose down                    # 대시보드 중지
 관리자 계정이 자동 등록되고, 없으면 브라우저 첫 접속 시 `/setup` 최초 설정
 화면으로 이동한다 — **관리자 계정 생성 / 백업 파일 복원 / 다른 춘추관에서
 네트워크 이전** 중 하나를 고른다. 이후 사용자는 `/signup` 또는 관리자의
-이메일 초대로 가입한다.
+이메일 초대로 가입한다. 외부에 노출한 채 셋업하는 경우 `WCCG_SETUP_TOKEN` 을
+설정하면 `/setup` 흐름이 일치 토큰을 요구해 선점을 막는다.
+
+외부 노출 시 무차별 대입 방어를 위해 로그인·2단계 인증·이메일 코드 시도에
+rate limit 이 걸린다(시스템 설정 → 인증 보호에서 한도·창 조정, 기본 켜짐).
 
 기존 인스턴스를 새 인스턴스로 옮길 때는 소스의 시스템 화면에서 **이전 모드**를
 켜면 토큰이 발급되고(그 동안 소스의 스크래핑·스케줄·크롤은 중단), 새 인스턴스의
@@ -180,3 +192,11 @@ uv run pytest                            # 테스트 (네트워크 불필요, ~1
 
 PyCharm 실행/디버그 구성과 모듈 구성은 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md),
 아키텍처 원칙·DB 스키마·코딩 컨벤션은 [CLAUDE.md](CLAUDE.md) 참조.
+
+## 라이선스
+
+[MIT License](LICENSE) © 2026 Tylor, Seo.
+
+서드파티 의존성의 라이선스 목록(전부 MIT 호환)은
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) 참조. 릴리스마다 CycloneDX SBOM 이
+GitHub Release 자산으로 자동 첨부된다.

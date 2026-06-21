@@ -44,7 +44,7 @@ def client(tmp_db):
 
 
 def _issue(**kwargs) -> str:
-    """API 키 발급 헬퍼 — 기본은 보기+아카이브, 영구."""
+    """API 키 발급 헬퍼 (기본 시스템 키 — DB/auth 계층 테스트용). 보기+아카이브, 영구."""
     options = {
         "can_view": True, "can_archive": True,
         "created_by": None, "ttl_seconds": None,
@@ -52,6 +52,17 @@ def _issue(**kwargs) -> str:
     options.update(kwargs)
     with db.connect() as conn:
         return auth.issue_api_key(conn, "test-key", **options)
+
+
+def _admin_id() -> int:
+    with db.connect() as conn:
+        return db.get_user_by_email(conn, "boss@test.co")["id"]
+
+
+def _user_token(**kwargs) -> str:
+    """admin 귀속 개인 API Key (/api/v1 은 개인 키 전용)."""
+    aid = _admin_id()
+    return _issue(owner_user_id=aid, created_by=aid, **kwargs)
 
 
 def _headers(token: str) -> dict:
@@ -121,13 +132,13 @@ def test_api_session_cookie_is_not_enough(client):
 
 
 def test_api_key_via_x_api_key_header(client):
-    token = _issue()
+    token = _user_token()
     r = client.get("/api/v1/pages", headers={"X-API-Key": token})
     assert r.status_code == 200
 
 
 def test_api_updates_last_used(client):
-    token = _issue()
+    token = _user_token()
     client.get("/api/v1/pages", headers=_headers(token))
     with db.connect() as conn:
         key = auth.resolve_api_key(conn, token)
@@ -169,7 +180,7 @@ def test_api_open_when_auth_disabled(client, monkeypatch):
 
 
 def test_api_pages_list_and_url_filter(client):
-    token = _issue()
+    token = _user_token()
     body = client.get("/api/v1/pages", headers=_headers(token)).json()
     assert len(body["pages"]) == 1
     assert body["pages"][0]["url"] == URL
@@ -187,7 +198,7 @@ def test_api_pages_list_and_url_filter(client):
 
 
 def test_api_page_detail_and_snapshot(client):
-    token = _issue()
+    token = _user_token()
     page_id = client.get("/api/v1/pages", headers=_headers(token)).json()["pages"][0]["id"]
     body = client.get(f"/api/v1/pages/{page_id}", headers=_headers(token)).json()
     assert body["url"] == URL
@@ -204,7 +215,11 @@ def test_api_page_detail_and_snapshot(client):
 
 
 def test_api_view_denied_without_can_view(client):
-    token = _issue(can_view=False)
+    # 개인 키 권한은 소유자 역할에서 재평가 — view 없는 사용자라 403 (use_api_keys 만 부여).
+    with db.connect() as conn:
+        uid = db.create_user(conn, "noview@test.co", password_hash="x", role="viewer")
+        db.set_permission_overrides(conn, uid, {"use_api_keys": True, "view": False})
+    token = _issue(owner_user_id=uid, created_by=uid)
     assert client.get("/api/v1/pages", headers=_headers(token)).status_code == 403
     assert client.get("/api/v1/pages/1", headers=_headers(token)).status_code == 403
     assert client.get("/api/v1/snapshots/1", headers=_headers(token)).status_code == 403
@@ -218,7 +233,7 @@ def test_api_view_denied_without_can_view(client):
 
 
 def test_api_archive_triggers_pipeline(client):
-    token = _issue()
+    token = _user_token()
     r = client.post(
         "/api/v1/archive", json={"url": "https://example.com/new?utm_source=x"},
         headers=_headers(token),
@@ -237,7 +252,7 @@ def test_api_archive_triggers_pipeline(client):
 
 
 def test_api_archive_rejects_invalid_url(client):
-    token = _issue()
+    token = _user_token()
     r = client.post(
         "/api/v1/archive", json={"url": "ftp://example.com/x"}, headers=_headers(token)
     )
@@ -245,7 +260,11 @@ def test_api_archive_rejects_invalid_url(client):
 
 
 def test_api_archive_denied_without_can_archive(client):
-    token = _issue(can_archive=False)
+    # 개인 키 권한은 소유자 역할에서 재평가 — archive 없는 viewer 라 403 (use_api_keys 부여).
+    with db.connect() as conn:
+        uid = db.create_user(conn, "noarch@test.co", password_hash="x", role="viewer")
+        db.set_permission_overrides(conn, uid, {"use_api_keys": True})
+    token = _issue(owner_user_id=uid, created_by=uid)
     r = client.post(
         "/api/v1/archive", json={"url": "https://example.com/new"},
         headers=_headers(token),
@@ -254,7 +273,7 @@ def test_api_archive_denied_without_can_archive(client):
 
 
 def test_api_archive_skips_duplicate_in_progress(client):
-    token = _issue()
+    token = _user_token()
     with db.connect() as conn:  # 같은 URL 이 이미 큐에 있는 상태
         db.enqueue_archive_job(conn, "https://example.com/busy", source="api")
     r = client.post(
@@ -268,93 +287,3 @@ def test_api_archive_skips_duplicate_in_progress(client):
 # ---- 관리 화면 ----
 
 
-def test_api_keys_page_admin_only(client):
-    client.post(
-        "/login", data={"email": "viewer@test.co", "password": "password1234"},
-        follow_redirects=False,
-    )
-    assert client.get("/api/v1/pages").status_code == 401  # 세션은 API 와 무관
-    assert client.get("/system/api-keys").status_code == 403
-    assert (
-        client.post("/system/api-keys", data={"name": "x", "can_view": "on"})
-        .status_code == 403
-    )
-
-
-def test_api_keys_page_renders(client):
-    _issue(ttl_seconds=86400)
-    _login_admin(client)
-    res = client.get("/system/api-keys", params={"new_key": "wccg_demo123"})
-    assert res.status_code == 200
-    assert "test-key" in res.text          # 발급된 키 목록
-    assert "wccg_demo123" in res.text      # 방금 발급된 키 원문 (1회 표시)
-    assert 'action="/system/api-keys"' in res.text  # 발급 폼
-    for label in ("영구", "1일", "1개월", "1년", "사용자 지정"):
-        assert label in res.text
-
-
-def test_admin_creates_key_via_ui(client):
-    _login_admin(client)
-    r = client.post(
-        "/system/api-keys",
-        data={"name": "rss-bot", "can_view": "on", "expiry": "1d"},
-        follow_redirects=False,
-    )
-    assert r.status_code == 303
-    assert "new_key=wccg_" in r.headers["location"]
-    with db.connect() as conn:
-        keys = db.list_api_keys(conn)
-    assert len(keys) == 1
-    assert keys[0]["name"] == "rss-bot"
-    assert keys[0]["can_view"] == 1 and keys[0]["can_archive"] == 0
-    assert keys[0]["expires_at"] is not None
-    assert keys[0]["creator_email"] == "boss@test.co"
-
-
-def test_admin_creates_permanent_and_custom_expiry(client):
-    _login_admin(client)
-    client.post(
-        "/system/api-keys",
-        data={"name": "forever", "can_archive": "on", "expiry": "permanent"},
-        follow_redirects=False,
-    )
-    client.post(
-        "/system/api-keys",
-        data={"name": "custom", "can_view": "on", "expiry": "custom",
-              "custom_days": "7"},
-        follow_redirects=False,
-    )
-    with db.connect() as conn:
-        keys = {k["name"]: k for k in db.list_api_keys(conn)}
-    assert keys["forever"]["expires_at"] is None
-    assert keys["custom"]["expires_at"] is not None
-
-
-def test_create_key_rejects_bad_input(client):
-    _login_admin(client)
-    # 권한 미선택
-    r = client.post(
-        "/system/api-keys", data={"name": "x", "expiry": "permanent"},
-        follow_redirects=False,
-    )
-    assert "error=" in r.headers["location"]
-    # 사용자 지정 일 수 범위 밖
-    r = client.post(
-        "/system/api-keys",
-        data={"name": "x", "can_view": "on", "expiry": "custom", "custom_days": "0"},
-        follow_redirects=False,
-    )
-    assert "error=" in r.headers["location"]
-    with db.connect() as conn:
-        assert db.list_api_keys(conn) == []
-
-
-def test_admin_deletes_key_via_ui(client):
-    token = _issue()
-    _login_admin(client)
-    with db.connect() as conn:
-        key_id = db.list_api_keys(conn)[0]["id"]
-    r = client.post(f"/system/api-keys/{key_id}/delete", follow_redirects=False)
-    assert r.status_code == 303
-    with db.connect() as conn:
-        assert auth.resolve_api_key(conn, token) is None

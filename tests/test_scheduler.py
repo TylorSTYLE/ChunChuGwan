@@ -240,6 +240,16 @@ def test_run_due_archives_and_advances(archive_env, monkeypatch):
     assert row["next_run_at"] > scheduler._iso(scheduler._utcnow())
 
 
+def test_run_due_logs_archive_result(archive_env, monkeypatch, caplog):
+    """스케줄 발화 성공을 INFO 로 남긴다 — 정상 동작도 로그로 확인되게 (url·status)."""
+    monkeypatch.setattr(pipeline, "archive_url", lambda *a, **k: _outcome("changed"))
+    _make_due()
+    with caplog.at_level("INFO", logger="chunchugwan.scheduler"):
+        scheduler.run_due()
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("스케줄 아카이빙" in m and "changed" in m for m in msgs)
+
+
 def test_run_due_advances_aligned_to_run_at(archive_env, monkeypatch):
     from datetime import datetime
 

@@ -82,52 +82,7 @@ def test_log_filter_by_requester(client):
 # ---- /settings/archives 화면 ----
 
 
-def test_my_archives_shows_only_mine(client):
-    a, b = _uid("alice@test.co"), _uid("bob@test.co")
-    _log("https://alice-only.test/", a)
-    _log("https://bob-only.test/", b)
-    _login(client, "alice@test.co")
-    res = client.get("/settings/archives")
-    assert res.status_code == 200
-    assert "alice-only.test" in res.text
-    assert "bob-only.test" not in res.text
-
-
-def test_my_archives_status_filter(client):
-    a = _uid("alice@test.co")
-    _log("https://a.test/newone", a, status="new")
-    _log("https://a.test/errone", a, status="error")
-    _login(client, "alice@test.co")
-    res = client.get("/settings/archives?status=error")
-    assert "a.test/errone" in res.text
-    assert "a.test/newone" not in res.text
-
-
-def test_my_archives_empty_state(client):
-    _login(client, "bob@test.co")
-    res = client.get("/settings/archives")
-    assert res.status_code == 200
-    assert "아직 요청한 아카이브가 없습니다" in res.text
-
-
-def test_my_archives_requires_login(client):
-    """미로그인은 로그인 화면으로 리다이렉트(보호 라우트)."""
-    res = client.get("/settings/archives", follow_redirects=False)
-    assert res.status_code in (302, 303, 307)
-
-
 # ---- 개인설정 드롭다운 메뉴 ----
-
-
-def test_user_menu_has_personal_links(client):
-    _login(client, "alice@test.co")
-    res = client.get("/archives")
-    # 개인설정 드롭다운 — 로그/관리자 메뉴와 같은 nav-group 패턴을 재사용
-    assert "nav-group user-menu" in res.text
-    assert 'href="/settings/account"' in res.text
-    assert 'href="/settings/api-keys"' in res.text
-    assert 'href="/settings/archives"' in res.text
-    assert 'action="/logout"' in res.text
 
 
 # ---- delete_user 정리 ----

@@ -134,9 +134,10 @@ def test_diff_works_after_middle_deletion(archive):
 
 def test_delete_page_removes_all_data(archive):
     page_id = archive["page_id"]
-    result = deletion.delete_page(page_id)
+    result = deletion.delete_page(page_id, hard=True)
     assert result is not None
     assert result.url == URL and result.snapshots_deleted == 3
+    assert result.trashed is False
 
     with db.connect() as conn:
         assert db.get_page_by_id(conn, page_id) is None
@@ -218,7 +219,7 @@ def test_delete_page_garbage_collects_documents(archive):
         )
     _attach_document(other_snap, b"%PDF elsewhere", "b-33333333.pdf")
 
-    deletion.delete_page(archive["page_id"])
+    deletion.delete_page(archive["page_id"], hard=True)
     assert not documents.cas_path(sha_a + ".pdf").exists()   # 참조 0 → 삭제
     assert documents.cas_path(sha_b + ".pdf").is_file()       # 잔존 참조 → 유지
     with db.connect() as conn:
@@ -236,76 +237,11 @@ def client(archive, monkeypatch):
     web_app._active_jobs.clear()
 
 
-def test_web_delete_snapshot(client, archive):
-    snaps = _snaps(archive["page_id"])
-    res = client.post(f"/snapshot/{snaps[1]['id']}/delete", follow_redirects=False)
-    assert res.status_code == 303
-    assert res.headers["location"].startswith(f"/page/{archive['page_id']}?notice=")
-    remaining = _snaps(archive["page_id"])
-    assert len(remaining) == 2 and remaining[1]["changed"] == 0
-
-
-def test_web_delete_page(client, archive):
-    res = client.post(f"/page/{archive['page_id']}/delete", follow_redirects=False)
-    assert res.status_code == 303
-    assert res.headers["location"].startswith("/archives?notice=")
-    with db.connect() as conn:
-        assert db.get_page_by_id(conn, archive["page_id"]) is None
-
-
-def test_web_delete_404(client):
-    assert client.post("/page/9999/delete").status_code == 404
-    assert client.post("/snapshot/9999/delete").status_code == 404
-
-
-def test_web_delete_refused_while_archiving(client, archive):
-    """진행 중인 URL 은 삭제를 거부하고 에러 리다이렉트."""
-    web_app._register_job(URL)
-    res = client.post(f"/page/{archive['page_id']}/delete", follow_redirects=False)
-    assert res.status_code == 303 and "error=" in res.headers["location"]
-    snaps = _snaps(archive["page_id"])
-    res = client.post(f"/snapshot/{snaps[0]['id']}/delete", follow_redirects=False)
-    assert res.status_code == 303 and "error=" in res.headers["location"]
-    with db.connect() as conn:
-        assert db.get_page_by_id(conn, archive["page_id"]) is not None
-    assert len(_snaps(archive["page_id"])) == 3
-
-
 def _site_url() -> str:
     """아카이브 픽스처 페이지가 속한 사이트 상세 경로."""
     with db.connect() as conn:
         site = db.get_site_by_key(conn, storage.site_key(URL))
     return f"/sites/{site['id']}"
-
-
-def test_web_delete_buttons_visible_when_allowed(client, archive):
-    assert 'action="/page/1/delete"' in client.get(_site_url()).text
-    assert f'action="{_site_url()}/delete"' in client.get(_site_url()).text
-    snaps = _snaps(archive["page_id"])
-    assert (
-        f'action="/snapshot/{snaps[0]["id"]}/delete"'
-        in client.get(f"/page/{archive['page_id']}").text
-    )
-
-
-def test_web_site_delete(client, archive):
-    """사이트 삭제 — 소속 페이지가 모두 지워지고 목록으로 리다이렉트."""
-    res = client.post(f"{_site_url()}/delete", follow_redirects=False)
-    assert res.status_code == 303
-    assert res.headers["location"].startswith("/archives?notice=")
-    with db.connect() as conn:
-        assert db.count_pages(conn) == 0
-        assert db.count_sites(conn) == 0
-
-
-def test_web_site_delete_refused_while_archiving(client, archive):
-    """소속 페이지가 아카이빙 중이면 사이트 삭제를 거부한다."""
-    site_url = _site_url()
-    web_app._register_job(URL)
-    res = client.post(f"{site_url}/delete", follow_redirects=False)
-    assert res.status_code == 303 and "error=" in res.headers["location"]
-    with db.connect() as conn:
-        assert db.get_page_by_id(conn, archive["page_id"]) is not None
 
 
 # ---- 권한 (인증 on — 삭제는 admin/archive_manager 전용, archiver 는 삭제 불가) ----
@@ -336,66 +272,3 @@ def _login(client, email: str, password: str):
     )
 
 
-def test_viewer_cannot_delete(role_client, archive):
-    _login(role_client, "viewer@test.co", "password1234")
-    assert role_client.post(f"/page/{archive['page_id']}/delete").status_code == 403
-    snaps = _snaps(archive["page_id"])
-    assert role_client.post(f"/snapshot/{snaps[0]['id']}/delete").status_code == 403
-    # 버튼도 노출되지 않는다
-    assert "/delete" not in role_client.get(_site_url()).text
-
-
-def test_viewer_cannot_export_site(role_client, archive):
-    """사이트 내보내기는 admin/archiver 전용 — viewer 는 403, 버튼도 숨김."""
-    _login(role_client, "viewer@test.co", "password1234")
-    site_url = _site_url()
-    assert role_client.post(f"{site_url}/export").status_code == 403
-    assert f'action="{site_url}/export"' not in role_client.get(site_url).text
-
-
-def test_archiver_can_export_site(role_client, archive):
-    _login(role_client, "archiver@test.co", "password1234")
-    site_url = _site_url()
-    assert f'action="{site_url}/export"' in role_client.get(site_url).text
-    res = role_client.post(f"{site_url}/export")
-    assert res.status_code == 200
-    assert res.headers["content-type"] == "application/gzip"
-
-
-def test_archive_manager_can_delete(role_client, archive):
-    _login(role_client, "manager@test.co", "password1234")
-    # 버튼이 노출된다 (사이트 상세)
-    assert (
-        f'action="/page/{archive["page_id"]}/delete"'
-        in role_client.get(_site_url()).text
-    )
-    snaps = _snaps(archive["page_id"])
-    res = role_client.post(f"/snapshot/{snaps[0]['id']}/delete", follow_redirects=False)
-    assert res.status_code == 303
-    assert len(_snaps(archive["page_id"])) == 2
-    # 페이지 전체 삭제도 가능
-    res = role_client.post(f"/page/{archive['page_id']}/delete", follow_redirects=False)
-    assert res.status_code == 303
-    with db.connect() as conn:
-        assert db.get_page_by_id(conn, archive["page_id"]) is None
-
-
-def test_archiver_cannot_delete(role_client, archive):
-    """아카이브(archiver) 그룹은 삭제 권한이 없다 — 403, 버튼도 숨김 (신규 설치 기본값)."""
-    _login(role_client, "archiver@test.co", "password1234")
-    assert role_client.post(f"/page/{archive['page_id']}/delete").status_code == 403
-    snaps = _snaps(archive["page_id"])
-    assert role_client.post(f"/snapshot/{snaps[0]['id']}/delete").status_code == 403
-    assert f'action="/page/{archive["page_id"]}/delete"' not in role_client.get(
-        _site_url()
-    ).text
-    # 삭제되지 않았다 (스냅샷 3개 그대로)
-    assert len(_snaps(archive["page_id"])) == 3
-
-
-def test_admin_can_delete(role_client, archive):
-    _login(role_client, "boss@test.co", "bosspass1234")
-    snaps = _snaps(archive["page_id"])
-    res = role_client.post(f"/snapshot/{snaps[0]['id']}/delete", follow_redirects=False)
-    assert res.status_code == 303
-    assert len(_snaps(archive["page_id"])) == 2

@@ -41,9 +41,72 @@ _EN: dict[str, str] = {
     "스케줄": "Schedules",
     "로그": "Logs",
     "아카이빙 로그": "Archive logs",
+    "아카이브 로그": "Archive logs",
     "시스템 로그": "System logs",
+    "감사 로그": "Audit log",
+    "누가 아카이빙·열람·문서 다운로드·관리 작업을 했는지 기록":
+        "Record of who archived, viewed, downloaded documents, or performed admin actions",
+    "모든 종류": "All types",
+    "모든 요청자": "All actors",
+    "요청자": "Actor",
+    "감사 기록이 없습니다.": "No audit records yet.",
+    "시간": "Time",
+    "표시이름": "Display name",
+    "표시이름을 저장했습니다.": "Saved display name.",
+    "루프백 주소는 아카이빙할 수 없습니다.": "Loopback addresses cannot be archived.",
+    "입력한 주소가 사설 IP 대역(로컬 네트워크)입니다 — 태그를 선택해야 아카이빙할 수 있습니다.":
+        "The address is a private-IP (local network) — select a tag to archive it.",
+    "로그인이 필요한 사이트의 자격증명 연결은 사이트 상세 화면에서 관리합니다.":
+        "Credentials for sites requiring login are managed on the site detail page.",
+    "HAR 파일 업로드는 사이트 상세 화면에서 지원합니다.":
+        "HAR file upload is supported on the site detail page.",
+    "이 도메인에 등록된 자격증명을 연결하거나 새로 추가할 수 있습니다. 아카이빙 시 로그인에 사용됩니다.":
+        "Link a credential registered for this domain or add a new one — used to log in when archiving.",
+    "시스템 상태": "System status",
+    "현재 버전과 저장된 데이터 규모입니다.": "Current version and stored-data size.",
+    "유지관리": "Maintenance",
+    "검색 인덱스와 저장공간을 정리합니다.": "Maintain the search index and storage.",
+    "아직 색인되지 않은 스냅샷을 다시 색인합니다.": "Re-index snapshots that are not yet indexed.",
+    "압축·자원 공유로 저장공간을 줄입니다 (내용은 그대로).":
+        "Reduce storage by compression and resource sharing (content preserved).",
+    "아카이빙·크롤·문서 수집·로컬 네트워크 동작을 설정합니다.":
+        "Configure archiving, crawling, document fetching, and local-network behavior.",
+    "사이트 전체 아카이브(크롤)의 기본 범위·간격입니다.":
+        "Default scope and interval for whole-site archiving (crawl).",
+    "새 사이트 아카이브에 허용하는 상한과 실패 시 재시도 대기입니다. 기본값은 이 상한 이내로 조정됩니다.":
+        "Maximum range allowed for new site archives, plus retry waits on failure. "
+        "Defaults are clamped within these limits.",
+    "스냅샷을 찍을 때의 추가 캡처 동작입니다.": "Extra capture behavior when taking snapshots.",
+    "확장이 보낸 1회성 로그인 자격증명의 보관 시간입니다.":
+        "Retention time for one-time login credentials sent by the extension.",
+    "페이지가 링크한 문서 파일을 받을 때의 한도입니다.":
+        "Limits when fetching document files linked from a page.",
+    "사설 IP(로컬 네트워크) 주소를 아카이빙할 때 붙이는 태그입니다.":
+        "Tags attached when archiving private-IP (local-network) addresses.",
+    "회원 가입과 이메일 본인 인증 정책입니다.": "Sign-up and email-verification policy.",
+    "주의: 초기 권한이 승인 대기(pending)가 아니면 가입·SSO 자동 생성 계정이 관리자 승인 없이 곧바로 권한을 갖습니다.":
+        "Caution: if the initial role is not pending (approval required), sign-up and "
+        "auto-provisioned SSO accounts gain permissions immediately without admin approval.",
+    "회원 가입 허용 여부와 가입 시 초기 권한입니다.":
+        "Whether sign-up is allowed and the initial role on sign-up.",
+    "패스워드 계정이 로그인 전에 메일로 이메일을 검증하게 합니다.":
+        "Require password accounts to verify their email by mail before login.",
+    "메일 발송과 API 키 등 서버 연동 설정입니다.":
+        "Server integration settings such as mail delivery and API keys.",
+    "초대·이메일 인증 메일을 보내는 SMTP 서버입니다.":
+        "SMTP server used to send invitation and verification emails.",
+    "API 키 관리로 이동": "Go to API key management",
+    "데이터 전체를 바꾸는 작업입니다 — 신중히 사용하세요.":
+        "Operations that change all data — use with care.",
+    "전체 백업·복원과 아카이브 내보내기·가져오기입니다.":
+        "Full backup/restore and archive export/import.",
+    "다른 춘추관 인스턴스로 전체 데이터를 옮길 때 켭니다 — 켜면 아카이빙이 중단됩니다.":
+        "Enable when migrating all data to another ChunChuGwan instance — archiving stops while on.",
     "사용자": "Users",
+    "API Key 관리": "Manage API keys",
     "시스템": "System",
+    "시스템 설정": "System settings",
+    "크롬 확장": "Chrome extension",
     "검색": "Search",
     "계정": "Account",
     "내 아카이브": "My archives",
@@ -51,6 +114,7 @@ _EN: dict[str, str] = {
     # 사람 보조 챌린지 해결 (라이브)
     "사람 확인": "Human check",
     "사람 확인 필요": "Human check needed",
+    "처리 중": "In progress",
     "사람 확인 처리": "Human-assisted solve",
     "자동으로 통과하지 못한 챌린지 — 직접 풀어서 통과시킵니다": "Challenges that auto-solve couldn't pass — solve them yourself",
     "사람 확인이 필요한 작업이 없습니다.": "No jobs need human check.",
@@ -110,6 +174,8 @@ _EN: dict[str, str] = {
     "삭제": "Delete",
     "저장": "Save",
     "취소": "Cancel",
+    "닫기": "Close",
+    "{version} 새 소식": "What's new in {version}",
     "확인": "Verify",
     "신규": "New",
     "변경": "Changed",
@@ -159,6 +225,12 @@ _EN: dict[str, str] = {
     "시도": "Attempts",
     "결과": "Result",
     "실패 일괄 재시도": "Retry all failed",
+    # SPA 크롤 회차 — 재시도 정책 문장을 조각으로 번역(횟수 동적)
+    "대기 후 재시도": "retry after waiting",
+    "최대": "max",
+    "회": " tries",
+    "크롤을 취소했습니다.": "Crawl cancelled.",
+    "실패한 페이지를 다시 시도합니다.": "Retrying failed pages.",
     "목록으로": "Back to list",
     "아카이브에 없는 페이지": "Page not in the archive",
     "이 링크의 페이지는 아카이브되지 않았습니다 — 크롤 범위 밖이거나 아직/끝내 저장되지 않았습니다.":
@@ -226,6 +298,39 @@ _EN: dict[str, str] = {
     "perm|사용자 관리": "Manage users",
     "perm|인증 스냅샷 전체 열람": "View all authenticated snapshots",
     "perm|개인 API Key": "Personal API Key",
+    "perm|감사 로그 보기": "View audit logs",
+    "perm|시스템 로그 보기": "View system logs",
+    "perm|아카이브 로그 보기": "View archive logs",
+    "perm|휴지통 관리": "Manage trash",
+    # ---- 휴지통 ----
+    "휴지통": "Trash",
+    "삭제한 아카이브가 여기에 보관됩니다 — 복원하거나 영구 삭제할 수 있습니다.":
+        "Deleted archives are kept here — you can restore or permanently delete them.",
+    "휴지통 기능이 꺼져 있어 삭제 시 즉시 영구 삭제됩니다. 아래는 이전에 보관된 항목입니다.":
+        "The trash is off, so deletes are permanent immediately. The items below were kept earlier.",
+    "보관 기간": "Retention",
+    "일": " days",
+    "자동 영구삭제가 꺼져 있습니다 (수동 삭제 전까지 보관).":
+        "Auto-deletion is off (kept until deleted manually).",
+    "휴지통이 비어 있습니다.": "The trash is empty.",
+    "삭제 시각": "Deleted at",
+    "삭제자": "Deleted by",
+    "보관 기한": "Expires",
+    "영구 삭제": "Delete permanently",
+    "복원했습니다.": "Restored.",
+    "영구 삭제했습니다.": "Permanently deleted.",
+    "이 항목을 영구 삭제할까요? 되돌릴 수 없습니다.":
+        "Permanently delete this item? This cannot be undone.",
+    "이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 휴지통으로 옮길까요? 휴지통에서 복원할 수 있습니다.":
+        "Move this site's pages, snapshots, crawls, and schedules to the trash? "
+        "You can restore them from the trash.",
+    "이 페이지의 모든 스냅샷을 휴지통으로 옮길까요? 휴지통에서 복원할 수 있습니다.":
+        "Move this page's snapshots to the trash? You can restore them from the trash.",
+    "아카이브 삭제 시 즉시 지우지 않고 휴지통에 보관했다가 기간 경과 시 자동 삭제합니다. 끄면 삭제가 즉시 영구 삭제됩니다.":
+        "When archives are deleted, they are kept in the trash and auto-deleted after the "
+        "retention period instead of being removed at once. Turn off to delete immediately.",
+    "휴지통 사용": "Use trash",
+    "보관 기간(일, 0=자동삭제 끔)": "Retention (days, 0 = no auto-delete)",
     # ---- 목록 (index) ----
     "아카이브 목록": "Archived pages",
     "아카이빙이 백그라운드에서 시작되었습니다": "Archiving started in the background",
@@ -556,6 +661,18 @@ _EN: dict[str, str] = {
     "사이트 아카이브 설정을 저장했습니다.": "Site archive settings saved.",
     "재시도 대기는 쉼표로 구분한 초 단위 숫자 목록이어야 합니다 (예: 300, 900)":
         "Retry waits must be a comma-separated list of seconds (e.g. 300, 900)",
+    # ---- 인증 보호 (rate limit) ----
+    "인증 보호 (무차별 대입 방어)": "Authentication protection (brute-force defense)",
+    "로그인·2단계 인증·이메일 코드의 시도 횟수를 제한합니다. 한도를 넘으면 잠시 차단됩니다.":
+        "Limits the number of attempts for login, two-factor, and email codes. "
+        "Exceeding a limit blocks further attempts for a while.",
+    "로그인 시도 한도(이메일별)": "Login attempt limit (per email)",
+    "로그인 시도 한도(IP별)": "Login attempt limit (per IP)",
+    "로그인 카운트 창(분)": "Login count window (minutes)",
+    "2단계 인증 시도 한도": "Two-factor attempt limit",
+    "이메일 코드 오답 한도": "Email code wrong-answer limit",
+    "이메일 코드 재발송 한도(시간당)": "Email code resend limit (per hour)",
+
     # ---- 이메일 본인 인증 ----
     "이메일 본인 인증": "Email verification",
     "회원 가입(패스워드 계정)으로 만든 계정이 메일로 받은 코드로 이메일 소유를 확인하게 합니다. SSO(OIDC) 계정은 IdP 가 검증하므로 제외됩니다.":
@@ -572,6 +689,11 @@ _EN: dict[str, str] = {
         "The verification code expiry must be between {lo} and {hi} minutes.",
     "{email} (으)로 보낸 인증 코드를 입력하세요. 코드는 {n}분 후 만료됩니다.":
         "Enter the verification code sent to {email}. The code expires in {n} minutes.",
+    # SPA 는 이메일·만료 시간을 동적으로 끼워 넣어 문장을 조각으로 번역한다.
+    "(으)로 보낸 인증 코드를 입력하세요.": "is the address we sent your verification code to. Enter it below.",
+    "코드는": "Expires in",
+    "분 후 만료됩니다.": " minutes.",
+    "인증 코드를 다시 보냈습니다.": "Verification code resent.",
     "인증 코드": "Verification code",
     "코드를 받지 못했나요?": "Didn't get the code?",
     "인증 코드 다시 보내기": "Resend verification code",
@@ -808,6 +930,8 @@ _EN: dict[str, str] = {
     "문서 아카이브 설정을 저장했습니다.": "Document archive settings saved.",
     # ---- 사이트 로그인 자격증명 (site_credentials) ----
     "로그인 자격증명": "Login credentials",
+    "로그인 자격증명 관리": "Manage login credentials",
+    "— 이 사이트 캡처 시 사용할 로그인 정보": "— login info used when capturing this site",
     "이 사이트를 아카이빙할 때 춘추관이 로그인하는 데 쓸 자격증명입니다. 비밀은 WCCG_SECRET_KEY 로 대칭 암호화해 저장하며, 화면에는 다시 표시되지 않습니다.":
         "Credentials ChunChuGwan uses to log in when archiving this site. Secrets are "
         "stored symmetrically encrypted with WCCG_SECRET_KEY and are never shown again.",
@@ -1162,7 +1286,14 @@ _EN: dict[str, str] = {
     "실패한 작업을 모두 재시도할까요?": "Retry all failed runs?",
     "실패한 작업을 모두 재시도합니다 — 백그라운드에서 진행됩니다.":
         "Retrying all failed runs — this proceeds in the background.",
+    "재시도가 등록되었습니다 — 백그라운드에서 진행됩니다.":
+        "Retry queued — this proceeds in the background.",
     "재시도할 실패 작업이 없습니다.": "No failed runs to retry.",
+    "이 사이트 내보내기": "Export this site",
+    "파일 준비중…": "Preparing file…",
+    "내보내기 파일을 다운로드했습니다.": "Export file downloaded.",
+    "— 이 사이트의 페이지·스냅샷만 담은 .ccg.export 파일":
+        "— a .ccg.export file with only this site's pages and snapshots",
     "다시 아카이빙": "Re-archive",
     "같은 범위·옵션으로 사이트 전체를 다시 아카이빙합니다. 계속할까요?":
         "Re-archive the entire site with the same scope and options. Continue?",
@@ -1199,11 +1330,15 @@ _EN: dict[str, str] = {
         "version and earlier versions are kept.",
     "호스트": "Host",
     "주체": "Subject",
+    "대체 이름": "Alternative names",
+    "일련번호": "Serial number",
+    "서명 알고리즘": "Signature algorithm",
     "유효 기간": "Valid",
     "확인 기간": "Seen",
     "지문": "Fingerprint",
     "현재": "Current",
     "이전 버전": "Previous",
+    "곧 만료": "Expiring soon",
     "검증 안 됨": "Unverified",
     "캡처가 인증서 검증을 통과하지 못했습니다 (자체 서명 등)":
         "The capture did not pass certificate verification (self-signed, etc.)",
@@ -1261,6 +1396,11 @@ _EN: dict[str, str] = {
 
     # ---- 최초 설정(setup.html) ----
     "최초 설정": "Initial setup",
+    "최초 설정 토큰": "Initial setup token",
+    "(WCCG_SETUP_TOKEN)": "(WCCG_SETUP_TOKEN)",
+    "이 서버는 최초 설정 보호 토큰을 요구합니다. 아래 작업에 서버 환경변수 WCCG_SETUP_TOKEN 값을 입력하세요.":
+        "This server requires an initial-setup protection token. Enter the server's "
+        "WCCG_SETUP_TOKEN environment variable value for the actions below.",
     "최초 구동입니다. 새 관리자 계정을 만들거나, 백업 파일에서 복원하거나, 다른 춘추관에서 네트워크로 데이터를 가져올 수 있습니다.":
         "This is the first run. You can create a new admin account, restore from a "
         "backup file, or pull all data over the network from another ChunChuGwan.",
@@ -1271,6 +1411,10 @@ _EN: dict[str, str] = {
     "일부 파일을 받지 못했습니다 ({n}개). 전체 재시도하거나, 무시하고 이전을 마무리할 수 있습니다(빠진 스냅샷 파일은 표시되지 않을 수 있습니다).":
         "Some files could not be received ({n}). You can retry them all, or ignore "
         "and finish the migration (missing snapshot files may not display).",
+    # SPA setup — 개수 동적 부분을 뺀 조각 버전
+    "일부 파일을 받지 못했습니다. 전체 재시도하거나, 무시하고 이전을 마무리할 수 있습니다(빠진 스냅샷 파일은 표시되지 않을 수 있습니다).":
+        "Some files could not be received. You can retry them all, or ignore and "
+        "finish the migration (missing snapshot files may not display).",
     "실패한 파일 목록": "Failed files",
     "전체 재시도": "Retry all",
     "빠진 파일을 무시하고 이전을 마무리할까요? 받은 데이터로 서비스를 시작합니다.":
@@ -1357,6 +1501,179 @@ _EN[f"비밀번호는 {MAX_PASSWORD_LENGTH}자 이하여야 합니다."] = (
 _EN[f"토큰은 {MAX_JWT_LENGTH}자 이하여야 합니다."] = (
     f"The token must be at most {MAX_JWT_LENGTH} characters."
 )
+
+# ---- SvelteKit SPA 화면 문자열 (#10 i18n 추출) ----
+# 단위/조사("개·건·명")는 영어에서 수 뒤에 붙지 않으므로 빈 문자열로 둔다
+# (예: "총 10건" → "Total 10").
+_EN.update({
+    "2단계 인증 설정": "Set up 2FA",
+    "2단계 인증(TOTP)": "Two-factor auth (TOTP)",
+    "6자리 코드": "6-digit code",
+    "SMTP 미설정 — 초대 링크를 직접 전달합니다.": "SMTP not configured — share the invite link directly.",
+    "SSO 전용 계정의 2단계 인증은 IdP(Authentik)에서 관리합니다.": "Two-factor auth for SSO-only accounts is managed in the IdP (Authentik).",
+    "TOTP QR": "TOTP QR",
+    "Touch ID·보안 키·휴대폰 등을 패스워드 로그인의 2단계 인증 수단으로 등록합니다.": "Register Touch ID, a security key, or your phone as a second factor for password login.",
+    "URL": "URL",
+    "개": "",
+    "개당 크기(MB)": "Size each (MB)",
+    "건": "",
+    "검색 결과가 없습니다.": "No search results.",
+    "검색 인덱스가 아직 준비되지 않았습니다.": "The search index isn't ready yet.",
+    "고유 용량": "Unique size",
+    "구형 스냅샷의 문서가 남아 있습니다. compact 를 실행하면 통합 목록에 반영됩니다.": "Documents from older snapshots remain. Run compact to include them in the unified list.",
+    "나란히": "Side by side",
+    "내가 대시보드·확장에서 직접 요청한 단발 아카이빙 이력입니다.": "One-off archive runs you requested directly from the dashboard or extension.",
+    "등록 중…": "Registering…",
+    "등록된 스케줄이 없습니다.": "No schedules.",
+    "등록된 태그가 없습니다.": "No tags.",
+    "등록된 패스키가 없습니다.": "No passkeys registered.",
+    "로그가 없습니다.": "No logs.",
+    "마지막": "Last",
+    "메일(SMTP)": "Mail (SMTP)",
+    "명": "",
+    "모바일 스크린샷도 저장": "Also save mobile screenshot",
+    "문서 그룹": "Document groups",
+    "문서 아카이브 한도": "Document archive limits",
+    "문서가 없습니다.": "No documents.",
+    "발급된 개인 키가 없습니다.": "No personal keys issued.",
+    "발급된 시스템 키가 없습니다.": "No system keys issued.",
+    "백업·복원·데이터 이전·재색인·네트워크 태그 편집·SMTP 설정은 이어서 추가됩니다.": "Backup, restore, data migration, reindex, network-tag editing, and SMTP settings are coming next.",
+    "백업·복원·데이터 이전·재색인·SMTP 설정은 이어서 추가됩니다.": "Backup, restore, data migration, reindex, and SMTP settings are coming next.",
+    "태그 추가": "Add tag",
+    "태그 병합": "Merge tags",
+    "원본": "Source",
+    "대상": "Target",
+    "TLS 인증서": "TLS certificates",
+    "검증됨": "Verified",
+    "보내는 주소": "Sender address",
+    "테스트 메일을 보냈습니다.": "Test email sent.",
+    "백업·복원·데이터 이전·재색인은 이어서 추가됩니다.": "Backup, restore, data migration, and reindex are coming next.",
+    "완료했습니다.": "Done.",
+    "백업·복원": "Backup & restore",
+    "백업 복원": "Restore from backup",
+    "정말 복원하시겠습니까? 현재 데이터가 백업 시점으로 교체됩니다.": "Restore now? Current data will be replaced with the backup.",
+    "가져오기 모드": "Import mode",
+    "덮어쓰기": "Overwrite",
+    "데이터 이전·재색인은 이어서 추가됩니다.": "Data migration and reindex are coming next.",
+    "최적화했습니다.": "Optimized.",
+    "최적화할 항목이 없습니다.": "Nothing to optimize.",
+    "최적화 중…": "Optimizing…",
+    "백업 준비중…": "Preparing backup…",
+    "내보내기 준비중…": "Preparing export…",
+    "재색인 실패": "Reindex failed",
+    "재색인을 완료했습니다.": "Reindex complete.",
+    "유지보수": "Maintenance",
+    "저장공간·검색": "Storage & search",
+    "검색 인덱스 전체 재색인": "Reindex search (full)",
+    "데이터 이전은 이어서 추가됩니다.": "Data migration is coming next.",
+    "데이터 이전": "Data migration",
+    "이전 모드 켜짐": "Migration mode on",
+    "이전 모드 꺼짐": "Migration mode off",
+    "이 토큰은 다시 표시되지 않습니다 — 받는 쪽에 안전하게 전달하세요.": "This token is shown only once — share it securely with the receiving instance.",
+    "이전 모드 끄기": "Turn migration off",
+    "이전 모드 켜기": "Turn migration on",
+    "보관 시간(시간)": "Retention (hours)",
+    "본문 비교": "Text diff",
+    "비우면 이메일이 표시됩니다.": "Leave empty to show your email.",
+    "사설 IP(로컬 네트워크) 대상은 네트워크 태그가 필요하며, 자격증명 연결은 추후 지원됩니다.": "Private-IP (local network) targets need a network tag; credential linking is coming later.",
+    "사용 중": "In use",
+    "사용 중입니다.": "In use.",
+    "사이트 검색": "Search sites",
+    "사이트 상세": "Site detail",
+    "사이트 아카이브 기본값": "Site archive defaults",
+    "사이트 아카이브 최대값": "Site archive limits",
+    "사이트 아카이브 회차": "Site archive runs",
+    "사이트 재아카이빙": "Re-archive site",
+    "사이트 전체 아카이브 (같은 호스트)": "Archive whole site (same host)",
+    "새 패스키 이름 (예: 맥북 Touch ID)": "New passkey name (e.g. MacBook Touch ID)",
+    "세션을 로그아웃했습니다.": "Session logged out.",
+    "스냅샷 이력": "Snapshot history",
+    "스냅샷당 수": "Per snapshot",
+    "스케줄 등록": "Add schedule",
+    "스케줄 해제": "Remove schedule",
+    "아래 키를 지금 복사하세요. 다시 표시되지 않습니다.": "Copy the key now. It won't be shown again.",
+    "아직 아카이브가 없습니다.": "No archives yet.",
+    "아직 요청한 아카이빙이 없습니다.": "No archive requests yet.",
+    "아카이빙 등록": "Queue archive",
+    "역할": "Role",
+    "이 권한 그룹을 삭제할까요?": "Delete this permission group?",
+    "이 사이트 삭제": "Delete this site",
+    "이 사이트의 모든 페이지·스냅샷·크롤·스케줄을 삭제할까요? 되돌릴 수 없습니다.": "Delete all pages, snapshots, crawls, and schedules for this site? This cannot be undone.",
+    "이 키를 폐기할까요?": "Revoke this key?",
+    "이 페이지 삭제": "Delete this page",
+    "이 페이지의 모든 스냅샷을 삭제할까요? 되돌릴 수 없습니다.": "Delete all snapshots for this page? This cannot be undone.",
+    "이름(영문/숫자/_)": "Name (letters/digits/_)",
+    "인증 앱(Google Authenticator 등)으로 QR 을 스캔하거나 키를 입력한 뒤, 표시되는 코드를 입력하세요.": "Scan the QR with an authenticator app (e.g. Google Authenticator) or enter the key, then type the code it shows.",
+    "재시도 대기(초, 쉼표)": "Retry backoff (seconds, comma-separated)",
+    "저장 용량": "Storage size",
+    "저장했습니다.": "Saved.",
+    "전체 도메인": "All domains",
+    "전체 레벨": "All levels",
+    "전체 상태": "All statuses",
+    "전체 출처": "All sources",
+    "절감 용량": "Saved space",
+    "정말 탈퇴할까요? 이 작업은 되돌릴 수 없습니다.": "Really withdraw? This cannot be undone.",
+    "지연(초)": "Delay (seconds)",
+    "차이": "Diff",
+    "참조": "Reference",
+    "첨부 문서": "Attached documents",
+    "초대 링크를 직접 전달하세요.": "Share the invite link directly.",
+    "초대 메일을 보냈습니다.": "Invitation email sent.",
+    "초대 메일을 다시 보냈습니다.": "Invitation email resent.",
+    "재생성": "Regenerate",
+    "총": "Total",
+    "최대 페이지": "Max pages",
+    "최신 2개 비교": "Compare latest two",
+    "최신만": "Latest only",
+    "캡처": "Capture",
+    "커스텀 그룹 추가": "Add custom group",
+    "코드 만료(분)": "Code expiry (minutes)",
+    "콘텐츠 동일해도 강제 저장": "Force save even if unchanged",
+    "크롬 확장 등 본인 도구가 사용할 토큰입니다. 권한은 내 역할 범위 안에서만 부여됩니다.": "A token for your own tools like the Chrome extension. Permissions are granted only within your role's scope.",
+    "키 이름": "Key name",
+    "탈퇴하면 모든 세션이 종료되고 같은 이메일로 재가입할 수 없습니다 (관리자 삭제 전까지).": "Withdrawing ends all sessions and blocks re-signup with the same email (until an admin deletes the account).",
+    "패스키를 등록했습니다.": "Passkey registered.",
+    "페이지 재아카이빙": "Re-archive page",
+    "편집": "Edit",
+    "표시 라벨": "Display label",
+    "픽셀 차이": "Pixel diff",
+    "확인 이메일": "Confirmation email",
+    "확인을 위해 이메일 입력": "Enter your email to confirm",
+    "확장 자격증명": "Extension credentials",
+    "확장(브라우저) 캡처가 포함되어 스크린샷 비교는 제공하지 않습니다 (렌더 환경 차이).": "Includes extension (browser) capture, so screenshot comparison isn't available (rendering-environment differences).",
+    "회원 가입 허용": "Allow sign-up",
+    # ---- 새 아카이빙 폼 리디자인 (archive/new) ----
+    "캡처 범위": "Scope",
+    "단일 페이지": "Single page",
+    "사이트 전체": "Whole site",
+    "없음": "None",
+    "1회": "Once",
+    "공개 주소": "Public address",
+    "사설 IP — 태그 필요": "Private IP — tag required",
+    "루프백 — 아카이빙 불가": "Loopback — can't archive",
+    "아카이빙할 페이지의 전체 주소를 입력하세요.": "Enter the full URL of the page to archive.",
+    "입력한 URL 한 페이지만 스냅샷으로 저장합니다.": "Captures only this single URL as a snapshot.",
+    "같은 호스트의 경로 프리픽스 이하를 모두 따라가 저장합니다. 비우면 시스템 기본값이 적용됩니다.": "Follows every page under the same host and path prefix. Leave blank to use system defaults.",
+    "기본값은 본문 해시가 바뀐 경우에만 새 스냅샷을 만듭니다.": "By default a new snapshot is created only when the content hash changes.",
+    # ---- 공통 컴포넌트 (Pager·PageSize 등) ----
+    "페이지 이동": "Pagination",
+    "페이지당 항목 수": "Items per page",
+    # 알림 토스트(run(fn, ok) 의 ok 인자 — t(변수)로 번역)
+    "표시 이름을 변경했습니다.": "Display name updated.",
+    "인증 앱에 등록한 뒤 코드를 입력하세요.": "Register it in your authenticator app, then enter the code.",
+    "2단계 인증을 켰습니다.": "Two-factor authentication enabled.",
+    "2단계 인증을 껐습니다.": "Two-factor authentication disabled.",
+    "패스키를 삭제했습니다.": "Passkey deleted.",
+    # 아카이빙 상태 라벨(STATUS_LABELS — t(변수)로 번역)
+    "새 스냅샷": "New snapshot",
+    "변경됨": "Changed",
+    "변경 없음": "Unchanged",
+    "강제 저장": "Forced save",
+    # 에러 화면(+error.svelte)·diff 비교 불가 안내
+    "문제가 발생했습니다": "Something went wrong",
+    "요청한 페이지를 표시할 수 없습니다.": "The requested page could not be displayed.",
+    "비교할 수 없습니다.": "Comparison is not available.",
+})
 
 CATALOGS: dict[str, dict[str, str]] = {"en": _EN}
 

@@ -4,6 +4,7 @@
 - 소스 Pull 엔드포인트(/api/migration/*) 토큰 인증·경로 검증
 - 받는 쪽 파일 단위 Pull 의 내결함성(재시도·실패 목록·부분 종료)·마무리
 """
+import sqlite3
 import time
 
 import httpx
@@ -285,6 +286,15 @@ def _make_admin_db(path):
     finally:
         config.DB_PATH = old
         db.invalidate_schema_cache()
+    # WAL 모드에서 커밋 데이터는 WAL 파일에만 존재 — read_bytes() 로 main file 을
+    # 취하기 전에 checkpoint 로 main file 에 반영한다.
+    # (프로덕션 발신측은 conn.backup() 으로 WAL 포함 일관 복사본을 만드는데,
+    #  이 헬퍼는 raw bytes 를 쓰므로 checkpoint 가 필수다.)
+    raw = sqlite3.connect(str(path))
+    try:
+        raw.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        raw.close()
 
 
 def _install_mock_client(monkeypatch, db_bytes, files, manifest, fail_paths=()):

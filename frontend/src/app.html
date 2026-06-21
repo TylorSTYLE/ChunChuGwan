@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+	<title>춘추관</title>
+	<script>
+		/* 테마 FOUC 방지 — 첫 페인트 전에 .dark 클래스를 적용한다. 실제 테마 관리(토글·
+		   저장·시스템 변경 감지)는 mode-watcher(ModeWatcher)가 담당하며, 여기선 동일한
+		   저장 키('mode-watcher-mode': light|dark|system)를 읽어 초기 깜빡임만 막는다. */
+		(function () {
+			try {
+				var mode = localStorage.getItem('mode-watcher-mode') || 'system';
+				var dark =
+					mode === 'dark' ||
+					(mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+				document.documentElement.classList.toggle('dark', dark);
+				document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+			} catch (e) {}
+		})();
+	</script>
+	%sveltekit.head%
+</head>
+<body data-sveltekit-preload-data="hover">
+	<div style="display: contents">%sveltekit.body%</div>
+</body>
+</html>

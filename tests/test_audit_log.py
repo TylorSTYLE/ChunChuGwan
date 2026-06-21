@@ -58,93 +58,14 @@ def _fake_archive(monkeypatch):
     )
 
 
-def test_archive_new_logs_actor(client, monkeypatch, audit_logs):
-    """새 아카이빙 등록이 요청한 사용자 이메일과 함께 기록된다."""
-    _fake_archive(monkeypatch)
-    _login(client, "archiver@test.co")
-    res = client.post(
-        "/archive", data={"url": "https://example.com/page"}, follow_redirects=False
-    )
-    assert res.status_code == 303
-    messages = _audit_messages(audit_logs)
-    assert any(
-        "새 아카이빙 등록: https://example.com/page" in m
-        and "(요청자: archiver@test.co)" in m
-        for m in messages
-    )
-
-
-def test_settings_change_logs_actor(client, audit_logs):
-    """가입 설정 변경이 관리자 이메일과 함께 기록된다."""
-    _login(client, "boss@test.co", "bosspass1234")
-    res = client.post(
-        "/system/settings",
-        data={"signup_enabled": "on", "signup_default_role": "viewer"},
-        follow_redirects=False,
-    )
-    assert res.status_code == 303
-    messages = _audit_messages(audit_logs)
-    assert any(
-        "가입 설정 변경" in m and "(요청자: boss@test.co)" in m for m in messages
-    )
-
-
-def test_role_change_logs_actor_and_target(client, audit_logs):
-    """사용자 권한 변경이 대상 이메일·새 권한·요청자와 함께 기록된다."""
-    _login(client, "boss@test.co", "bosspass1234")
-    with db.connect() as conn:
-        target = db.get_user_by_email(conn, "archiver@test.co")
-    res = client.post(
-        f"/system/users/{target['id']}/role", data={"role": "viewer"},
-        follow_redirects=False,
-    )
-    assert res.status_code == 303
-    messages = _audit_messages(audit_logs)
-    assert any(
-        "사용자 권한 변경: archiver@test.co" in m and "(요청자: boss@test.co)" in m
-        for m in messages
-    )
-
-
-def test_network_tag_create_and_delete_logged(client, audit_logs):
-    """로컬 네트워크 태그 추가·삭제가 기록된다."""
-    _login(client, "boss@test.co", "bosspass1234")
-    client.post(
-        "/system/network-tags", data={"name": "NAS"}, follow_redirects=False
-    )
-    with db.connect() as conn:
-        tag = db.get_network_tag_by_name(conn, "NAS")
-    client.post(
-        f"/system/network-tags/{tag['id']}/delete", follow_redirects=False
-    )
-    messages = _audit_messages(audit_logs)
-    assert any("로컬 네트워크 태그 추가: 'NAS'" in m for m in messages)
-    assert any("로컬 네트워크 태그 삭제: 'NAS'" in m for m in messages)
-
-
-def test_api_key_create_logged(client, audit_logs):
-    """API 키 발급이 키 이름·권한·요청자와 함께 기록된다."""
-    _login(client, "boss@test.co", "bosspass1234")
-    res = client.post(
-        "/system/api-keys",
-        data={"name": "bot", "can_view": "on", "expiry": "permanent"},
-        follow_redirects=False,
-    )
-    assert res.status_code == 303
-    messages = _audit_messages(audit_logs)
-    assert any(
-        "API 키 발급: 'bot' (권한: 보기)" in m and "(요청자: boss@test.co)" in m
-        for m in messages
-    )
-
-
 def test_api_archive_logs_key_name(client, monkeypatch, audit_logs):
     """REST API 아카이빙 트리거는 API 키 이름이 요청 주체로 기록된다."""
     _fake_archive(monkeypatch)
     with db.connect() as conn:
+        aid = db.get_user_by_email(conn, "boss@test.co")["id"]
         token = auth.issue_api_key(
             conn, "bot", can_view=True, can_archive=True,
-            created_by=None, ttl_seconds=None,
+            created_by=aid, owner_user_id=aid, ttl_seconds=None,
         )
     res = client.post(
         "/api/v1/archive", json={"url": "https://example.com/api-page"},
@@ -159,23 +80,3 @@ def test_api_archive_logs_key_name(client, monkeypatch, audit_logs):
     )
 
 
-def test_audit_log_lands_in_system_logs_db(client):
-    """감사 로그가 system_logs 테이블에 적재된다 (시스템 로그 화면의 데이터 소스)."""
-    system_log.install("serve")
-    try:
-        _login(client, "boss@test.co", "bosspass1234")
-        client.post(
-            "/system/network-tags", data={"name": "내부망"}, follow_redirects=False
-        )
-        system_log.flush()
-        with db.connect() as conn:
-            rows = db.list_system_logs(conn, limit=50, offset=0)
-    finally:
-        system_log.uninstall()
-    audit_rows = [r for r in rows if r["logger"] == _AUDIT_LOGGER]
-    assert audit_rows, "감사 로그가 system_logs 에 적재되어야 한다"
-    assert any(
-        "로컬 네트워크 태그 추가: '내부망'" in r["message"]
-        and "boss@test.co" in r["message"]
-        for r in audit_rows
-    )

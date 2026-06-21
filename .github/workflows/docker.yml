@@ -17,7 +17,9 @@ concurrency:
   cancel-in-progress: ${{ github.ref == 'refs/heads/develop' }}
 
 jobs:
-  # 플랫폼별 네이티브 빌드 (QEMU 에뮬레이션 없이 — chromium 설치가 느려서)
+  # 플랫폼별 네이티브 빌드 (QEMU 에뮬레이션 없이 — chromium 설치가 느려서).
+  # GitHub 호스티드 러너를 아키텍처별로 — amd64→ubuntu-latest·arm64→ubuntu-24.04-arm
+  # (공개 리포라 arm64 호스티드 러너도 무료).
   build:
     # 릴리스(release.yml)는 main 범프 커밋·develop FF 를 따로 push 하는데, 같은 트리를
     # 가리키는 vX.Y.Z 태그 빌드가 :latest·:main·:develop 태그까지 모두 떠맡으므로
@@ -152,19 +154,24 @@ jobs:
 
       - name: 대시보드 기동 스모크
         run: |
-          # 0.0.0.0 바인딩 → 인증 강제, 관리자 자동 등록으로 부팅만 검증한다
+          # 0.0.0.0 바인딩 → 인증 강제, 관리자 자동 등록으로 부팅만 검증한다.
+          # 포트 발행·호스트 curl 없이 `docker exec` 로 컨테이너 '내부'에서 8765 LISTEN 을
+          # 확인한다(uvicorn 은 "Application startup complete" 후에만 바인딩하므로
+          # connect 성공 = 기동 완료). 컨테이너만으로 검증하므로 러너 종류에 무관하게 동작.
+          # 이전 run 의 잔존 컨테이너는 선제 제거.
+          docker rm -f wccg-smoke >/dev/null 2>&1 || true
           docker run -d --name wccg-smoke \
             -e WCCG_HOST=0.0.0.0 \
             -e WCCG_ADMIN_EMAIL=smoke@example.com \
             -e WCCG_ADMIN_PASSWORD=smoke-password-1234 \
-            -p 8765:8765 "$TAG" serve
+            "$TAG" serve
           ok=0
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8765/ || echo 000)
-            echo "try $i -> $code"
-            if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
-              echo "대시보드 응답 OK ($code)"; ok=1; break
+            # if 조건이라 connect 실패(비정상 종료)가 set -e 에 안 걸린다 — 그냥 재시도.
+            if docker exec wccg-smoke python -c "import socket; socket.create_connection(('127.0.0.1', 8765), 5).close()" 2>/dev/null; then
+              echo "try $i -> OK (대시보드가 8765 에서 응답)"; ok=1; break
             fi
+            echo "try $i -> 대기"
             sleep 2
           done
           echo "--- 컨테이너 로그 ---"; docker logs wccg-smoke || true

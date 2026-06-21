@@ -1,0 +1,66 @@
+{
+  "0.6.1": {
+    "items": [
+      {
+        "pr": 165,
+        "text": "확장 풀페이지 스크린샷 — scroll-and-stitch (첫 뷰포트 반복·이음새 수정)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/165"
+      },
+      {
+        "pr": 167,
+        "text": "docs: 성능 최적화 분석 및 단계별 실행 계획",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/167"
+      },
+      {
+        "pr": 168,
+        "text": "perf(phase-0): 즉효·무위험 최적화 묶음 (PRAGMA·래치·지연 import 등)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/168"
+      },
+      {
+        "pr": 169,
+        "text": "perf(phase-1): 핫패스·삭제·정리 경로 인덱스 묶음 추가",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/169"
+      },
+      {
+        "pr": 170,
+        "text": "perf(phase-2): snapshots.bytes 비정규화 — 용량 집계 파일시스템 N+1 제거",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/170"
+      },
+      {
+        "pr": 171,
+        "text": "perf(phase-3): 스냅샷 title 비정규화 — 목록·상세의 meta.json 파싱 제거",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/171"
+      },
+      {
+        "pr": 172,
+        "text": "perf(phase-4): 요청당 권한 중복 계산·API 키 쓰기 제거 (저위험 국소)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/172"
+      },
+      {
+        "pr": 173,
+        "text": "perf(phase-5): 검색 스니펫·문서 추출 메모리 절감 (FTS5 snippet + 조기 중단)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/173"
+      },
+      {
+        "pr": 174,
+        "text": "perf(phase-6): 백업/내보내기 tar.gz 재압축 회피 (compresslevel=1)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/174"
+      },
+      {
+        "pr": 175,
+        "text": "perf(phase-7): /documents legacy 스캔 캐시 + 삭제 GC IN() 청크 (선택)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/175"
+      },
+      {
+        "pr": 176,
+        "text": "ci: 워크플로 중복 빌드 제거·캐시 개선",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/176"
+      },
+      {
+        "pr": 177,
+        "text": "fix: serve·worker 동시 기동 시 마이그레이션 duplicate column 방지",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/177"
+      }
+    ]
+  }
+}

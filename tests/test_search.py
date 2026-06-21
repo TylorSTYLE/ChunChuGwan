@@ -378,38 +378,4 @@ def test_backfill_skips_concurrently_deleted_snapshot(archive, monkeypatch):
         assert db.list_orphan_fts_rowids(conn) == []
 
 
-def _wait_reindex_done(client, timeout: float = 15.0) -> dict:
-    import time
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        state = client.get("/system/search/reindex/status").json()
-        if not state["running"]:
-            return state
-        time.sleep(0.05)
-    raise AssertionError("재색인이 시간 내에 끝나지 않음")
 
-
-def test_system_reindex_button_runs_in_background(archive, monkeypatch):
-    """시스템 버튼은 즉시 303 으로 응답하고(백그라운드), status 폴링으로 완료된다."""
-    from fastapi.testclient import TestClient
-    from chunchugwan.web import app as web_app
-    monkeypatch.setattr(config, "AUTH_ENABLED", False)  # loopback — 관리자 허용
-    _make_snapshot("https://a.com/1", "버튼색인 본문", index=False)
-    assert searchindex.pending_count() == 1
-    client = TestClient(web_app.app)
-    res = client.post("/system/search/reindex", follow_redirects=False)
-    assert res.status_code == 303  # 즉시 응답 (동기 대기 아님)
-    state = _wait_reindex_done(client)
-    assert state["error"] is None and state["result"] == 1
-    assert searchindex.pending_count() == 0
-    assert searchindex.search("버튼색인").total == 1
-
-
-def test_system_reindex_status_endpoint(archive, monkeypatch):
-    """status 엔드포인트가 진행 상태 JSON 을 돌려준다."""
-    from fastapi.testclient import TestClient
-    from chunchugwan.web import app as web_app
-    monkeypatch.setattr(config, "AUTH_ENABLED", False)
-    client = TestClient(web_app.app)
-    s = client.get("/system/search/reindex/status").json()
-    assert set(s) >= {"running", "done", "total", "result", "error", "finished_at"}

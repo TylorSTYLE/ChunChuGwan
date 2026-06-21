@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
-archive/
+/archive/
 .pytest_cache/
 .DS_Store
 
@@ -9,3 +9,16 @@ archive/
 compose.yaml
 compose.override.yaml
 .env
+
+# SvelteKit SPA 빌드 산출물 — Docker/CI 가 빌드해 동봉(소스 커밋 안 함)
+chunchugwan/web/frontend_dist/
+
+# 패키지 빌드 산출물 / 릴리스 SBOM (CI 가 생성해 릴리스에 첨부 — 커밋 안 함)
+/dist/
+*.cdx.json
+
+# fablize 골 트래커 상태
+.fablize/
+
+# PyCharm 로컬 전용 워크스페이스 설정 (절대 경로·개인 설정 포함)
+.idea/workspace.xml

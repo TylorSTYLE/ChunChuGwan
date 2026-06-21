@@ -80,14 +80,27 @@ def test_diff_bad_range(archive_env):
 
 
 def test_delete_page(archive_env):
-    """확인 프롬프트 거부 시 보존, --yes 면 전체 삭제."""
+    """확인 프롬프트 거부 시 보존, --hard --yes 면 즉시 영구 삭제."""
     aborted = CliRunner().invoke(cli.main, ["delete", archive_env], input="n\n")
     assert aborted.exit_code != 0
-    result = CliRunner().invoke(cli.main, ["delete", archive_env, "--yes"])
+    result = CliRunner().invoke(cli.main, ["delete", archive_env, "--hard", "--yes"])
     assert result.exit_code == 0
     assert "스냅샷 2개" in result.output
     with db.connect() as conn:
         assert db.get_page(conn, archive_env) is None
+
+
+def test_delete_page_to_trash(archive_env):
+    """휴지통이 켜진 기본 동작 — delete 가 페이지를 휴지통으로 옮긴다(영구삭제 아님)."""
+    result = CliRunner().invoke(cli.main, ["delete", archive_env, "--yes"])
+    assert result.exit_code == 0
+    assert "휴지통으로 이동" in result.output
+    with db.connect() as conn:
+        # 페이지 행은 남아 있지만 휴지통(trash_id)이라 목록에서 숨겨진다
+        assert db.count_pages(conn) == 0
+        assert db.count_trash_entries(conn) == 1
+        page = db.get_page(conn, archive_env)
+        assert page is not None and page["trash_id"] is not None
 
 
 def test_delete_single_snapshot(archive_env):
@@ -140,6 +153,19 @@ def test_worker_command_runs_with_resolved_count(monkeypatch):
     finally:
         signal.signal(signal.SIGINT, old_int)
         signal.signal(signal.SIGTERM, old_term)
+
+
+def test_console_level_daemon_defaults_to_info():
+    """worker/serve 는 기본 INFO(데몬 운영 로그), 단발 명령은 WARNING. -v/-q 우선."""
+    import logging
+
+    assert cli._console_level(False, False, "worker") == logging.INFO
+    assert cli._console_level(False, False, "serve") == logging.INFO
+    assert cli._console_level(False, False, "add") == logging.WARNING
+    assert cli._console_level(False, False, None) == logging.WARNING
+    assert cli._console_level(True, False, "add") == logging.INFO        # -v
+    assert cli._console_level(False, True, "worker") == logging.WARNING  # --quiet
+    assert cli._console_level(True, True, "worker") == logging.INFO      # -v 가 우선
 
 
 # ---- add (큐 등록) + archive run (큐 소비) ----

@@ -15,10 +15,12 @@
     <option name="SCRIPT_NAME" value="chunchugwan.cli" />
     <option name="PARAMETERS" value="serve" />
     <option name="SHOW_COMMAND_LINE" value="false" />
-    <option name="EMULATE_TERMINAL" value="false" />
+    <option name="EMULATE_TERMINAL" value="true" />
     <option name="MODULE_MODE" value="true" />
     <option name="REDIRECT_INPUT" value="false" />
     <option name="INPUT_FILE" value="" />
-    <method v="2" />
+    <method v="2">
+      <option name="RunConfigurationTask" enabled="true" run_configuration_id="frontend: build" run_configuration_type="js.build_tools.npm" />
+    </method>
   </configuration>
 </component>

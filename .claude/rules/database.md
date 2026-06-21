@@ -13,11 +13,11 @@ paths:
 
 | 테이블 | 상세 |
 |---|---|
-| `sites`·`pages`·`snapshots`·`checks`·`settings`·`archive_logs`·`system_logs` | 이 파일 |
+| `sites`·`pages`·`snapshots`·`checks`·`settings`·`archive_logs`·`system_logs`·`audit_logs`·`trash_entries` | 이 파일 |
 | `snapshot_resources`·`snapshot_documents` | `.claude/rules/storage.md` |
 | `snapshot_fts` | `.claude/rules/search.md` |
 | `network_tags`·`site_certificates`·`archive_jobs`·`live_commands`·`schedules`·`crawls`/`crawl_pages`·`crawl_schedules` | `.claude/rules/capture-crawl.md` |
-| `users`/`identities`/`sessions`/`oidc_states`·`permission_groups`·`email_verifications`·`webauthn_credentials`·`site_credentials` | `.claude/rules/authentication.md` |
+| `users`/`identities`/`sessions`/`oidc_states`·`permission_groups`·`email_verifications`·`webauthn_credentials`·`site_credentials`·`auth_throttle` | `.claude/rules/authentication.md` |
 | `api_keys` | `.claude/rules/api-extension.md` |
 
 ## 코어·구조 테이블
@@ -67,8 +67,17 @@ paths:
 - `system_logs` — 앱 동작 로그 (`system_log.py` 의 logging 핸들러가
   chunchugwan 네임스페이스의 INFO 이상 레코드를 적재 — 레벨·로거·출처
   serve/worker/cli·트레이스백). 비차단 큐 + 쓰기 스레드, 보관 한도
-  (`WCCG_SYSTEM_LOG_MAX_ROWS`) 초과분 자동 정리. 대시보드 `/system/logs`
-  (관리자 전용)의 데이터 소스
+  (`WCCG_SYSTEM_LOG_MAX_ROWS`) 초과분 자동 정리. 대시보드 `/log/system`
+  (`view_system_logs` 권한, 기본 admin)의 데이터 소스. 감사 로그(`chunchugwan.web.audit`
+  로거)는 핸들러가 **제외**해 여기 적재되지 않는다 (전용 audit_logs 로 분리)
+- `audit_logs` — 사용자 액션 감사 로그 (누가 무엇을 했는지). `web.audit.log` 가
+  요청 주체(actor=이메일/API 키 이름/익명, actor_user_id)·액션 종류(action ∈
+  `db.AUDIT_ACTIONS` = archive·view·download·admin)·대상(target)·한국어 원문
+  메시지를 적재한다. 아카이빙(archive)·아카이브 열람(view)·문서 다운로드(download)·
+  관리 작업(admin, 설정·권한·자격증명·네트워크 태그·API 키 등)을 기록하고, 대시보드
+  `/log/audit`(`view_audit_logs` 권한, 기본 admin)이 액션·요청자·기간 필터로 보여준다.
+  `system_log` 핸들러가 audit 로거를 제외하므로 시스템 로그와 분리된다.
+  `db.list/count/insert/list_audit_actors/prune_audit_logs`
 - `settings` — 대시보드에서 변경하는 key-value 런타임 설정. 가입 설정
   (`signup_enabled` on/off 기본 on — off 면 `/signup` 차단 + 로그인 화면
   가입 링크 숨김(초대 가입은 허용), `signup_default_role`)과 이메일 본인 인증
@@ -76,9 +85,12 @@ paths:
   — 코드 만료 분, SMTP 미설정이면 켜도 무시)과 사이트 아카이브
   설정 (`crawl_default_max_pages`/`crawl_default_max_depth`/
   `crawl_default_delay_seconds` — 새 크롤 옵션 기본값,
+  `crawl_limit_max_pages`/`crawl_limit_max_depth`/`crawl_limit_max_delay_seconds`
+  — 그 옵션의 상한(최대값), 새 크롤 등록 시 강제하고 기본값은 이 상한 이내로
+  클램프(절대 천장은 config.CRAWL_MAX_*_CEILING),
   `crawl_retry_backoff_seconds` — 실패 재시도 대기 쉼표 목록(초), 최대 시도
   = 길이 + 1, 진행 중 크롤에도 즉시 적용. 해석·검증은
-  `crawler.crawl_defaults`/`retry_backoff`, 오염 시 config 기본값 폴백)과
+  `crawler.crawl_defaults`/`crawl_limits`/`retry_backoff`, 오염 시 config 기본값 폴백)과
   캡처 설정 (`mobile_screenshot_enabled` on/off 기본 off — 켜면 캡처가
   데스크탑 외에, 같은 URL 을 안드로이드 크롬으로 위장한 모바일 컨텍스트
   (UA·뷰포트 390×844·isMobile/hasTouch)로 한 번 더 열어 screenshot-mobile 을
@@ -100,4 +112,27 @@ paths:
   크롤 전면 중단, `db.migration_mode_enabled`/`set_migration_mode`. `migration_token_hash`
   — 발급한 이전 토큰의 SHA-256 해시만 저장(세션·API 키와 같은 단방향, 원칙 6),
   `migration_token_created_at` — 발급 시각 표시용. 모드를 끄면 토큰 키들이 삭제된다.
-  흐름은 `.claude/rules/authentication.md`·`.claude/rules/capture-crawl.md` 참조)
+  흐름은 `.claude/rules/authentication.md`·`.claude/rules/capture-crawl.md` 참조)와
+  인증 보호 설정 (`auth_throttle_enabled` on/off 기본 on, `auth_login_limit`/
+  `auth_login_ip_limit`/`auth_login_window_minutes`/`auth_totp_limit`/
+  `auth_email_verify_limit`/`auth_email_resend_limit` — 무차별 대입 방어 한도·창,
+  해석·클램핑은 `db.auth_throttle_settings`, 오염·범위 밖이면 config 기본값. 카운터는
+  `auth_throttle` 테이블, 상세는 `.claude/rules/authentication.md`)와 휴지통 설정
+  (`trash_enabled` on/off 기본 on — off 면 페이지·사이트 삭제가 휴지통을 거치지 않고 즉시
+  영구삭제. `trash_retention_days` — 보관 기간(일, 기본 30, 0=자동삭제 끔), 경과 시
+  스케줄러가 자동 영구삭제. 해석은 `db.trash_enabled`/`trash_retention_days`, 상세는
+  `trash_entries` 항목 참조)
+- `trash_entries` — 아카이브 휴지통. 페이지·사이트 삭제(`deletion.delete_page`/`delete_site`,
+  `trash_enabled` on + `hard=False`)는 즉시 지우지 않고 이 테이블에 항목을 남기고 연결
+  행의 `trash_id`(`pages`·`crawls`·`crawl_schedules` 에 추가된 FK)를 세팅해 **모든 목록·
+  집계·검색·서빙에서 숨긴다**(파일·CAS 는 그대로). `kind`(page|site)·`label`(URL/site_key)·
+  page/snapshot/bytes 카운트·`deleted_by`·`deleted_at`. site_id·page_id·deleted_by 는
+  표시·복원용 상관 키(FK 아님 — prune·사용자 삭제가 막히지 않게, `archive_logs.job_id` 와
+  같은 이유). 숨김의 정본은 id 게터 4종(`get_page_by_id`/`get_snapshot`/`get_crawl` 기본
+  숨김 + `include_trashed=True` 탈출구, `get_page` 는 재아카이브 복원 앵커라 미필터)과
+  목록/검색/집계 쿼리의 `trash_id IS NULL` 필터. 복원(`deletion.restore`)은 `trash_id`
+  해제, 영구삭제(`purge`/`purge_expired`)는 기존 하드삭제 기구 재사용(CAS GC·FTS·diff·
+  prune). 휴지통 페이지의 URL 을 다시 아카이빙하면 `get_or_create_page` 가 자동 복원한다.
+  자동 purge 는 `scheduler.run_due`(=`wccg schedule run`)가 보관 기간 경과분에 호출.
+  관리 화면은 `/archive/trash`(`manage_trash` 권한 — `.claude/rules/authentication.md`),
+  전체 백업은 보존하되 `export` 는 제외. 마이그레이션·삭제 흐름은 `.claude/rules/storage.md`

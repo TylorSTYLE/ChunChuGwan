@@ -8,6 +8,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 tests/
+# frontend 로컬 산출물·의존성 — 컨테이너의 npm ci/build 결과를 덮지 않게 제외
+frontend/node_modules
+frontend/build
+frontend/.svelte-kit
+chunchugwan/web/frontend_dist
 Dockerfile
 compose*.yaml
 .env

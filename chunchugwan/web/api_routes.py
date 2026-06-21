@@ -12,9 +12,11 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import secrets
 import sqlite3
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -36,51 +38,69 @@ def _extract_token(request: Request) -> str:
     return request.headers.get("x-api-key", "").strip()
 
 
-def _api_auth(request: Request) -> None:
-    """API 키 게이트 — 유효 키를 request.state.api_key 에 적재.
+def _api_auth_throttle(ip: str) -> None:
+    """API 키 인증 실패에 IP 별 인증 보호 적용 (무차별 대입 방어).
 
-    인증이 꺼진 환경은 키 없이 통과한다 (api_key=None = 전체 허용).
-    사용자 귀속 확장 토큰(owner_user_id 보유)은 권한을 저장 컬럼이 아니라
-    소유자의 *현재* 역할에서 매 요청 재평가한다 — 역할 강등·차단·탈퇴가
-    즉시 반영되고, 권한 없는 역할(pending/blocked/withdrawn)이거나 개인 API Key
-    사용 권한(use_api_keys)을 잃으면 401 로 막는다.
+    로그인과 같은 `auth_throttle` 을 쓰되 버킷을 분리한다(`api_key_ip`). 한도·창은
+    "인증 보호" 설정(`login_ip_limit`·`login_window_minutes`)을 재사용한다. 카운트는
+    인증 핸들러 주 트랜잭션과 분리된 별도 conn 에서 한다 — 인증 실패로 401/429 를
+    던져 롤백돼도 시도 횟수가 남도록(authentication.md 규칙). 한도 초과면 429.
+    """
+    with db.connect() as conn:
+        if not db.auth_throttle_enabled(conn):
+            return
+        s = db.auth_throttle_settings(conn)
+        allowed, retry = db.throttle_hit(
+            conn, "api_key_ip", ip, s["login_ip_limit"], s["login_window_minutes"] * 60
+        )
+    if not allowed:
+        raise HTTPException(
+            429, "요청이 너무 많습니다 — 잠시 후 다시 시도하세요",
+            headers={"Retry-After": str(retry)},
+        )
+
+
+def _api_auth(request: Request) -> None:
+    """API 키 게이트 — **개인 API Key 전용**. 유효 키를 request.state.api_key 에 적재.
+
+    /api/v1 은 개인 API Key 발급 권한(use_api_keys)이 있는 사용자가 자신이 만든
+    소프트웨어(크롬 확장 포함)를 춘추관과 연동하는 경로다. 인증은 개인 API Key 만
+    받고(시스템 키 owner=NULL 은 거부), 권한은 저장 컬럼이 아니라 소유자의 *현재*
+    역할에서 매 요청 재평가한다 — 역할 강등·차단·탈퇴나 개인 API Key 사용 권한
+    (use_api_keys) 회수가 즉시 반영돼 기존 토큰도 401 로 막힌다. 인증 실패는 IP 별
+    인증 보호로 무차별 대입을 막는다(실패 시에만 카운트, 한도 초과 시 429). 인증이
+    꺼진 환경(loopback)은 키 없이 통과한다 (api_key=None = 전체 허용).
     """
     request.state.api_key = None
     if not config.AUTH_ENABLED:
         return
     token = _extract_token(request)
-    unauthorized = HTTPException(
-        401, "유효한 API 키가 필요합니다",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    ip = request.client.host if request.client is not None else "unknown"
+    key = None
     with db.connect() as conn:
-        key = auth.resolve_api_key(conn, token) if token else None
-        if key is None:
-            raise unauthorized
-        db.touch_api_key(conn, key["id"])
-        if key["owner_user_id"] is not None:
-            owner = db.get_user_by_id(conn, key["owner_user_id"])
+        resolved = auth.resolve_api_key(conn, token) if token else None
+        # 개인 키 전용 — owner_user_id 가 있어야 한다 (시스템 키 owner=NULL 은 거부).
+        if resolved is not None and resolved["owner_user_id"] is not None:
+            owner = db.get_user_by_id(conn, resolved["owner_user_id"])
             # role_presets 로 프리셋 캐시를 워밍하며 권한 보유 그룹인지 확인한다
             # (그룹 dict 는 STATE_ROLES·미지 역할을 포함하지 않아 그 자체가 게이트).
-            if owner is None or owner["role"] not in db.role_presets(conn):
-                raise HTTPException(
-                    401, "토큰 소유자의 권한이 없습니다",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            # 실효 권한을 1회만 계산해 사용 권한·토큰 권한(view/archive)을 모두 파생
-            # (예전엔 can_use_api_keys + token_permissions_for_user 가 오버라이드 JSON 을
-            #  두 번 파싱했다). role_presets 캐시가 워밍된 뒤라 정확하다.
-            perms = permissions.effective_permissions(owner)
-            # 개인 API Key 사용 권한이 없으면(역할 강등·오버라이드 회수) 토큰 무효.
-            if "use_api_keys" not in perms:
-                raise HTTPException(
-                    401, "토큰 소유자에게 개인 API Key 사용 권한이 없습니다",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            key = dict(key)
-            key["can_view"] = int("view" in perms)
-            key["can_archive"] = int("archive" in perms)
-    request.state.api_key = key
+            if owner is not None and owner["role"] in db.role_presets(conn):
+                # 실효 권한을 1회만 계산해 사용 권한·토큰 권한(view/archive)을 파생.
+                perms = permissions.effective_permissions(owner)
+                # 개인 API Key 사용 권한이 있어야 유효 (역할 강등·오버라이드 회수 시 무효).
+                if "use_api_keys" in perms:
+                    db.touch_api_key(conn, resolved["id"])
+                    key = dict(resolved)
+                    key["can_view"] = int("view" in perms)
+                    key["can_archive"] = int("archive" in perms)
+    if key is not None:
+        request.state.api_key = key
+        return  # 성공 — 정상 트래픽은 throttle 을 건드리지 않는다(비용 0).
+    # 인증 실패 — IP 별 인증 보호(무차별 대입 방어) 후 401.
+    _api_auth_throttle(ip)
+    raise HTTPException(
+        401, "유효한 개인 API Key가 필요합니다", headers={"WWW-Authenticate": "Bearer"}
+    )
 
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(_api_auth)])
@@ -176,13 +196,27 @@ def _snapshot_json(snap: sqlite3.Row) -> dict:
     }
 
 
+@functools.lru_cache(maxsize=1)
+def _extension_version() -> str:
+    """패키지 내 확장 manifest 의 version — 확장은 서버 앱 버전과 독립 버저닝한다.
+
+    파일이 없거나 깨졌으면 '0.0.0' (확장의 checkVersion 이 폴백으로 비교 생략).
+    """
+    try:
+        path = Path(__file__).resolve().parent.parent / "extension" / "manifest.json"
+        return str(json.loads(path.read_text(encoding="utf-8")).get("version", "0.0.0"))
+    except (OSError, ValueError):
+        return "0.0.0"
+
+
 @router.get("/version")
 def api_version() -> dict:
-    """서버(춘추관) 버전 — 확장이 자기 manifest 버전과 비교해 업데이트 안내.
+    """서버 앱 버전 + 확장 버전 — 확장이 자기 manifest 버전과 extension_version 을
+    비교해 업데이트(재설치) 안내. extension_version 은 서버 앱 버전(version)과 독립이다.
 
     토큰만 유효하면 누구나 조회 (확장은 항상 연결 토큰 보유). 별도 권한 불필요.
     """
-    return {"version": __version__}
+    return {"version": __version__, "extension_version": _extension_version()}
 
 
 @router.get("/pages")

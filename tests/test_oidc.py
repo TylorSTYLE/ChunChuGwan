@@ -60,25 +60,6 @@ def test_oidc_login_redirects_to_idp(client):
     assert row is not None and row["redirect_to"] == "/page/1"
 
 
-def test_callback_provisions_new_user(client):
-    state = start_login(client)
-    res = client.get(
-        f"/auth/oidc/callback?code=abc&state={state}", follow_redirects=False
-    )
-    assert res.status_code == 303 and res.headers["location"] == "/page/1"
-    with db.connect() as conn:
-        user = db.get_user_by_email(conn, "sso@example.com")
-        assert user is not None and user["password_hash"] is None  # SSO 전용
-        # 자동 프로비저닝도 가입 초기 권한 설정(기본 권한없음)을 따른다
-        assert user["role"] == "pending"
-        ident = db.get_identity(conn, "authentik", "ak-user-1")
-        assert ident["user_id"] == user["id"]
-    # 세션은 발급되지만 승인 전이라 안내 페이지로만 보내진다
-    assert client.get("/healthz").status_code == 200
-    res = client.get("/", follow_redirects=False)
-    assert res.status_code == 302 and res.headers["location"] == "/pending"
-
-
 def test_callback_provision_role_follows_setting(client):
     """가입 초기 권한을 보기 전용으로 바꾸면 SSO 자동 생성도 따라간다."""
     with db.connect() as conn:
@@ -142,7 +123,3 @@ def test_oidc_disabled_404(client, monkeypatch):
     assert client.get("/auth/oidc/login").status_code == 404
 
 
-def test_login_page_shows_sso_button(client):
-    res = client.get("/login")
-    # 레이블은 "SSO 로그인 →"(ko) / "SSO login →"(en) — 로케일 무관하게 "SSO"
-    assert "SSO" in res.text and "/auth/oidc/login" in res.text
