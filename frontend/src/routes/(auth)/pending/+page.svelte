@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { t } from '$lib/i18n';
+	import { Button } from '$lib/components/ui/button';
 
 	let { data }: { data: { email: string } } = $props();
 </script>
@@ -11,7 +12,9 @@
 		{t('관리자가 권한을 부여하면 바로 이용할 수 있습니다. 잠시 후 다시 방문해 주세요.')}
 	</p>
 	<div class="mono muted email">{data.email}</div>
-	<form method="POST" action="/logout"><button type="submit">{t('로그아웃')}</button></form>
+	<form method="POST" action="/logout">
+		<Button type="submit" variant="outline" size="sm">{t('로그아웃')}</Button>
+	</form>
 </div>
 
 <style>

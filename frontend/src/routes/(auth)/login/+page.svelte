@@ -4,6 +4,8 @@
 	import { api, ApiError } from '$lib/api';
 	import { afterAuth } from '$lib/auth';
 	import type { AuthConfig, LoginResult } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { config: AuthConfig } } = $props();
 	const cfg = $derived(data.config);
@@ -40,13 +42,13 @@
 	<form onsubmit={submit}>
 		<label
 			>{t('이메일')}
-			<input type="email" bind:value={email} required autocomplete="username" />
+			<Input type="email" bind:value={email} required autocomplete="username" />
 		</label>
 		<label
 			>{t('패스워드')}
-			<input type="password" bind:value={password} required autocomplete="current-password" />
+			<Input type="password" bind:value={password} required autocomplete="current-password" />
 		</label>
-		<button type="submit" disabled={busy}>{t('로그인')}</button>
+		<Button type="submit" disabled={busy} class="mt-1 w-full">{t('로그인')}</Button>
 	</form>
 	{#if cfg.oidc_enabled}
 		<div class="alt"><a href={oidcHref}>{t('SSO 로그인 →')}</a></div>

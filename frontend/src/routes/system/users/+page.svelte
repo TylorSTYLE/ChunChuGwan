@@ -9,6 +9,9 @@
 	import Pager from '$lib/components/Pager.svelte';
 	import PageSize from '$lib/components/PageSize.svelte';
 	import { createAction } from '$lib/action.svelte';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { data: SystemUsersData } } = $props();
 	const act = createAction();
@@ -96,17 +99,18 @@
 				<tr>
 					<td>
 						{u.email}
-						{#if u.is_founder}<span class="badge same">{t('최초 관리자')}</span>{/if}
+						{#if u.is_founder}<Badge variant="same">{t('최초 관리자')}</Badge>{/if}
 					</td>
 					<td>
 						<div class="name-edit">
-							<input
+							<Input
 								type="text"
+								class="w-36 max-w-full"
 								placeholder="-"
 								value={nameEdit[u.id] ?? u.display_name ?? ''}
 								oninput={(e) => (nameEdit = { ...nameEdit, [u.id]: e.currentTarget.value })}
 							/>
-							<button onclick={() => saveName(u)} disabled={act.busy}>{t('저장')}</button>
+							<Button variant="outline" size="sm" onclick={() => saveName(u)} disabled={act.busy}>{t('저장')}</Button>
 						</div>
 					</td>
 					<td>
@@ -122,17 +126,17 @@
 					<td>
 						{#if !u.is_founder && u.id !== d.me_id}
 							<div class="action-bar">
-								<button onclick={() => forceLogout(u)} disabled={act.busy}>{t('로그아웃')}</button>
+								<Button variant="outline" size="sm" onclick={() => forceLogout(u)} disabled={act.busy}>{t('로그아웃')}</Button>
 								<details>
 									<summary class="muted">{t('삭제')}</summary>
 									<div class="del-confirm">
-										<input
+										<Input
 											type="text"
 											placeholder={t('확인 이메일')}
 											value={deleteEmail[u.id] ?? ''}
 											oninput={(e) => (deleteEmail = { ...deleteEmail, [u.id]: e.currentTarget.value })}
 										/>
-										<button class="danger" onclick={() => deleteUser(u)} disabled={act.busy}>{t('삭제')}</button>
+										<Button variant="destructive" onclick={() => deleteUser(u)} disabled={act.busy}>{t('삭제')}</Button>
 									</div>
 								</details>
 							</div>
@@ -154,11 +158,11 @@
 <h3>{t('초대')}</h3>
 {#if !d.mail_enabled}<p class="muted">{t('SMTP 미설정 — 초대 링크를 직접 전달합니다.')}</p>{/if}
 <Toolbar>
-	<input type="email" bind:value={inviteEmail} placeholder={t('이메일')} />
+	<Input type="email" bind:value={inviteEmail} placeholder={t('이메일')} />
 	<select bind:value={inviteRole}>
 		{#each d.invitable_roles as r}<option value={r}>{d.role_labels[r] ?? r}</option>{/each}
 	</select>
-	<button class="primary" onclick={invite} disabled={act.busy}>{t('초대')}</button>
+	<Button onclick={invite} disabled={act.busy}>{t('초대')}</Button>
 </Toolbar>
 {#if inviteLink}<div class="notice mono link-out">{inviteLink}</div>{/if}
 
@@ -171,7 +175,7 @@
 					<tr>
 						<td>{inv.email}</td>
 						<td>{d.role_labels[inv.role] ?? inv.role}</td>
-						<td><button onclick={() => cancelInvite(inv.id)} disabled={act.busy}>{t('취소')}</button></td>
+						<td><Button variant="outline" size="sm" onclick={() => cancelInvite(inv.id)} disabled={act.busy}>{t('취소')}</Button></td>
 					</tr>
 				{/each}
 			</tbody>
@@ -184,10 +188,6 @@
 		display: flex;
 		gap: 6px;
 		align-items: center;
-	}
-	.name-edit input {
-		width: 9rem;
-		max-width: 100%;
 	}
 	.del-confirm {
 		display: flex;

@@ -7,6 +7,8 @@
 	import FormSection from '$lib/components/FormSection.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { createAction } from '$lib/action.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { data: PersonalApiKeysData } } = $props();
 	const d = $derived(data.data);
@@ -67,16 +69,16 @@
 
 <FormSection title={t('새 키 발급')}>
 	<div class="form">
-		<input type="text" bind:value={name} placeholder={t('키 이름')} />
+		<Input type="text" bind:value={name} placeholder={t('키 이름')} class="flex-1 basis-[180px] min-w-0" />
 		{#if d.can_view}<label class="opt"><input type="checkbox" bind:checked={canView} /> {t('보기')}</label>{/if}
 		{#if d.can_archive}<label class="opt"><input type="checkbox" bind:checked={canArchive} /> {t('아카이브')}</label>{/if}
 		<select bind:value={expiry}>
 			{#each EXPIRY as [v, label]}<option value={v}>{t(label)}</option>{/each}
 		</select>
 		{#if expiry === 'custom'}
-			<input type="number" bind:value={customDays} min="1" max="3650" style="width:90px" />
+			<Input type="number" bind:value={customDays} min="1" max="3650" style="width:90px" />
 		{/if}
-		<button class="primary" onclick={create} disabled={act.busy || !name.trim()}>{t('발급')}</button>
+		<Button onclick={create} disabled={act.busy || !name.trim()}>{t('발급')}</Button>
 	</div>
 </FormSection>
 
@@ -96,7 +98,7 @@
 								.join(', ')}
 						</td>
 						<td class="mono">{k.expires_at ? ts(k.expires_at) : t('영구')}</td>
-						<td><button class="danger" onclick={() => revoke(k.id)} disabled={act.busy}>{t('폐기')}</button></td>
+						<td><Button variant="destructive" onclick={() => revoke(k.id)} disabled={act.busy}>{t('폐기')}</Button></td>
 					</tr>
 				{/each}
 			</tbody>
@@ -125,9 +127,5 @@
 	.form .opt {
 		font-size: 13px;
 		white-space: nowrap;
-	}
-	.form input[type='text'] {
-		flex: 1 1 180px;
-		min-width: 0;
 	}
 </style>

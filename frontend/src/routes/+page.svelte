@@ -7,11 +7,12 @@
 	import StatGrid from '$lib/components/StatGrid.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 
 	let { data }: { data: { dashboard: Dashboard } } = $props();
 	const d = $derived(data.dashboard);
 
-	const STATUS: Record<string, { cls: string; label: string }> = {
+	const STATUS: Record<string, { cls: BadgeVariant; label: string }> = {
 		new: { cls: 'new', label: '신규' },
 		changed: { cls: 'changed', label: '변경' },
 		unchanged: { cls: 'same', label: '동일' },
@@ -19,12 +20,12 @@
 		error: { cls: 'error', label: '실패' }
 	};
 
-	function snapBadge(s: RecentSnap): { cls: string; label: string } {
+	function snapBadge(s: RecentSnap): { cls: BadgeVariant; label: string } {
 		if (s.is_first) return { cls: 'new', label: '신규' };
 		if (s.changed) return { cls: 'changed', label: '변경' };
 		return { cls: 'same', label: '동일' };
 	}
-	function logBadge(log: RecentLog): { cls: string; label: string } {
+	function logBadge(log: RecentLog): { cls: BadgeVariant; label: string } {
 		return STATUS[log.status] ?? { cls: 'same', label: log.status };
 	}
 </script>
@@ -78,7 +79,7 @@
 					{@const b = snapBadge(s)}
 					<tr>
 						<td class="mono">{ts(s.taken_at)}</td>
-						<td><span class="badge {b.cls}">{t(b.label)}</span></td>
+						<td><Badge variant={b.cls}>{t(b.label)}</Badge></td>
 						<td class="url-cell"><a href={pagePath(s.site_id, s.page_id)} title={s.page_url}>{s.page_url}</a></td>
 						<td class="num mono">{filesize(s.bytes)}</td>
 						<td><a href={snapPath(s.site_id, s.page_id, s.id)}>{t('보기')}</a></td>
@@ -103,7 +104,7 @@
 					{@const b = logBadge(log)}
 					<tr>
 						<td class="mono">{ts(log.started_at)}</td>
-						<td><span class="badge {b.cls}">{t(b.label)}</span></td>
+						<td><Badge variant={b.cls}>{t(b.label)}</Badge></td>
 						<td class="url-cell">
 							{#if log.page_id}
 								<a href={pagePath(log.page_site_id, log.page_id)} title={log.url}>{log.url}</a>

@@ -8,6 +8,7 @@
 	import Pager from '$lib/components/Pager.svelte';
 	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 
 	let { data }: { data: { audit: AuditLogsData } } = $props();
 
@@ -22,7 +23,7 @@
 	});
 	const d = $derived(list.data);
 
-	const ACTION_BADGE: Record<string, string> = {
+	const ACTION_BADGE: Record<string, BadgeVariant> = {
 		archive: 'new',
 		view: 'running',
 		download: 'changed',
@@ -73,7 +74,7 @@
 				{#each d.logs as log}
 					<tr>
 						<td class="mono col-time">{ts(log.created_at)}</td>
-						<td><span class="badge {ACTION_BADGE[log.action] ?? 'same'}">{actionLabel(log.action)}</span></td>
+						<td><Badge variant={ACTION_BADGE[log.action] ?? 'same'}>{actionLabel(log.action)}</Badge></td>
 						<td class="mono">{log.actor}</td>
 						<td class="mono muted target">{log.target ?? '-'}</td>
 						<td>{log.message}</td>

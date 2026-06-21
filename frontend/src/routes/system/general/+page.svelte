@@ -7,6 +7,8 @@
 	import type { SystemOverview } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { sys: SystemOverview } } = $props();
 	const s = $derived(data.sys);
@@ -323,18 +325,18 @@
 	<legend>{t('검색 인덱스')}</legend>
 	<p class="desc">{t('아직 색인되지 않은 스냅샷을 다시 색인합니다.')}</p>
 	<div class="btn-row">
-		<button disabled={busy || reindexRunning} onclick={startReindex} aria-busy={reindexRunning}>
+		<Button variant="outline" size="sm" disabled={busy || reindexRunning} onclick={startReindex} aria-busy={reindexRunning}>
 			{#if reindexRunning}<Spinner />{/if}{t('검색 인덱스 전체 재색인')}
-		</button>
+		</Button>
 		{#if reindexRunning}<span class="muted">{t('재색인 중')} {reindexDone}/{reindexTotal}</span>{/if}
 	</div>
 </fieldset>
 <fieldset class="sec">
 	<legend>{t('저장공간 최적화')}</legend>
 	<p class="desc">{t('압축·자원 공유로 저장공간을 줄입니다 (내용은 그대로).')}</p>
-	<button disabled={busy} onclick={compact} aria-busy={pending === 'compact'}>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={compact} aria-busy={pending === 'compact'}>
 		{#if pending === 'compact'}<Spinner />{t('최적화 중…')}{:else}{t('저장공간 최적화')}{/if}
-	</button>
+	</Button>
 </fieldset>
 
 <!-- ── 아카이브 설정 ── -->
@@ -344,59 +346,59 @@
 <fieldset class="sec">
 	<legend>{t('사이트 아카이브 기본값')}</legend>
 	<p class="desc">{t('사이트 전체 아카이브(크롤)의 기본 범위·간격입니다.')}</p>
-	<label>{t('최대 페이지')} <input type="number" bind:value={crawlMaxPages} /></label>
-	<label>{t('최대 깊이')} <input type="number" bind:value={crawlMaxDepth} /></label>
-	<label>{t('지연(초)')} <input type="number" bind:value={crawlDelay} /></label>
-	<button disabled={busy} onclick={() => save('/system/crawl-settings', { crawl_max_pages: crawlMaxPages, crawl_max_depth: crawlMaxDepth, crawl_delay: crawlDelay })}>{t('저장')}</button>
+	<label>{t('최대 페이지')} <Input type="number" bind:value={crawlMaxPages} /></label>
+	<label>{t('최대 깊이')} <Input type="number" bind:value={crawlMaxDepth} /></label>
+	<label>{t('지연(초)')} <Input type="number" bind:value={crawlDelay} /></label>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => save('/system/crawl-settings', { crawl_max_pages: crawlMaxPages, crawl_max_depth: crawlMaxDepth, crawl_delay: crawlDelay })}>{t('저장')}</Button>
 </fieldset>
 
 <fieldset class="sec">
 	<legend>{t('사이트 아카이브 최대값')}</legend>
 	<p class="desc">{t('새 사이트 아카이브에 허용하는 상한과 실패 시 재시도 대기입니다. 기본값은 이 상한 이내로 조정됩니다.')}</p>
-	<label>{t('최대 페이지')} <input type="number" bind:value={limitMaxPages} /></label>
-	<label>{t('최대 깊이')} <input type="number" bind:value={limitMaxDepth} /></label>
-	<label>{t('지연(초)')} <input type="number" bind:value={limitMaxDelay} /></label>
-	<label>{t('재시도 대기(초, 쉼표)')} <input type="text" bind:value={crawlBackoff} /></label>
-	<button disabled={busy} onclick={() => save('/system/crawl-limits', { crawl_max_pages: limitMaxPages, crawl_max_depth: limitMaxDepth, crawl_max_delay: limitMaxDelay, crawl_retry_backoff: crawlBackoff })}>{t('저장')}</button>
+	<label>{t('최대 페이지')} <Input type="number" bind:value={limitMaxPages} /></label>
+	<label>{t('최대 깊이')} <Input type="number" bind:value={limitMaxDepth} /></label>
+	<label>{t('지연(초)')} <Input type="number" bind:value={limitMaxDelay} /></label>
+	<label>{t('재시도 대기(초, 쉼표)')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={crawlBackoff} /></label>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => save('/system/crawl-limits', { crawl_max_pages: limitMaxPages, crawl_max_depth: limitMaxDepth, crawl_max_delay: limitMaxDelay, crawl_retry_backoff: crawlBackoff })}>{t('저장')}</Button>
 </fieldset>
 
 <fieldset class="sec">
 	<legend>{t('캡처')}</legend>
 	<p class="desc">{t('스냅샷을 찍을 때의 추가 캡처 동작입니다.')}</p>
 	<label class="ck"><input type="checkbox" bind:checked={mobileShot} /> {t('모바일 스크린샷도 저장')}</label>
-	<button disabled={busy} onclick={() => save('/system/capture-settings', { mobile_screenshot_enabled: mobileShot })}>{t('저장')}</button>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => save('/system/capture-settings', { mobile_screenshot_enabled: mobileShot })}>{t('저장')}</Button>
 </fieldset>
 
 <fieldset class="sec">
 	<legend>{t('휴지통')}</legend>
 	<p class="desc">{t('아카이브 삭제 시 즉시 지우지 않고 휴지통에 보관했다가 기간 경과 시 자동 삭제합니다. 끄면 삭제가 즉시 영구 삭제됩니다.')}</p>
 	<label class="ck"><input type="checkbox" bind:checked={trashEnabled} /> {t('휴지통 사용')}</label>
-	<label>{t('보관 기간(일, 0=자동삭제 끔)')} <input type="number" bind:value={trashRetention} min={s.trash_retention_limits.min} max={s.trash_retention_limits.max} /></label>
-	<button disabled={busy} onclick={() => save('/system/trash-settings', { trash_enabled: trashEnabled, trash_retention_days: trashRetention })}>{t('저장')}</button>
+	<label>{t('보관 기간(일, 0=자동삭제 끔)')} <Input type="number" bind:value={trashRetention} min={s.trash_retention_limits.min} max={s.trash_retention_limits.max} /></label>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => save('/system/trash-settings', { trash_enabled: trashEnabled, trash_retention_days: trashRetention })}>{t('저장')}</Button>
 </fieldset>
 
 <fieldset class="sec">
 	<legend>{t('확장 자격증명')}</legend>
 	<p class="desc">{t('확장이 보낸 1회성 로그인 자격증명의 보관 시간입니다.')}</p>
-	<label>{t('보관 시간(시간)')} <input type="number" bind:value={credTtl} min={s.ext_credential_ttl_limits.min} max={s.ext_credential_ttl_limits.max} /></label>
-	<button disabled={busy} onclick={() => save('/system/credential-settings', { ext_credential_ttl_hours: credTtl })}>{t('저장')}</button>
+	<label>{t('보관 시간(시간)')} <Input type="number" bind:value={credTtl} min={s.ext_credential_ttl_limits.min} max={s.ext_credential_ttl_limits.max} /></label>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => save('/system/credential-settings', { ext_credential_ttl_hours: credTtl })}>{t('저장')}</Button>
 </fieldset>
 
 <fieldset class="sec">
 	<legend>{t('문서 아카이브 한도')}</legend>
 	<p class="desc">{t('페이지가 링크한 문서 파일을 받을 때의 한도입니다.')}</p>
-	<label>{t('스냅샷당 수')} <input type="number" bind:value={docCount} /></label>
-	<label>{t('개당 크기(MB)')} <input type="number" bind:value={docMb} /></label>
-	<label>{t('다운로드 타임아웃(초)')} <input type="number" bind:value={docTimeout} /></label>
-	<button disabled={busy} onclick={() => save('/system/document-settings', { document_max_count: docCount, document_max_mb: docMb, document_fetch_timeout: docTimeout })}>{t('저장')}</button>
+	<label>{t('스냅샷당 수')} <Input type="number" bind:value={docCount} /></label>
+	<label>{t('개당 크기(MB)')} <Input type="number" bind:value={docMb} /></label>
+	<label>{t('다운로드 타임아웃(초)')} <Input type="number" bind:value={docTimeout} /></label>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => save('/system/document-settings', { document_max_count: docCount, document_max_mb: docMb, document_fetch_timeout: docTimeout })}>{t('저장')}</Button>
 </fieldset>
 
 <fieldset class="sec">
 	<legend>{t('로컬 네트워크 태그')}</legend>
 	<p class="desc">{t('사설 IP(로컬 네트워크) 주소를 아카이빙할 때 붙이는 태그입니다.')}</p>
-	<label>{t('이름')} <input type="text" bind:value={newTagName} maxlength="60" /></label>
-	<label>{t('설명')} <input type="text" bind:value={newTagDesc} maxlength="200" /></label>
-	<button disabled={busy || !newTagName.trim()} onclick={createTag}>{t('추가')}</button>
+	<label>{t('이름')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={newTagName} maxlength={60} /></label>
+	<label>{t('설명')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={newTagDesc} maxlength={200} /></label>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy || !newTagName.trim()} onclick={createTag}>{t('추가')}</Button>
 </fieldset>
 {#if s.network_tags.length === 0}
 	<p class="muted">{t('등록된 태그가 없습니다.')}</p>
@@ -406,7 +408,7 @@
 			<li>
 				<span class="mono">{tag.name}</span>
 				<span class="muted mono">{tag.id}</span>
-				<button class="del" disabled={busy} onclick={() => save(`/system/network-tags/${tag.id}/delete`)}>{t('삭제')}</button>
+				<Button variant="outline" size="sm" class="ml-auto" disabled={busy} onclick={() => save(`/system/network-tags/${tag.id}/delete`)}>{t('삭제')}</Button>
 			</li>
 		{/each}
 	</ul>
@@ -425,7 +427,7 @@
 					{#each s.network_tags as tag}<option value={tag.id}>{tag.name}</option>{/each}
 				</select>
 			</label>
-			<button disabled={busy || !mergeSource || !mergeTarget} onclick={mergeTags}>{t('병합')}</button>
+			<Button variant="outline" size="sm" class="self-start" disabled={busy || !mergeSource || !mergeTarget} onclick={mergeTags}>{t('병합')}</Button>
 		</fieldset>
 	{/if}
 {/if}
@@ -445,26 +447,26 @@
 	{#if signupEnabled && signupRole !== 'pending'}
 		<p class="desc warn">{t('주의: 초기 권한이 승인 대기(pending)가 아니면 가입·SSO 자동 생성 계정이 관리자 승인 없이 곧바로 권한을 갖습니다.')}</p>
 	{/if}
-	<button disabled={busy} onclick={() => save('/system/settings', { signup_enabled: signupEnabled, signup_default_role: signupRole })}>{t('저장')}</button>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => save('/system/settings', { signup_enabled: signupEnabled, signup_default_role: signupRole })}>{t('저장')}</Button>
 </fieldset>
 <fieldset class="sec">
 	<legend>{t('이메일 본인 인증')}</legend>
 	<p class="desc">{t('패스워드 계정이 로그인 전에 메일로 이메일을 검증하게 합니다.')}</p>
 	<label class="ck"><input type="checkbox" bind:checked={evEnabled} /> {t('사용')}</label>
-	<label>{t('코드 만료(분)')} <input type="number" bind:value={evTtl} min={s.email_verification_ttl_limits.min} max={s.email_verification_ttl_limits.max} /></label>
-	<button disabled={busy} onclick={() => save('/system/email-verification-settings', { email_verification_enabled: evEnabled, email_verification_ttl_minutes: evTtl })}>{t('저장')}</button>
+	<label>{t('코드 만료(분)')} <Input type="number" bind:value={evTtl} min={s.email_verification_ttl_limits.min} max={s.email_verification_ttl_limits.max} /></label>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => save('/system/email-verification-settings', { email_verification_enabled: evEnabled, email_verification_ttl_minutes: evTtl })}>{t('저장')}</Button>
 </fieldset>
 <fieldset class="sec">
 	<legend>{t('인증 보호 (무차별 대입 방어)')}</legend>
 	<p class="desc">{t('로그인·2단계 인증·이메일 코드의 시도 횟수를 제한합니다. 한도를 넘으면 잠시 차단됩니다.')}</p>
 	<label class="ck"><input type="checkbox" bind:checked={atEnabled} /> {t('사용')}</label>
-	<label>{t('로그인 시도 한도(이메일별)')} <input type="number" bind:value={atLoginLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
-	<label>{t('로그인 시도 한도(IP별)')} <input type="number" bind:value={atLoginIpLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
-	<label>{t('로그인 카운트 창(분)')} <input type="number" bind:value={atLoginWindow} min={s.auth_throttle_limits.window_min} max={s.auth_throttle_limits.window_max} /></label>
-	<label>{t('2단계 인증 시도 한도')} <input type="number" bind:value={atTotpLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
-	<label>{t('이메일 코드 오답 한도')} <input type="number" bind:value={atEmailVerifyLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
-	<label>{t('이메일 코드 재발송 한도(시간당)')} <input type="number" bind:value={atEmailResendLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
-	<button disabled={busy} onclick={() => save('/system/auth-throttle-settings', { auth_throttle_enabled: atEnabled, login_limit: atLoginLimit, login_ip_limit: atLoginIpLimit, login_window_minutes: atLoginWindow, totp_limit: atTotpLimit, email_verify_limit: atEmailVerifyLimit, email_resend_limit: atEmailResendLimit })}>{t('저장')}</button>
+	<label>{t('로그인 시도 한도(이메일별)')} <Input type="number" bind:value={atLoginLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
+	<label>{t('로그인 시도 한도(IP별)')} <Input type="number" bind:value={atLoginIpLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
+	<label>{t('로그인 카운트 창(분)')} <Input type="number" bind:value={atLoginWindow} min={s.auth_throttle_limits.window_min} max={s.auth_throttle_limits.window_max} /></label>
+	<label>{t('2단계 인증 시도 한도')} <Input type="number" bind:value={atTotpLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
+	<label>{t('이메일 코드 오답 한도')} <Input type="number" bind:value={atEmailVerifyLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
+	<label>{t('이메일 코드 재발송 한도(시간당)')} <Input type="number" bind:value={atEmailResendLimit} min={s.auth_throttle_limits.limit_min} max={s.auth_throttle_limits.limit_max} /></label>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => save('/system/auth-throttle-settings', { auth_throttle_enabled: atEnabled, login_limit: atLoginLimit, login_ip_limit: atLoginIpLimit, login_window_minutes: atLoginWindow, totp_limit: atTotpLimit, email_verify_limit: atEmailVerifyLimit, email_resend_limit: atEmailResendLimit })}>{t('저장')}</Button>
 </fieldset>
 
 <!-- ── 서버 환경설정 ── -->
@@ -473,25 +475,25 @@
 <fieldset class="sec">
 	<legend>{t('메일(SMTP)')} — {s.smtp_config.enabled ? t('사용 중') : t('미설정')}</legend>
 	<p class="desc">{t('초대·이메일 인증 메일을 보내는 SMTP 서버입니다.')}</p>
-	<label>{t('호스트')} <input type="text" bind:value={smtpHost} /></label>
-	<label>{t('포트')} <input type="number" bind:value={smtpPort} min="1" max="65535" /></label>
-	<label>{t('사용자')} <input type="text" bind:value={smtpUser} /></label>
-	<label>{t('보내는 주소')} <input type="text" bind:value={smtpFrom} /></label>
+	<label>{t('호스트')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={smtpHost} /></label>
+	<label>{t('포트')} <Input type="number" bind:value={smtpPort} min="1" max="65535" /></label>
+	<label>{t('사용자')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={smtpUser} /></label>
+	<label>{t('보내는 주소')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={smtpFrom} /></label>
 	<label>TLS
 		<select bind:value={smtpTls}>
 			{#each s.smtp_tls_modes as m}<option value={m}>{m}</option>{/each}
 		</select>
 	</label>
 	<label>{t('비밀번호')}
-		<input type="password" bind:value={smtpPassword}
+		<Input type="password" bind:value={smtpPassword}
 			placeholder={s.smtp_config.has_password ? '••••••••' : ''} />
 	</label>
 	{#if s.smtp_config.has_password}
 		<label class="ck"><input type="checkbox" bind:checked={smtpClearPw} /> {t('저장된 비밀번호 삭제')}</label>
 	{/if}
 	<div class="btn-row">
-		<button disabled={busy} onclick={saveSmtp}>{t('저장')}</button>
-		<button disabled={busy || !s.smtp_config.enabled} onclick={testSmtp}>{t('테스트 메일 보내기')}</button>
+		<Button variant="outline" size="sm" disabled={busy} onclick={saveSmtp}>{t('저장')}</Button>
+		<Button variant="outline" size="sm" disabled={busy || !s.smtp_config.enabled} onclick={testSmtp}>{t('테스트 메일 보내기')}</Button>
 	</div>
 </fieldset>
 <p class="desc"><a href="{base}/system/api-keys">{t('API 키 관리로 이동')}</a></p>
@@ -503,12 +505,12 @@
 	<legend>{t('데이터 관리')}</legend>
 	<p class="desc">{t('전체 백업·복원과 아카이브 내보내기·가져오기입니다.')}</p>
 	<div class="btn-row">
-		<button disabled={busy} onclick={() => doDownload('/system/backup')} aria-busy={pending === '/system/backup'}>
+		<Button variant="outline" size="sm" disabled={busy} onclick={() => doDownload('/system/backup')} aria-busy={pending === '/system/backup'}>
 			{#if pending === '/system/backup'}<Spinner />{t('백업 준비중…')}{:else}{t('전체 백업 다운로드')}{/if}
-		</button>
-		<button disabled={busy} onclick={() => doDownload('/system/export')} aria-busy={pending === '/system/export'}>
+		</Button>
+		<Button variant="outline" size="sm" disabled={busy} onclick={() => doDownload('/system/export')} aria-busy={pending === '/system/export'}>
 			{#if pending === '/system/export'}<Spinner />{t('내보내기 준비중…')}{:else}{t('아카이브 내보내기')}{/if}
-		</button>
+		</Button>
 	</div>
 	<label>{t('백업 복원')}
 		<input type="file" accept=".ccg.backup" disabled={busy}
@@ -535,11 +537,11 @@
 	{/if}
 	{#if s.migration_mode}
 		<div class="btn-row">
-			<button disabled={busy} onclick={() => migrationAction('regenerate')}>{t('토큰 재발급')}</button>
-			<button disabled={busy} onclick={() => migrationAction('disable')}>{t('이전 모드 끄기')}</button>
+			<Button variant="outline" size="sm" disabled={busy} onclick={() => migrationAction('regenerate')}>{t('토큰 재발급')}</Button>
+			<Button variant="outline" size="sm" disabled={busy} onclick={() => migrationAction('disable')}>{t('이전 모드 끄기')}</Button>
 		</div>
 	{:else}
-		<button disabled={busy} onclick={() => migrationAction('enable')}>{t('이전 모드 켜기')}</button>
+		<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => migrationAction('enable')}>{t('이전 모드 켜기')}</Button>
 	{/if}
 </fieldset>
 
@@ -653,13 +655,9 @@
 	.sec label.ck {
 		justify-content: flex-start;
 	}
-	.sec label input[type='text'],
 	.sec label select {
 		flex: 1 1 180px;
 		min-width: 0;
-	}
-	.sec button {
-		align-self: flex-start;
 	}
 	.taglist {
 		list-style: none;
@@ -673,21 +671,10 @@
 		padding: 4px 0;
 		font-size: 13px;
 	}
-	.taglist li .del {
-		margin-left: auto;
-		font-size: 12px;
-	}
 	.btn-row {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 8px;
-	}
-	/* 로딩 시 버튼 안 스피너+텍스트 정렬 (export 페이지의 .export-link button 패턴) */
-	.btn-row button,
-	.sec > button {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
 	}
 	.mtoken {
 		background: var(--code-bg, var(--border));

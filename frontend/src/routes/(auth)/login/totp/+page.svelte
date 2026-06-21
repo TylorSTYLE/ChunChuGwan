@@ -4,6 +4,8 @@
 	import { afterAuth } from '$lib/auth';
 	import { b64uToBuf, bufToB64u } from '$lib/webauthn';
 	import type { LoginResult, TotpStatus } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { status: TotpStatus } } = $props();
 	const st = $derived(data.status);
@@ -77,9 +79,9 @@
 
 	{#if st.has_passkey}
 		<p class="muted">{t('등록된 패스키로 본인 확인을 완료하세요.')}</p>
-		<button type="button" class="pk-btn" onclick={loginPasskey} disabled={busy}
-			>{t('패스키로 인증')}</button
-		>
+		<Button variant="outline" onclick={loginPasskey} disabled={busy} class="w-full">
+			{t('패스키로 인증')}
+		</Button>
 	{/if}
 
 	{#if st.has_totp}
@@ -88,36 +90,19 @@
 			<form onsubmit={submitTotp}>
 				<label
 					>{t('OTP 코드')}
-					<input
+					<Input
 						type="text"
 						inputmode="numeric"
 						pattern="[0-9]*"
-						maxlength="6"
+						maxlength={6}
 						autocomplete="one-time-code"
-						class="mono"
+						class="font-mono"
 						bind:value={code}
 						required
 					/>
 				</label>
-				<button type="submit" disabled={busy || !code.trim()}>{t('확인')}</button>
+				<Button type="submit" disabled={busy || !code.trim()} class="mt-1 w-full">{t('확인')}</Button>
 			</form>
 		</div>
 	{/if}
 </div>
-
-<style>
-	.pk-btn {
-		width: 100%;
-		padding: 6px;
-		font: inherit;
-		font-size: 13px;
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		background: var(--surface);
-		color: var(--fg);
-		cursor: pointer;
-	}
-	.pk-btn:hover {
-		background: var(--bg-soft);
-	}
-</style>

@@ -6,6 +6,8 @@
 	import { api, ApiError } from '$lib/api';
 	import { afterAuth } from '$lib/auth';
 	import type { LoginResult, MigrationStatus } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { migration: MigrationStatus; tokenRequired: boolean } } = $props();
 	const m = $derived(data.migration);
@@ -87,8 +89,7 @@
 		}
 	}
 
-	const retryMigrate = () =>
-		runMigrateAction('/auth/setup/migrate/retry');
+	const retryMigrate = () => runMigrateAction('/auth/setup/migrate/retry');
 	const finishMigrate = () => {
 		if (!confirm(t('빠진 파일을 무시하고 이전을 마무리할까요? 받은 데이터로 서비스를 시작합니다.')))
 			return;
@@ -162,8 +163,12 @@
 					</details>
 				{/if}
 				<div class="row">
-					<button type="button" onclick={retryMigrate} disabled={busy}>{t('전체 재시도')}</button>
-					<button type="button" onclick={finishMigrate} disabled={busy}>{t('무시하고 이전 종료')}</button>
+					<Button variant="outline" size="sm" onclick={retryMigrate} disabled={busy}>
+						{t('전체 재시도')}
+					</Button>
+					<Button variant="outline" size="sm" onclick={finishMigrate} disabled={busy}>
+						{t('무시하고 이전 종료')}
+					</Button>
 				</div>
 			{/if}
 		</div>
@@ -173,7 +178,7 @@
 		{#if tokenRequired}
 			<label class="setup-token"
 				>{t('최초 설정 토큰')} <span class="muted">{t('(WCCG_SETUP_TOKEN)')}</span>
-				<input type="password" bind:value={setupToken} autocomplete="off" />
+				<Input type="password" bind:value={setupToken} autocomplete="off" />
 			</label>
 			<p class="muted sm">
 				{t('이 서버는 최초 설정 보호 토큰을 요구합니다. 아래 작업에 서버 환경변수 WCCG_SETUP_TOKEN 값을 입력하세요.')}
@@ -183,13 +188,13 @@
 		<form onsubmit={createAdmin}>
 			<label
 				>{t('관리자 이메일')}
-				<input type="email" bind:value={email} required autocomplete="username" />
+				<Input type="email" bind:value={email} required autocomplete="username" />
 			</label>
 			<label
 				>{t('패스워드')} <span class="muted">{t('(8자 이상)')}</span>
-				<input type="password" bind:value={password} minlength="8" required autocomplete="new-password" />
+				<Input type="password" bind:value={password} minlength={8} required autocomplete="new-password" />
 			</label>
-			<button type="submit" disabled={busy}>{t('등록')}</button>
+			<Button type="submit" disabled={busy} class="mt-1 w-full">{t('등록')}</Button>
 		</form>
 
 		<h3>{t('백업 파일에서 복원')}</h3>
@@ -198,7 +203,7 @@
 		</p>
 		<form onsubmit={restore}>
 			<input type="file" accept=".tar.gz,.tgz,application/gzip" bind:files={restoreFiles} required />
-			<button type="submit" disabled={busy || !restoreFiles?.length}>{t('복원')}</button>
+			<Button type="submit" disabled={busy || !restoreFiles?.length} class="mt-1 w-full">{t('복원')}</Button>
 		</form>
 
 		<h3>{t('다른 춘추관에서 이전')}</h3>
@@ -208,13 +213,13 @@
 		<form onsubmit={startMigrate}>
 			<label
 				>{t('소스 주소')} <span class="muted">{t('(예: https://NAS주소:8765)')}</span>
-				<input type="url" bind:value={sourceUrl} placeholder="https://…" required />
+				<Input type="url" bind:value={sourceUrl} placeholder="https://…" required />
 			</label>
 			<label
 				>{t('이전 토큰')}
-				<input type="text" bind:value={token} required autocomplete="off" />
+				<Input type="text" bind:value={token} required autocomplete="off" />
 			</label>
-			<button type="submit" disabled={busy}>{t('이전 시작')}</button>
+			<Button type="submit" disabled={busy} class="mt-1 w-full">{t('이전 시작')}</Button>
 		</form>
 	{/if}
 </div>
@@ -234,9 +239,9 @@
 		margin-bottom: 8px;
 	}
 	.migrate-box {
-		background: var(--amber-bg);
-		color: var(--amber);
-		border: 1px solid var(--amber);
+		background: var(--changed-bg);
+		color: var(--changed);
+		border: 1px solid var(--changed);
 		border-radius: 4px;
 		padding: 10px 12px;
 		margin-bottom: 12px;

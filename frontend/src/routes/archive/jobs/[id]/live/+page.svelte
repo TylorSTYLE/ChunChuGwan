@@ -4,6 +4,8 @@
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { api } from '$lib/api';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import type { LiveMeta, LiveState } from '$lib/types';
 
 	let { data }: { data: { meta: LiveMeta } } = $props();
@@ -165,15 +167,19 @@
 {/if}
 
 <div class="live-bar">
-	<button type="button" onclick={refreshShot}>{t('화면 갱신')}</button>
+	<Button variant="outline" size="sm" type="button" onclick={refreshShot}>{t('화면 갱신')}</Button>
 	{#if OWNED}
-		<input type="text" bind:value={textin} placeholder={t('입력할 문자열…')} autocomplete="off" />
-		<button type="button" onclick={sendText}>{t('문자 입력')}</button>
-		<button type="button" onclick={sendEnter}>Enter</button>
-		<button type="button" class="primary" onclick={forceSolve} disabled={forceBusy}
-			>{t('사람 확인 완료')}</button
-		>
-		<button type="button" class="danger" onclick={cancel}>{t('취소')}</button>
+		<Input
+			type="text"
+			class="live-input"
+			bind:value={textin}
+			placeholder={t('입력할 문자열…')}
+			autocomplete="off"
+		/>
+		<Button variant="outline" size="sm" type="button" onclick={sendText}>{t('문자 입력')}</Button>
+		<Button variant="outline" size="sm" type="button" onclick={sendEnter}>Enter</Button>
+		<Button type="button" onclick={forceSolve} disabled={forceBusy}>{t('사람 확인 완료')}</Button>
+		<Button variant="destructive" type="button" onclick={cancel}>{t('취소')}</Button>
 	{/if}
 	<span class="guide mono">{guide}</span>
 </div>
@@ -240,22 +246,12 @@
 		flex-wrap: wrap;
 		margin: 10px 0;
 	}
-	.live-bar input {
+	.live-bar :global(.live-input) {
 		max-width: 260px;
 	}
 	.guide {
 		color: var(--seal);
 		min-height: 1.2em;
-	}
-	button.primary {
-		color: #fff;
-		background: var(--seal);
-		border-color: var(--seal);
-	}
-	button.danger {
-		color: #fff;
-		background: var(--red);
-		border-color: var(--red);
 	}
 	.live-frame {
 		display: inline-block;

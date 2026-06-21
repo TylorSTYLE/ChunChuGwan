@@ -4,6 +4,8 @@
 	import { api, ApiError } from '$lib/api';
 	import { afterAuth } from '$lib/auth';
 	import type { LoginResult, VerifyEmailStatus } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { status: VerifyEmailStatus } } = $props();
 	const st = $derived(data.status);
@@ -62,23 +64,25 @@
 		<form onsubmit={submit}>
 			<label
 				>{t('인증 코드')}
-				<input
+				<Input
 					type="text"
 					inputmode="numeric"
 					pattern="[0-9]*"
-					maxlength="6"
+					maxlength={6}
 					autocomplete="one-time-code"
-					class="mono"
+					class="font-mono"
 					bind:value={code}
 					required
 				/>
 			</label>
-			<button type="submit" disabled={busy || !code.trim()}>{t('확인')}</button>
+			<Button type="submit" disabled={busy || !code.trim()} class="mt-1 w-full">{t('확인')}</Button>
 		</form>
 
 		<div class="alt">
 			<p class="muted">{t('코드를 받지 못했나요?')}</p>
-			<button type="button" onclick={resend} disabled={busy}>{t('인증 코드 다시 보내기')}</button>
+			<Button variant="outline" onclick={resend} disabled={busy} class="w-full">
+				{t('인증 코드 다시 보내기')}
+			</Button>
 		</div>
 	{:else}
 		<div class="error">
@@ -88,7 +92,9 @@
 
 	{#if st.pending}
 		<div class="alt">
-			<form method="POST" action="/logout"><button type="submit">{t('로그아웃')}</button></form>
+			<form method="POST" action="/logout">
+				<Button type="submit" variant="outline" size="sm">{t('로그아웃')}</Button>
+			</form>
 		</div>
 	{/if}
 </div>

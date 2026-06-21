@@ -8,6 +8,7 @@
 	import Pager from '$lib/components/Pager.svelte';
 	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 
 	let { data }: { data: { logs: SystemLogsData } } = $props();
 
@@ -22,7 +23,7 @@
 	});
 	const d = $derived(list.data);
 
-	const LEVEL_BADGE: Record<string, string> = {
+	const LEVEL_BADGE: Record<string, BadgeVariant> = {
 		DEBUG: 'same',
 		INFO: 'same',
 		WARNING: 'changed',
@@ -68,7 +69,7 @@
 				{#each d.logs as log}
 					<tr>
 						<td class="mono">{ts(log.created_at)}</td>
-						<td><span class="badge {LEVEL_BADGE[log.level] ?? 'same'}">{log.level}</span></td>
+						<td><Badge variant={LEVEL_BADGE[log.level] ?? 'same'}>{log.level}</Badge></td>
 						<td class="mono muted">{log.source}</td>
 						<td>
 							<span class="mono muted">{log.logger}</span>
