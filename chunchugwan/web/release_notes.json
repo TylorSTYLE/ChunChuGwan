@@ -62,5 +62,179 @@
         "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/177"
       }
     ]
+  },
+  "0.7.0": {
+    "items": [
+      {
+        "pr": 178,
+        "text": "feat: 워커 운영 로그 보강 — 작업 라이프사이클·실패 맥락, 콘솔 기본 INFO",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/178"
+      },
+      {
+        "pr": 179,
+        "text": "fix: 동시 마이그레이션 직렬화를 파일 락으로 강화",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/179"
+      },
+      {
+        "pr": 181,
+        "text": "feat: #13 대시보드 SvelteKit SPA 전환 — C2 빅뱅 컷오버 완료",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/181"
+      },
+      {
+        "pr": 182,
+        "text": "test: C2 컷오버 후 노후 SSR 테스트 정리",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/182"
+      },
+      {
+        "pr": 183,
+        "text": "feat: 대시보드 헤더 재구성 — 메뉴 트리·전역 검색창·확장 안내·반응형",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/183"
+      },
+      {
+        "pr": 184,
+        "text": "로그/아카이브 경로 재편 · 감사 로그 · 로그 권한 3종 · 시스템 설정 그룹화",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/184"
+      },
+      {
+        "pr": 185,
+        "text": "ci: CI·Release 잡을 셀프 호스트 러너로 전환 (Docker 는 hosted 유지)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/185"
+      },
+      {
+        "pr": 186,
+        "text": "chore: 런타임 Python 3.14 · Node 24 로 업그레이드",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/186"
+      },
+      {
+        "pr": 187,
+        "text": "ci: docker smoke 랜덤 호스트 포트로 — 셀프 호스트 8765 충돌 회피",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/187"
+      },
+      {
+        "pr": 188,
+        "text": "fix: docker smoke 헬스체크 거짓 통과 수정",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/188"
+      },
+      {
+        "pr": 189,
+        "text": "fix: docker smoke 가 set -e 로 첫 시도에 즉사하던 것 수정",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/189"
+      },
+      {
+        "pr": 190,
+        "text": "fix: docker smoke 컨테이너 내부 검사로 — DooD 셀프 호스트 러너 호환",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/190"
+      },
+      {
+        "pr": 191,
+        "text": "fix: archive/new 사이트 전체 아카이브 옵션에 시스템 기본값 미리 채우기",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/191"
+      },
+      {
+        "pr": 193,
+        "text": "feat: 사이트 상세 TLS 인증서 정보 상세 표시 (카드·만료 뱃지)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/193"
+      },
+      {
+        "pr": 192,
+        "text": "fix: 사이트 내보내기에 준비중 표시 추가 — 중복 다운로드 방지",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/192"
+      },
+      {
+        "pr": 194,
+        "text": "fix: SPA 검증 오류를 [object Object] 대신 읽을 수 있는 메시지로 표시",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/194"
+      },
+      {
+        "pr": 195,
+        "text": "feat: 대시보드 전체를 공통 컴포넌트 톤앤매너로 리디자인 + 반응형",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/195"
+      },
+      {
+        "pr": 196,
+        "text": "feat: 시스템 설정 오래 걸리는 버튼에 준비중 스피너 표시 (PR #192 패턴 공통화)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/196"
+      },
+      {
+        "pr": 197,
+        "text": "fix: 로그인·인증·권한·API 보안 강화 (F1~F6 + V1)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/197"
+      },
+      {
+        "pr": 198,
+        "text": "chore: 라이선스·SBOM 정리 (MIT 메타데이터·서드파티 목록·릴리스 SBOM)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/198"
+      },
+      {
+        "pr": 199,
+        "text": "docs: gitflow 작업 시작 규칙 명시 — fetch 후 origin/develop 분리 필수",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/199"
+      },
+      {
+        "pr": 200,
+        "text": "fix: test_migration WAL checkpoint 누락 → count_users==0 수정",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/200"
+      },
+      {
+        "pr": 201,
+        "text": "feat: 아카이브 휴지통 — 소프트 삭제·복원·자동 영구삭제",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/201"
+      },
+      {
+        "pr": 202,
+        "text": "ci: GitHub Actions 러너를 self-hosted → 호스티드로 전환",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/202"
+      },
+      {
+        "pr": 203,
+        "text": "fix: 사이트 회차 테이블 시작 시각 undefined·완료/실패/대기 열 분리",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/203"
+      },
+      {
+        "pr": 204,
+        "text": "feat: 목록 페이지네이션·필터 리로드 없이 in-place 갱신",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/204"
+      },
+      {
+        "pr": 205,
+        "text": "feat: 사이트 아카이브 최대값(상한) 설정 추가 + 크롤 옵션 422 수정",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/205"
+      },
+      {
+        "pr": 206,
+        "text": "feat: 목록 페이지네이션·페이지 크기 선택 + archive/list 사이트 필터",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/206"
+      },
+      {
+        "pr": 207,
+        "text": "feat: 로그인 후 업데이트 안내 모달 (GitHub Release 기준 1회 표시)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/207"
+      },
+      {
+        "pr": 208,
+        "text": "feat: 크롬 확장 보안 강화(개인 키 전용·IP 인증보호) + 6기능 개선",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/208"
+      },
+      {
+        "pr": 209,
+        "text": "프론트엔드 Tailwind v4 + shadcn-svelte 전면 마이그레이션 & 모던 리프레시",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/209"
+      },
+      {
+        "pr": 210,
+        "text": "fix(frontend): 초대 링크 미인증 접근 시 로그인으로 튕기던 문제 수정",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/210"
+      },
+      {
+        "pr": 211,
+        "text": "feat(users): 초대 링크 재생성 버튼 + 만료 초대 표시",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/211"
+      },
+      {
+        "pr": 212,
+        "text": "fix(frontend): 반응형 UI 감사 수정 — 좁은 화면 테이블 카드화 + diff/에러 처리",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/212"
+      }
+    ]
   }
 }
