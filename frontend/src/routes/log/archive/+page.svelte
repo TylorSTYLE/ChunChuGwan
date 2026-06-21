@@ -75,7 +75,7 @@
 {#if d.items.length === 0}
 	<EmptyState message={t('로그가 없습니다.')} />
 {:else}
-	<div class="table-wrap wide">
+	<div class="table-wrap wide cards">
 		<table>
 			<thead>
 				<tr>
@@ -90,20 +90,20 @@
 			<tbody>
 				{#each d.items as it}
 					<tr>
-						<td class="mono">{ts(it.log.started_at)}</td>
-						<td>
+						<td class="mono" data-label={t('시간')}>{ts(it.log.started_at)}</td>
+						<td data-label={t('상태')}>
 							<Badge variant={BADGE[it.log.status] ?? 'same'}>{t(STATUS_LABEL[it.log.status] ?? it.log.status)}</Badge>
 						</td>
-						<td class="url-cell">
+						<td class="url-cell" data-label="URL">
 							{#if it.log.page_id}
 								<a href={pagePath(it.log.page_site_id, it.log.page_id)} title={it.log.url}>{it.log.url}</a>
 							{:else}
 								<span title={it.log.url}>{it.log.url}</span>
 							{/if}
 						</td>
-						<td class="num mono">{it.log.duration_ms}ms</td>
-						<td class="mono muted">{it.log.source}</td>
-						<td>
+						<td class="num mono" data-label={t('소요')}>{it.log.duration_ms}ms</td>
+						<td class="mono muted" data-label={t('출처')}>{it.log.source}</td>
+						<td data-label={t('보기')}>
 							{#if it.log.snapshot_id}
 								<a href={snapPath(it.log.page_site_id, it.log.page_id, it.log.snapshot_id)}>{t('보기')}</a>
 							{:else if d.can_archive && it.log.status === 'error'}

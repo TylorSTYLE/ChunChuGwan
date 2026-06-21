@@ -50,7 +50,7 @@
 {#if d.groups.length === 0}
 	<EmptyState message={t('문서가 없습니다.')} />
 {:else}
-	<div class="table-wrap wide">
+	<div class="table-wrap wide cards">
 		<table>
 			<thead>
 				<tr>
@@ -64,11 +64,11 @@
 			<tbody>
 				{#each d.groups as g}
 					<tr>
-						<td><a href="/document/{String(g.sha256)}/{g.file}" download>{g.file}</a></td>
-						<td class="num mono">{filesize(g.bytes)}</td>
-						<td class="url-cell"><a href={pagePath(g.site_id, g.page_id)} title={g.page_url}>{g.page_url}</a></td>
-						<td class="num">{g.snapshot_count}</td>
-						<td class="mono">{g.last_seen ? ts(String(g.last_seen)) : '-'}</td>
+						<td data-label={t('문서명')}><a href="/document/{String(g.sha256)}/{g.file}" download>{g.file}</a></td>
+						<td class="num mono" data-label={t('용량')}>{filesize(g.bytes)}</td>
+						<td class="url-cell" data-label={t('페이지')}><a href={pagePath(g.site_id, g.page_id)} title={g.page_url}>{g.page_url}</a></td>
+						<td class="num" data-label={t('참조')}>{g.snapshot_count}</td>
+						<td class="mono" data-label={t('마지막')}>{g.last_seen ? ts(String(g.last_seen)) : '-'}</td>
 					</tr>
 				{/each}
 			</tbody>

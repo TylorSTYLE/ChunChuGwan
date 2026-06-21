@@ -157,7 +157,7 @@
 	<h3>{t('페이지')} ({s.page_count})</h3>
 	<PageSize value={ld.pager.per_page} onchange={(n) => list.go({ per_page: n, page: 1 })} />
 </div>
-<div class="table-wrap">
+<div class="table-wrap cards">
 	<table>
 		<thead>
 			<tr><th>URL</th><th>{t('스냅샷')}</th><th>{t('용량')}</th><th>{t('마지막')}</th></tr>
@@ -165,10 +165,10 @@
 		<tbody>
 			{#each ld.pages as p}
 				<tr>
-					<td class="url-cell"><a href={pagePath(s.site.id, p.id)} title={p.url}>{p.url}</a></td>
-					<td class="num">{p.snapshot_count ?? '-'}</td>
-					<td class="num mono">{filesize(p.bytes)}</td>
-					<td class="mono">{p.last_snapshot_at ? ts(String(p.last_snapshot_at)) : '-'}</td>
+					<td class="url-cell" data-label="URL"><a href={pagePath(s.site.id, p.id)} title={p.url}>{p.url}</a></td>
+					<td class="num" data-label={t('스냅샷')}>{p.snapshot_count ?? '-'}</td>
+					<td class="num mono" data-label={t('용량')}>{filesize(p.bytes)}</td>
+					<td class="mono" data-label={t('마지막')}>{p.last_snapshot_at ? ts(String(p.last_snapshot_at)) : '-'}</td>
 				</tr>
 			{/each}
 		</tbody>
@@ -190,7 +190,7 @@
 			onchange={(n) => list.go({ crawls_per_page: n, crawls_page: 1 })}
 		/>
 	</div>
-	<div class="table-wrap">
+	<div class="table-wrap cards">
 		<table>
 			<thead>
 				<tr>
@@ -204,15 +204,15 @@
 			<tbody>
 				{#each ld.crawls as c}
 					<tr>
-						<td class="mono"><a href="{base}/crawls/{c.id}">{ts(c.created_at)}</a></td>
-						<td>
+						<td class="mono" data-label={t('시작')}><a href="{base}/crawls/{c.id}">{ts(c.created_at)}</a></td>
+						<td data-label={t('상태')}>
 							<Badge variant={STATUS_BADGE[c.status] ?? 'same'}>
 								{t(STATUS_LABEL[c.status] ?? c.status)}
 							</Badge>
 						</td>
-						<td class="num mono cnt done" class:zero={c.done_count === 0}>{c.done_count}</td>
-						<td class="num mono cnt fail" class:zero={c.failed_count === 0}>{c.failed_count}</td>
-						<td class="num mono cnt pend" class:zero={c.pending_count === 0}>{c.pending_count}</td>
+						<td class="num mono cnt done" data-label={t('완료')} class:zero={c.done_count === 0}>{c.done_count}</td>
+						<td class="num mono cnt fail" data-label={t('실패')} class:zero={c.failed_count === 0}>{c.failed_count}</td>
+						<td class="num mono cnt pend" data-label={t('대기')} class:zero={c.pending_count === 0}>{c.pending_count}</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -252,7 +252,7 @@
 			{/if}
 		</div>
 	</div>
-	<div class="table-wrap">
+	<div class="table-wrap cards">
 		<table>
 			<thead>
 				<tr>
@@ -263,9 +263,9 @@
 			<tbody>
 				{#each ld.failed_items as f}
 					<tr>
-						<td class="mono">{f.at ? ts(String(f.at)) : '-'}</td>
-						<td class="url-cell">{f.url}</td>
-						<td class="muted">{f.error}</td>
+						<td class="mono" data-label={t('시간')}>{f.at ? ts(String(f.at)) : '-'}</td>
+						<td class="url-cell" data-label="URL">{f.url}</td>
+						<td class="muted" data-label={t('오류')}>{f.error}</td>
 						{#if s.can_archive}
 							<td><Button variant="outline" size="sm" onclick={() => retryFailed(f)} disabled={action.busy}>{t('재시도')}</Button></td>
 						{/if}

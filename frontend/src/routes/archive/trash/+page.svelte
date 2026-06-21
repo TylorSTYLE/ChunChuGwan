@@ -73,7 +73,7 @@
 		<span class="muted">{t('총')} {d.total}{t('건')}</span>
 		<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
 	</Toolbar>
-	<div class="table-wrap wide">
+	<div class="table-wrap wide cards">
 		<table>
 			<thead>
 				<tr>
@@ -90,17 +90,17 @@
 			<tbody>
 				{#each d.entries as e}
 					<tr>
-						<td>
+						<td data-label={t('종류')}>
 							<span class="badge {e.kind}">{e.kind === 'site' ? t('사이트') : t('페이지')}</span>
 						</td>
-						<td class="url-cell" title={e.label}>{e.label}</td>
-						<td class="num">
+						<td class="url-cell" data-label={t('대상')} title={e.label}>{e.label}</td>
+						<td class="num" data-label={t('스냅샷')}>
 							{e.snapshot_count}{#if e.kind === 'site'}<span class="muted"> ({e.page_count} {t('페이지')})</span>{/if}
 						</td>
-						<td class="num mono">{filesize(e.bytes)}</td>
-						<td class="mono">{ts(e.deleted_at)}</td>
-						<td class="muted">{e.deleted_by_name || e.deleted_by_email || t('시스템')}</td>
-						<td class="mono">{e.expires_at ? ts(e.expires_at) : '-'}</td>
+						<td class="num mono" data-label={t('용량')}>{filesize(e.bytes)}</td>
+						<td class="mono" data-label={t('삭제 시각')}>{ts(e.deleted_at)}</td>
+						<td class="muted" data-label={t('삭제자')}>{e.deleted_by_name || e.deleted_by_email || t('시스템')}</td>
+						<td class="mono" data-label={t('보관 기한')}>{e.expires_at ? ts(e.expires_at) : '-'}</td>
 						<td class="actions">
 							<Button variant="outline" size="sm" onclick={() => restore(e)} disabled={act.busy}>{t('복원')}</Button>
 							<Button variant="destructive" size="sm" onclick={() => purge(e)} disabled={act.busy}>{t('영구 삭제')}</Button>

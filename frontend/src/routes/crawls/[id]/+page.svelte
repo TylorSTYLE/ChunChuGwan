@@ -170,7 +170,7 @@
 	{/each}
 </p>
 
-<div class="table-wrap">
+<div class="table-wrap cards">
 	<table>
 		<thead>
 			<tr>
@@ -181,9 +181,9 @@
 		<tbody>
 			{#each d.pages as p}
 				<tr>
-					<td class="url-cell mono"><span title={p.url}>{p.url}</span></td>
-					<td class="num mono">{p.depth}</td>
-					<td>
+					<td class="url-cell mono" data-label="URL"><span title={p.url}>{p.url}</span></td>
+					<td class="num mono" data-label={t('깊이')}>{p.depth}</td>
+					<td data-label={t('상태')}>
 						{#if PAGE_BADGE[p.status]}
 							<Badge variant={PAGE_BADGE[p.status]}>{t(PAGE_LABEL[p.status])}</Badge>
 						{:else if p.next_attempt_at}
@@ -192,8 +192,8 @@
 							<Badge variant="same">{t('대기')}</Badge>
 						{/if}
 					</td>
-					<td class="num mono">{p.attempts || '—'}</td>
-					<td>
+					<td class="num mono" data-label={t('시도')}>{p.attempts || '—'}</td>
+					<td data-label={t('결과')}>
 						{#if p.snapshot_id}
 							<a href={snapPath(p.snapshot_site_id, p.snapshot_page_id, p.snapshot_id)}>{t('스냅샷')}</a>
 							{#if p.snapshot_page_id}
