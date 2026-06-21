@@ -15,6 +15,8 @@
 	import PageSize from '$lib/components/PageSize.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { createAction } from '$lib/action.svelte';
+	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
 
 	let { data }: { data: { site: SiteDetail } } = $props();
 	const s = $derived(data.site);
@@ -22,7 +24,7 @@
 	let exporting = $state(false);
 
 	// 크롤 회차 상태 → 색 뱃지·라벨 (crawls/[id] 상세와 동일).
-	const STATUS_BADGE: Record<string, string> = {
+	const STATUS_BADGE: Record<string, BadgeVariant> = {
 		running: 'running',
 		done: 'new',
 		cancelled: 'same'
@@ -204,9 +206,9 @@
 					<tr>
 						<td class="mono"><a href="{base}/crawls/{c.id}">{ts(c.created_at)}</a></td>
 						<td>
-							<span class="badge {STATUS_BADGE[c.status] ?? 'same'}">
+							<Badge variant={STATUS_BADGE[c.status] ?? 'same'}>
 								{t(STATUS_LABEL[c.status] ?? c.status)}
-							</span>
+							</Badge>
 						</td>
 						<td class="num mono cnt done" class:zero={c.done_count === 0}>{c.done_count}</td>
 						<td class="num mono cnt fail" class:zero={c.failed_count === 0}>{c.failed_count}</td>
@@ -246,7 +248,7 @@
 				onchange={(n) => list.go({ failed_per_page: n, failed_page: 1 })}
 			/>
 			{#if s.can_archive}
-				<button onclick={retryAllFailed} disabled={action.busy}>{t('모두 재시도')}</button>
+				<Button variant="outline" size="sm" onclick={retryAllFailed} disabled={action.busy}>{t('모두 재시도')}</Button>
 			{/if}
 		</div>
 	</div>
@@ -265,7 +267,7 @@
 						<td class="url-cell">{f.url}</td>
 						<td class="muted">{f.error}</td>
 						{#if s.can_archive}
-							<td><button onclick={() => retryFailed(f)} disabled={action.busy}>{t('재시도')}</button></td>
+							<td><Button variant="outline" size="sm" onclick={() => retryFailed(f)} disabled={action.busy}>{t('재시도')}</Button></td>
 						{/if}
 					</tr>
 				{/each}
@@ -295,19 +297,19 @@
 				<div class="cert-head">
 					<span class="mono host">{c.cert.host}</span>
 					{#if c.is_current}
-						<span class="badge new">{t('현재')}</span>
+						<Badge variant="new">{t('현재')}</Badge>
 					{:else}
-						<span class="badge same">{t('이전 버전')}</span>
+						<Badge variant="same">{t('이전 버전')}</Badge>
 					{/if}
 					{#if exp === 'expired'}
-						<span class="badge error">{t('만료됨')}</span>
+						<Badge variant="error">{t('만료됨')}</Badge>
 					{:else if exp === 'soon'}
-						<span class="badge changed">{t('곧 만료')}</span>
+						<Badge variant="changed">{t('곧 만료')}</Badge>
 					{/if}
 					{#if !c.cert.verified}
-						<span class="badge error" title={t('캡처가 인증서 검증을 통과하지 못했습니다 (자체 서명 등)')}>
+						<Badge variant="error" title={t('캡처가 인증서 검증을 통과하지 못했습니다 (자체 서명 등)')}>
 							{t('검증 안 됨')}
-						</span>
+						</Badge>
 					{/if}
 					<a href={c.pem_url} class="pem" download>PEM</a>
 				</div>
@@ -352,9 +354,9 @@
 
 {#if s.can_archive}
 	<p class="export-link">
-		<button onclick={exportSite} disabled={action.busy} aria-busy={exporting}>
+		<Button variant="outline" size="sm" class="gap-1.5" onclick={exportSite} disabled={action.busy} aria-busy={exporting}>
 			{#if exporting}<Spinner />{t('파일 준비중…')}{:else}{t('이 사이트 내보내기')}{/if}
-		</button>
+		</Button>
 		<span class="muted">{t('— 이 사이트의 페이지·스냅샷만 담은 .ccg.export 파일')}</span>
 	</p>
 {/if}
@@ -362,7 +364,7 @@
 {#if s.can_delete}
 	<fieldset class="danger-zone">
 		<legend>{t('위험 구역')}</legend>
-		<button class="danger" onclick={deleteSite} disabled={action.busy}>{t('이 사이트 삭제')}</button>
+		<Button variant="destructive" onclick={deleteSite} disabled={action.busy}>{t('이 사이트 삭제')}</Button>
 	</fieldset>
 {/if}
 
@@ -456,11 +458,6 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-	}
-	.export-link button {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
 	}
 	.danger-zone {
 		border: 1px solid var(--red);

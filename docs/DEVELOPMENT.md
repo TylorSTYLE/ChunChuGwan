@@ -34,6 +34,12 @@ uv run pytest                            # 테스트 (네트워크 불필요, ~1
   `npm run build`를 자동 실행하므로 별도 빌드 없이 바로 시작할 수 있다(빌드가 없으면 503).
   SPA 개발 중에는 `npm --prefix frontend run dev`(Vite, HMR)로 띄우고 API 는
   `wccg serve` 로 따로 돌린다.
+- 스타일링은 **Tailwind CSS v4 + shadcn-svelte**(Bits UI). 디자인 토큰은
+  `frontend/src/app.css`(shadcn 표준 토큰 + 춘추관 시맨틱 색, `.dark` 다크모드 —
+  mode-watcher). shadcn 컴포넌트는 `src/lib/components/ui` 에 소유(복사-인)되며
+  `npx shadcn-svelte@latest add <name> -y` 로 추가한다. 색은 토큰만 쓰고(직접 hex
+  금지) 상태 뱃지는 `<Badge variant>` 를 쓴다 — 상세 규칙은
+  `.claude/rules/dashboard.md` 디자인 방향.
 
 ## 모듈 구성
 

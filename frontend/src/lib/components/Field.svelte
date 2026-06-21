@@ -9,27 +9,8 @@
 	}: { label: string; hint?: string; children: Snippet } = $props();
 </script>
 
-<div class="field">
-	<span class="field-label">{label}</span>
+<div class="flex flex-col gap-1.5">
+	<span class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
 	{@render children()}
-	{#if hint}<span class="field-hint">{hint}</span>{/if}
+	{#if hint}<span class="text-xs text-muted-foreground">{hint}</span>{/if}
 </div>
-
-<style>
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-	.field-label {
-		font-size: 11px;
-		font-weight: 600;
-		color: var(--muted);
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-	}
-	.field-hint {
-		font-size: 12px;
-		color: var(--muted);
-	}
-</style>

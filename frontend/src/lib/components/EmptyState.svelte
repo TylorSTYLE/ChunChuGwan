@@ -8,19 +8,7 @@
 </script>
 
 {#if tag === 'tr'}
-	<tr><td {colspan} class="muted empty-cell">{message}</td></tr>
+	<tr><td {colspan} class="px-2.5 py-4 text-center text-muted-foreground">{message}</td></tr>
 {:else}
-	<p class="muted empty-state">{message}</p>
+	<p class="my-3 text-[13px] text-muted-foreground">{message}</p>
 {/if}
-
-<style>
-	.empty-state {
-		font-size: 13px;
-		margin: 12px 0;
-	}
-	.empty-cell {
-		text-align: center;
-		color: var(--muted);
-		padding: 16px 10px;
-	}
-</style>

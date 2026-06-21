@@ -9,6 +9,8 @@
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { createAction } from '$lib/action.svelte';
+	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
 
 	let { data }: { data: { tl: PageTimeline } } = $props();
 	const tl = $derived(data.tl);
@@ -62,18 +64,18 @@
 {#if tl.can_archive}
 	<div class="actions">
 		<div class="action-bar">
-			<button onclick={rearchive} disabled={action.busy}>{t('재아카이빙')}</button>
+			<Button variant="outline" size="sm" onclick={rearchive} disabled={action.busy}>{t('재아카이빙')}</Button>
 			<label class="muted"><input type="checkbox" bind:checked={force} /> {t('강제')}</label>
 		</div>
 		<div class="action-bar">
 			{#if tl.schedule}
-				<span class="badge same">{t('스케줄')}: {tl.schedule.label}</span>
-				<button onclick={removeSchedule} disabled={action.busy}>{t('스케줄 해제')}</button>
+				<Badge variant="same">{t('스케줄')}: {tl.schedule.label}</Badge>
+				<Button variant="outline" size="sm" onclick={removeSchedule} disabled={action.busy}>{t('스케줄 해제')}</Button>
 			{:else}
 				<select bind:value={interval}>
 					{#each INTERVALS as [v, label]}<option value={v}>{t(label)}</option>{/each}
 				</select>
-				<button onclick={setSchedule} disabled={action.busy}>{t('스케줄 등록')}</button>
+				<Button variant="outline" size="sm" onclick={setSchedule} disabled={action.busy}>{t('스케줄 등록')}</Button>
 			{/if}
 		</div>
 	</div>
@@ -96,9 +98,9 @@
 						<td class="num">{item.idx}</td>
 						<td class="mono">{ts(item.snap.taken_at)}</td>
 						<td>
-							<span class="badge {item.badge}">
+							<Badge variant={item.badge as BadgeVariant}>
 								{item.badge === 'new' ? t('신규') : item.badge === 'changed' ? t('변경') : t('동일')}
-							</span>
+							</Badge>
 						</td>
 						<td class="mono muted">{String(item.snap.content_hash).slice(0, 12)}</td>
 						<td class="num mono">{filesize(item.total_bytes)}</td>
@@ -113,7 +115,7 @@
 {#if tl.can_delete}
 	<fieldset class="danger-zone">
 		<legend>{t('위험 구역')}</legend>
-		<button class="danger" onclick={deletePage} disabled={action.busy}>{t('이 페이지 삭제')}</button>
+		<Button variant="destructive" onclick={deletePage} disabled={action.busy}>{t('이 페이지 삭제')}</Button>
 	</fieldset>
 {/if}
 

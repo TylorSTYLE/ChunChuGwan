@@ -12,6 +12,8 @@
 	import Pager from '$lib/components/Pager.svelte';
 	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { sites: SitesData } } = $props();
 
@@ -52,7 +54,7 @@
 <h2>{t('아카이브 사이트 목록')}</h2>
 
 <Toolbar>
-	<input
+	<Input
 		type="search"
 		value={d.q}
 		placeholder={t('사이트 검색')}
@@ -87,7 +89,7 @@
 							{:else}
 								<span>{s.site_key}</span>
 							{/if}
-							{#if s.crawling}<span class="badge new">{t('아카이빙 중')}</span>{/if}
+							{#if s.crawling}<Badge variant="new">{t('아카이빙 중')}</Badge>{/if}
 							{#if s.title}<div class="muted">{s.title}</div>{/if}
 						</td>
 						<td class="num">{s.page_count}</td>

@@ -4,6 +4,8 @@
 	import { api, ApiError } from '$lib/api';
 	import { afterAuth } from '$lib/auth';
 	import type { LoginResult } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let email = $state('');
 	let password = $state('');
@@ -34,19 +36,19 @@
 	<form onsubmit={submit}>
 		<label
 			>{t('이메일')}
-			<input type="email" bind:value={email} required autocomplete="username" />
+			<Input type="email" bind:value={email} required autocomplete="username" />
 		</label>
 		<label
 			>{t('패스워드')} <span class="muted">{t('(8자 이상)')}</span>
-			<input
+			<Input
 				type="password"
 				bind:value={password}
-				minlength="8"
+				minlength={8}
 				required
 				autocomplete="new-password"
 			/>
 		</label>
-		<button type="submit" disabled={busy}>{t('가입')}</button>
+		<Button type="submit" disabled={busy} class="mt-1 w-full">{t('가입')}</Button>
 	</form>
 	<div class="alt muted">
 		{t('이미 계정이 있나요?')} <a href="{base}/login">{t('로그인')}</a>

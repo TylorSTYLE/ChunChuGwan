@@ -11,6 +11,7 @@
 	import Pager from '$lib/components/Pager.svelte';
 	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 	import { createAction } from '$lib/action.svelte';
 
 	let { data }: { data: { logs: LogsData } } = $props();
@@ -41,7 +42,7 @@
 		forced_same: '동일(강제)',
 		error: '실패'
 	};
-	const BADGE: Record<string, string> = {
+	const BADGE: Record<string, BadgeVariant> = {
 		new: 'new',
 		changed: 'changed',
 		unchanged: 'same',
@@ -91,7 +92,7 @@
 					<tr>
 						<td class="mono">{ts(it.log.started_at)}</td>
 						<td>
-							<span class="badge {BADGE[it.log.status] ?? 'same'}">{t(STATUS_LABEL[it.log.status] ?? it.log.status)}</span>
+							<Badge variant={BADGE[it.log.status] ?? 'same'}>{t(STATUS_LABEL[it.log.status] ?? it.log.status)}</Badge>
 						</td>
 						<td class="url-cell">
 							{#if it.log.page_id}

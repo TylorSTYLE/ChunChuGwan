@@ -38,7 +38,10 @@ SEARCH·DOCKER·API·AUTHENTICATION·DEVELOPMENT — README 는 빠른 시작 + 
   odf·hwpx·epub) — doctext.py
 - CLI: click
 - 대시보드: FastAPI + SvelteKit SPA (정적 셸을 루트(/)로 서빙 + `/api/web` JSON API,
-  읽기 전용 + 재아카이빙 트리거). 프론트엔드 소스는 `frontend/`, 빌드 산출물은
+  읽기 전용 + 재아카이빙 트리거). 스타일링은 **Tailwind CSS v4 + shadcn-svelte**
+  (Bits UI 기반 컴포넌트는 `frontend/src/lib/components/ui`, 공통 래퍼는
+  `frontend/src/lib/components`), 다크모드는 **mode-watcher**(`.dark` 클래스 +
+  `app.css` 의 HSL 토큰). 프론트엔드 소스는 `frontend/`, 빌드 산출물은
   `chunchugwan/web/frontend_dist`(개발 시 `frontend/build`). C2 컷오버로 SSR(Jinja2) 제거.
 - 인증: argon2-cffi(패스워드), pyotp+qrcode(TOTP), webauthn(패스키),
   httpx+PyJWT(OIDC — Authentik)

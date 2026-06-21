@@ -9,6 +9,9 @@
 	import Field from '$lib/components/Field.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { createAction } from '$lib/action.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 
 	let { data }: { data: { data: CredentialsData } } = $props();
 	const d = $derived(data.data);
@@ -91,7 +94,7 @@
 					<td class="mono muted">{c.creator_email ?? '—'}</td>
 					<td class="mono muted">{ts(c.created_at, true)}</td>
 					<td>
-						<button class="danger" onclick={() => remove(c.id, c.label)} disabled={act.busy}>{t('삭제')}</button>
+						<Button variant="destructive" onclick={() => remove(c.id, c.label)} disabled={act.busy}>{t('삭제')}</Button>
 					</td>
 				</tr>
 			{:else}
@@ -104,10 +107,10 @@
 <FormSection title={t('새 자격증명 등록')}>
 	<form class="cred-form" onsubmit={create}>
 		<Field label={t('이름')}>
-			<input
+			<Input
 				type="text"
 				bind:value={label}
-				maxlength="50"
+				maxlength={50}
 				required
 				placeholder={t('예: 관리자 계정')}
 				disabled={!d.secret_key_configured}
@@ -121,23 +124,23 @@
 
 		{#if kind === 'http_basic'}
 			<Field label={t('사용자명')}>
-				<input type="text" bind:value={username} autocomplete="off" disabled={!d.secret_key_configured} />
+				<Input type="text" bind:value={username} autocomplete="off" disabled={!d.secret_key_configured} />
 			</Field>
 			<Field label={t('비밀번호')}>
-				<input type="password" bind:value={password} autocomplete="new-password" disabled={!d.secret_key_configured} />
+				<Input type="password" bind:value={password} autocomplete="new-password" disabled={!d.secret_key_configured} />
 			</Field>
 		{:else if kind === 'session'}
 			<Field
 				label={t('세션 상태 (storage_state JSON)')}
 				hint={t('브라우저에서 로그인한 뒤 Playwright 의 storage_state() 등으로 추출한 JSON 을 붙여넣으세요. 쿠키·localStorage 가 포함됩니다.')}
 			>
-				<textarea
+				<Textarea
 					bind:value={storageState}
-					rows="8"
+					rows={8}
 					spellcheck="false"
 					placeholder={'{"cookies": [...], "origins": [...]}'}
 					disabled={!d.secret_key_configured}
-				></textarea>
+				/>
 			</Field>
 			<Field
 				label={t('또는 HAR 파일 업로드')}
@@ -150,18 +153,18 @@
 				label={t('Bearer 토큰')}
 				hint={t("캡처 시 Authorization: Bearer 헤더로 주입됩니다. 'Bearer ' 접두사 없이 토큰 값만 넣으세요.")}
 			>
-				<textarea
+				<Textarea
 					bind:value={token}
-					rows="4"
+					rows={4}
 					spellcheck="false"
 					autocomplete="off"
 					placeholder="eyJhbGciOi…"
 					disabled={!d.secret_key_configured}
-				></textarea>
+				/>
 			</Field>
 		{/if}
 
-		<button type="submit" class="primary" disabled={act.busy || !d.secret_key_configured}>{t('등록')}</button>
+		<Button type="submit" class="self-start" disabled={act.busy || !d.secret_key_configured}>{t('등록')}</Button>
 	</form>
 </FormSection>
 
@@ -179,8 +182,5 @@
 		flex-direction: column;
 		gap: 12px;
 		max-width: 640px;
-	}
-	.cred-form button {
-		align-self: flex-start;
 	}
 </style>

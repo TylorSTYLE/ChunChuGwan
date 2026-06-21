@@ -5,6 +5,9 @@
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import Field from '$lib/components/Field.svelte';
 	import { createAction } from '$lib/action.svelte';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { data: SystemGroupsData } } = $props();
 	const d = $derived(data.data);
@@ -75,13 +78,13 @@
 	<fieldset class="group">
 		<legend>
 			{g.label} <span class="mono muted">{g.name}</span>
-			{#if g.is_builtin}<span class="badge same">{t('기본')}</span>{/if}
+			{#if g.is_builtin}<Badge variant="same">{t('기본')}</Badge>{/if}
 			<span class="muted">· {g.member_count}{t('명')}</span>
 		</legend>
 		<div class="stack">
 			{#if !g.is_builtin}
 				<Field label={t('표시 라벨')}>
-					<input type="text" value={e.label} oninput={(ev) => setLabel(g, ev.currentTarget.value)} />
+					<Input type="text" value={e.label} oninput={(ev) => setLabel(g, ev.currentTarget.value)} />
 				</Field>
 			{/if}
 			<div class="perms">
@@ -90,9 +93,9 @@
 				{/each}
 			</div>
 			<div class="action-bar">
-				<button class="primary" onclick={() => saveGroup(g)} disabled={act.busy}>{t('저장')}</button>
+				<Button onclick={() => saveGroup(g)} disabled={act.busy}>{t('저장')}</Button>
 				{#if !g.is_builtin && g.member_count === 0}
-					<button class="danger" onclick={() => deleteGroup(g)} disabled={act.busy}>{t('삭제')}</button>
+					<Button variant="destructive" onclick={() => deleteGroup(g)} disabled={act.busy}>{t('삭제')}</Button>
 				{/if}
 			</div>
 		</div>
@@ -103,15 +106,15 @@
 <fieldset class="group">
 	<div class="stack">
 		<div class="form-grid">
-			<Field label={t('이름(영문/숫자/_)')}><input type="text" bind:value={newName} /></Field>
-			<Field label={t('표시 라벨')}><input type="text" bind:value={newLabel} /></Field>
+			<Field label={t('이름(영문/숫자/_)')}><Input type="text" bind:value={newName} /></Field>
+			<Field label={t('표시 라벨')}><Input type="text" bind:value={newLabel} /></Field>
 		</div>
 		<div class="perms">
 			{#each d.permissions_catalog as p}
 				<label><input type="checkbox" checked={newPerms.has(p)} onchange={() => toggleNew(p)} /> {d.permission_labels[p] ?? p}</label>
 			{/each}
 		</div>
-		<button class="primary" onclick={addGroup} disabled={act.busy || !newName.trim()}>{t('그룹 추가')}</button>
+		<Button onclick={addGroup} disabled={act.busy || !newName.trim()}>{t('그룹 추가')}</Button>
 	</div>
 </fieldset>
 

@@ -12,6 +12,7 @@
 	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { createAction } from '$lib/action.svelte';
+	import { Button } from '$lib/components/ui/button';
 
 	let { data }: { data: { trash: TrashData } } = $props();
 	const act = createAction();
@@ -101,8 +102,8 @@
 						<td class="muted">{e.deleted_by_name || e.deleted_by_email || t('시스템')}</td>
 						<td class="mono">{e.expires_at ? ts(e.expires_at) : '-'}</td>
 						<td class="actions">
-							<button onclick={() => restore(e)} disabled={act.busy}>{t('복원')}</button>
-							<button class="danger" onclick={() => purge(e)} disabled={act.busy}>{t('영구 삭제')}</button>
+							<Button variant="outline" size="sm" onclick={() => restore(e)} disabled={act.busy}>{t('복원')}</Button>
+							<Button variant="destructive" size="sm" onclick={() => purge(e)} disabled={act.busy}>{t('영구 삭제')}</Button>
 						</td>
 					</tr>
 				{/each}

@@ -9,6 +9,8 @@
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import FormSection from '$lib/components/FormSection.svelte';
 	import { createAction } from '$lib/action.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { data: AccountData } } = $props();
 	const d = $derived(data.data);
@@ -168,8 +170,8 @@
 
 <FormSection title={t('표시 이름')}>
 	<div class="form">
-		<input type="text" bind:value={displayName} placeholder={d.email} />
-		<button onclick={saveName} disabled={act.busy}>{t('저장')}</button>
+		<Input type="text" bind:value={displayName} placeholder={d.email} />
+		<Button variant="outline" size="sm" onclick={saveName} disabled={act.busy}>{t('저장')}</Button>
 	</div>
 	<p class="muted hint">{t('비우면 이메일이 표시됩니다.')}</p>
 </FormSection>
@@ -179,7 +181,7 @@
 		<select bind:value={locale}>
 			{#each d.locales as code}<option value={code}>{d.locale_names[code] ?? code}</option>{/each}
 		</select>
-		<button onclick={saveLanguage} disabled={act.busy}>{t('저장')}</button>
+		<Button variant="outline" size="sm" onclick={saveLanguage} disabled={act.busy}>{t('저장')}</Button>
 	</div>
 </FormSection>
 
@@ -188,17 +190,17 @@
 		<select bind:value={timezone}>
 			{#each d.timezones as tz}<option value={tz}>{tz}</option>{/each}
 		</select>
-		<button onclick={saveTimezone} disabled={act.busy}>{t('저장')}</button>
+		<Button variant="outline" size="sm" onclick={saveTimezone} disabled={act.busy}>{t('저장')}</Button>
 	</div>
 </FormSection>
 
 <FormSection title={t('패스워드 변경')}>
 	{#if d.has_password}
 		<div class="form col">
-			<input type="password" bind:value={curPw} placeholder={t('현재 패스워드')} autocomplete="current-password" />
-			<input type="password" bind:value={newPw} placeholder={t('새 패스워드')} autocomplete="new-password" />
-			<input type="password" bind:value={newPw2} placeholder={t('새 패스워드 확인')} autocomplete="new-password" />
-			<button class="primary" onclick={changePassword} disabled={act.busy || !curPw || !newPw}>{t('변경')}</button>
+			<Input type="password" bind:value={curPw} placeholder={t('현재 패스워드')} autocomplete="current-password" />
+			<Input type="password" bind:value={newPw} placeholder={t('새 패스워드')} autocomplete="new-password" />
+			<Input type="password" bind:value={newPw2} placeholder={t('새 패스워드 확인')} autocomplete="new-password" />
+			<Button onclick={changePassword} disabled={act.busy || !curPw || !newPw}>{t('변경')}</Button>
 		</div>
 	{:else}
 		<p class="muted">{t('SSO 전용 계정은 패스워드가 없습니다. IdP(Authentik)에서 관리하세요.')}</p>
@@ -211,8 +213,8 @@
 	{:else if d.totp_enabled}
 		<p class="muted">{t('사용 중입니다.')}</p>
 		<div class="form">
-			<input type="password" bind:value={totpPassword} placeholder={t('현재 패스워드')} autocomplete="current-password" />
-			<button class="danger" onclick={disableTotp} disabled={act.busy || !totpPassword}>{t('해제')}</button>
+			<Input type="password" bind:value={totpPassword} placeholder={t('현재 패스워드')} autocomplete="current-password" />
+			<Button variant="destructive" onclick={disableTotp} disabled={act.busy || !totpPassword}>{t('해제')}</Button>
 		</div>
 	{:else if totpSetup}
 		<p class="muted hint">
@@ -221,12 +223,12 @@
 		<img class="qr" src={totpSetup.qr} alt={t('TOTP QR')} />
 		<div class="mono secret">{totpSetup.secret}</div>
 		<div class="form">
-			<input type="text" inputmode="numeric" bind:value={totpCode} placeholder={t('6자리 코드')} />
-			<button class="primary" onclick={confirmTotp} disabled={act.busy || !totpCode.trim()}>{t('확인')}</button>
-			<button onclick={() => (totpSetup = null)} disabled={act.busy}>{t('취소')}</button>
+			<Input type="text" inputmode="numeric" bind:value={totpCode} placeholder={t('6자리 코드')} />
+			<Button onclick={confirmTotp} disabled={act.busy || !totpCode.trim()}>{t('확인')}</Button>
+			<Button variant="outline" size="sm" onclick={() => (totpSetup = null)} disabled={act.busy}>{t('취소')}</Button>
 		</div>
 	{:else}
-		<div class="form"><button class="primary" onclick={startTotp} disabled={act.busy}>{t('2단계 인증 설정')}</button></div>
+		<div class="form"><Button onclick={startTotp} disabled={act.busy}>{t('2단계 인증 설정')}</Button></div>
 	{/if}
 </FormSection>
 
@@ -251,10 +253,10 @@
 								<td class="mono muted">{pk.last_used_at ? ts(pk.last_used_at) : '—'}</td>
 								<td>
 									<div class="pk-del">
-										<input type="password" bind:value={pkPasswords[pk.id]} placeholder={t('패스워드 확인')} />
-										<button class="danger" onclick={() => deletePasskey(pk.id)} disabled={act.busy || !pkPasswords[pk.id]}>
+										<Input type="password" class="w-[130px] max-w-full" bind:value={pkPasswords[pk.id]} placeholder={t('패스워드 확인')} />
+										<Button variant="destructive" onclick={() => deletePasskey(pk.id)} disabled={act.busy || !pkPasswords[pk.id]}>
 											{t('삭제')}
-										</button>
+										</Button>
 									</div>
 								</td>
 							</tr>
@@ -266,8 +268,8 @@
 			<p class="muted">{t('등록된 패스키가 없습니다.')}</p>
 		{/if}
 		<div class="form">
-			<input type="text" bind:value={pkName} maxlength="64" placeholder={t('새 패스키 이름 (예: 맥북 Touch ID)')} />
-			<button class="primary" onclick={registerPasskey} disabled={act.busy}>{t('패스키 등록')}</button>
+			<Input type="text" bind:value={pkName} maxlength={64} placeholder={t('새 패스키 이름 (예: 맥북 Touch ID)')} />
+			<Button onclick={registerPasskey} disabled={act.busy}>{t('패스키 등록')}</Button>
 		</div>
 	{/if}
 </FormSection>
@@ -278,11 +280,11 @@
 		<p class="muted">{t('탈퇴하면 모든 세션이 종료되고 같은 이메일로 재가입할 수 없습니다 (관리자 삭제 전까지).')}</p>
 		<div class="form">
 			{#if d.has_password}
-				<input type="password" bind:value={withdrawPw} placeholder={t('현재 패스워드')} autocomplete="current-password" />
+				<Input type="password" bind:value={withdrawPw} placeholder={t('현재 패스워드')} autocomplete="current-password" />
 			{:else}
-				<input type="text" bind:value={withdrawConfirm} placeholder={t('확인을 위해 이메일 입력')} />
+				<Input type="text" bind:value={withdrawConfirm} placeholder={t('확인을 위해 이메일 입력')} />
 			{/if}
-			<button class="danger" onclick={withdraw} disabled={act.busy}>{t('탈퇴')}</button>
+			<Button variant="destructive" onclick={withdraw} disabled={act.busy}>{t('탈퇴')}</Button>
 		</div>
 	</section>
 {/if}
@@ -335,10 +337,6 @@
 		flex-wrap: wrap;
 		gap: 6px;
 		align-items: center;
-	}
-	.pk-del input {
-		width: 130px;
-		max-width: 100%;
 	}
 	.danger-zone {
 		border-top: 1px solid var(--red);

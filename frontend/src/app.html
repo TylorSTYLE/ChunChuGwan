@@ -6,27 +6,18 @@
 	<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 	<title>춘추관</title>
 	<script>
-		/* 테마 적용 — 저장값(light|dark) 없으면 시스템 설정. 첫 페인트 전에 실행해 깜빡임 방지.
-		   기존 base.html 의 FOUC 방지 스크립트를 그대로 이식한다. */
+		/* 테마 FOUC 방지 — 첫 페인트 전에 .dark 클래스를 적용한다. 실제 테마 관리(토글·
+		   저장·시스템 변경 감지)는 mode-watcher(ModeWatcher)가 담당하며, 여기선 동일한
+		   저장 키('mode-watcher-mode': light|dark|system)를 읽어 초기 깜빡임만 막는다. */
 		(function () {
-			var KEY = 'wccg-theme';
-			var mq = window.matchMedia('(prefers-color-scheme: dark)');
-			function stored() {
-				try {
-					var v = localStorage.getItem(KEY);
-				} catch (e) {
-					return null;
-				}
-				return v === 'light' || v === 'dark' ? v : null;
-			}
-			function apply() {
-				document.documentElement.dataset.theme = stored() || (mq.matches ? 'dark' : 'light');
-			}
-			mq.addEventListener('change', function () {
-				if (!stored()) apply();
-			});
-			apply();
-			window.wccgTheme = { KEY: KEY, stored: stored, apply: apply };
+			try {
+				var mode = localStorage.getItem('mode-watcher-mode') || 'system';
+				var dark =
+					mode === 'dark' ||
+					(mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+				document.documentElement.classList.toggle('dark', dark);
+				document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+			} catch (e) {}
 		})();
 	</script>
 	%sveltekit.head%

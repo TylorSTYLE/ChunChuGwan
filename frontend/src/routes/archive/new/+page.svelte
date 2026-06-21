@@ -11,6 +11,9 @@
 	import Toggle from '$lib/components/Toggle.svelte';
 	import ChipGroup from '$lib/components/ChipGroup.svelte';
 	import HostBadge from '$lib/components/HostBadge.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 
 	type Tag = { id: string; name: string; description: string | null };
 	type Cred = { id: number; label: string; kind: string; kind_label: string };
@@ -177,7 +180,7 @@
 
 <form onsubmit={submit} class="archive-form">
 	<Field label="URL" hint={t('아카이빙할 페이지의 전체 주소를 입력하세요.')}>
-		<input type="url" bind:value={url} placeholder="https://example.com" required onchange={loadCreds} />
+		<Input type="url" bind:value={url} placeholder="https://example.com" required onchange={loadCreds} />
 	</Field>
 	{#if url.trim()}<HostBadge kind={netKind} />{/if}
 
@@ -206,9 +209,9 @@
 		<Segmented bind:value={scope} options={scopeOptions} />
 		{#if site}
 			<div class="crawl-opts">
-				<Field label={t('최대 페이지')}><input type="number" bind:value={maxPages} min="1" max={data.crawlLimits?.max_pages} /></Field>
-				<Field label={t('최대 깊이')}><input type="number" bind:value={maxDepth} min="0" max={data.crawlLimits?.max_depth} /></Field>
-				<Field label={t('지연(초)')}><input type="number" bind:value={delay} min="0" max={data.crawlLimits?.max_delay} /></Field>
+				<Field label={t('최대 페이지')}><Input class="w-full min-w-0" type="number" bind:value={maxPages} min="1" max={data.crawlLimits?.max_pages} /></Field>
+				<Field label={t('최대 깊이')}><Input class="w-full min-w-0" type="number" bind:value={maxDepth} min="0" max={data.crawlLimits?.max_depth} /></Field>
+				<Field label={t('지연(초)')}><Input class="w-full min-w-0" type="number" bind:value={delay} min="0" max={data.crawlLimits?.max_delay} /></Field>
 			</div>
 			<p class="muted hint">
 				{t('같은 호스트의 경로 프리픽스 이하를 모두 따라가 저장합니다. 비우면 시스템 기본값이 적용됩니다.')}
@@ -246,22 +249,22 @@
 							{#each credKinds as k}<option value={k.value}>{k.label}</option>{/each}
 						</select>
 					</Field>
-					<Field label={t('이름')}><input type="text" bind:value={credLabel} maxlength="50" /></Field>
+					<Field label={t('이름')}><Input type="text" bind:value={credLabel} maxlength={50} /></Field>
 					{#if credKind === 'http_basic'}
-						<Field label={t('사용자명')}><input type="text" bind:value={credUsername} autocomplete="off" /></Field>
+						<Field label={t('사용자명')}><Input type="text" bind:value={credUsername} autocomplete="off" /></Field>
 						<Field label={t('비밀번호')}>
-							<input type="password" bind:value={credPassword} autocomplete="new-password" />
+							<Input type="password" bind:value={credPassword} autocomplete="new-password" />
 						</Field>
 					{:else if credKind === 'session'}
 						<Field
 							label={t('세션 상태 (storage_state JSON)')}
 							hint={t('HAR 파일 업로드는 사이트 상세 화면에서 지원합니다.')}
 						>
-							<textarea bind:value={credStorageState} rows="5" spellcheck="false"></textarea>
+							<Textarea bind:value={credStorageState} rows={5} spellcheck="false" />
 						</Field>
 					{:else if credKind === 'jwt'}
 						<Field label={t('Bearer 토큰')}>
-							<textarea bind:value={credToken} rows="3" spellcheck="false" autocomplete="off"></textarea>
+							<Textarea bind:value={credToken} rows={3} spellcheck="false" autocomplete="off" />
 						</Field>
 					{/if}
 				</div>
@@ -278,9 +281,9 @@
 
 	<div class="foot">
 		<span class="summary">{host || '—'} · {scopeLabel} · {intervalLabel}</span>
-		<button type="submit" class="primary" disabled={busy || isLoopback}>
+		<Button type="submit" disabled={busy || isLoopback}>
 			{busy ? t('등록 중…') : t('아카이빙 등록')}
-		</button>
+		</Button>
 	</div>
 </form>
 
@@ -299,12 +302,6 @@
 		background: var(--bg-soft);
 		border-radius: 6px;
 	}
-	/* 슬롯 input 은 부모(이 페이지) 스코프 — number 입력 고유 너비가 좁은 화면에서
-	   그리드 컬럼을 밀어내지 않도록 줄어들 수 있게 한다. */
-	.crawl-opts input {
-		width: 100%;
-		min-width: 0;
-	}
 	.cred-new {
 		display: flex;
 		flex-direction: column;
@@ -313,16 +310,6 @@
 		background: var(--bg-soft);
 		border: 1px solid var(--border);
 		border-radius: 6px;
-	}
-	.cred-new textarea {
-		font: inherit;
-		font-size: 13px;
-		padding: 5px 10px;
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		background: var(--surface);
-		color: var(--fg);
-		resize: vertical;
 	}
 	.hint,
 	.net-hint,
@@ -343,18 +330,5 @@
 		font-size: 12px;
 		color: var(--muted);
 		overflow-wrap: anywhere;
-	}
-	button.primary {
-		color: #fff;
-		background: #16a34a;
-		border-color: #16a34a;
-		padding: 8px 20px;
-	}
-	button.primary:hover {
-		background: #15803d;
-	}
-	button.primary:disabled {
-		opacity: 0.6;
-		cursor: default;
 	}
 </style>

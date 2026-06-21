@@ -6,6 +6,8 @@
 	import { createList } from '$lib/list.svelte';
 	import type { SearchData } from '$lib/types';
 	import Pager from '$lib/components/Pager.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { search: SearchData } } = $props();
 
@@ -42,10 +44,10 @@
 <h2>{t('검색')}</h2>
 
 <form onsubmit={submit} class="toolbar">
-	<input type="text" class="search-q" bind:value={q} placeholder={t('아카이브 본문·문서에서 검색…')} />
-	<input type="text" class="search-domain" bind:value={domain} placeholder={t('도메인')} />
+	<Input type="text" class="search-q" bind:value={q} placeholder={t('아카이브 본문·문서에서 검색…')} />
+	<Input type="text" class="search-domain" bind:value={domain} placeholder={t('도메인')} />
 	<label class="muted"><input type="checkbox" bind:checked={latest} /> {t('최신만')}</label>
-	<button type="submit" class="primary">{t('검색')}</button>
+	<Button type="submit">{t('검색')}</Button>
 </form>
 
 {#if !s.available}
@@ -78,11 +80,12 @@
 {/if}
 
 <style>
-	.search-q {
+	/* Input 컴포넌트로 위임돼 scoped 매칭이 안 되므로 :global 로 폭 제어 유지 */
+	.toolbar :global(.search-q) {
 		flex: 2 1 200px;
 		min-width: 0;
 	}
-	.search-domain {
+	.toolbar :global(.search-domain) {
 		flex: 1 1 140px;
 		min-width: 0;
 	}

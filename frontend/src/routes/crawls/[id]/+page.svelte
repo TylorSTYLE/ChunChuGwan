@@ -9,6 +9,8 @@
 	import type { CrawlDetail } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import { createAction } from '$lib/action.svelte';
+	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
 
 	let { data }: { data: { detail: CrawlDetail; merged: boolean } } = $props();
 	const d = $derived(data.detail);
@@ -16,7 +18,7 @@
 	const counts = $derived(d.counts);
 	const action = createAction();
 
-	const STATUS_BADGE: Record<string, string> = {
+	const STATUS_BADGE: Record<string, BadgeVariant> = {
 		running: 'running',
 		done: 'new',
 		cancelled: 'same'
@@ -26,7 +28,7 @@
 		done: '완료됨',
 		cancelled: '취소됨'
 	};
-	const PAGE_BADGE: Record<string, string> = {
+	const PAGE_BADGE: Record<string, BadgeVariant> = {
 		done: 'new',
 		failed: 'error',
 		in_progress: 'running'
@@ -96,13 +98,13 @@
 	<span class="spacer"></span>
 	{#if d.can_archive}
 		{#if c.status === 'running'}
-			<button onclick={cancel} disabled={action.busy}>{t('취소')}</button>
+			<Button variant="outline" size="sm" onclick={cancel} disabled={action.busy}>{t('취소')}</Button>
 		{/if}
 		{#if counts.failed > 0}
-			<button onclick={retryAll} disabled={action.busy}>{t('실패 일괄 재시도')}</button>
+			<Button variant="outline" size="sm" onclick={retryAll} disabled={action.busy}>{t('실패 일괄 재시도')}</Button>
 		{/if}
 		{#if c.status !== 'running'}
-			<button onclick={rerun} disabled={action.busy}>{t('다시 아카이빙')}</button>
+			<Button variant="outline" size="sm" onclick={rerun} disabled={action.busy}>{t('다시 아카이빙')}</Button>
 		{/if}
 	{/if}
 	<a href="{base}/archive/list">{t('목록으로')}</a>
@@ -119,7 +121,7 @@
 	<tbody>
 		<tr>
 			<th>{t('상태')}</th>
-			<td><span class="badge {STATUS_BADGE[c.status] ?? 'same'}">{t(STATUS_LABEL[c.status] ?? c.status)}</span></td>
+			<td><Badge variant={STATUS_BADGE[c.status] ?? 'same'}>{t(STATUS_LABEL[c.status] ?? c.status)}</Badge></td>
 		</tr>
 		<tr><th>{t('범위')}</th><td class="mono">{c.scope_host}{c.scope_path}</td></tr>
 		{#if d.network_tag}
@@ -183,11 +185,11 @@
 					<td class="num mono">{p.depth}</td>
 					<td>
 						{#if PAGE_BADGE[p.status]}
-							<span class="badge {PAGE_BADGE[p.status]}">{t(PAGE_LABEL[p.status])}</span>
+							<Badge variant={PAGE_BADGE[p.status]}>{t(PAGE_LABEL[p.status])}</Badge>
 						{:else if p.next_attempt_at}
-							<span class="badge changed">{t('재시도 대기')}</span>
+							<Badge variant="changed">{t('재시도 대기')}</Badge>
 						{:else}
-							<span class="badge same">{t('대기')}</span>
+							<Badge variant="same">{t('대기')}</Badge>
 						{/if}
 					</td>
 					<td class="num mono">{p.attempts || '—'}</td>

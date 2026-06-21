@@ -4,6 +4,8 @@
 	import { api, ApiError } from '$lib/api';
 	import { afterAuth } from '$lib/auth';
 	import type { LoginResult } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	let { data } = $props();
 
@@ -41,19 +43,19 @@
 		<form onsubmit={submit}>
 			<label
 				>{t('이메일')}
-				<input type="email" value={data.email} readonly autocomplete="username" />
+				<Input type="email" value={data.email} readonly autocomplete="username" />
 			</label>
 			<label
 				>{t('패스워드')} <span class="muted">{t('(8자 이상)')}</span>
-				<input
+				<Input
 					type="password"
 					bind:value={password}
-					minlength="8"
+					minlength={8}
 					required
 					autocomplete="new-password"
 				/>
 			</label>
-			<button type="submit" disabled={busy}>{t('초대 수락')}</button>
+			<Button type="submit" disabled={busy} class="mt-1 w-full">{t('초대 수락')}</Button>
 		</form>
 	{/if}
 </div>
