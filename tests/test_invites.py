@@ -90,6 +90,43 @@ def test_expired_invite_not_returned_and_cleaned(tmp_db):
         assert conn.execute("SELECT COUNT(*) AS c FROM invites").fetchone()["c"] == 0
 
 
+def test_get_invite_by_id_ignores_expiry(tmp_db):
+    """재생성용 단건 조회 — 만료된 초대도 id 로 찾을 수 있어야 한다."""
+    with db.connect() as conn:
+        iid = db.create_invite(conn, "a@b.co", auth.hash_token("t"), "viewer", None, ttl_seconds=-1)
+        inv = db.get_invite_by_id(conn, iid)
+        assert inv is not None and inv["email"] == "a@b.co"
+        assert db.get_invite_by_id(conn, 9999) is None
+
+
+def test_list_invites_include_expired_flags(tmp_db):
+    """include_expired=True 면 만료 초대도 expired=1 로 내려주고, 기본은 숨긴다."""
+    with db.connect() as conn:
+        db.create_invite(conn, "live@b.co", auth.hash_token("a"), "viewer", None, ttl_seconds=3600)
+        db.create_invite(conn, "dead@b.co", auth.hash_token("b"), "viewer", None, ttl_seconds=-1)
+        # 기본: 만료 제외 → live 1건, expired=0
+        live = db.list_invites(conn)
+        assert [i["email"] for i in live] == ["live@b.co"]
+        assert live[0]["expired"] == 0
+        # include_expired: 둘 다 + 만료 플래그
+        allinv = db.list_invites(conn, include_expired=True)
+        flags = {i["email"]: i["expired"] for i in allinv}
+        assert flags == {"live@b.co": 0, "dead@b.co": 1}
+
+
+def test_delete_expired_invites_grace(tmp_db):
+    """grace 기간 내 만료분은 남기고, 그보다 오래된 만료분만 정리한다."""
+    with db.connect() as conn:
+        recent = db.create_invite(conn, "recent@b.co", auth.hash_token("r"), "viewer", None, ttl_seconds=-60)
+        old = db.create_invite(conn, "old@b.co", auth.hash_token("o"), "viewer", None, ttl_seconds=-7200)
+        db.delete_expired_invites(conn, grace_seconds=3600)
+        ids = {i["id"] for i in db.list_invites(conn, include_expired=True)}
+        assert recent in ids and old not in ids
+        # grace=0(기본)이면 만료 즉시 모두 정리
+        db.delete_expired_invites(conn)
+        assert conn.execute("SELECT COUNT(*) AS c FROM invites").fetchone()["c"] == 0
+
+
 # ---- 발급 (관리자 전용) ----
 
 

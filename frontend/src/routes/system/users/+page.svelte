@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { t } from '$lib/i18n';
 	import { api } from '$lib/api';
+	import { ts } from '$lib/format';
 	import { filterUrl } from '$lib/filters';
 	import { createList } from '$lib/list.svelte';
 	import type { SystemUsersData, SystemUser } from '$lib/types';
@@ -34,10 +35,12 @@
 	let nameEdit = $state<Record<number, string>>({});
 	let deleteEmail = $state<Record<number, string>>({});
 
-	// 초대 폼
+	// 초대 폼 — 메일 미설정 시 직접 전달할 링크와 그 대상 이메일을 함께 노출한다
+	// (재생성도 같은 자리에 표시하므로 어느 초대의 링크인지 이메일로 식별).
 	let inviteEmail = $state('');
 	let inviteRole = $state('viewer');
 	let inviteLink = $state('');
+	let inviteLinkEmail = $state('');
 
 	const setRole = (u: SystemUser, role: string) =>
 		act.run(() => api(`/system/users/${u.id}/role`, { method: 'POST', body: JSON.stringify({ role }) }));
@@ -65,18 +68,42 @@
 	function invite() {
 		if (!inviteEmail.trim()) return;
 		inviteLink = '';
+		inviteLinkEmail = '';
 		return act.run(async () => {
-			const r = await api<{ link: string; mailed: boolean }>('/system/users/invite', {
+			const r = await api<{ email: string; link: string; mailed: boolean }>('/system/users/invite', {
 				method: 'POST',
 				body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole })
 			});
 			act.notice = r.mailed ? t('초대 메일을 보냈습니다.') : t('초대 링크를 직접 전달하세요.');
-			if (!r.mailed) inviteLink = r.link;
+			if (!r.mailed) {
+				inviteLink = r.link;
+				inviteLinkEmail = r.email;
+			}
 			inviteEmail = '';
 		});
 	}
 	const cancelInvite = (id: number) =>
 		act.run(() => api(`/system/users/invite/${id}/delete`, { method: 'POST' }));
+
+	// 초대 링크 재생성 — 새 토큰(이전 링크 무효)·TTL 리셋. 메일이 켜져 있으면 재발송,
+	// 아니면 새 링크를 (신규 초대와 같은 자리에) 노출한다. 만료된 초대도 가능.
+	function regenerate(id: number) {
+		return act.run(async () => {
+			inviteLink = '';
+			inviteLinkEmail = '';
+			const r = await api<{ email: string; link: string; mailed: boolean }>(
+				`/system/users/invite/${id}/regenerate`,
+				{ method: 'POST' }
+			);
+			act.notice = r.mailed
+				? t('초대 메일을 다시 보냈습니다.')
+				: t('초대 링크를 직접 전달하세요.');
+			if (!r.mailed) {
+				inviteLink = r.link;
+				inviteLinkEmail = r.email;
+			}
+		});
+	}
 </script>
 
 <h2>{t('사용자')}</h2>
@@ -164,18 +191,34 @@
 	</select>
 	<Button onclick={invite} disabled={act.busy}>{t('초대')}</Button>
 </Toolbar>
-{#if inviteLink}<div class="notice mono link-out">{inviteLink}</div>{/if}
+{#if inviteLink}
+	<div class="notice link-out">
+		{#if inviteLinkEmail}<strong>{inviteLinkEmail}</strong> · {/if}<span class="mono">{inviteLink}</span>
+	</div>
+{/if}
 
 {#if d.invites.length > 0}
 	<div class="table-wrap">
 		<table>
-			<thead><tr><th>{t('이메일')}</th><th>{t('역할')}</th><th></th></tr></thead>
+			<thead><tr><th>{t('이메일')}</th><th>{t('역할')}</th><th>{t('만료')}</th><th></th></tr></thead>
 			<tbody>
 				{#each d.invites as inv}
 					<tr>
 						<td>{inv.email}</td>
 						<td>{d.role_labels[inv.role] ?? inv.role}</td>
-						<td><Button variant="outline" size="sm" onclick={() => cancelInvite(inv.id)} disabled={act.busy}>{t('취소')}</Button></td>
+						<td>
+							{#if inv.expired}
+								<Badge variant="error">{t('만료됨')}</Badge>
+							{:else}
+								<span class="mono muted">{ts(inv.expires_at)}</span>
+							{/if}
+						</td>
+						<td>
+							<div class="action-bar">
+								<Button variant="outline" size="sm" onclick={() => regenerate(inv.id)} disabled={act.busy}>{t('재생성')}</Button>
+								<Button variant="outline" size="sm" onclick={() => cancelInvite(inv.id)} disabled={act.busy}>{t('취소')}</Button>
+							</div>
+						</td>
 					</tr>
 				{/each}
 			</tbody>

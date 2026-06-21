@@ -4601,16 +4601,32 @@ def get_invite_by_token(conn: sqlite3.Connection, token_hash: str) -> sqlite3.Ro
     ).fetchone()
 
 
-def list_invites(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """만료되지 않은 초대 목록 (+ 초대한 사용자 이메일, 최신 순)."""
+def get_invite_by_id(conn: sqlite3.Connection, invite_id: int) -> sqlite3.Row | None:
+    """초대를 id 로 조회 (만료 무관 — 재생성용). 없으면 None."""
     return conn.execute(
-        """
-        SELECT i.*, u.email AS inviter_email
+        "SELECT * FROM invites WHERE id = ?", (invite_id,)
+    ).fetchone()
+
+
+def list_invites(
+    conn: sqlite3.Connection, include_expired: bool = False
+) -> list[sqlite3.Row]:
+    """초대 목록 (+ 초대한 사용자 이메일·만료 여부, 최신 순).
+
+    include_expired=True 면 만료된 초대도 포함한다 (재생성 버튼 노출용). 각 행에
+    현재 시각 기준 `expired`(0/1) 계산 컬럼을 함께 내려준다.
+    """
+    now = _utcnow()
+    where = "" if include_expired else "WHERE i.expires_at > ?"
+    params = [now] if include_expired else [now, now]
+    return conn.execute(
+        f"""
+        SELECT i.*, u.email AS inviter_email, (i.expires_at <= ?) AS expired
         FROM invites i LEFT JOIN users u ON u.id = i.invited_by
-        WHERE i.expires_at > ?
+        {where}
         ORDER BY i.created_at DESC, i.id DESC
         """,
-        (_utcnow(),),
+        params,
     ).fetchall()
 
 
@@ -4620,9 +4636,14 @@ def delete_invite(conn: sqlite3.Connection, invite_id: int) -> bool:
     return cur.rowcount == 1
 
 
-def delete_expired_invites(conn: sqlite3.Connection) -> None:
-    """만료 초대 일괄 삭제 (기회적 정리용)."""
-    conn.execute("DELETE FROM invites WHERE expires_at <= ?", (_utcnow(),))
+def delete_expired_invites(conn: sqlite3.Connection, grace_seconds: int = 0) -> None:
+    """만료 초대 일괄 삭제 (기회적 정리용).
+
+    grace_seconds 가 주어지면 만료 후 그 시간이 지난 초대만 지운다 — 최근 만료분은
+    재생성할 수 있게 목록에 남겨 두기 위함. grace_seconds=0 이면 만료 즉시 삭제.
+    """
+    cutoff = _utcnow() if grace_seconds <= 0 else _later(-grace_seconds)
+    conn.execute("DELETE FROM invites WHERE expires_at <= ?", (cutoff,))
 
 
 # ---- 로컬 네트워크 태그 ----

@@ -1493,12 +1493,14 @@ def system_users(
     _require_manage_users(user)
     per_page = _page_size(per_page, _LIST_PAGE_SIZE_DEFAULT)
     with db.connect() as conn:
-        db.delete_expired_invites(conn)
+        # 만료 후 TTL 만큼은 목록에 남겨 재생성 버튼으로 새 링크를 발급할 수 있게 하고,
+        # 그보다 오래된 만료 초대만 기회적으로 정리한다.
+        db.delete_expired_invites(conn, grace_seconds=config.INVITE_TTL_DAYS * 86400)
         total = db.count_users(conn)
         total_pages = max(1, -(-total // per_page))
         page = max(1, min(page, total_pages))
         users = db.list_users(conn, limit=per_page, offset=(page - 1) * per_page)
-        invites = db.list_invites(conn)
+        invites = db.list_invites(conn, include_expired=True)
         mail_on = mailer.mail_enabled(conn)
         assignable = db.assignable_roles(conn)
         invitable = db.invitable_roles(conn)
@@ -1506,7 +1508,7 @@ def system_users(
     # 권한은 역할(권한 묶음) 단위로만 부여한다 — 사용자별 세분 권한 편집은 없다.
     return {
         "users": [dict(u) for u in users],
-        "invites": [dict(i) for i in invites],
+        "invites": [{**dict(i), "expired": bool(i["expired"])} for i in invites],
         "me_id": user["id"] if user else None,
         "roles": list(assignable),
         "invitable_roles": list(invitable),
@@ -1784,30 +1786,26 @@ class InviteReq(BaseModel):
     role: str = "viewer"
 
 
-@router.post("/system/users/invite")
-def system_user_invite(
-    request: Request, body: InviteReq,
-    user: sqlite3.Row | None = Depends(require_session),
+def _issue_invite(
+    request: Request,
+    user: sqlite3.Row | None,
+    email: str,
+    role: str,
+    role_label: str,
 ) -> dict:
-    """이메일 초대 발급 — 메일 미설정이면 링크를 반환해 직접 전달."""
-    _require_manage_users(user)
-    email = body.email.strip()
-    err = auth.validate_email(email)
-    if err is not None:
-        raise HTTPException(400, err)
+    """초대 토큰을 발급(기존 동일 이메일 초대는 교체)하고 메일 발송을 시도한다.
+
+    호출 측이 `_require_manage_users`·이메일/역할 검증·가입자 중복 확인을 마쳤다고
+    가정한다. 메일이 켜져 있으면 발송하고, 아니면(또는 실패하면) 링크를 직접 전달하도록
+    반환한다. 신규 초대·재생성 양쪽이 같은 계약을 쓰게 공통화한 헬퍼.
+    """
     token = secrets.token_urlsafe(32)
     with db.connect() as conn:
-        if body.role not in db.invitable_roles(conn):
-            raise HTTPException(400, "초대할 수 없는 역할")
-        role_label = db.role_labels(conn).get(body.role, body.role)
-        if db.get_user_by_email(conn, email) is not None:
-            raise HTTPException(400, "이미 가입된 이메일입니다")
         db.create_invite(
-            conn, email, auth.hash_token(token), body.role,
+            conn, email, auth.hash_token(token), role,
             invited_by=user["id"] if user else None,
             ttl_seconds=config.INVITE_TTL_DAYS * 86400,
         )
-    audit.log(request, "사용자 초대 발급: %s (권한 %s)", email, role_label)
     link = _invite_link(request, token)
     with db.connect() as conn:
         smtp = mailer.resolve_config(conn)
@@ -1820,6 +1818,54 @@ def system_user_invite(
         except (smtplib.SMTPException, OSError):
             mailed = False
     return {"ok": True, "email": email, "link": link, "mailed": mailed}
+
+
+@router.post("/system/users/invite")
+def system_user_invite(
+    request: Request, body: InviteReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """이메일 초대 발급 — 메일 미설정이면 링크를 반환해 직접 전달."""
+    _require_manage_users(user)
+    email = body.email.strip()
+    err = auth.validate_email(email)
+    if err is not None:
+        raise HTTPException(400, err)
+    with db.connect() as conn:
+        if body.role not in db.invitable_roles(conn):
+            raise HTTPException(400, "초대할 수 없는 역할")
+        role_label = db.role_labels(conn).get(body.role, body.role)
+        if db.get_user_by_email(conn, email) is not None:
+            raise HTTPException(400, "이미 가입된 이메일입니다")
+    res = _issue_invite(request, user, email, body.role, role_label)
+    audit.log(request, "사용자 초대 발급: %s (권한 %s)", email, role_label)
+    return res
+
+
+@router.post("/system/users/invite/{invite_id}/regenerate")
+def system_invite_regenerate(
+    request: Request, invite_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """초대 링크 재생성 — 기존 초대의 이메일·역할로 새 토큰을 발급한다.
+
+    이전 링크는 무효화되고 만료 시각이 리셋된다(만료된 초대도 재생성 가능). 메일이
+    켜져 있으면 다시 보내고, 아니면 새 링크를 반환한다.
+    """
+    _require_manage_users(user)
+    with db.connect() as conn:
+        invite = db.get_invite_by_id(conn, invite_id)
+        if invite is None:
+            raise HTTPException(404, "초대 없음")
+        email, role = invite["email"], invite["role"]
+        if role not in db.invitable_roles(conn):
+            raise HTTPException(400, "초대할 수 없는 역할")
+        if db.get_user_by_email(conn, email) is not None:
+            raise HTTPException(400, "이미 가입된 이메일입니다")
+        role_label = db.role_labels(conn).get(role, role)
+    res = _issue_invite(request, user, email, role, role_label)
+    audit.log(request, "초대 링크 재생성: %s (권한 %s)", email, role_label)
+    return res
 
 
 @router.post("/system/users/invite/{invite_id}/delete")
