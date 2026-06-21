@@ -1669,6 +1669,10 @@ _EN.update({
     "변경됨": "Changed",
     "변경 없음": "Unchanged",
     "강제 저장": "Forced save",
+    # 에러 화면(+error.svelte)·diff 비교 불가 안내
+    "문제가 발생했습니다": "Something went wrong",
+    "요청한 페이지를 표시할 수 없습니다.": "The requested page could not be displayed.",
+    "비교할 수 없습니다.": "Comparison is not available.",
 })
 
 CATALOGS: dict[str, dict[str, str]] = {"en": _EN}

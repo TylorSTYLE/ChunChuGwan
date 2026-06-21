@@ -1,5 +1,5 @@
 import type { PageLoad } from './$types';
-import { api } from '$lib/api';
+import { api, ApiError } from '$lib/api';
 import type { DiffData } from '$lib/types';
 
 export const load: PageLoad = async ({ params, url }) => {
@@ -9,6 +9,15 @@ export const load: PageLoad = async ({ params, url }) => {
 	if (from) qs.set('from', from);
 	if (to) qs.set('to', to);
 	const q = qs.toString();
-	const diff = await api<DiffData>(`/diff/${params.id}${q ? `?${q}` : ''}`);
-	return { diff };
+	try {
+		const diff = await api<DiffData>(`/diff/${params.id}${q ? `?${q}` : ''}`);
+		return { diff, unavailable: null as string | null };
+	} catch (e) {
+		// 스냅샷 1개뿐 등 비교 불가(400)는 에러 페이지 대신 화면 안에서 안내한다.
+		// 그 외(404·500 등)는 +error.svelte 가 처리하도록 다시 던진다.
+		if (e instanceof ApiError && e.status === 400) {
+			return { diff: null as DiffData | null, unavailable: e.message };
+		}
+		throw e;
+	}
 };
