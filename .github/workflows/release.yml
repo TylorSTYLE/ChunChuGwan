@@ -124,8 +124,20 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add chunchugwan/web/release_notes.json
           git commit -am "춘추관 v$NEXT (#$PR_NUM)"
+          # main 푸시 — 체크아웃 이후 main 이 전진했으면(non-FF 거부) origin/main 을
+          # 다시 받아 rebase 후 재시도한다. 태그는 '실제로 main 에 올라간' 커밋을
+          # 가리켜야 하므로(rebase 로 SHA 가 바뀌어도 정합) 푸시 성공 뒤에 만든다.
+          pushed=0
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then pushed=1; break; fi
+            echo "::warning::main 푸시 거부(non-FF) — origin/main 재취득 후 rebase 재시도 ($attempt/3)"
+            git fetch origin main
+            git rebase origin/main \
+              || { echo "::error::rebase 충돌 — 릴리스 커밋을 main 에 올릴 수 없음(수동 개입 필요)"; exit 1; }
+          done
+          [ "$pushed" = 1 ] || { echo "::error::main 푸시 3회 실패"; exit 1; }
+          # main 에 올라간 커밋(HEAD)에 태그를 찍고 푸시 (docker.yml 의 vX.Y.Z 빌드 트리거)
           git tag -a "v$NEXT" -m "v$NEXT"
-          git push origin HEAD:main
           git push origin "v$NEXT"
 
       - name: SBOM 생성 (CycloneDX)
