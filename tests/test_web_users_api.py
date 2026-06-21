@@ -181,6 +181,83 @@ def test_invite_delete_404(tmp_db):
     assert r.status_code == 404
 
 
+def test_invite_regenerate(tmp_db):
+    """재생성 — 같은 이메일·역할로 새 링크 발급, 이전 토큰은 무효화된다."""
+    _, admin = make_user("admin@test.co", role="admin")
+    c = client_for(admin)
+    inv = c.post("/api/web/system/users/invite",
+                 json={"email": "new@test.co", "role": "viewer"}, headers=POST_HEADERS).json()
+    old_token = inv["link"].rsplit("/invite/", 1)[1]
+    with db.connect() as conn:
+        invite_id = db.list_invites(conn)[0]["id"]
+    r = c.post(f"/api/web/system/users/invite/{invite_id}/regenerate", headers=POST_HEADERS)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["email"] == "new@test.co"
+    new_token = body["link"].rsplit("/invite/", 1)[1]
+    assert new_token != old_token
+    # 이전 토큰 무효, 새 토큰만 유효
+    with db.connect() as conn:
+        assert db.get_invite_by_token(conn, auth.hash_token(old_token)) is None
+        assert db.get_invite_by_token(conn, auth.hash_token(new_token))["email"] == "new@test.co"
+
+
+def test_invite_regenerate_404(tmp_db):
+    _, admin = make_user("admin@test.co", role="admin")
+    r = client_for(admin).post("/api/web/system/users/invite/9999/regenerate",
+                               headers=POST_HEADERS)
+    assert r.status_code == 404
+
+
+def test_invite_regenerate_rejects_registered(tmp_db):
+    """초대 후 같은 이메일이 가입을 완료했으면 재생성은 거부된다."""
+    _, admin = make_user("admin@test.co", role="admin")
+    c = client_for(admin)
+    c.post("/api/web/system/users/invite",
+           json={"email": "soon@test.co", "role": "viewer"}, headers=POST_HEADERS)
+    with db.connect() as conn:
+        invite_id = db.list_invites(conn)[0]["id"]
+    make_user("soon@test.co", role="viewer")  # 같은 이메일 가입 완료
+    r = c.post(f"/api/web/system/users/invite/{invite_id}/regenerate", headers=POST_HEADERS)
+    assert r.status_code == 400
+
+
+def test_invite_regenerate_requires_manage_users(tmp_db):
+    _, arch = make_user("arch@test.co", role="archiver")
+    assert client_for().post("/api/web/system/users/invite/1/regenerate",
+                             headers=POST_HEADERS).status_code == 401
+    assert client_for(arch).post("/api/web/system/users/invite/1/regenerate",
+                                 headers=POST_HEADERS).status_code == 403
+
+
+def test_invite_regenerate_expired(tmp_db):
+    """이 기능의 핵심 — 이미 만료된 초대도 재생성되어 새 토큰·새 만료가 발급된다."""
+    admin_id, admin = make_user("admin@test.co", role="admin")
+    with db.connect() as conn:
+        iid = db.create_invite(conn, "stale@test.co", auth.hash_token("stale-tok"),
+                               "viewer", admin_id, ttl_seconds=-60)
+    r = client_for(admin).post(f"/api/web/system/users/invite/{iid}/regenerate",
+                               headers=POST_HEADERS)
+    assert r.status_code == 200
+    new_token = r.json()["link"].rsplit("/invite/", 1)[1]
+    with db.connect() as conn:
+        # 이전(만료) 토큰은 무효, 새 토큰은 유효(만료 리셋됨)
+        assert db.get_invite_by_token(conn, auth.hash_token("stale-tok")) is None
+        assert db.get_invite_by_token(conn, auth.hash_token(new_token))["email"] == "stale@test.co"
+
+
+def test_system_users_serializes_expired_flag(tmp_db):
+    """system_users GET 이 만료(grace 내) 초대를 expired=true 로, 미만료는 false 로 내려준다."""
+    admin_id, admin = make_user("admin@test.co", role="admin")
+    with db.connect() as conn:
+        db.create_invite(conn, "live@test.co", auth.hash_token("a"), "viewer", admin_id, ttl_seconds=3600)
+        db.create_invite(conn, "dead@test.co", auth.hash_token("b"), "viewer", admin_id, ttl_seconds=-60)
+    body = client_for(admin).get("/api/web/system/users").json()
+    flags = {i["email"]: i["expired"] for i in body["invites"]}
+    assert flags == {"live@test.co": False, "dead@test.co": True}
+    assert all(isinstance(v, bool) for v in flags.values())
+
+
 def test_users_pagination(tmp_db):
     """사용자 목록 페이징 — 기본 25, 선택지 10/25/50/100, clamp. (초대는 페이징 대상 아님)"""
     _, admin = make_user("admin@test.co", role="admin")

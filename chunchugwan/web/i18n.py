@@ -1619,6 +1619,8 @@ _EN.update({
     "첨부 문서": "Attached documents",
     "초대 링크를 직접 전달하세요.": "Share the invite link directly.",
     "초대 메일을 보냈습니다.": "Invitation email sent.",
+    "초대 메일을 다시 보냈습니다.": "Invitation email resent.",
+    "재생성": "Regenerate",
     "총": "Total",
     "최대 페이지": "Max pages",
     "최신 2개 비교": "Compare latest two",

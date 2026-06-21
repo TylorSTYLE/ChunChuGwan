@@ -538,7 +538,13 @@ export interface SystemUser {
 
 export interface SystemUsersData {
 	users: SystemUser[];
-	invites: (Record<string, unknown> & { id: number; email: string; role: string })[];
+	invites: (Record<string, unknown> & {
+		id: number;
+		email: string;
+		role: string;
+		expires_at: string;
+		expired: boolean;
+	})[];
 	me_id: number | null;
 	roles: string[];
 	invitable_roles: string[];
