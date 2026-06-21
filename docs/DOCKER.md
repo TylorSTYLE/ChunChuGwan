@@ -6,18 +6,19 @@
 
 ## Docker Compose (권장)
 
-리포지토리에는 예제 파일(`compose.example.yaml`)만 들어 있다. 복사해서
-로컬 전용 `compose.yaml` 을 만들고, 개인 설정은 거기서만 수정한다 —
-`compose.yaml`(과 `.env`, `compose.override.yaml`)은 gitignore 대상이라
-시크릿이 커밋될 일이 없다.
+리포지토리에 바로 쓸 수 있는 `docker-compose.yml` 이 들어 있다. GitHub Actions 가
+main 푸시마다 빌드해 GHCR 에 게시하는 이미지(`ghcr.io/tylorstyle/chunchugwan:latest`,
+amd64/arm64)를 사용한다.
 
-예제는 GitHub Actions 가 main 푸시마다 빌드해 GHCR 에 게시하는 이미지
-(`ghcr.io/tylorstyle/chunchugwan:latest`, amd64/arm64)를 사용한다.
-로컬 소스로 직접 빌드하려면 복사한 `compose.yaml` 에서 `image:` 줄을
-`build: .` 로 바꾸면 된다.
+관리자 비번·OIDC·SMTP 같은 개인 설정·시크릿은 추적 파일을 직접 고치지 말고
+gitignore 대상인 `docker-compose.override.yml`(또는 `.env`)에 둔다 — compose 가
+자동 병합하므로 시크릿이 커밋될 일이 없다. 로컬 소스로 직접 빌드하려면 override 에서
+`image:` 대신 `build: .` 를 지정한다.
+
+테스트(`develop`) 이미지로 띄우려면 `docker-compose.dev.yml` 오버라이드를 함께 넘긴다:
+`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`.
 
 ```bash
-cp compose.example.yaml compose.yaml   # 예제 복사 (최초 1회)
 docker compose up -d dashboard         # 대시보드 + 워커 (http://127.0.0.1:8765)
 docker compose run --rm cli add <url>  # 스냅샷 생성
 docker compose run --rm cli list       # 아카이브 현황
@@ -26,9 +27,9 @@ docker compose run --rm cli diff <url>     # 스냅샷 비교
 docker compose down                    # 대시보드 중지
 ```
 
-설정은 복사한 `compose.yaml` 의 `environment:` 블록에서 한다. 예제 파일에
-자주 쓰는 항목(관리자 자동 등록, 공개 URL, OIDC, SMTP)이 주석으로 들어 있으니
-필요한 것만 주석을 해제하면 된다 — 전체 목록은
+설정은 `docker-compose.override.yml` 의 `environment:` 블록에서 한다. 베이스
+`docker-compose.yml` 에 자주 쓰는 항목(관리자 자동 등록, 공개 URL, OIDC, SMTP)이
+주석으로 들어 있으니 필요한 것만 override 로 복사하면 된다 — 전체 목록은
 [환경변수](AUTHENTICATION.md#환경변수) 절 참조.
 
 ```yaml
