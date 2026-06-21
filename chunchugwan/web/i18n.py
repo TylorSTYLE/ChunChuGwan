@@ -466,6 +466,8 @@ _EN: dict[str, str] = {
     "데스크탑 스크린샷": "Desktop screenshot",
     "모바일 스크린샷": "Mobile screenshot",
     "텍스트": "Text",
+    "불러오는 중…": "Loading…",
+    "텍스트를 불러오지 못했습니다.": "Failed to load text.",
     "전체 페이지 스크린샷": "Full-page screenshot",
     "전체 페이지 데스크탑 스크린샷": "Full-page desktop screenshot",
     "전체 페이지 모바일 스크린샷": "Full-page mobile screenshot",
