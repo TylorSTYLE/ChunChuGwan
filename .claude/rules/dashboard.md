@@ -84,8 +84,22 @@ meta.json documents 목록 검증, `/document/{sha256}/{name}` — snapshot_docu
   여는 대시보드 딥링크는 `/extension/*`(page·crawl·needs-human·archives·token·go)가
   정식 화면으로 302 리다이렉트해 화면 구조와 분리한다(api-extension.md). 화면별 라우트·
   권한·세부 동작은 `docs/DASHBOARD.md` 참조.
-- 도구다운 밀도 있는 UI. 모노스페이스로 해시/시각 표기, 변경 상태는 색 뱃지
-  (변경=amber, 동일=gray, 신규=green). 과한 장식/그라데이션 금지.
+- **Tailwind v4 + shadcn-svelte 기반의 모던하고 밀도 있는 UI.** UI 를 만들 땐
+  shadcn 프리미티브(`frontend/src/lib/components/ui` — Button·Badge·Input·
+  Dialog·DropdownMenu·Select·Tabs·Switch 등)와 공통 래퍼
+  (`frontend/src/lib/components` — Card·Field·FormSection·Toolbar·Pager·
+  AlertBox·Toggle·Segmented·ChipGroup 등)를 **우선 재사용**하고, 일회성 스타일은
+  Tailwind 유틸로 쓴다(scoped `<style>` 는 라우트 고유 레이아웃에만 최소한으로).
+- **색은 `app.css` 의 시맨틱 토큰만 사용(직접 hex 금지).** shadcn 표준 토큰
+  (background/foreground/primary/secondary/muted/accent/destructive/border/ring)
+  + 춘추관 상태 색 — 변경=amber(`changed`), 동일=gray(`same`), 신규=green(`new`),
+  실행=blue(`running`), 오류=red(`error`), 관인(`seal`). 상태 뱃지는
+  `<Badge variant="changed|same|new|running|error">`, 모노스페이스(`.mono`/
+  `font-mono`)로 해시·시각 표기. 다크모드는 `.dark` 클래스(mode-watcher)가
+  토큰을 치환하므로 토큰만 쓰면 자동 대응된다.
+- 모던하게: 적절한 여백·라운드(`--radius`)를 쓰되 과한 그라데이션·장식은 지양,
+  데이터 테이블은 밀도를 유지한다(컴팩트). 새 컴포넌트가 필요하면
+  `npx shadcn-svelte@latest add <name> -y` 로 추가한다.
 - 다국어(ko/en): `web/i18n.py` 가 정본 카탈로그(한국어 원문이 메시지 키, gettext msgid
   방식 — 언어별 "원문 → 번역" dict). SPA 는 `frontend/src/lib/i18n.ts` 의 `t('…')` 로
   쓰고, 로케일 카탈로그는 `/api/web/i18n/{locale}` 로 받아 `setCatalog` 주입한다(ko 는

@@ -245,25 +245,14 @@
 		padding: 6px 12px; margin-bottom: 12px; font-size: 13px;
 	}
 
-	/* 공통 UI 프리미티브 (버튼·알림·필터바·페이지헤더·페이지네이션) */
-	button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
-	button.primary:hover { background: var(--accent-hover); }
-	button.danger { color: #fff; background: var(--danger); border-color: var(--danger); }
-	button.danger:hover { background: var(--danger-hover); }
-
+	/* 공통 UI 프리미티브 (알림·필터바·페이지네이션) — 액션 버튼·페이지헤더는
+	   shadcn Button·PageHeader 컴포넌트로 이관됨(레거시 .primary/.danger/.page-head 제거). */
 	.error, .notice, .warn {
 		border-radius: 4px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px;
 	}
 	.error { background: var(--danger-bg); color: var(--danger-fg); }
 	.notice { background: var(--new-bg); color: var(--new); }
 	.warn { background: var(--changed-bg); color: var(--changed); }
-
-	.page-head {
-		display: flex; flex-wrap: wrap; gap: 10px;
-		align-items: baseline; justify-content: space-between; margin: 0 0 12px;
-	}
-	.page-head h2 { margin: 0; }
-	.page-head .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 	.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 	.toolbar .spacer { flex: 1 1 auto; }
