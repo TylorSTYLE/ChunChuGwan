@@ -83,7 +83,7 @@
 </FormSection>
 
 {#if d.keys.length > 0}
-	<div class="table-wrap">
+	<div class="table-wrap cards">
 		<table>
 			<thead>
 				<tr><th>{t('이름')}</th><th>{t('권한')}</th><th>{t('만료')}</th><th></th></tr>
@@ -91,13 +91,13 @@
 			<tbody>
 				{#each d.keys as k}
 					<tr>
-						<td>{k.name}</td>
-						<td class="muted">
+						<td data-label={t('이름')}>{k.name}</td>
+						<td class="muted" data-label={t('권한')}>
 							{[k.can_view ? t('보기') : '', k.can_archive ? t('아카이브') : '']
 								.filter(Boolean)
 								.join(', ')}
 						</td>
-						<td class="mono">{k.expires_at ? ts(k.expires_at) : t('영구')}</td>
+						<td class="mono" data-label={t('만료')}>{k.expires_at ? ts(k.expires_at) : t('영구')}</td>
 						<td><Button variant="destructive" onclick={() => revoke(k.id)} disabled={act.busy}>{t('폐기')}</Button></td>
 					</tr>
 				{/each}
@@ -127,5 +127,14 @@
 	.form .opt {
 		font-size: 13px;
 		white-space: nowrap;
+	}
+	@media (max-width: 599px) {
+		.form {
+			flex-direction: column;
+			align-items: stretch;
+		}
+		.form .opt {
+			white-space: normal;
+		}
 	}
 </style>

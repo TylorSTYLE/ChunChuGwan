@@ -634,7 +634,7 @@
 		border-radius: 6px;
 		margin: 14px 0;
 		padding: 10px 14px;
-		max-width: 560px;
+		max-width: 720px;
 		display: flex;
 		flex-direction: column;
 		gap: 8px;

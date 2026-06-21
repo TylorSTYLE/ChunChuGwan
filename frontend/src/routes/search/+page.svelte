@@ -89,6 +89,13 @@
 		flex: 1 1 140px;
 		min-width: 0;
 	}
+	/* 모바일: 검색어·도메인 입력을 각각 한 줄 풀폭으로 스택(좁게 끼이는 문제 보정) */
+	@media (max-width: 599px) {
+		.toolbar :global(.search-q),
+		.toolbar :global(.search-domain) {
+			flex: 1 1 100%;
+		}
+	}
 	/* 검색엔진 결과창 스타일 — 가독 폭의 한 컬럼, URL → 큰 제목 링크 → 스니펫 순 */
 	.results {
 		max-width: 640px;
