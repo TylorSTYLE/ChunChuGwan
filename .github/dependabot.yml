@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # 워크플로 액션은 SHA 로 핀돼 있다 — Dependabot 이 SHA·주석의 버전을 함께 갱신한다.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # 잡음을 줄이려 액션 업데이트를 한 PR 로 묶는다.
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
