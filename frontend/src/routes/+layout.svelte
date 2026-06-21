@@ -6,6 +6,17 @@
 	import { ModeWatcher, userPrefersMode, setMode } from 'mode-watcher';
 	import NavMenu from '$lib/components/NavMenu.svelte';
 	import UpdateNoticeModal from '$lib/components/UpdateNoticeModal.svelte';
+	import { Button, buttonVariants } from '$lib/components/ui/button';
+	import { Toaster } from '$lib/components/ui/sonner';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import * as Popover from '$lib/components/ui/popover';
+	import * as Sheet from '$lib/components/ui/sheet';
+	import Search from '@lucide/svelte/icons/search';
+	import Puzzle from '@lucide/svelte/icons/puzzle';
+	import Sun from '@lucide/svelte/icons/sun';
+	import Moon from '@lucide/svelte/icons/moon';
+	import Monitor from '@lucide/svelte/icons/monitor';
+	import Menu from '@lucide/svelte/icons/menu';
 	import type { Snippet } from 'svelte';
 	import type { Me } from '$lib/types';
 
@@ -45,6 +56,56 @@
 	const showLogs = $derived(!!me && me.flags.can_view_any_logs);
 	const showSettings = $derived(!!me && (me.flags.can_manage_users || me.flags.can_manage_system));
 
+	// 헤더 네비 구조 — 데스크탑 드롭다운과 모바일 시트가 같은 데이터를 공유한다.
+	// 라벨은 t() 리터럴로 둬 i18n 정적 검사가 en 카탈로그를 강제하게 한다.
+	type NavItem = { href: string; label: string; badge?: number };
+	type NavGroup = { label: string; badge: number; items: NavItem[] };
+	const menuGroups = $derived.by<NavGroup[]>(() => {
+		if (!me) return [];
+		const groups: NavGroup[] = [];
+
+		const arch: NavItem[] = [];
+		if (me.flags.can_archive) arch.push({ href: '/archive/new', label: t('새 아카이빙') });
+		arch.push({ href: '/archive/list', label: t('아카이브 사이트 목록') });
+		arch.push({ href: '/archive/documents', label: t('전체 문서(파일)') });
+		arch.push({ href: '/archive/schedules', label: t('스케줄') });
+		if (me.flags.can_manage_trash) arch.push({ href: '/archive/trash', label: t('휴지통') });
+		if (me.flags.can_manage_system && me.needs_human_count > 0)
+			arch.push({
+				href: '/archive/needs-human',
+				label: t('사람 확인'),
+				badge: me.needs_human_count
+			});
+		groups.push({
+			label: t('아카이브'),
+			badge: me.flags.can_manage_system ? me.needs_human_count : 0,
+			items: arch
+		});
+
+		if (showLogs) {
+			const logs: NavItem[] = [];
+			if (me.flags.can_view_archive_logs)
+				logs.push({ href: '/log/archive', label: t('아카이브 로그') });
+			if (me.flags.can_view_system_logs)
+				logs.push({ href: '/log/system', label: t('시스템 로그') });
+			if (me.flags.can_view_audit_logs) logs.push({ href: '/log/audit', label: t('감사 로그') });
+			groups.push({ label: t('로그'), badge: 0, items: logs });
+		}
+
+		if (showSettings) {
+			const sys: NavItem[] = [];
+			if (me.flags.can_manage_users) sys.push({ href: '/system/users', label: t('사용자 관리') });
+			if (me.flags.can_manage_system) sys.push({ href: '/system/groups', label: t('권한 그룹') });
+			if (me.flags.can_manage_users)
+				sys.push({ href: '/system/api-keys', label: t('API Key 관리') });
+			if (me.flags.can_manage_system)
+				sys.push({ href: '/system/general', label: t('시스템 설정') });
+			groups.push({ label: t('설정'), badge: 0, items: sys });
+		}
+
+		return groups;
+	});
+
 	// 테마 토글 — 자동(시스템) → 라이트 → 다크 순환 (mode-watcher). .dark 클래스·
 	// localStorage 저장·FOUC 방지는 mode-watcher(ModeWatcher)가 담당한다.
 	const THEME_LABELS: Record<string, string> = {
@@ -61,11 +122,7 @@
 		setMode(NEXT[userPrefersMode.current]);
 	}
 
-	// 좁은 화면 메뉴 토글
 	let navOpen = $state(false);
-	// 개인설정·확장 드롭다운 — SPA 클라이언트 이동은 전체 새로고침이 없어 <details open>
-	// 상태가 남으므로, 항목 클릭 시 직접 닫는다.
-	let userMenuOpen = $state(false);
 	let extOpen = $state(false);
 
 	// 전역 헤더 검색창 — 제출 시 기존 /search 전용 페이지로 이동한다.
@@ -77,434 +134,204 @@
 		goto(`${base}/search${term ? `?q=${encodeURIComponent(term)}` : ''}`);
 	}
 
-	// 헤더 드롭다운(<details>)은 그룹 name="hdrmenu" 으로 한 번에 하나만 열린다(네이티브
-	// 배타). 메뉴 밖을 클릭하면 열려 있던 드롭다운을 닫는다 — 네이티브 details 는
-	// 외부 클릭으로 닫히지 않기 때문(메뉴 내부 클릭·항목 선택은 각자 처리).
-	$effect(() => {
-		function onDocClick(e: MouseEvent) {
-			const target = e.target as Element | null;
-			if (target?.closest('header details')) return;
-			document
-				.querySelectorAll<HTMLDetailsElement>('header details[open]')
-				.forEach((d) => (d.open = false));
-		}
-		document.addEventListener('click', onDocClick);
-		return () => document.removeEventListener('click', onDocClick);
-	});
+	// 로그아웃 — 숨은 POST 폼을 프로그래밍으로 제출한다(서버가 세션 종료 후 리다이렉트).
+	let logoutForm: HTMLFormElement;
 </script>
 
 <ModeWatcher />
+<Toaster />
+<form method="POST" action="/logout" bind:this={logoutForm} class="hidden"></form>
 
 {#if me && me.user?.role !== 'pending'}
-<header>
-	<h1><a href="{base}/">{t('춘추관')}</a></h1>
-	<span class="muted tagline">{t('개인 웹 아카이브')}</span>
+	<header
+		class="sticky top-0 z-30 flex flex-wrap items-center gap-x-3.5 gap-y-2 border-b bg-background/95 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 max-[599px]:px-3"
+	>
+		<h1 class="m-0 text-[15px] font-semibold">
+			<a href="{base}/" class="text-foreground no-underline">{t('춘추관')}</a>
+		</h1>
+		<span class="text-xs text-muted-foreground max-[599px]:hidden">{t('개인 웹 아카이브')}</span>
 
-	<nav class:open={navOpen}>
-		<NavMenu label={t('아카이브')} badge={me.flags.can_manage_system ? me.needs_human_count : 0}>
-			{#snippet children(close)}
-				{#if me.flags.can_archive}
-					<a href="{base}/archive/new" onclick={close}>{t('새 아카이빙')}</a>
-				{/if}
-				<a href="{base}/archive/list" onclick={close}>{t('아카이브 사이트 목록')}</a>
-				<a href="{base}/archive/documents" onclick={close}>{t('전체 문서(파일)')}</a>
-				<a href="{base}/archive/schedules" onclick={close}>{t('스케줄')}</a>
-					{#if me.flags.can_manage_trash}
-						<a href="{base}/archive/trash" onclick={close}>{t('휴지통')}</a>
-					{/if}
-				{#if me.flags.can_manage_system && me.needs_human_count > 0}
-					<a href="{base}/archive/needs-human" class="needs-human" onclick={close}>
-						{t('사람 확인')}<span class="nh-badge">{me.needs_human_count}</span>
-					</a>
-				{/if}
-			{/snippet}
-		</NavMenu>
+		<!-- 데스크탑 네비 — 드롭다운 그룹들 -->
+		<nav class="hidden items-center gap-1 lg:flex">
+			{#each menuGroups as g (g.label)}
+				<NavMenu label={g.label} badge={g.badge}>
+					{#snippet children(close)}
+						{#each g.items as it (it.href)}
+							<a
+								href="{base}{it.href}"
+								onclick={close}
+								class={it.badge ? 'flex items-center justify-between gap-2' : ''}
+							>
+								{it.label}
+								{#if it.badge}
+									<span
+										class="rounded-lg bg-changed-bg px-1.5 text-[11px] font-semibold text-changed"
+										>{it.badge}</span
+									>
+								{/if}
+							</a>
+						{/each}
+					{/snippet}
+				</NavMenu>
+			{/each}
+		</nav>
 
-		{#if showLogs}
-			<NavMenu label={t('로그')}>
-				{#snippet children(close)}
-					{#if me.flags.can_view_archive_logs}
-						<a href="{base}/log/archive" onclick={close}>{t('아카이브 로그')}</a>
-					{/if}
-					{#if me.flags.can_view_system_logs}
-						<a href="{base}/log/system" onclick={close}>{t('시스템 로그')}</a>
-					{/if}
-					{#if me.flags.can_view_audit_logs}
-						<a href="{base}/log/audit" onclick={close}>{t('감사 로그')}</a>
-					{/if}
-				{/snippet}
-			</NavMenu>
-		{/if}
-
-		{#if showSettings}
-			<NavMenu label={t('설정')}>
-				{#snippet children(close)}
-					{#if me.flags.can_manage_users}
-						<a href="{base}/system/users" onclick={close}>{t('사용자 관리')}</a>
-					{/if}
-					{#if me.flags.can_manage_system}
-						<a href="{base}/system/groups" onclick={close}>{t('권한 그룹')}</a>
-					{/if}
-					{#if me.flags.can_manage_users}
-						<a href="{base}/system/api-keys" onclick={close}>{t('API Key 관리')}</a>
-					{/if}
-					{#if me.flags.can_manage_system}
-						<a href="{base}/system/general" onclick={close}>{t('시스템 설정')}</a>
-					{/if}
-				{/snippet}
-			</NavMenu>
-		{/if}
-	</nav>
-
-	{#if me.flags.can_search}
-		<form class="hdr-search" role="search" onsubmit={search}>
-			<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"
-				><path
-					d="M21 21l-4.3-4.3M11 18a7 7 0 110-14 7 7 0 010 14z"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-				/></svg
+		{#if me.flags.can_search}
+			<form
+				class="order-10 flex basis-full items-center gap-2 rounded-full border bg-card px-3 py-1 focus-within:border-link lg:order-none lg:max-w-[520px] lg:flex-1 lg:basis-auto"
+				role="search"
+				onsubmit={search}
 			>
-			<input
-				type="search"
-				bind:value={q}
-				placeholder={t('아카이브 본문·문서에서 검색…')}
-				aria-label={t('검색')}
-			/>
-		</form>
-	{/if}
-
-	<div class="hdr-actions">
-		<!-- 크롬 확장 안내 팝오버 -->
-		<details class="ext-menu" name="hdrmenu" bind:open={extOpen}>
-			<summary title={t('크롬 확장')} aria-label={t('크롬 확장')}>
-				<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"
-					><path
-						d="M12 3a3 3 0 013 3h3a2 2 0 012 2v3a3 3 0 010 6v3a2 2 0 01-2 2h-3a3 3 0 00-6 0H6a2 2 0 01-2-2v-3a3 3 0 010-6V8a2 2 0 012-2h3a3 3 0 013-3z"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="1.6"
-						stroke-linejoin="round"
-					/></svg
-				>
-			</summary>
-			<div class="ext-panel">
-				<h4>{t('크롬 확장')} <span class="mono muted">v{me.version}</span></h4>
-				<p class="muted">
-					{t(
-						'크롬 확장을 설치하면 보고 있는 페이지를 클릭 한 번으로 아카이브하고, 아카이브 히스토리도 바로 확인할 수 있습니다.'
-					)}
-				</p>
-				<p>
-					<a class="ext-dl" href="/extension/download" onclick={() => (extOpen = false)}
-						>{t('크롬 확장 내려받기')}</a
-					>
-				</p>
-				<details class="ext-steps">
-					<summary>{t('설치 방법')}</summary>
-					<ol class="muted">
-						<li>{t('내려받은 ZIP 파일의 압축을 풉니다.')}</li>
-						<li>
-							{t('크롬 주소창에')} <span class="mono">chrome://extensions</span>
-							{t('를 엽니다.')}
-						</li>
-						<li>{t('우측 상단 ‘개발자 모드’를 켭니다.')}</li>
-						<li>{t('‘압축해제된 확장 프로그램을 로드’를 눌러 압축 푼 폴더를 선택합니다.')}</li>
-						<li>{t('확장 아이콘을 눌러 이 춘추관 주소와, 개인 API Key 화면에서 발급한 키를 입력하면 연결됩니다.')}</li>
-					</ol>
-				</details>
-			</div>
-		</details>
-
-		<button type="button" class="theme-btn" onclick={cycleTheme}>{t(THEME_LABELS[userPrefersMode.current])}</button>
-
-		{#if me.user}
-			<details class="user-menu" name="hdrmenu" bind:open={userMenuOpen}>
-				<summary class="mono muted">{me.user.display_name || me.user.email}</summary>
-				<div class="user-menu-items">
-					<a href="{base}/settings/account" onclick={() => (userMenuOpen = false)}>{t('계정')}</a>
-					{#if me.flags.can_use_api_keys}
-						<a href="{base}/settings/api-keys" onclick={() => (userMenuOpen = false)}
-							>{t('개인 API Key')}</a
-						>
-					{/if}
-					<a href="{base}/settings/archives" onclick={() => (userMenuOpen = false)}
-						>{t('내 아카이브')}</a
-					>
-					<form method="POST" action="/logout"><button type="submit">{t('로그아웃')}</button></form>
-				</div>
-			</details>
+				<Search class="size-4 shrink-0 text-muted-foreground" />
+				<input
+					type="search"
+					bind:value={q}
+					class="min-w-0 flex-1 border-none bg-transparent p-0 text-[13px] outline-none placeholder:text-muted-foreground"
+					placeholder={t('아카이브 본문·문서에서 검색…')}
+					aria-label={t('검색')}
+				/>
+			</form>
 		{/if}
 
-		<button
-			type="button"
-			id="nav-toggle"
-			aria-expanded={navOpen}
-			onclick={() => (navOpen = !navOpen)}
-			title={t('메뉴')}>☰</button
-		>
-	</div>
-</header>
+		<div class="ml-auto flex items-center gap-1.5">
+			<!-- 크롬 확장 안내 팝오버 -->
+			<Popover.Root bind:open={extOpen}>
+				<Popover.Trigger
+					class={buttonVariants({ variant: 'ghost', size: 'icon' })}
+					title={t('크롬 확장')}
+					aria-label={t('크롬 확장')}
+				>
+					<Puzzle class="size-5" />
+				</Popover.Trigger>
+				<Popover.Content align="end" class="w-[300px] max-w-[86vw] text-sm">
+					<h4 class="mb-1.5 flex items-baseline gap-2 text-[13px] font-semibold">
+						{t('크롬 확장')}
+						<span class="font-mono text-xs text-muted-foreground">v{me.version}</span>
+					</h4>
+					<p class="mb-2 text-xs leading-relaxed text-muted-foreground">
+						{t(
+							'크롬 확장을 설치하면 보고 있는 페이지를 클릭 한 번으로 아카이브하고, 아카이브 히스토리도 바로 확인할 수 있습니다.'
+						)}
+					</p>
+					<a
+						class={buttonVariants({ variant: 'outline', size: 'sm' })}
+						href="/extension/download"
+						onclick={() => (extOpen = false)}>{t('크롬 확장 내려받기')}</a
+					>
+					<details class="mt-3">
+						<summary class="cursor-pointer text-xs text-link">{t('설치 방법')}</summary>
+						<ol class="mt-2 list-decimal pl-[18px] text-xs leading-relaxed text-muted-foreground">
+							<li>{t('내려받은 ZIP 파일의 압축을 풉니다.')}</li>
+							<li>
+								{t('크롬 주소창에')} <span class="font-mono">chrome://extensions</span>
+								{t('를 엽니다.')}
+							</li>
+							<li>{t('우측 상단 ‘개발자 모드’를 켭니다.')}</li>
+							<li>{t('‘압축해제된 확장 프로그램을 로드’를 눌러 압축 푼 폴더를 선택합니다.')}</li>
+							<li>
+								{t(
+									'확장 아이콘을 눌러 이 춘추관 주소와, 개인 API Key 화면에서 발급한 키를 입력하면 연결됩니다.'
+								)}
+							</li>
+						</ol>
+					</details>
+				</Popover.Content>
+			</Popover.Root>
+
+			<Button
+				variant="ghost"
+				size="icon"
+				onclick={cycleTheme}
+				title={t(THEME_LABELS[userPrefersMode.current])}
+				aria-label={t(THEME_LABELS[userPrefersMode.current])}
+			>
+				{#if userPrefersMode.current === 'light'}
+					<Sun class="size-4" />
+				{:else if userPrefersMode.current === 'dark'}
+					<Moon class="size-4" />
+				{:else}
+					<Monitor class="size-4" />
+				{/if}
+			</Button>
+
+			{#if me.user}
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger
+						class="max-w-[180px] truncate font-mono text-xs text-muted-foreground outline-none hover:text-foreground max-[599px]:max-w-[110px]"
+					>
+						{me.user.display_name || me.user.email}
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Content align="end" class="min-w-[160px]">
+						<DropdownMenu.Item onSelect={() => goto(`${base}/settings/account`)}>
+							{t('계정')}
+						</DropdownMenu.Item>
+						{#if me.flags.can_use_api_keys}
+							<DropdownMenu.Item onSelect={() => goto(`${base}/settings/api-keys`)}>
+								{t('개인 API Key')}
+							</DropdownMenu.Item>
+						{/if}
+						<DropdownMenu.Item onSelect={() => goto(`${base}/settings/archives`)}>
+							{t('내 아카이브')}
+						</DropdownMenu.Item>
+						<DropdownMenu.Separator />
+						<DropdownMenu.Item variant="destructive" onSelect={() => logoutForm.requestSubmit()}>
+							{t('로그아웃')}
+						</DropdownMenu.Item>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
+			{/if}
+
+			<!-- 모바일 네비 — 시트(좌측 드로어) -->
+			<Sheet.Root bind:open={navOpen}>
+				<Sheet.Trigger
+					class="{buttonVariants({ variant: 'ghost', size: 'icon' })} lg:hidden"
+					title={t('메뉴')}
+					aria-label={t('메뉴')}
+				>
+					<Menu class="size-5" />
+				</Sheet.Trigger>
+				<Sheet.Content side="left" class="w-[280px] overflow-y-auto">
+					<Sheet.Header>
+						<Sheet.Title>{t('춘추관')}</Sheet.Title>
+					</Sheet.Header>
+					<nav class="flex flex-col gap-4 px-4 pb-4">
+						{#each menuGroups as g (g.label)}
+							<div>
+								<div
+									class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+								>
+									{g.label}
+								</div>
+								<div class="flex flex-col">
+									{#each g.items as it (it.href)}
+										<a
+											href="{base}{it.href}"
+											onclick={() => (navOpen = false)}
+											class="flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm text-foreground no-underline hover:bg-muted"
+										>
+											{it.label}
+											{#if it.badge}
+												<span
+													class="rounded-lg bg-changed-bg px-1.5 text-[11px] font-semibold text-changed"
+													>{it.badge}</span
+												>
+											{/if}
+										</a>
+									{/each}
+								</div>
+							</div>
+						{/each}
+					</nav>
+				</Sheet.Content>
+			</Sheet.Root>
+		</div>
+	</header>
 {/if}
 
 {#if chrome && showUpdate && updateNote}
 	<UpdateNoticeModal note={updateNote} onclose={dismissUpdate} />
 {/if}
 
-<main class:plain={!chrome}>
+<main class="mx-auto max-w-[1280px] p-4 max-[599px]:p-3" class:!max-w-none={!chrome} class:!p-0={!chrome}>
 	{@render children()}
 </main>
-
-<style>
-	header {
-		border-bottom: 1px solid var(--border);
-		padding: 8px 16px;
-		display: flex;
-		gap: 8px 14px;
-		align-items: center;
-		flex-wrap: wrap;
-	}
-	header h1 {
-		font-size: 15px;
-		margin: 0;
-	}
-	header h1 a {
-		color: var(--fg);
-		text-decoration: none;
-	}
-	header .tagline {
-		font-size: 12px;
-	}
-	/* nav 는 데스크탑에서 박스가 아니라 그룹 버튼들이 헤더 flex 에 직접 참여하게 둔다. */
-	header nav {
-		display: contents;
-	}
-
-	/* 전역 검색창 — 구글 스타일 둥근 입력. 데스크탑에서 가운데 공간을 흡수한다. */
-	.hdr-search {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		flex: 1 1 220px;
-		max-width: 520px;
-		padding: 4px 12px;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		background: var(--surface);
-	}
-	.hdr-search:focus-within {
-		border-color: var(--link);
-	}
-	.hdr-search .icon {
-		width: 16px;
-		height: 16px;
-		color: var(--muted);
-		flex: none;
-	}
-	.hdr-search input {
-		flex: 1;
-		min-width: 0;
-		border: none;
-		background: none;
-		padding: 2px 0;
-		font-size: 13px;
-		color: var(--fg);
-	}
-	.hdr-search input:focus {
-		outline: none;
-	}
-
-	.hdr-actions {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		margin-left: auto;
-	}
-	.theme-btn {
-		font-size: 12px;
-		white-space: nowrap;
-	}
-
-	.needs-human {
-		color: var(--amber);
-	}
-	.nh-badge {
-		display: inline-block;
-		margin-left: 4px;
-		padding: 0 6px;
-		border-radius: 8px;
-		background: var(--amber-bg);
-		color: var(--amber);
-		font-size: 11px;
-		font-weight: 600;
-	}
-
-	/* 확장 팝오버 — user-menu 와 같은 <details> 패턴 */
-	.ext-menu {
-		position: relative;
-		display: flex;
-	}
-	.ext-menu summary {
-		cursor: pointer;
-		list-style: none;
-		display: inline-flex;
-		color: var(--muted);
-	}
-	.ext-menu summary::-webkit-details-marker {
-		display: none;
-	}
-	.ext-menu summary:hover {
-		color: var(--link);
-	}
-	.ext-menu .icon {
-		width: 20px;
-		height: 20px;
-	}
-	.ext-panel {
-		position: absolute;
-		right: 0;
-		top: 100%;
-		margin-top: 6px;
-		width: 300px;
-		max-width: 86vw;
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		padding: 12px 14px;
-		z-index: 30;
-		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
-	}
-	.ext-panel h4 {
-		margin: 0 0 6px;
-		font-size: 13px;
-	}
-	.ext-panel p {
-		margin: 0 0 8px;
-		font-size: 12px;
-		line-height: 1.5;
-	}
-	.ext-dl {
-		display: inline-block;
-		padding: 5px 12px;
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		font-size: 13px;
-	}
-	.ext-dl:hover {
-		background: var(--bg-soft);
-		text-decoration: none;
-	}
-	.ext-steps summary {
-		cursor: pointer;
-		font-size: 12px;
-		color: var(--link);
-	}
-	.ext-steps ol {
-		margin: 8px 0 0;
-		padding-left: 18px;
-		font-size: 12px;
-		line-height: 1.6;
-	}
-
-	/* 개인설정 드롭다운 */
-	.user-menu {
-		position: relative;
-		font-size: 12px;
-	}
-	.user-menu summary {
-		cursor: pointer;
-		list-style: none;
-		max-width: 180px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.user-menu summary::-webkit-details-marker {
-		display: none;
-	}
-	.user-menu-items {
-		position: absolute;
-		right: 0;
-		top: 100%;
-		margin-top: 4px;
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 4px;
-		padding: 4px;
-		display: flex;
-		flex-direction: column;
-		min-width: 150px;
-		z-index: 20;
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-	}
-	.user-menu-items a,
-	.user-menu-items button {
-		font-size: 13px;
-		padding: 6px 8px;
-		text-align: left;
-		background: none;
-		border: none;
-		color: var(--fg);
-		text-decoration: none;
-		cursor: pointer;
-		width: 100%;
-		border-radius: 3px;
-	}
-	.user-menu-items a:hover,
-	.user-menu-items button:hover {
-		background: var(--bg-soft);
-	}
-	.user-menu-items form {
-		margin: 0;
-	}
-
-	#nav-toggle {
-		display: none;
-		font-size: 16px;
-		line-height: 1;
-		padding: 4px 9px;
-	}
-
-	/* ── 태블릿·모바일: nav 그룹은 ☰ 안으로, 검색창은 풀폭 줄로 내린다 ── */
-	@media (max-width: 1023px) {
-		#nav-toggle {
-			display: inline-flex;
-		}
-		/* 검색창과 nav 를 헤더의 다음 줄(풀폭)로 내린다 (order > 0). */
-		.hdr-search {
-			order: 5;
-			flex: 1 1 100%;
-			max-width: none;
-		}
-		header nav {
-			order: 6;
-			display: none;
-			flex: 1 1 100%;
-			flex-direction: column;
-			align-items: stretch;
-			gap: 0;
-		}
-		header nav.open {
-			display: flex;
-		}
-	}
-	@media (max-width: 599px) {
-		header {
-			padding: 8px 12px;
-		}
-		header .tagline {
-			display: none;
-		}
-		.hdr-actions {
-			gap: 8px;
-		}
-		.theme-btn {
-			font-size: 11px;
-		}
-		.user-menu summary {
-			max-width: 110px;
-		}
-	}
-</style>
