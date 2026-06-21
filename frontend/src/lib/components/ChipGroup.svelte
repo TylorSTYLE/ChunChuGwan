@@ -8,41 +8,16 @@
 	}: { value?: string; options: [string, string][] } = $props();
 </script>
 
-<div class="chips" role="radiogroup">
+<div class="flex flex-wrap gap-1.5" role="radiogroup">
 	{#each options as [v, label]}
 		<button
 			type="button"
 			role="radio"
 			aria-checked={value === v}
-			class="chip"
+			class="rounded-full border bg-background px-3 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-checked:border-running aria-checked:bg-running-bg aria-checked:text-running"
 			onclick={() => (value = v)}
 		>
 			{t(label)}
 		</button>
 	{/each}
 </div>
-
-<style>
-	.chips {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 7px;
-	}
-	.chip {
-		padding: 5px 13px;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		background: var(--surface);
-		color: var(--muted);
-		font-size: 13px;
-	}
-	.chip:hover {
-		background: var(--bg-soft);
-		color: var(--fg);
-	}
-	.chip[aria-checked='true'] {
-		background: var(--blue-bg);
-		color: var(--blue);
-		border-color: var(--blue);
-	}
-</style>
