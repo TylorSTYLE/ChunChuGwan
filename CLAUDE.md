@@ -19,7 +19,7 @@
 | `chunchugwan/searchindex.py`·`doctext.py` | `.claude/rules/search.md` — 전문 검색(FTS5 trigram)·문서 본문 추출 |
 | `chunchugwan/web/api_routes.py`·`ingest.py`·`extension/**` | `.claude/rules/api-extension.md` — REST API·API 키·확장 클라이언트 캡처 |
 | `tests/**` | `.claude/rules/testing.md` — 테스트 컨벤션 |
-| `.github/workflows/**`·`Dockerfile`·`compose.example.yaml`·`pyproject.toml` | `.claude/rules/release-docker.md` — 릴리스 자동화(gitflow CI)·Docker |
+| `.github/workflows/**`·`Dockerfile`·`docker-compose*.yml`·`pyproject.toml` | `.claude/rules/release-docker.md` — 릴리스 자동화(gitflow CI)·Docker |
 
 사용자용 기능 문서는 `docs/` 에 주제별로 나눠져 있다 (CRAWLING·STORAGE·
 SEARCH·DOCKER·API·AUTHENTICATION·DEVELOPMENT — README 는 빠른 시작 + 링크만 둔다).
@@ -93,8 +93,8 @@ uv run wccg import <file> --mode merge   # 가져오기 (merge | overwrite)
 uv run wccg compact [--yes]              # 저장공간 최적화 — 압축 변환 + 인라인 스타일 추출
                                          #   + 자원 참조 백필 + 고아 공유 자원 정리 (멱등)
 uv run pytest                            # 테스트
-cp compose.example.yaml compose.yaml     # 컴포즈 예제 복사 (최초 1회 — compose.yaml 은 gitignore, 개인 설정은 여기서)
-docker compose up -d dashboard           # 대시보드 + 워커 컨테이너 (127.0.0.1:8765)
+docker compose up -d dashboard           # 대시보드 + 워커 (:latest, 127.0.0.1:8765 — 개인 설정은 docker-compose.override.yml 에)
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d dashboard  # develop(테스트) 이미지로
 docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 ```
 

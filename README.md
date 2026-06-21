@@ -123,15 +123,16 @@ run`)가 소비해 실행한다 — `crawl add`/`crawl run` 과 같은 모델이
 
 ## 도커 빠른 시작
 
-로컬에 Python/uv 를 설치하지 않고 Docker Compose 로 실행할 수 있다. 예제
-파일을 복사해 로컬 전용 `compose.yaml` 을 만들고(개인 설정은 거기서만 수정),
-대시보드 + 워커를 띄운다.
+로컬에 Python/uv 를 설치하지 않고 Docker Compose 로 실행할 수 있다. 리포의
+`docker-compose.yml`(`:latest` 이미지)을 그대로 띄운다. 관리자 비번·OIDC·SMTP 같은
+개인 설정·시크릿은 gitignore 대상인 `docker-compose.override.yml` 에 둔다.
 
 ```bash
-cp compose.example.yaml compose.yaml   # 예제 복사 (최초 1회)
 docker compose up -d dashboard         # 대시보드 + 워커 (http://127.0.0.1:8765)
 docker compose run --rm cli add <url>  # 스냅샷 생성
 docker compose down                    # 대시보드 중지
+# develop(테스트) 이미지로 띄우려면:
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d dashboard
 ```
 
 포트는 호스트의 127.0.0.1 에만 바인딩되고, 컨테이너 대시보드는 인증이 항상

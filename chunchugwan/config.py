@@ -167,7 +167,7 @@ SYSTEM_LOG_MAX_ROWS = int(os.environ.get("WCCG_SYSTEM_LOG_MAX_ROWS", "20000"))
 
 # ---- 로그 파일 (선택 — 콘솔 로그를 회전 파일로도 남긴다, cli.py 가 설치) ----
 # WCCG_LOG_FILE 가 설정되면 그 경로에 INFO 이상 로그를 회전 파일로 기록한다
-# (도커는 볼륨에 마운트해 호스트에서 읽기 — compose.example.yaml 참조). 미설정
+# (도커는 볼륨에 마운트해 호스트에서 읽기 — docker-compose.yml 참조). 미설정
 # 이면 콘솔(stderr)·DB(system_logs) 만. 다중 프로세스(dashboard/worker)는 서로
 # 다른 파일을 써야 한다 — 회전이 같은 파일에서 경합하면 깨질 수 있다.
 LOG_FILE = os.environ.get("WCCG_LOG_FILE", "").strip()
