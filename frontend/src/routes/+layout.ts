@@ -26,10 +26,15 @@ async function applyCatalog(loc: string): Promise<void> {
 // 미인증으로 머무를 수 있는 화면(로그인·가입·이메일 인증·setup·pending).
 // 이 외의 보호된 화면에 미인증으로 들어오면 레이아웃이 로그인으로 보낸다.
 const AUTH_ROUTES = ['/login', '/login/totp', '/signup', '/verify-email', '/setup', '/pending'];
+// 토큰을 경로에 담는 미인증 화면은 프리픽스로 매칭한다 — 초대 수락(/invite/{token})은
+// 아직 계정이 없는 피초대자가 여는 링크라 로그인으로 튕기면 안 된다.
+const AUTH_ROUTE_PREFIXES = ['/invite/'];
 
 export const load: LayoutLoad = async ({ url }) => {
 	const at = (p: string) => url.pathname === `${base}${p}`;
-	const onAuthRoute = AUTH_ROUTES.some((r) => at(r));
+	const onAuthRoute =
+		AUTH_ROUTES.some((r) => at(r)) ||
+		AUTH_ROUTE_PREFIXES.some((p) => url.pathname.startsWith(`${base}${p}`));
 	// 미인증(AUTH on)이면 /me 가 401 — SSR 로 튕기지 않고 me:null 로 셸만 렌더한다.
 	// (auth) 라우트 그룹이 헤더·카탈로그 없이 로그인 화면을 띄운다.
 	let me: Me | null;
