@@ -85,6 +85,7 @@ jobs:
     needs: build
     permissions:
       packages: write
+      actions: read   # download-artifact 가 아티팩트 API 호출에 쓰는 스코프(예방적 명시)
     timeout-minutes: 10
 
     steps:
