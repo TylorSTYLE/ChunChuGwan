@@ -31,6 +31,15 @@ docs/tests/.md/.github 만=patch, 커밋에 "BREAKING"·"호환 깨" 있으면 m
 도커 이미지 태그: `:latest`·`:main`(main), `:develop`(develop),
 `:vX.Y.Z`(릴리스 태그)
 
+**릴리스 토큰 의존성 (함정 주의).** 릴리스 PR 생성(`docker.yml` promote 잡의
+`gh pr create`)·보호 브랜치 푸시(`release.yml`)는 `secrets.RELEASE_TOKEN ||
+secrets.GITHUB_TOKEN` 순으로 토큰을 쓴다. `RELEASE_TOKEN`(PAT)을 등록하지 않으면
+`GITHUB_TOKEN` 으로 폴백되는데, 이때 리포 설정
+`Settings → Actions → General → Allow GitHub Actions to create and approve pull
+requests` 를 끄면 봇이 PR 을 못 만들어 **릴리스 자동화가 깨진다** (이 체크박스는
+생성+승인을 함께 통제). 즉 PAT 없이 이 설정을 끄지 말 것. 봇 권한을 조이려면
+먼저 `repo`+`workflow` 스코프 PAT 을 `RELEASE_TOKEN` 으로 등록한 뒤 끈다.
+
 ## 릴리스 노트 (업데이트 안내 모달)
 
 표시 내용은 **GitHub Release 기준**으로 **CI 가 자동 생성**한다(수동 작성 불필요).

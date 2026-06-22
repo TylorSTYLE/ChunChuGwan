@@ -24,3 +24,4 @@ chunchugwan/web/frontend_dist/
 
 # PyCharm 로컬 전용 워크스페이스 설정 (절대 경로·개인 설정 포함)
 .idea/workspace.xml
+.idea/.name
