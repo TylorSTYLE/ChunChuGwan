@@ -3,7 +3,18 @@ name: CI
 on:
   push:
     branches: [main]
+    # 문서/마크다운만 바뀐 커밋은 Python·Playwright·SPA 빌드를 돌릴 이유가 없다.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - ".gitignore"
+      - "LICENSE"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - ".gitignore"
+      - "LICENSE"
 
 # CI 는 읽기만 필요하다 — PR(신뢰 불가 코드)이 쓰기 토큰과 함께 돌지 않게 최소권한 고정.
 permissions:
@@ -15,6 +26,8 @@ concurrency:
 
 jobs:
   frontend:
+    # draft PR 동안은 무거운 잡을 돌리지 않는다 (push 는 항상 실행).
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -41,6 +54,7 @@ jobs:
         working-directory: frontend
 
   test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
