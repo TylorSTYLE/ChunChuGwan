@@ -220,20 +220,32 @@ def api_version() -> dict:
 
 
 @router.get("/pages")
-def api_pages(request: Request, url: str | None = None):
-    """아카이브된 페이지 목록. url 쿼리로 단일 페이지 조회 (정규화 후 일치)."""
+def api_pages(
+    request: Request,
+    url: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+):
+    """아카이브된 페이지 목록. url 쿼리로 단일 페이지 조회 (정규화 후 일치).
+
+    url 단건은 pages.url 인덱스 단건 조회(확장 상태 배지 경로). url 없는 목록은
+    선택적 limit/offset 페이지네이션(기본 전체). 인증 스냅샷은 소유자/관리자만
+    카운트·시각에 반영한다(집계 메타데이터 누출 차단).
+    """
     _require_view(request)
     from . import app as webapp  # 순환 임포트 방지 — app 이 이 모듈을 임포트한다
 
-    # 인증 스냅샷은 소유자/관리자만 카운트·시각에 반영 (집계 메타데이터 누출 차단)
+    viewer = webapp._snapshot_viewer(request)
     with db.connect() as conn:
-        pages = db.list_pages(conn, viewer=webapp._snapshot_viewer(request))
-    if url is not None:
-        try:
-            norm = storage.normalize_url(url)
-        except ValueError as e:
-            raise HTTPException(400, f"잘못된 URL: {e}")
-        pages = [p for p in pages if p["url"] == norm]
+        if url is not None:
+            try:
+                norm = storage.normalize_url(url)
+            except ValueError as e:
+                raise HTTPException(400, f"잘못된 URL: {e}")
+            page = db.get_page_aggregate(conn, norm, viewer=viewer)
+            pages = [page] if page is not None else []
+        else:
+            pages = db.list_pages(conn, viewer=viewer, limit=limit, offset=offset)
     return {"pages": [_page_json(p) for p in pages]}
 
 

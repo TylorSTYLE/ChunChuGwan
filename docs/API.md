@@ -24,7 +24,7 @@
 | 메서드 | 경로 | 권한 | 설명 |
 |---|---|---|---|
 | GET | `/api/v1/version` | (토큰만) | 서버 앱 버전 + 확장 버전(독립) — 확장이 `extension_version` 과 자기 버전을 비교해 업데이트 안내. 응답 `{"version": "...", "extension_version": "..."}` |
-| GET | `/api/v1/pages` | 보기 | 페이지 목록 (`?url=` 로 단일 조회) |
+| GET | `/api/v1/pages` | 보기 | 페이지 목록 (`?url=` 로 단일 조회 — 인덱스 조회, `?limit=&offset=` 로 페이지네이션) |
 | GET | `/api/v1/pages/{id}` | 보기 | 페이지 상세 + 스냅샷 히스토리 |
 | GET | `/api/v1/snapshots/{id}` | 보기 | 스냅샷 메타데이터 |
 | GET | `/api/v1/snapshots/{id}/file/{name}` | 보기 | 파일 다운로드 (`page.html` \| `screenshot` \| `content.md`) |

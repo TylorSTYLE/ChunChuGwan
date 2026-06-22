@@ -1868,24 +1868,57 @@ def _visible_snapshot_filter(
 
 
 def list_pages(
-    conn: sqlite3.Connection, *, viewer: "tuple[int | None, bool] | None" = None
+    conn: sqlite3.Connection,
+    *,
+    viewer: "tuple[int | None, bool] | None" = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[sqlite3.Row]:
     """페이지 목록 + 스냅샷 수 + 마지막 캡처 시각 (대시보드/CLI list 용).
 
     viewer 를 주면 그 요청자가 볼 수 있는 스냅샷만 집계한다 — 인증(로그인)
     스냅샷은 소유자/관리자만 카운트·시각에 반영(메타데이터 누출 차단). None=전체.
+    limit 을 주면 LIMIT/OFFSET 페이지네이션(기본 None=전체) — 페이지 수가 커질 때
+    전체 행 직렬화·메모리 로드를 피한다.
     """
     cond, params = _visible_snapshot_filter(viewer)
-    return conn.execute(
-        f"""
+    sql = f"""
         SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
         FROM pages p
         LEFT JOIN snapshots s ON s.page_id = p.id{cond}
         GROUP BY p.id
         ORDER BY last_taken_at DESC NULLS LAST, p.url
+    """
+    if limit is not None:
+        sql += " LIMIT :limit OFFSET :offset"
+        params = {**params, "limit": limit, "offset": offset}
+    return conn.execute(sql, params).fetchall()
+
+
+def get_page_aggregate(
+    conn: sqlite3.Connection,
+    url: str,
+    *,
+    viewer: "tuple[int | None, bool] | None" = None,
+) -> sqlite3.Row | None:
+    """정규화 URL 하나의 페이지 + 스냅샷 집계 (pages.url 인덱스 단건 조회).
+
+    list_pages 와 같은 viewer-aware 집계(`_visible_snapshot_filter`)를 쓰되
+    `WHERE p.url = ?` 로 한 페이지만 본다 — 확장 상태 배지(GET /pages?url=)가
+    전체 목록을 받아 파이썬에서 거르던 것을 인덱스 조회로 대체한다. 없으면 None.
+    """
+    cond, params = _visible_snapshot_filter(viewer)
+    params = {**params, "url": url}
+    return conn.execute(
+        f"""
+        SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
+        FROM pages p
+        LEFT JOIN snapshots s ON s.page_id = p.id{cond}
+        WHERE p.url = :url
+        GROUP BY p.id
         """,
         params,
-    ).fetchall()
+    ).fetchone()
 
 
 def list_snapshots(conn: sqlite3.Connection, page_id: int) -> list[sqlite3.Row]:
