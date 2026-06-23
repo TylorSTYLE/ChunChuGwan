@@ -238,6 +238,27 @@ def test_corruption_stays_partial_no_flip_no_unpause(s3_env):
         assert db.storage_backend(conn) == "local"        # 전환 안 됨
         assert db.writes_paused(conn) is True             # 일시중지 유지
         assert db.storage_migration_summary(conn)["status"] == "partial"
+    # 라이브 실패 카운트 — 손상 파일 1개가 failed_count 에 반영된다
+    assert st["failed_count"] >= 1
+    assert st["workers"] >= 1  # 동시 전송 워커 수 노출
+
+
+def test_parallel_transfer_completes(s3_env, monkeypatch):
+    """동시 전송 워커(>1)로 여러 파일을 옮겨도 0실패로 완료된다."""
+    monkeypatch.setattr(config, "S3_MIGRATION_WORKERS", 8)
+    client, root = s3_env
+    # 여러 자원 파일 시드 (병렬 경로 검증)
+    for i in range(12):
+        _cas(root, "resources", f"parallel-{i}".encode(), ".png")
+    _seed_local_blobs(root)
+    assert storage_migration.start_migration() is None
+    _join()
+    st = storage_migration.status()
+    assert st["status"] == "done"
+    assert st["failed_count"] == 0
+    assert st["workers"] == 8
+    with db.connect() as conn:
+        assert db.storage_backend(conn) == "s3"
 
 
 def test_partial_then_retry_completes(s3_env, monkeypatch):

@@ -1591,6 +1591,9 @@ _EN: dict[str, str] = {
     "S3 모드에서는 전체 백업·복원이 비활성화됩니다 (blob 이 로컬에 없음). 내구성은 S3 DB 백업으로, 데이터 이동은 내보내기/가져오기로 하세요.":
         "Full backup/restore is disabled in S3 mode (blobs are not local). Use S3 DB "
         "backups for durability and export/import to move data.",
+    # 마이그레이션 진행 표시 (동시 전송·처리 속도)
+    "동시": "concurrency",
+    "파일/초": "files/s",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

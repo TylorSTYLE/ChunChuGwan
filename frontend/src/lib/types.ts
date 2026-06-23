@@ -757,6 +757,8 @@ export interface StorageStatus {
 	paused: boolean;
 	done?: number;
 	total?: number;
+	failed_count?: number; // 진행 중 누적 실패 수 (라이브)
+	workers?: number; // 동시 전송 워커 수
 	failed?: { path: string; error: string }[];
 	direction?: string;
 	source_backend?: string;

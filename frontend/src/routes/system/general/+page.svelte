@@ -101,6 +101,10 @@
 	const migratePct = $derived(
 		storage?.total ? `${Math.round(((storage.done ?? 0) / storage.total) * 100)}%` : '0%'
 	);
+	// 처리 속도(파일/초) — 폴링 사이 done 증가분으로 추정.
+	let migrateRate = $state(0);
+	let lastDone = 0;
+	let lastTick = 0;
 	function directionLabel(dir?: string): string {
 		if (dir === 'local_to_s3') return t('로컬 → S3');
 		if (dir === 's3_to_local') return t('S3 → 로컬');
@@ -319,8 +323,16 @@
 			const st = await api<StorageStatus>('/system/storage/status');
 			storage = st;
 			if (st.status === 'manifest' || st.status === 'copying') {
+				const now = Date.now();
+				if (lastTick && st.status === 'copying') {
+					const dt = (now - lastTick) / 1000;
+					if (dt > 0) migrateRate = Math.max(0, ((st.done ?? 0) - lastDone) / dt);
+				}
+				lastDone = st.done ?? 0;
+				lastTick = now;
 				setTimeout(pollStorage, 1000);
 			} else {
+				migrateRate = 0;
 				if (st.status === 'error') {
 					notice = `${t('마이그레이션 실패')}: ${st.error ?? ''}`;
 				} else if (st.status === 'partial') {
@@ -341,6 +353,9 @@
 		notice = '';
 		try {
 			await api('/system/storage/migrate/start', { method: 'POST' });
+			lastDone = 0;
+			lastTick = 0;
+			migrateRate = 0;
 			pollStorage();
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
@@ -352,6 +367,9 @@
 		notice = '';
 		try {
 			await api('/system/storage/migrate/retry', { method: 'POST' });
+			lastDone = 0;
+			lastTick = 0;
+			migrateRate = 0;
 			pollStorage();
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
@@ -611,7 +629,14 @@
 			<Button variant="outline" size="sm" disabled={busy || storageRunning} onclick={startMigration} aria-busy={storageRunning}>
 				{#if storageRunning}<Spinner />{t('마이그레이션 중…')}{:else}{t('마이그레이션 시작')}{/if}
 			</Button>
-			{#if storageRunning}<span class="muted">{t('마이그레이션 중')} {storage.done ?? 0}/{storage.total ?? 0} ({migratePct})</span>{/if}
+			{#if storageRunning}
+				<span class="muted">
+					{t('마이그레이션 중')} {storage.done ?? 0}/{storage.total ?? 0} ({migratePct})
+					{#if (storage.failed_count ?? 0) > 0}<span class="warn">· {t('실패')} {storage.failed_count}</span>{/if}
+					{#if storage.workers}· {t('동시')} {storage.workers}{/if}
+					{#if migrateRate > 0}· ~{migrateRate.toFixed(1)} {t('파일/초')}{/if}
+				</span>
+			{/if}
 		</div>
 
 		{#if storage.status === 'partial' && storage.failed?.length}
