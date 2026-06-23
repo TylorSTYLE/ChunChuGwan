@@ -68,6 +68,20 @@ def test_s3_existence_check_does_not_download(tmp_path):
         assert not cache.exists() or not any(cache.rglob("*"))
 
 
+def test_s3_put_omits_expect_100_continue(tmp_path):
+    """PUT 에 Expect: 100-continue 를 보내지 않는다 (Garage/MinIO 헤더파싱 경고 회피)."""
+    with mock_aws():
+        store, _ = _make_store(tmp_path)
+        captured: dict = {}
+
+        def _spy(params, **kwargs):
+            captured.update(params.get("headers", {}))
+        store._client.meta.events.register("before-call.s3", _spy)
+        store.write_bytes(tmp_path / "resources" / "ab" / "ab12.png", b"x" * 200)
+        # add_expect_header 가 언레지스터됐으므로 Expect 헤더가 없어야 한다
+        assert "Expect" not in captured
+
+
 def test_s3_local_path_caches_and_serves_from_cache(tmp_path):
     """local_path 가 미스 시 다운로드, 히트 시 캐시에서 (S3 객체가 지워져도) 서빙."""
     with mock_aws():
