@@ -495,13 +495,47 @@ def needs_compaction(snap_dir: Path) -> bool:
     ) or documents.has_legacy_documents(snap_dir)
 
 
+# 구형 스크린샷 산출물 ↔ WebP 변환 보류 마커 (마커가 있으면 변환 대상 아님)
+_LEGACY_SCREENSHOT_MARKERS = {
+    "screenshot.png": storage.WEBP_SKIP_MARKER,
+    "screenshot-mobile.png": storage.MOBILE_WEBP_SKIP_MARKER,
+}
+
+
 def compactable_count() -> int:
     """압축 변환 대상(구형 산출물이 남은) 스냅샷 수.
 
     CLI 와 대시보드가 압축 기능의 노출/실행 여부를 판정하는 기준 —
     0 이면 compact 를 실행할 필요가 없다.
+
+    sites/ 전체를 **한 번만 나열(단일 LIST)** 해 메모리에서 판정한다 — 스냅샷마다
+    meta.json HEAD + files/ LIST 를 하던 N+1 라운드트립(S3 모드에서 시스템 화면이
+    수십 초~타임아웃)을 없앤다. 판정 기준은 needs_compaction 과 같다(구형 산출물·
+    보류 마커·구형 files/ 문서). 직속 파일 이름만 보므로 디스크 내용을 읽지 않는다.
     """
-    return sum(1 for d in snapshot_dirs() if needs_compaction(d))
+    store = config.blob_store()
+    if not store.is_dir(config.SITES_DIR):
+        return 0
+    # 스냅샷 디렉토리({domain}/{slug}/{ts}) → 그 안의 직속 이름 집합
+    names_by_dir: dict[Path, set[str]] = {}
+    for f in store.rglob(config.SITES_DIR, "*"):
+        rel = f.relative_to(config.SITES_DIR).parts
+        if len(rel) < 4:
+            continue  # 스냅샷 디렉토리 자체·상위 — 직속 파일/하위만 센다
+        snap_dir = config.SITES_DIR / rel[0] / rel[1] / rel[2]
+        # rel[3] = 직속 파일명, 또는 하위 디렉토리(files/) 이름
+        names_by_dir.setdefault(snap_dir, set()).add(rel[3])
+    count = 0
+    for names in names_by_dir.values():
+        if "meta.json" not in names:
+            continue  # 저장 진행 중 등 — 확정 스냅샷이 아니다
+        legacy = "page.html" in names or "raw.html" in names or "files" in names
+        for art, marker in _LEGACY_SCREENSHOT_MARKERS.items():
+            if art in names and marker not in names:
+                legacy = True
+        if legacy:
+            count += 1
+    return count
 
 
 def _meta_final_url(snap_dir: Path) -> str | None:

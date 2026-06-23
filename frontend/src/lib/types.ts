@@ -202,7 +202,6 @@ export interface TimelineSnap {
 	idx: number;
 	snap: SnapshotRow;
 	badge: string;
-	files: { name: string; bytes: number }[];
 	total_bytes: number | null;
 	steps: unknown[];
 	log: Record<string, unknown> | null;
