@@ -259,6 +259,8 @@ class S3BlobStore:
                 connect_timeout=10,
                 read_timeout=60,
                 retries={"max_attempts": 3, "mode": "standard"},
+                # 마이그레이션 동시 전송(ThreadPoolExecutor)에 연결 풀 여유를 둔다.
+                max_pool_connections=16,
             ),
         )
 

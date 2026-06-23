@@ -151,6 +151,11 @@ def _bump_done() -> None:
         _state["done"] = _state.get("done", 0) + 1
 
 
+def _bump_failed() -> None:
+    with _lock:
+        _state["failed_count"] = _state.get("failed_count", 0) + 1
+
+
 def _running() -> bool:
     return _thread is not None and _thread.is_alive()
 
@@ -184,7 +189,7 @@ def start_migration() -> str | None:
         _state.update({
             "status": "manifest", "direction": f"{source}_to_{target}",
             "source_backend": source, "target_backend": target,
-            "total": 0, "done": 0, "failed": [], "error": None,
+            "total": 0, "done": 0, "failed": [], "failed_count": 0, "error": None,
             "started_at": _utcnow(), "finished_at": None, "cleanup_pending": False,
         })
         _thread = threading.Thread(
@@ -208,8 +213,8 @@ def retry_failed() -> str | None:
             return "재시도할 파일이 없습니다."
         source = _state.get("source_backend")
         target = _state.get("target_backend")
-        _state.update({"status": "copying", "failed": [], "done": 0,
-                       "total": len(retry_paths)})
+        _state.update({"status": "copying", "failed": [], "failed_count": 0,
+                       "done": 0, "total": len(retry_paths)})
         _thread = threading.Thread(
             target=_migrate_worker, args=(source, target),
             kwargs={"only_paths": retry_paths},
@@ -244,17 +249,36 @@ def _migrate_worker(source_name: str, target_name: str, *,
         if only_paths is not None:
             wanted = set(only_paths)
             manifest = [e for e in manifest if e["path"] in wanted]
-        _set_state(status="copying", total=len(manifest), done=0, failed=[])
+        workers = max(1, min(config.S3_MIGRATION_WORKERS, 16))
+        _set_state(status="copying", total=len(manifest), done=0, failed=[],
+                   failed_count=0, workers=workers)
 
+        # 파일 단위 copy 를 동시 전송한다 — 네트워크 I/O 바운드라 병렬도가 곧
+        # 처리량이다. 진행/실패 카운트는 락으로 안전하게 누적해 라이브로 보인다.
+        # (boto3 저수준 클라이언트는 스레드 간 공유가 안전하다.)
         failed: list[dict] = []
-        for entry in manifest:
+
+        def _do(entry: dict) -> tuple[dict, str | None]:
             path_obj = config.ARCHIVE_ROOT / entry["path"]
-            err = _copy_file(source, target, path_obj, entry)
+            return entry, _copy_file(source, target, path_obj, entry)
+
+        def _handle(entry: dict, err: str | None) -> None:
             if err is not None:
                 failed.append({"path": entry["path"], "error": err})
+                _bump_failed()
                 logger.warning("스토리지 마이그레이션 파일 실패: %s — %s",
                                entry["path"], err)
             _bump_done()
+
+        if workers <= 1 or len(manifest) <= 1:
+            for entry in manifest:
+                _handle(*_do(entry))
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                for entry, err in ex.map(_do, manifest):
+                    _handle(entry, err)
 
         if failed:
             # 실패가 남으면 미완료 — 전환·일시중지 해제 금지 (재시도로 0실패까지)
