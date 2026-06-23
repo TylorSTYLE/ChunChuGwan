@@ -236,5 +236,74 @@
         "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/212"
       }
     ]
+  },
+  "0.8.0": {
+    "items": [
+      {
+        "pr": 213,
+        "text": "refactor(docker): compose.example.yaml → docker-compose.yml + develop 오버라이드",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/213"
+      },
+      {
+        "pr": 215,
+        "text": "feat: 개인 API Key 발급 시 클립보드 복사 버튼 추가",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/215"
+      },
+      {
+        "pr": 216,
+        "text": "fix(frontend): 스냅샷 텍스트 탭 다크모드 가독성 — iframe 대신 토큰 색 <pre>",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/216"
+      },
+      {
+        "pr": 217,
+        "text": "fix(ci): 릴리스 SBOM·FF 동기화 견고화 + CI 최소권한",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/217"
+      },
+      {
+        "pr": 219,
+        "text": "ci: 액션 SHA 핀 + Dependabot + SBOM 도구 버전 핀 (공급망)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/219"
+      },
+      {
+        "pr": 220,
+        "text": "fix(ci): 릴리스 main 푸시 non-FF 재시도 (L6)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/220"
+      },
+      {
+        "pr": 221,
+        "text": "ci: docs-only·draft PR 스킵으로 CI 낭비 실행 절감",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/221"
+      },
+      {
+        "pr": 222,
+        "text": "chore: GHA 감사 정리 — 릴리스 토큰 함정 문서화 + .idea/.name 무시",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/222"
+      },
+      {
+        "pr": 223,
+        "text": "perf: /pages 단건 url 인덱스 조회 + list_pages 페이지네이션",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/223"
+      },
+      {
+        "pr": 224,
+        "text": "docs: Docker Desktop 설치·설정 섹션 추가",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/224"
+      },
+      {
+        "pr": 225,
+        "text": "feat: 설정 시크릿을 .env 로 둘 수 있게 + .env.example 추가",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/225"
+      },
+      {
+        "pr": 226,
+        "text": "feat: S3 객체 저장소 blob 백엔드 (P1~P6) — 추상화·마이그레이션·DB백업·복구·사용량",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/226"
+      },
+      {
+        "pr": 227,
+        "text": "chore: .env.example 에 WCCG_S3_* 항목 추가",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/227"
+      }
+    ]
   }
 }
