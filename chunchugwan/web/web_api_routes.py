@@ -363,9 +363,9 @@ def page_timeline(
     items = []
     for i, s in enumerate(snaps, 1):
         badge = "new" if i == 1 else _BADGES[s["changed"]]
-        files = storage.snapshot_files(
-            storage.page_dir(page["domain"], page["slug"]) / s["dir_name"]
-        )
+        # 용량은 DB 비정규화 값(snapshots.bytes)을 쓴다 — 스냅샷마다 디렉토리를
+        # 훑으면(snapshot_files) S3 모드에서 파일별 HEAD 가 쌓여 타임라인이
+        # 수십 초씩 걸린다. 파일별 목록은 타임라인에서 쓰지 않는다.
         log = log_by_snap.get(s["id"])
         steps: list = []
         if log is not None and log["steps"]:
@@ -377,8 +377,7 @@ def page_timeline(
             "idx": i,
             "snap": dict(s),
             "badge": badge,
-            "files": files,
-            "total_bytes": sum(f["bytes"] for f in files) if files else None,
+            "total_bytes": s["bytes"],
             "steps": steps,
             "log": dict(log) if log is not None else None,
         })

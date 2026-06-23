@@ -508,6 +508,30 @@ def test_s3_document_ingest_uploads_to_cas(s3_serving):
     assert config.blob_store().read_bytes(cas) == doc_bytes
 
 
+def test_s3_compactable_count_single_list(s3_serving):
+    """S3 모드 compactable_count 는 sites/ 를 한 번만 나열해 정확히 센다.
+
+    스냅샷마다 meta.json HEAD + files/ LIST 를 하던 N+1(시스템 화면 504)을
+    없앤 뒤에도, 구형 산출물이 남은 스냅샷 수가 맞아야 한다 (S3 에선 레거시
+    검사가 로컬 .is_file() 이라 과소 집계되던 정확성 문제도 함께 교정)."""
+    from chunchugwan import resources
+
+    s3, root = s3_serving
+    base = config.SITES_DIR / "example.com" / "post-abcd1234"
+    legacy = base / "2026-06-01T00-00-00"      # 구형 raw.html → 대상
+    compacted = base / "2026-06-02T00-00-00"   # 변환 완료 → 비대상
+    for d in (legacy, compacted):
+        d.mkdir(parents=True)
+        (d / "meta.json").write_text("{}", encoding="utf-8")
+    (legacy / "raw.html").write_text("<html>원본</html>", encoding="utf-8")
+    (compacted / "raw.html.gz").write_bytes(gzip.compress(b"<html></html>"))
+
+    _upload_tree_then_drop_local(s3, root)
+    assert not config.SITES_DIR.exists()  # 로컬 트리 없음 → 판정은 S3 나열로만
+
+    assert resources.compactable_count() == 1
+
+
 def test_s3_serving_auth_gate_preserved(s3_serving):
     """문서 라우트는 S3 모드에서도 비로그인 접근을 막는다 (인증 게이트 보존)."""
     s3, root = s3_serving

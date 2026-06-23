@@ -293,6 +293,14 @@ def test_needs_compaction_and_count(cas_env, monkeypatch, tmp_path):
     assert not resources.needs_compaction(kept)
     assert resources.compactable_count() == 1
 
+    # 산출물은 변환됐지만 구형 files/ 문서가 남은 스냅샷도 대상이다
+    docs_snap = base / "2026-06-04T00-00-00"
+    (docs_snap / "files").mkdir(parents=True)
+    (docs_snap / "meta.json").write_text("{}", encoding="utf-8")
+    (docs_snap / "raw.html.gz").write_bytes(gzip.compress(b"<html></html>"))
+    (docs_snap / "files" / "x.pdf").write_bytes(b"%PDF-1.4")
+    assert resources.compactable_count() == 2  # legacy + docs_snap
+
 
 def test_compact_keeps_png_when_conversion_fails(cas_env, tmp_path):
     snap = tmp_path / "snap"
