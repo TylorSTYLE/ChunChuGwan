@@ -8,6 +8,18 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
+# .env 파일 로드 — 로컬 실행(`uv run wccg`) 편의용. 실제 환경변수가 항상 우선이며
+# (override=False), python-dotenv 미설치 시 조용히 건너뛴다. 도커 이미지엔 .env 를
+# 동봉하지 않으므로(.dockerignore) 컨테이너에선 no-op 이고, compose 는 각 서비스의
+# env_file 로 주입한다. 모든 WCCG_* 읽기가 이 모듈에 있으므로 여기서 한 번 로드하면
+# 전 모듈에 적용된다.
+try:
+    from dotenv import find_dotenv, load_dotenv
+except ImportError:  # python-dotenv 없음 — 환경변수만 사용
+    pass
+else:
+    load_dotenv(find_dotenv(usecwd=True))  # CWD 부터 위로 .env 탐색 (없으면 no-op)
+
 logger = logging.getLogger(__name__)
 
 ARCHIVE_ROOT = Path(os.environ.get("WCCG_ROOT", "archive")).resolve()
