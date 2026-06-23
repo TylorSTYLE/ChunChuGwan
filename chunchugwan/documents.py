@@ -29,7 +29,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 import httpx
 
-from . import config, db, storage
+from . import blobstore, config, db, storage
 
 logger = logging.getLogger(__name__)
 
@@ -419,30 +419,44 @@ def cas_path(name: str) -> Path:
 def _move_into_cas(src: Path, name: str) -> bool:
     """파일을 CAS 로 이동. 같은 내용이 이미 있으면 src 만 지운다.
 
-    새로 추가됐으면 True (중복 제거로 저장이 생략됐으면 False).
-    os.replace 는 원자적이라 동시 아카이빙(스케줄러 + 수동)에 안전하다.
-    스테이징(/tmp)과 아카이브가 다른 파일시스템이면(도커 볼륨 등 — EXDEV)
-    목적지 디렉토리의 임시 파일로 복사한 뒤 교체해 원자성을 유지한다.
+    새로 추가됐으면 True (중복 제거로 저장이 생략됐으면 False). 활성 백엔드를
+    경유하므로 S3 모드면 CAS 객체로 업로드된다(로컬 디스크에 남지 않는다).
+
+    - 로컬: os.replace 는 원자적이라 동시 아카이빙(스케줄러 + 수동)에 안전하다.
+      스테이징(/tmp)과 아카이브가 다른 파일시스템이면(도커 볼륨 등 — EXDEV)
+      목적지 디렉토리의 임시 파일로 복사한 뒤 교체해 원자성을 유지한다.
+    - S3: src 가 로컬 스테이징 파일(캡처 tmp)이면 업로드(PUT 는 원자적), 이미
+      S3 에 있는 구형 스냅샷 files/ 객체면(wccg compact) 읽어서 CAS 키로 다시
+      쓴다(문서는 최대 50MB).
     """
+    store = config.blob_store()
     dst = cas_path(name)
-    if dst.is_file():
-        src.unlink()
+    if store.is_file(dst):
+        store.delete(src)
         return False
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        os.replace(src, dst)
-    except OSError as e:
-        if e.errno != errno.EXDEV:
-            raise
-        fd, tmp = tempfile.mkstemp(dir=dst.parent, suffix=".tmp")
-        os.close(fd)
+    if isinstance(store, blobstore.LocalBlobStore):
+        dst.parent.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.copyfile(src, tmp)
-            os.replace(tmp, dst)
-        except BaseException:
-            os.unlink(tmp)
-            raise
-        src.unlink()
+            os.replace(src, dst)
+        except OSError as e:
+            if e.errno != errno.EXDEV:
+                raise
+            fd, tmp = tempfile.mkstemp(dir=dst.parent, suffix=".tmp")
+            os.close(fd)
+            try:
+                shutil.copyfile(src, tmp)
+                os.replace(tmp, dst)
+            except BaseException:
+                os.unlink(tmp)
+                raise
+            src.unlink()
+        return True
+    # S3 모드
+    if src.is_file():  # 실제 로컬 파일 = 캡처 tmp 스테이징 → 업로드 후 로컬 src 삭제
+        store.move(src, dst)
+    else:  # S3 객체 (구형 files/ → CAS) → 읽어서 다시 쓰고 원본 삭제
+        store.write_bytes(dst, store.read_bytes(src))
+        store.delete(src)
     return True
 
 

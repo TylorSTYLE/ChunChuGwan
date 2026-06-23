@@ -262,6 +262,11 @@ class S3BlobStore:
         self._archive_root = archive_root
         self._cache_dir = cache_dir
         self._cache_max_bytes = cache_max_bytes
+        # 아카이브 트리(sites/resources/documents) 밖의 경로 — 캡처 파이프라인의
+        # 로컬 스테이징 디렉토리(/tmp/wccg-…) — 는 S3 가 아니라 로컬 파일시스템을
+        # 그대로 쓴다. 캡처는 tmp 에 산출물을 모아 compact 한 뒤 finalize 에서
+        # move(로컬→S3)로 업로드하므로, 그 전까지의 tmp 입출력은 로컬이어야 한다.
+        self._local = LocalBlobStore()
         # 키 프리픽스는 슬래시로 정규화 (빈 값이면 프리픽스 없음)
         self._prefix = prefix.strip("/")
         self._client = boto3.client(
@@ -283,6 +288,10 @@ class S3BlobStore:
         _disable_expect_100_continue(self._client)
 
     # ---- 키 ↔ 경로 매핑 ----
+    def _is_archive_path(self, path: Path) -> bool:
+        """경로가 아카이브 트리(S3 대상) 안인지. 밖이면 로컬 스테이징(/tmp)."""
+        return path == self._archive_root or self._archive_root in path.parents
+
     def _rel(self, path: Path) -> str:
         """blob 절대 경로 → 아카이브 루트 기준 상대 POSIX 경로."""
         return path.relative_to(self._archive_root).as_posix()
@@ -303,6 +312,8 @@ class S3BlobStore:
 
     # ---- 읽기 ----
     def read_bytes(self, path: Path, *, size: int | None = None) -> bytes:
+        if not self._is_archive_path(path):
+            return self._local.read_bytes(path, size=size)
         kwargs = {"Bucket": self._bucket, "Key": self._key(path)}
         if size is not None:
             kwargs["Range"] = f"bytes=0-{size - 1}"
@@ -317,15 +328,21 @@ class S3BlobStore:
 
     # ---- 쓰기 (S3 PUT 는 원자적) ----
     def write_bytes(self, path: Path, data: bytes) -> None:
+        if not self._is_archive_path(path):
+            return self._local.write_bytes(path, data)
         self._client.put_object(Bucket=self._bucket, Key=self._key(path), Body=data)
 
     def write_text(self, path: Path, text: str, *, encoding: str = "utf-8") -> None:
         self.write_bytes(path, text.encode(encoding))
 
     def write_atomic(self, path: Path, data: bytes) -> None:
+        if not self._is_archive_path(path):
+            return self._local.write_atomic(path, data)
         self.write_bytes(path, data)
 
     def put_verified(self, path: Path, data: bytes, sha256_hex: str) -> None:
+        if not self._is_archive_path(path):
+            return self._local.put_verified(path, data, sha256_hex)
         # S3 가 본문 sha256 을 검증하게 해 업로드 종단 무결성을 확보한다
         # (불일치면 boto3 가 오류 — 부분/손상 객체가 생기지 않는다).
         import base64
@@ -338,6 +355,9 @@ class S3BlobStore:
 
     # ---- 이동 (로컬 스테이징 → S3 업로드) ----
     def move(self, src: Path, dst: Path) -> None:
+        if not self._is_archive_path(dst):
+            # 목적지가 아카이브 밖(스테이징 간 이동)이면 로컬 파일시스템 이동.
+            return self._local.move(src, dst)
         if src.is_dir():
             for child in sorted(src.rglob("*")):
                 if child.is_file():
@@ -352,6 +372,8 @@ class S3BlobStore:
 
     # ---- 검사 (객체 다운로드 없음) ----
     def is_file(self, path: Path) -> bool:
+        if not self._is_archive_path(path):
+            return self._local.is_file(path)
         try:
             self._client.head_object(Bucket=self._bucket, Key=self._key(path))
             return True
@@ -361,6 +383,8 @@ class S3BlobStore:
             raise
 
     def is_dir(self, path: Path) -> bool:
+        if not self._is_archive_path(path):
+            return self._local.is_dir(path)
         prefix = self._key(path).rstrip("/") + "/"
         resp = self._client.list_objects_v2(
             Bucket=self._bucket, Prefix=prefix, MaxKeys=1
@@ -368,6 +392,8 @@ class S3BlobStore:
         return resp.get("KeyCount", 0) > 0
 
     def size(self, path: Path) -> int:
+        if not self._is_archive_path(path):
+            return self._local.size(path)
         resp = self._client.head_object(Bucket=self._bucket, Key=self._key(path))
         return int(resp["ContentLength"])
 
@@ -379,6 +405,8 @@ class S3BlobStore:
         않게 하고 동시 다운로드 경합을 허용한다. blob 은 불변이라 무효화는
         없고 용량 상한 초과 시 LRU 제거만 한다.
         """
+        if not self._is_archive_path(path):
+            return self._local.local_path(path)
         cache_file = self._cache_dir / self._rel(path)
         if cache_file.is_file():
             try:
@@ -403,20 +431,30 @@ class S3BlobStore:
 
     # ---- 수명 ----
     def touch_mtime(self, path: Path) -> None:
+        if not self._is_archive_path(path):
+            return self._local.touch_mtime(path)
         # S3 객체는 불변/콘텐츠 주소라 sweep 유예 창 개념이 없다 — no-op.
         pass
 
     def touch_create(self, path: Path) -> None:
+        if not self._is_archive_path(path):
+            return self._local.touch_create(path)
         self._client.put_object(Bucket=self._bucket, Key=self._key(path), Body=b"")
 
     def delete(self, path: Path) -> None:
+        if not self._is_archive_path(path):
+            return self._local.delete(path)
         self._client.delete_object(Bucket=self._bucket, Key=self._key(path))
 
     def rmdir(self, path: Path) -> None:
+        if not self._is_archive_path(path):
+            return self._local.rmdir(path)
         # S3 에는 빈 디렉토리 개념이 없다 — no-op.
         pass
 
     def rmtree(self, path: Path) -> None:
+        if not self._is_archive_path(path):
+            return self._local.rmtree(path)
         prefix = self._key(path).rstrip("/") + "/"
         paginator = self._client.get_paginator("list_objects_v2")
         batch: list[dict] = []
@@ -432,6 +470,8 @@ class S3BlobStore:
             self._client.delete_objects(Bucket=self._bucket, Delete={"Objects": batch})
 
     def mkdir(self, path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
+        if not self._is_archive_path(path):
+            return self._local.mkdir(path, parents=parents, exist_ok=exist_ok)
         # S3 에는 디렉토리 개념이 없다 — 키 쓰기 시 프리픽스가 자동 생성된다.
         pass
 
@@ -443,6 +483,9 @@ class S3BlobStore:
                 yield obj["Key"]
 
     def iterdir(self, path: Path) -> Iterator[Path]:
+        if not self._is_archive_path(path):
+            yield from self._local.iterdir(path)
+            return
         prefix = self._key(path).rstrip("/") + "/"
         paginator = self._client.get_paginator("list_objects_v2")
         for page in paginator.paginate(
@@ -454,6 +497,9 @@ class S3BlobStore:
                 yield self._to_path(cp["Prefix"].rstrip("/"))
 
     def glob(self, path: Path, pattern: str) -> Iterator[Path]:
+        if not self._is_archive_path(path):
+            yield from self._local.glob(path, pattern)
+            return
         import fnmatch
 
         segments = pattern.split("/")
@@ -476,6 +522,9 @@ class S3BlobStore:
                 yield self._archive_root.joinpath(*base_rel_parts, *candidate)
 
     def rglob(self, path: Path, pattern: str) -> Iterator[Path]:
+        if not self._is_archive_path(path):
+            yield from self._local.rglob(path, pattern)
+            return
         import fnmatch
 
         base_prefix = self._key(path).rstrip("/") + "/"

@@ -173,6 +173,47 @@ def test_s3_glob_and_iterdir(tmp_path):
         assert children == ["ab", "cd"]
 
 
+def test_s3_staging_paths_use_local_fs(tmp_path):
+    """아카이브 루트 밖 경로(캡처 tmp 스테이징)는 S3 가 아니라 로컬 파일시스템.
+
+    캡처는 tmp 에 산출물을 모아 compact 한 뒤 finalize 에서만 S3 로 올린다.
+    그 전 tmp 입출력에 S3 키 매핑(_rel)을 적용하면 archive_root 밖이라
+    ValueError 가 났다(회귀 방지)."""
+    with mock_aws():
+        store, client = _make_store(tmp_path)
+        staging = tmp_path.parent / "wccg-staging-xyz"  # archive_root 밖
+        staging.mkdir()
+        page = staging / "page.html"
+
+        # 쓰기·존재·크기·읽기·삭제가 모두 로컬에서 동작하고 S3 를 건드리지 않는다
+        store.write_bytes(page, b"<html>raw</html>")
+        assert store.is_file(page) is True
+        assert page.is_file()  # 실제 로컬 파일
+        assert store.size(page) == len(b"<html>raw</html>")
+        assert store.read_text(page) == "<html>raw</html>"
+        assert store.local_path(page) == page  # 캐시 거치지 않고 그 경로 그대로
+        # 스테이징에 쓴 것은 S3 버킷에 객체로 남지 않는다
+        assert client.list_objects_v2(Bucket=BUCKET).get("KeyCount", 0) == 0
+
+        store.delete(page)
+        assert store.is_file(page) is False
+
+
+def test_s3_move_staging_dir_to_archive_uploads(tmp_path):
+    """move(스테이징 디렉토리 → 아카이브)는 디렉토리째 S3 로 업로드한다 (finalize 경로)."""
+    with mock_aws():
+        store, _ = _make_store(tmp_path)
+        staging = tmp_path.parent / "wccg-finalize-abc"
+        staging.mkdir()
+        (staging / "page.html.gz").write_bytes(b"gz")
+        (staging / "content.md").write_text("body", encoding="utf-8")
+        dst = tmp_path / "sites" / "d" / "s" / "2026-06-24T00-00-00"
+        store.move(staging, dst)
+        assert not staging.exists()
+        assert store.read_bytes(dst / "page.html.gz") == b"gz"
+        assert store.read_text(dst / "content.md") == "body"
+
+
 # ---- config 팩토리 / 활성 판정 (활성 = DB 설정 storage_backend, env 는 가용성만) ----
 
 
@@ -384,6 +425,87 @@ def test_s3_serving_all_routes(s3_serving):
     # read-through 캐시에 실제로 materialize 됐는지 확인
     cache_files = [f for f in (root / "blobcache").rglob("*") if f.is_file()]
     assert cache_files  # 서빙이 캐시를 채웠다
+
+
+def test_s3_system_overview_usage_keys(s3_serving):
+    """S3 모드 /api/web/system 은 db/cache/blobcache 사용량을 내려준다 (KeyError 회귀).
+
+    S3 모드 archive_disk_usage 는 sites/resources/documents 대신 로컬 분해
+    (db/cache/blobcache)를 돌려주므로, 엔드포인트가 고정 키를 골라내면 안 된다."""
+    s3, root = s3_serving
+    with db.connect() as conn:
+        db.create_first_admin(conn, "boss@test.co", auth.hash_password("bosspass1234"))
+    client = TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
+    client.post("/api/web/auth/login",
+                json={"email": "boss@test.co", "password": "bosspass1234"})
+    r = client.get("/api/web/system")
+    assert r.status_code == 200
+    usage = r.json()["usage"]
+    assert set(usage) == {"db", "cache", "blobcache"}  # S3 모드 키
+    assert "sites" not in usage  # 로컬 전용 키는 없다
+
+
+def test_s3_compact_tmp_staging_extracts_to_s3_cas(s3_serving):
+    """S3 모드 캡처: compact_snapshot_dir 가 tmp(로컬) 산출물을 변환하되
+    추출 자원은 S3 CAS 로 올린다 (tmp 경로 _rel ValueError 회귀)."""
+    import base64
+    import hashlib
+
+    from chunchugwan import resources
+
+    s3, root = s3_serving
+    # archive_root 밖 캡처 스테이징 디렉토리 (pipeline 의 tempfile.mkdtemp 모사)
+    staging = root.parent / "wccg-capture-tmp"
+    staging.mkdir()
+    # RESOURCE_MIN_BYTES 이상인 PNG data URI 한 개를 가진 page.html
+    blob = b"\x89PNG\r\n" + b"Z" * (config.RESOURCE_MIN_BYTES + 100)
+    b64 = base64.b64encode(blob).decode()
+    (staging / "page.html").write_text(
+        f'<html><img src="data:image/png;base64,{b64}"></html>', encoding="utf-8")
+
+    stats = resources.compact_snapshot_dir(staging, "https://example.com/")
+
+    assert stats.externalized == 1
+    # tmp 산출물은 로컬에서 gz 로 바뀌고 원본 page.html 은 사라진다
+    assert (staging / "page.html.gz").is_file()
+    assert not (staging / "page.html").exists()
+    # 추출된 자원은 S3 CAS(archive_root 안)로 올라가야 한다
+    name = stats.resource_names[0]
+    assert config.blob_store().is_file(resources.resource_path(name))
+    sha = hashlib.sha256(blob).hexdigest()
+    obj = s3.get_object(Bucket=BUCKET, Key=f"resources/{sha[:2]}/{name}")
+    assert obj["Body"].read() == blob
+
+
+def test_s3_document_ingest_uploads_to_cas(s3_serving):
+    """S3 모드 캡처: ingest_into_cas 가 받은 문서를 로컬이 아니라 S3 CAS 로 올린다.
+
+    _move_into_cas 가 os.replace(로컬 전용)를 쓰면 S3 모드에서도 문서가 로컬
+    디스크에만 남아 서빙(local_path)이 S3 에서 못 찾는다(회귀 방지)."""
+    import hashlib
+
+    from chunchugwan import documents
+
+    s3, root = s3_serving
+    staging = root.parent / "wccg-doc-tmp" / "files"  # archive_root 밖 캡처 스테이징
+    staging.mkdir(parents=True)
+    doc_bytes = b"%PDF-1.4 captured document body"
+    (staging / "report.pdf").write_bytes(doc_bytes)
+    sha = hashlib.sha256(doc_bytes).hexdigest()
+    manifest = [{"url": "https://example.com/r.pdf", "file": "report.pdf",
+                 "bytes": len(doc_bytes), "sha256": sha,
+                 "content_type": "application/pdf"}]
+
+    documents.ingest_into_cas(staging, manifest)
+
+    assert manifest  # 항목이 유지됐다
+    cas = documents.cas_path(sha + ".pdf")
+    # 로컬 스테이징 원본은 사라지고, S3 CAS 에 객체가 있어야 한다 (로컬 디스크 아님)
+    assert not (staging / "report.pdf").exists()
+    assert not cas.exists()  # 로컬 archive 트리에는 없다 (S3 모드)
+    obj = s3.get_object(Bucket=BUCKET, Key=f"documents/{sha[:2]}/{sha}.pdf")
+    assert obj["Body"].read() == doc_bytes
+    assert config.blob_store().read_bytes(cas) == doc_bytes
 
 
 def test_s3_serving_auth_gate_preserved(s3_serving):
