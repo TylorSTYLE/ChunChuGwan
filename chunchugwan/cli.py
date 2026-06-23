@@ -883,6 +883,44 @@ def storage_status_cmd() -> None:
         click.echo("마이그레이션: 이력 없음")
 
 
+@main.group("db-backup", invoke_without_command=True)
+@click.pass_context
+def db_backup_group(ctx: click.Context) -> None:
+    """S3 DB 백업 — wccg db-backup (즉시 1회) | status (읽기 전용)."""
+    if ctx.invoked_subcommand is not None:
+        return
+    from . import db_backup
+
+    try:
+        meta = db_backup.run_blocking()
+    except RuntimeError as e:
+        raise click.ClickException(str(e))
+    except Exception:
+        raise click.ClickException("DB 백업에 실패했습니다.")
+    click.echo(f"백업 완료: {meta['last_key']} ({meta['last_bytes']} bytes)")
+
+
+@db_backup_group.command("status")
+def db_backup_status_cmd() -> None:
+    """마지막 백업 시각·결과·보존 설정·백업 개수를 표시 (읽기 전용)."""
+    from . import db_backup
+
+    st = db_backup.status()
+    if not st["s3_mode"]:
+        click.echo("DB 백업: S3 모드에서만 사용 가능 (현재 로컬)")
+        return
+    click.echo(f"주기: {st['interval_hours']}시간 / 보존: {st['keep']}개")
+    if st.get("last_at"):
+        click.echo(f"마지막 백업: {st['last_at']} ({st.get('last_status')})")
+        if st.get("last_error"):
+            click.echo(f"  마지막 오류: {st['last_error']}")
+    else:
+        click.echo("마지막 백업: 없음")
+    click.echo(f"S3 백업 개수: {st.get('count', 0)}")
+    if st.get("list_error"):
+        click.echo(f"  목록 조회 오류: {st['list_error']}")
+
+
 @main.group(cls=_SearchGroup)
 def search() -> None:
     """아카이브 전문 검색 — wccg search <검색어> | reindex | status.

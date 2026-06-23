@@ -5,7 +5,7 @@
 	import { t } from '$lib/i18n';
 	import { filesize } from '$lib/format';
 	import { api, ApiError, download } from '$lib/api';
-	import type { SystemOverview, StorageStatus } from '$lib/types';
+	import type { SystemOverview, StorageStatus, DbBackupStatus } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -100,6 +100,18 @@
 		if (dir === 's3_to_local') return t('S3 → 로컬');
 		return dir ?? '';
 	}
+
+	// S3 DB 백업 — 서버 status 가 마지막 백업·목록·설정의 정본. 빈번 폴링 없이
+	// 진입 시 1회 로드 + [지금 백업] 후 갱신.
+	let dbBackup = $state<DbBackupStatus | null>(null);
+	let dbbInterval = $state(24);
+	let dbbKeep = $state(14);
+	$effect(() => {
+		if (dbBackup) {
+			dbbInterval = dbBackup.interval_hours;
+			dbbKeep = dbBackup.keep;
+		}
+	});
 
 	$effect(() => {
 		signupEnabled = s.signup_enabled;
@@ -342,7 +354,40 @@
 		}
 	}
 
-	onMount(loadStorage);
+	async function loadDbBackup() {
+		try {
+			dbBackup = await api<DbBackupStatus>('/system/db-backup/status');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function runDbBackup() {
+		busy = true;
+		pending = 'db-backup';
+		error = '';
+		notice = '';
+		try {
+			dbBackup = await api<DbBackupStatus>('/system/db-backup/run', { method: 'POST' });
+			notice = t('DB 백업을 완료했습니다.');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+			pending = '';
+		}
+	}
+
+	async function saveDbBackupSettings() {
+		if (await save('/system/db-backup/settings', { interval_hours: dbbInterval, keep: dbbKeep })) {
+			await loadDbBackup();
+		}
+	}
+
+	onMount(() => {
+		loadStorage();
+		loadDbBackup();
+	});
 
 	async function uploadFile(e: Event, path: string, confirmMsg: string, extra: Record<string, string> = {}) {
 		const input = e.currentTarget as HTMLInputElement;
@@ -471,6 +516,36 @@
 		</fieldset>
 	{/if}
 {/if}
+
+<fieldset class="sec">
+	<legend>{t('DB 백업 (S3)')}</legend>
+	<p class="desc">{t('index.db 와 rules.json 을 S3 의 db-backups/ 에 백업합니다 (S3 모드 전용). 전체 백업의 대체 내구성 수단입니다.')}</p>
+	{#if !dbBackup}
+		<p class="muted">{t('불러오는 중…')}</p>
+	{:else if !dbBackup.s3_mode}
+		<p class="muted">{t('S3 모드에서만 사용할 수 있습니다.')}</p>
+	{:else}
+		<p class="desc">
+			<span class="muted">{t('마지막 백업')}:</span>
+			<span class="mono">{dbBackup.last_at ?? t('없음')}</span>
+			{#if dbBackup.last_status === 'error'}
+				<span class="warn"> ({t('실패')}{dbBackup.last_error ? `: ${dbBackup.last_error}` : ''})</span>
+			{/if}
+		</p>
+		<p class="desc">
+			<span class="muted">{t('S3 백업 개수')}:</span> <span class="mono">{dbBackup.count}</span>
+			{#if dbBackup.list_error}<span class="warn"> ({t('목록 조회 오류')}: {dbBackup.list_error})</span>{/if}
+		</p>
+		<div class="btn-row">
+			<Button variant="outline" size="sm" disabled={busy} onclick={runDbBackup} aria-busy={pending === 'db-backup'}>
+				{#if pending === 'db-backup'}<Spinner />{t('백업 중…')}{:else}{t('지금 백업')}{/if}
+			</Button>
+		</div>
+		<label>{t('백업 주기(시간)')} <Input type="number" bind:value={dbbInterval} min="1" max="720" /></label>
+		<label>{t('보존 개수')} <Input type="number" bind:value={dbbKeep} min="1" max="365" /></label>
+		<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={saveDbBackupSettings}>{t('저장')}</Button>
+	{/if}
+</fieldset>
 
 <!-- ── 아카이브 설정 ── -->
 <h3 class="group">{t('아카이브 설정')}</h3>

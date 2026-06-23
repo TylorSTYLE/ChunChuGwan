@@ -2751,6 +2751,59 @@ def system_storage_cleanup_confirm(
     return {"ok": True}
 
 
+class DbBackupSettingsReq(BaseModel):
+    interval_hours: int
+    keep: int
+
+
+@router.get("/system/db-backup/status")
+def system_db_backup_status(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """S3 DB 백업 상태 — 설정·마지막 결과·백업 목록 요약 (관리자)."""
+    from .. import db_backup
+
+    _require_manage_system(user)
+    return db_backup.status()
+
+
+@router.post("/system/db-backup/run")
+def system_db_backup_run(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """즉시 DB 백업 1회 — S3 모드 전용 (관리자)."""
+    from .. import db_backup
+
+    _require_manage_system(user)
+    try:
+        db_backup.run_blocking()
+    except RuntimeError as e:  # S3 아님·진행 중 등 (안내 메시지, 비밀값 없음)
+        raise HTTPException(409, str(e))
+    except Exception:  # 업로드 실패 등 — 내용·비밀값 노출 없이 일반 메시지
+        raise HTTPException(500, "DB 백업에 실패했습니다.")
+    audit.log(request, "DB 백업 즉시 실행")
+    return db_backup.status()
+
+
+@router.post("/system/db-backup/settings")
+def system_db_backup_settings(
+    request: Request, body: DbBackupSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """DB 백업 주기(시간)·보존 개수 설정 (관리자). 범위 밖이면 400."""
+    _require_manage_system(user)
+    ih_lo, ih_hi = config.DB_BACKUP_INTERVAL_HOURS_MIN, config.DB_BACKUP_INTERVAL_HOURS_MAX
+    k_lo, k_hi = config.DB_BACKUP_KEEP_MIN, config.DB_BACKUP_KEEP_MAX
+    if not (ih_lo <= body.interval_hours <= ih_hi):
+        raise HTTPException(400, f"백업 주기는 {ih_lo} ~ {ih_hi}시간 사이여야 합니다")
+    if not (k_lo <= body.keep <= k_hi):
+        raise HTTPException(400, f"보존 개수는 {k_lo} ~ {k_hi} 사이여야 합니다")
+    with db.connect() as conn:
+        db.set_db_backup_settings(conn, body.interval_hours, body.keep)
+    audit.log(request, "DB 백업 설정 변경")
+    return {"ok": True}
+
+
 def _issue_migration_token(request: Request) -> dict:
     """이전 토큰 발급(또는 재발급)하고 모드를 켠다. 토큰 원문은 이 응답에서만 1회 노출.
 

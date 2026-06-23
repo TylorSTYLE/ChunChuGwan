@@ -5015,6 +5015,57 @@ def set_storage_migration_summary(
         )
 
 
+# S3 DB 백업 — 주기(시간)·보존 개수 설정 + 마지막 백업 메타(JSON).
+DB_BACKUP_INTERVAL_HOURS_KEY = "db_backup_interval_hours"
+DB_BACKUP_KEEP_KEY = "db_backup_keep"
+DB_BACKUP_META_KEY = "db_backup_meta"  # JSON: last_at·last_key·last_bytes·last_status 등
+
+
+def db_backup_interval_hours(conn: sqlite3.Connection) -> int:
+    """정기 DB 백업 주기(시간) — 오염·범위 밖이면 config 기본값으로 클램핑."""
+    return _clamped_int_setting(
+        conn, DB_BACKUP_INTERVAL_HOURS_KEY,
+        config.DB_BACKUP_INTERVAL_HOURS_DEFAULT,
+        config.DB_BACKUP_INTERVAL_HOURS_MIN,
+        config.DB_BACKUP_INTERVAL_HOURS_MAX,
+    )
+
+
+def db_backup_keep(conn: sqlite3.Connection) -> int:
+    """보존할 최신 DB 백업 개수 — 오염·범위 밖이면 config 기본값으로 클램핑."""
+    return _clamped_int_setting(
+        conn, DB_BACKUP_KEEP_KEY,
+        config.DB_BACKUP_KEEP_DEFAULT,
+        config.DB_BACKUP_KEEP_MIN,
+        config.DB_BACKUP_KEEP_MAX,
+    )
+
+
+def set_db_backup_settings(
+    conn: sqlite3.Connection, interval_hours: int, keep: int
+) -> None:
+    """DB 백업 주기·보존 설정 저장 (읽을 때 클램핑된다)."""
+    set_setting(conn, DB_BACKUP_INTERVAL_HOURS_KEY, str(interval_hours))
+    set_setting(conn, DB_BACKUP_KEEP_KEY, str(keep))
+
+
+def db_backup_meta(conn: sqlite3.Connection) -> dict | None:
+    """마지막 DB 백업 메타(JSON) — 없거나 깨졌으면 None."""
+    raw = get_setting(conn, DB_BACKUP_META_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_db_backup_meta(conn: sqlite3.Connection, meta: dict) -> None:
+    """마지막 DB 백업 메타 저장."""
+    set_setting(conn, DB_BACKUP_META_KEY, json.dumps(meta, ensure_ascii=False))
+
+
 def email_verification_ttl_minutes(conn: sqlite3.Connection) -> int:
     """이메일 인증 코드 만료 시간(분) — 기본·오염·범위 밖이면 config 기본값으로 클램핑."""
     raw = get_setting(conn, EMAIL_VERIFICATION_TTL_MINUTES_KEY)

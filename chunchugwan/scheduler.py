@@ -240,4 +240,13 @@ def run_loop(
             run_due(claim=claim, release=release)
         except Exception:
             logger.exception("스케줄러 폴링 실패")
+        # S3 모드면 주기 도래 시 DB 백업 (run_scheduled 가 S3·비일시중지·주기 판정).
+        # 실패해도 스레드가 죽지 않게 한다 — run_scheduled 자체가 예외를 삼키지만
+        # 한 겹 더 보호한다.
+        try:
+            from . import db_backup
+
+            db_backup.run_scheduled()
+        except Exception:
+            logger.exception("정기 DB 백업 폴링 실패")
     logger.info("스케줄러 종료")

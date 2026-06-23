@@ -765,3 +765,18 @@ export interface StorageStatus {
 	cleanup_pending?: boolean;
 	summary?: StorageMigrationSummary | null;
 }
+
+// S3 DB 백업 — /api/web/system/db-backup/status 응답.
+export interface DbBackupStatus {
+	s3_mode: boolean;
+	running: boolean;
+	interval_hours: number;
+	keep: number;
+	last_at?: string | null;
+	last_status?: string | null;
+	last_error?: string | null;
+	last_bytes?: number | null;
+	count: number;
+	backups: { key: string; bytes: number; at: string }[];
+	list_error?: string;
+}

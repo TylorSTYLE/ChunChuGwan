@@ -1508,6 +1508,20 @@ _EN: dict[str, str] = {
     "원본 위치": "Source location",
     "정리 완료 확인": "Confirm cleanup",
     "원본 정리를 확인했습니다.": "Source cleanup confirmed.",
+    # S3 DB 백업 — system/general 화면
+    "DB 백업 (S3)": "DB backup (S3)",
+    "index.db 와 rules.json 을 S3 의 db-backups/ 에 백업합니다 (S3 모드 전용). 전체 백업의 대체 내구성 수단입니다.":
+        "Back up index.db and rules.json to db-backups/ on S3 (S3 mode only) — a "
+        "durability alternative to full backups.",
+    "S3 모드에서만 사용할 수 있습니다.": "Available in S3 mode only.",
+    "마지막 백업": "Last backup",
+    "S3 백업 개수": "S3 backup count",
+    "목록 조회 오류": "List error",
+    "지금 백업": "Back up now",
+    "백업 중…": "Backing up…",
+    "백업 주기(시간)": "Backup interval (hours)",
+    "보존 개수": "Keep count",
+    "DB 백업을 완료했습니다.": "DB backup complete.",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

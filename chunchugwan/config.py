@@ -48,6 +48,16 @@ S3_PREFIX = os.environ.get("WCCG_S3_PREFIX", "").strip()
 # read-through 캐시 용량 상한 (MB) — 초과 시 LRU 제거
 BLOB_CACHE_MAX_MB = int(os.environ.get("WCCG_BLOB_CACHE_MAX_MB", "2048"))
 
+# ---- S3 DB 백업 (db_backup.py — S3 모드에서 index.db+rules.json 을 db-backups/ 로) ----
+# 주기(시간)와 보존 개수는 시스템 설정으로 변경하며, 오염·범위 밖이면 기본값으로
+# 클램핑한다 (db.db_backup_interval_hours / db_backup_keep).
+DB_BACKUP_INTERVAL_HOURS_DEFAULT = 24       # 정기 백업 주기 (시간)
+DB_BACKUP_INTERVAL_HOURS_MIN = 1
+DB_BACKUP_INTERVAL_HOURS_MAX = 720          # 30일
+DB_BACKUP_KEEP_DEFAULT = 14                 # 보존할 최신 백업 개수
+DB_BACKUP_KEEP_MIN = 1
+DB_BACKUP_KEEP_MAX = 365
+
 PAGE_LOAD_TIMEOUT_MS = 30_000
 # load 도달 후 networkidle 추가 대기 상한 — 분석 스크립트·롱폴링이 있는
 # 페이지는 networkidle 에 영영 도달하지 않으므로 짧게 기다리고 진행한다
