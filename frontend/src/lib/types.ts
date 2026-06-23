@@ -736,3 +736,32 @@ export interface MyArchivesData {
 	total_pages: number;
 	page_num: number;
 }
+
+// 스토리지(blob 백엔드) 마이그레이션 — /api/web/system/storage/status 응답.
+// DB 요약(세션 간 유지)은 정리 대기 배너의 영속 소스다.
+export interface StorageMigrationSummary {
+	status?: string;
+	direction?: string;
+	source_backend?: string;
+	target_backend?: string;
+	source_location?: string;
+	cleanup_pending?: boolean;
+	total?: number;
+	finished_at?: string;
+}
+
+export interface StorageStatus {
+	status: string; // idle | manifest | copying | partial | done | error
+	active_backend: string; // local | s3
+	paused: boolean;
+	done?: number;
+	total?: number;
+	failed?: { path: string; error: string }[];
+	direction?: string;
+	source_backend?: string;
+	target_backend?: string;
+	error?: string | null;
+	source_location?: string;
+	cleanup_pending?: boolean;
+	summary?: StorageMigrationSummary | null;
+}

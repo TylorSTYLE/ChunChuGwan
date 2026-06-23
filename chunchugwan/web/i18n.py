@@ -1479,6 +1479,35 @@ _EN: dict[str, str] = {
     "이전(마이그레이션) 모드입니다 — 데이터 이전 중에는 아카이빙할 수 없습니다. 시스템 설정에서 이전 모드를 끄세요.":
         "Migration mode is on — you cannot archive during data migration. Turn off "
         "migration mode in system settings.",
+    # 스토리지(blob 백엔드) 마이그레이션 — system/general 화면
+    "스토리지": "Storage",
+    "blob 저장 백엔드를 로컬과 S3 사이에서 옮깁니다. 마이그레이션 중에는 캡처·스케줄·크롤이 중지되고, 0건 실패로 끝나야 활성 백엔드가 전환됩니다.":
+        "Move the blob storage backend between local and S3. Capture, schedules, and "
+        "crawls pause during migration, and the active backend switches only after it "
+        "finishes with zero failures.",
+    "blob 저장 백엔드": "Blob storage backend",
+    "활성 백엔드": "Active backend",
+    "S3 (객체 저장소)": "S3 (object storage)",
+    "로컬 저장소": "Local storage",
+    "전환 방향": "Migration direction",
+    "로컬 → S3": "Local → S3",
+    "S3 → 로컬": "S3 → Local",
+    "마이그레이션 시작": "Start migration",
+    "마이그레이션 중…": "Migrating…",
+    "마이그레이션 중": "Migrating",
+    "마이그레이션 중에는 캡처·스케줄·크롤이 중지됩니다. 진행하시겠습니까?":
+        "Capture, schedules, and crawls will pause during migration. Continue?",
+    "마이그레이션을 완료했습니다.": "Migration complete.",
+    "마이그레이션 실패": "Migration failed",
+    "일부 파일이 실패했습니다 — 재시도하세요.": "Some files failed — please retry.",
+    "실패한 파일": "Failed files",
+    "원본 정리 대기": "Source cleanup pending",
+    "마이그레이션이 완료되었습니다. 아래 원본을 수동으로 삭제한 뒤 정리 완료를 확인하세요 (원본은 자동 삭제되지 않습니다).":
+        "Migration is complete. Manually delete the source below, then confirm cleanup "
+        "(the source is not deleted automatically).",
+    "원본 위치": "Source location",
+    "정리 완료 확인": "Confirm cleanup",
+    "원본 정리를 확인했습니다.": "Source cleanup confirmed.",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

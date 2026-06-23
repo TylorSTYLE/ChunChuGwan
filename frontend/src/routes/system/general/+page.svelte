@@ -1,10 +1,11 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize } from '$lib/format';
 	import { api, ApiError, download } from '$lib/api';
-	import type { SystemOverview } from '$lib/types';
+	import type { SystemOverview, StorageStatus } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -82,6 +83,23 @@
 
 	// 데이터 이전(마이그레이션) — 발급 토큰은 1회만 표시
 	let migrationToken = $state('');
+
+	// 스토리지(blob 백엔드) 마이그레이션 — 서버 status 가 진행/정리대기의 정본.
+	let storage = $state<StorageStatus | null>(null);
+	const storageRunning = $derived(
+		storage?.status === 'manifest' || storage?.status === 'copying'
+	);
+	const migrateDir = $derived(
+		storage?.active_backend === 's3' ? t('S3 → 로컬') : t('로컬 → S3')
+	);
+	const migratePct = $derived(
+		storage?.total ? `${Math.round(((storage.done ?? 0) / storage.total) * 100)}%` : '0%'
+	);
+	function directionLabel(dir?: string): string {
+		if (dir === 'local_to_s3') return t('로컬 → S3');
+		if (dir === 's3_to_local') return t('S3 → 로컬');
+		return dir ?? '';
+	}
 
 	$effect(() => {
 		signupEnabled = s.signup_enabled;
@@ -259,6 +277,73 @@
 		}
 	}
 
+	async function loadStorage() {
+		try {
+			storage = await api<StorageStatus>('/system/storage/status');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	// 재색인 폴링(pollReindex) 미러 — 진행 중이면 setTimeout 으로 재폴링.
+	async function pollStorage() {
+		try {
+			const st = await api<StorageStatus>('/system/storage/status');
+			storage = st;
+			if (st.status === 'manifest' || st.status === 'copying') {
+				setTimeout(pollStorage, 1000);
+			} else {
+				if (st.status === 'error') {
+					notice = `${t('마이그레이션 실패')}: ${st.error ?? ''}`;
+				} else if (st.status === 'partial') {
+					notice = t('일부 파일이 실패했습니다 — 재시도하세요.');
+				} else if (st.status === 'done') {
+					notice = t('마이그레이션을 완료했습니다.');
+				}
+				await invalidateAll(); // 활성 백엔드·용량이 바뀌었을 수 있다
+			}
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function startMigration() {
+		if (!confirm(t('마이그레이션 중에는 캡처·스케줄·크롤이 중지됩니다. 진행하시겠습니까?'))) return;
+		error = '';
+		notice = '';
+		try {
+			await api('/system/storage/migrate/start', { method: 'POST' });
+			pollStorage();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function retryMigration() {
+		error = '';
+		notice = '';
+		try {
+			await api('/system/storage/migrate/retry', { method: 'POST' });
+			pollStorage();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function confirmCleanup() {
+		error = '';
+		notice = '';
+		try {
+			await api('/system/storage/cleanup/confirm', { method: 'POST' });
+			notice = t('원본 정리를 확인했습니다.');
+			await loadStorage();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	onMount(loadStorage);
+
 	async function uploadFile(e: Event, path: string, confirmMsg: string, extra: Record<string, string> = {}) {
 		const input = e.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
@@ -325,7 +410,7 @@
 	<legend>{t('검색 인덱스')}</legend>
 	<p class="desc">{t('아직 색인되지 않은 스냅샷을 다시 색인합니다.')}</p>
 	<div class="btn-row">
-		<Button variant="outline" size="sm" disabled={busy || reindexRunning} onclick={startReindex} aria-busy={reindexRunning}>
+		<Button variant="outline" size="sm" disabled={busy || reindexRunning || storageRunning} onclick={startReindex} aria-busy={reindexRunning}>
 			{#if reindexRunning}<Spinner />{/if}{t('검색 인덱스 전체 재색인')}
 		</Button>
 		{#if reindexRunning}<span class="muted">{t('재색인 중')} {reindexDone}/{reindexTotal}</span>{/if}
@@ -334,10 +419,58 @@
 <fieldset class="sec">
 	<legend>{t('저장공간 최적화')}</legend>
 	<p class="desc">{t('압축·자원 공유로 저장공간을 줄입니다 (내용은 그대로).')}</p>
-	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={compact} aria-busy={pending === 'compact'}>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy || storageRunning} onclick={compact} aria-busy={pending === 'compact'}>
 		{#if pending === 'compact'}<Spinner />{t('최적화 중…')}{:else}{t('저장공간 최적화')}{/if}
 	</Button>
 </fieldset>
+
+<!-- ── 스토리지 ── -->
+<h3 class="group">{t('스토리지')}</h3>
+<p class="desc">{t('blob 저장 백엔드를 로컬과 S3 사이에서 옮깁니다. 마이그레이션 중에는 캡처·스케줄·크롤이 중지되고, 0건 실패로 끝나야 활성 백엔드가 전환됩니다.')}</p>
+{#if storage}
+	<fieldset class="sec">
+		<legend>{t('blob 저장 백엔드')}</legend>
+		<p class="desc">
+			<span class="muted">{t('활성 백엔드')}:</span>
+			<span class="mono">{storage.active_backend === 's3' ? t('S3 (객체 저장소)') : t('로컬 저장소')}</span>
+		</p>
+		<p class="desc">
+			<span class="muted">{t('전환 방향')}:</span> <span class="mono">{migrateDir}</span>
+		</p>
+		<div class="btn-row">
+			<Button variant="outline" size="sm" disabled={busy || storageRunning} onclick={startMigration} aria-busy={storageRunning}>
+				{#if storageRunning}<Spinner />{t('마이그레이션 중…')}{:else}{t('마이그레이션 시작')}{/if}
+			</Button>
+			{#if storageRunning}<span class="muted">{t('마이그레이션 중')} {storage.done ?? 0}/{storage.total ?? 0} ({migratePct})</span>{/if}
+		</div>
+
+		{#if storage.status === 'partial' && storage.failed?.length}
+			<p class="desc warn">{t('실패한 파일')} ({storage.failed.length})</p>
+			<ul class="faillist mono">
+				{#each storage.failed.slice(0, 50) as f}
+					<li title={f.error}>{f.path}</li>
+				{/each}
+			</ul>
+			<Button variant="outline" size="sm" class="self-start" disabled={busy || storageRunning} onclick={retryMigration}>{t('전체 재시도')}</Button>
+		{/if}
+	</fieldset>
+
+	{#if storage.summary?.cleanup_pending}
+		<fieldset class="sec danger">
+			<legend>{t('원본 정리 대기')}</legend>
+			<p class="desc">{t('마이그레이션이 완료되었습니다. 아래 원본을 수동으로 삭제한 뒤 정리 완료를 확인하세요 (원본은 자동 삭제되지 않습니다).')}</p>
+			<p class="desc">
+				<span class="muted">{t('전환 방향')}:</span>
+				<span class="mono">{directionLabel(storage.summary.direction)}</span>
+			</p>
+			<p class="desc">
+				<span class="muted">{t('원본 위치')}:</span>
+				<span class="mono">{storage.summary.source_location ?? ''}</span>
+			</p>
+			<Button variant="outline" size="sm" class="self-start" disabled={busy || storageRunning} onclick={confirmCleanup}>{t('정리 완료 확인')}</Button>
+		</fieldset>
+	{/if}
+{/if}
 
 <!-- ── 아카이브 설정 ── -->
 <h3 class="group">{t('아카이브 설정')}</h3>
@@ -681,6 +814,22 @@
 		border-radius: 4px;
 		padding: 8px 10px;
 		font-size: 12px;
+		word-break: break-all;
+	}
+	/* 마이그레이션 실패 파일 목록 — 길면 스크롤 */
+	.faillist {
+		list-style: none;
+		padding: 6px 10px;
+		margin: 0;
+		max-width: 560px;
+		max-height: 160px;
+		overflow-y: auto;
+		background: var(--bg-soft);
+		border-radius: 4px;
+		font-size: 12px;
+	}
+	.faillist li {
+		padding: 2px 0;
 		word-break: break-all;
 	}
 </style>
