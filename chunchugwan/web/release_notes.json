@@ -1,4 +1,18 @@
 {
+  "0.10.0": {
+    "items": [
+      {
+        "pr": 232,
+        "text": "fix: S3 마이그레이션 신뢰성·관측성 (CSS 무결성·Expect 경고·폴링 재개·로그)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/232"
+      },
+      {
+        "pr": null,
+        "text": "@dependabot[bot] made their first contribution in https://github.com/TylorSTYLE/ChunChuGwan/pull/228",
+        "url": null
+      }
+    ]
+  },
   "0.6.1": {
     "items": [
       {
