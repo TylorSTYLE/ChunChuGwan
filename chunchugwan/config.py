@@ -47,6 +47,9 @@ S3_FORCE_PATH_STYLE = os.environ.get("WCCG_S3_FORCE_PATH_STYLE", "on") != "off"
 S3_PREFIX = os.environ.get("WCCG_S3_PREFIX", "").strip()
 # read-through 캐시 용량 상한 (MB) — 초과 시 LRU 제거
 BLOB_CACHE_MAX_MB = int(os.environ.get("WCCG_BLOB_CACHE_MAX_MB", "2048"))
+# 로컬↔S3 마이그레이션 동시 전송 워커 수 (파일 단위 copy 병렬도). 네트워크 I/O
+# 바운드라 동시 전송으로 크게 빨라진다. 호출부에서 [1, 16] 으로 클램핑한다.
+S3_MIGRATION_WORKERS = int(os.environ.get("WCCG_S3_MIGRATION_WORKERS", "4"))
 
 # ---- S3 DB 백업 (db_backup.py — S3 모드에서 index.db+rules.json 을 db-backups/ 로) ----
 # 주기(시간)와 보존 개수는 시스템 설정으로 변경하며, 오염·범위 밖이면 기본값으로
