@@ -2145,10 +2145,10 @@ def system_overview(
         },
         "smtp_tls_modes": list(mailer.SMTP_TLS_MODES),
         "archive_root": str(config.ARCHIVE_ROOT),
-        "usage": {
-            "db": usage["db"], "sites": usage["sites"],
-            "resources": usage["resources"], "documents": usage["documents"],
-        },
+        # 로컬 모드는 db/sites/resources/documents, S3 모드는 db/cache/blobcache
+        # 키를 돌려준다(archive_disk_usage). 프론트가 양쪽 형태를 모두 처리하므로
+        # 키를 골라내지 않고 그대로 내려준다.
+        "usage": dict(usage),
         "optimize_pending": sum(optimize.pending_counts()),
         "search": searchindex.verify(),
         "migration_mode": migration_mode,
