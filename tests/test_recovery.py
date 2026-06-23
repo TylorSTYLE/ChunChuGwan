@@ -310,6 +310,22 @@ def test_recovery_expose_all_and_toggle(env):
         assert row["authenticated"] == 1
 
 
+def test_recovery_restricted_count_reflects_releases(env):
+    """status().restricted_count 가 전체 노출/개별 해제로 줄어든다 (배너 표시 기준)."""
+    _make_snapshot(env, "https://example.com/p", 1, "h1")
+    _make_snapshot(env, "https://example.com/p", 2, "h2")
+    recovery.start_recovery()
+    _join()
+    assert recovery.status()["restricted_count"] == 2  # 복구 직후 전수 제한
+    with db.connect() as conn:
+        db.set_snapshot_authenticated(conn, 1, 0)  # 한 개 개별 해제
+    assert recovery.status()["restricted_count"] == 1
+    with db.connect() as conn:
+        meta = db.recovery_meta(conn)
+        db.expose_recovered_snapshots(conn, meta["baseline_max_id"], meta["last_id"])
+    assert recovery.status()["restricted_count"] == 0  # 전체 노출 → 배너 사라짐
+
+
 def test_recovery_choice_forbidden_for_non_admin(env):
     client = _admin_client(env)
     client.post("/api/web/auth/login",

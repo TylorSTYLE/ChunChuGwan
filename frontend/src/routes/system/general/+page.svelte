@@ -5,7 +5,7 @@
 	import { t } from '$lib/i18n';
 	import { filesize } from '$lib/format';
 	import { api, ApiError, download } from '$lib/api';
-	import type { SystemOverview, StorageStatus, DbBackupStatus } from '$lib/types';
+	import type { SystemOverview, StorageStatus, DbBackupStatus, RecoveryStatus } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -106,6 +106,11 @@
 	let dbBackup = $state<DbBackupStatus | null>(null);
 	let dbbInterval = $state(24);
 	let dbbKeep = $state(14);
+
+	// 복구-선택 — 서버 status 의 restricted_count 가 정본(새로고침/세션 간 영속).
+	// 복구된 스냅샷이 아직 제한(authenticated=1)인 동안에만 배너가 뜬다.
+	let recovery = $state<RecoveryStatus | null>(null);
+	const recoveryPending = $derived((recovery?.restricted_count ?? 0) > 0);
 	$effect(() => {
 		if (dbBackup) {
 			dbbInterval = dbBackup.interval_hours;
@@ -384,9 +389,39 @@
 		}
 	}
 
+	async function loadRecovery() {
+		try {
+			recovery = await api<RecoveryStatus>('/system/recovery/status');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function exposeAllRecovered() {
+		if (
+			!confirm(
+				t('복구된 스냅샷을 모두 전체 공개로 바꿀까요? 로그인 캡처였을 수 있어 비공개 정보가 노출될 수 있습니다.')
+			)
+		)
+			return;
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			const r = await api<{ exposed: number }>('/system/recovery/expose-all', { method: 'POST' });
+			notice = t('복구 스냅샷 {n}개를 전체 공개로 바꿨습니다.').replace('{n}', String(r.exposed));
+			await loadRecovery();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+		}
+	}
+
 	onMount(() => {
 		loadStorage();
 		loadDbBackup();
+		loadRecovery();
 	});
 
 	async function uploadFile(e: Event, path: string, confirmMsg: string, extra: Record<string, string> = {}) {
@@ -472,6 +507,22 @@
 <!-- ── 스토리지 ── -->
 <h3 class="group">{t('스토리지')}</h3>
 <p class="desc">{t('blob 저장 백엔드를 로컬과 S3 사이에서 옮깁니다. 마이그레이션 중에는 캡처·스케줄·크롤이 중지되고, 0건 실패로 끝나야 활성 백엔드가 전환됩니다.')}</p>
+
+{#if recoveryPending}
+	<fieldset class="sec danger">
+		<legend>{t('복구 스냅샷 분류 대기')}</legend>
+		<p class="desc">
+			{t('복구된 스냅샷 {n}개가 보안상 관리자 전용으로 제한되어 있습니다 (로그인 캡처 여부를 알 수 없어 보수적으로 제한).').replace('{n}', String(recovery?.restricted_count ?? 0))}
+		</p>
+		<p class="desc">
+			{t('각 스냅샷 화면에서 개별로 검토해 공개하거나, 아래에서 한 번에 전체 공개로 바꿀 수 있습니다.')}
+		</p>
+		<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={exposeAllRecovered}>
+			{t('복구 스냅샷 전체 공개')}
+		</Button>
+	</fieldset>
+{/if}
+
 {#if storage}
 	<fieldset class="sec">
 		<legend>{t('blob 저장 백엔드')}</legend>

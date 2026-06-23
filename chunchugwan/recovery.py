@@ -153,11 +153,21 @@ _thread: threading.Thread | None = None
 
 
 def status() -> dict:
-    """복구 진행 상태 (폴링용) — 인메모리 진행률 + DB 복구 메타(세션 간)."""
+    """복구 진행 상태 (폴링용) — 인메모리 진행률 + DB 복구 메타(세션 간).
+
+    restricted_count 는 복구분 중 아직 제한(authenticated=1)인 스냅샷의 현재 개수다
+    — 복구-선택 배너가 이 값이 0 보다 클 때만 뜨고, 전체 노출·개별 해제로 0 이
+    되면 사라진다(서버 기반·세션 간 영속).
+    """
     with _lock:
         live = dict(_state)
     with db.connect() as conn:
-        live["recovery_meta"] = db.recovery_meta(conn)
+        meta = db.recovery_meta(conn)
+        live["recovery_meta"] = meta
+        live["restricted_count"] = 0
+        if meta and meta.get("last_id") is not None:
+            live["restricted_count"] = db.count_restricted_recovered(
+                conn, meta["baseline_max_id"], meta["last_id"])
     return live
 
 

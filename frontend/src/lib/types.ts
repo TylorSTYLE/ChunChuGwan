@@ -766,6 +766,40 @@ export interface StorageStatus {
 	summary?: StorageMigrationSummary | null;
 }
 
+// 복구모드 — /auth/setup/recover/status·/system/recovery/status 응답.
+export interface RecoveryMeta {
+	baseline_max_id?: number;
+	last_id?: number;
+	status?: string;
+	recovered?: number;
+	source_backend?: string;
+	finished_at?: string;
+}
+
+export interface RecoveryStatus {
+	status: string; // idle | scanning | rebuilding | done | error
+	done?: number;
+	total?: number;
+	error?: string | null;
+	source_backend?: string;
+	restricted_count?: number; // 복구분 중 아직 제한(authenticated=1)인 개수 (배너 기준)
+	recovery_meta?: RecoveryMeta | null;
+}
+
+// 첫 구동 분류 — /auth/setup 응답 (P5a recovery.classify + 진행 상태).
+export interface SetupStatus {
+	needed: boolean;
+	migration: MigrationStatus;
+	token_required: boolean;
+	case: string; // operating | data_preserved | restore_s3 | recover_local | recover_s3 | fresh
+	has_archive_data?: boolean;
+	local_blob?: boolean;
+	s3_configured?: boolean;
+	s3_blob?: boolean;
+	s3_db_backup?: boolean;
+	recovery?: RecoveryStatus | null;
+}
+
 // S3 DB 백업 — /api/web/system/db-backup/status 응답.
 export interface DbBackupStatus {
 	s3_mode: boolean;

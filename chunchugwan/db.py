@@ -5124,6 +5124,21 @@ def expose_recovered_snapshots(
     return cur.rowcount
 
 
+def count_restricted_recovered(
+    conn: sqlite3.Connection, baseline_id: int, last_id: int
+) -> int:
+    """복구 범위(baseline < id <= last_id)에서 아직 제한(authenticated=1)인 스냅샷 수.
+
+    복구-선택 배너의 '현재 제한 개수' — 전체 노출·개별 해제로 줄어들고 0 이 되면
+    배너가 사라진다(서버 기반 표시).
+    """
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots "
+        "WHERE id > ? AND id <= ? AND authenticated = 1",
+        (baseline_id, last_id),
+    ).fetchone()["c"]
+
+
 def set_snapshot_authenticated(
     conn: sqlite3.Connection, snapshot_id: int, value: int
 ) -> None:
