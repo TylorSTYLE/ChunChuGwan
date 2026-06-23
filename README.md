@@ -136,7 +136,9 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d dashboard
 ```
 
 포트는 호스트의 127.0.0.1 에만 바인딩되고, 컨테이너 대시보드는 인증이 항상
-켜진다. 도커 단독 실행·공통 사항·이미지 빌드 등 자세한 내용은
+켜진다. 윈도우·macOS 에서 Docker Desktop(GUI 앱)으로 처음 구동한다면
+[Docker Desktop 설치·설정 안내](docs/DOCKER.md#docker-desktop으로-설치-및-설정)
+를 따라 하면 된다. 도커 단독 실행·공통 사항·이미지 빌드 등 자세한 내용은
 [docs/DOCKER.md](docs/DOCKER.md) 참조.
 
 ## 대시보드
