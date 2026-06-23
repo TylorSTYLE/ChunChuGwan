@@ -1,12 +1,41 @@
 <script lang="ts">
 	import { pagePath } from '$lib/urls';
 	import { base } from '$app/paths';
+	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
-	import type { SnapshotMeta } from '$lib/types';
+	import { api, ApiError } from '$lib/api';
+	import { Button } from '$lib/components/ui/button';
+	import type { SnapshotMeta, Me } from '$lib/types';
 
-	let { data }: { data: { meta: SnapshotMeta } } = $props();
+	let { data }: { data: { meta: SnapshotMeta; me: Me | null } } = $props();
 	const m = $derived(data.meta);
+	// 관리자 전용 — 복구된(또는 로그인 캡처) 스냅샷의 접근 제한(authenticated) 토글.
+	const isAdmin = $derived(!!data.me?.flags.can_manage_system);
+	const restricted = $derived(!!m.snap.authenticated);
+	let authBusy = $state(false);
+	let authError = $state('');
+
+	async function toggleAuth() {
+		const restrict = !restricted;
+		const msg = restrict
+			? t('이 스냅샷을 관리자 전용으로 제한할까요?')
+			: t('이 스냅샷을 모든 사용자에게 공개할까요? 로그인 캡처였다면 비공개 정보가 노출될 수 있습니다.');
+		if (!confirm(msg)) return;
+		authBusy = true;
+		authError = '';
+		try {
+			await api(`/system/recovery/snapshot/${m.snap.id}/authenticated`, {
+				method: 'POST',
+				body: JSON.stringify({ value: restrict })
+			});
+			await invalidateAll();
+		} catch (err) {
+			authError = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			authBusy = false;
+		}
+	}
 
 	type Tab = 'render' | 'shot' | 'shot-mobile' | 'text';
 	let tab = $state<Tab>('render');
@@ -39,6 +68,17 @@
 		<tr><th>HTTP</th><td class="mono">{m.snap.http_status ?? '-'}</td></tr>
 	</tbody>
 </table>
+
+{#if isAdmin}
+	<div class="auth-control">
+		<span class="muted">{t('접근')}:</span>
+		<span class="mono">{restricted ? t('관리자 전용 (제한됨)') : t('전체 공개')}</span>
+		<Button variant="outline" size="sm" onclick={toggleAuth} disabled={authBusy}>
+			{restricted ? t('전체 공개로 전환') : t('관리자 전용으로 제한')}
+		</Button>
+	</div>
+	{#if authError}<p class="auth-err">{authError}</p>{/if}
+{/if}
 
 {#if m.documents.length > 0}
 	<h3>{t('첨부 문서')} ({m.documents.length})</h3>
@@ -101,6 +141,19 @@
 {/if}
 
 <style>
+	.auth-control {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 8px 0;
+		font-size: 13px;
+		max-width: 760px;
+	}
+	.auth-err {
+		color: var(--destructive, #b91c1c);
+		font-size: 12px;
+		margin: 4px 0;
+	}
 	.viewer-frame {
 		width: 100%;
 		height: 78vh;

@@ -1479,6 +1479,118 @@ _EN: dict[str, str] = {
     "이전(마이그레이션) 모드입니다 — 데이터 이전 중에는 아카이빙할 수 없습니다. 시스템 설정에서 이전 모드를 끄세요.":
         "Migration mode is on — you cannot archive during data migration. Turn off "
         "migration mode in system settings.",
+    # 스토리지(blob 백엔드) 마이그레이션 — system/general 화면
+    "스토리지": "Storage",
+    "blob 저장 백엔드를 로컬과 S3 사이에서 옮깁니다. 마이그레이션 중에는 캡처·스케줄·크롤이 중지되고, 0건 실패로 끝나야 활성 백엔드가 전환됩니다.":
+        "Move the blob storage backend between local and S3. Capture, schedules, and "
+        "crawls pause during migration, and the active backend switches only after it "
+        "finishes with zero failures.",
+    "blob 저장 백엔드": "Blob storage backend",
+    "활성 백엔드": "Active backend",
+    "S3 (객체 저장소)": "S3 (object storage)",
+    "로컬 저장소": "Local storage",
+    "전환 방향": "Migration direction",
+    "로컬 → S3": "Local → S3",
+    "S3 → 로컬": "S3 → Local",
+    "마이그레이션 시작": "Start migration",
+    "마이그레이션 중…": "Migrating…",
+    "마이그레이션 중": "Migrating",
+    "마이그레이션 중에는 캡처·스케줄·크롤이 중지됩니다. 진행하시겠습니까?":
+        "Capture, schedules, and crawls will pause during migration. Continue?",
+    "마이그레이션을 완료했습니다.": "Migration complete.",
+    "마이그레이션 실패": "Migration failed",
+    "일부 파일이 실패했습니다 — 재시도하세요.": "Some files failed — please retry.",
+    "실패한 파일": "Failed files",
+    "원본 정리 대기": "Source cleanup pending",
+    "마이그레이션이 완료되었습니다. 아래 원본을 수동으로 삭제한 뒤 정리 완료를 확인하세요 (원본은 자동 삭제되지 않습니다).":
+        "Migration is complete. Manually delete the source below, then confirm cleanup "
+        "(the source is not deleted automatically).",
+    "원본 위치": "Source location",
+    "정리 완료 확인": "Confirm cleanup",
+    "원본 정리를 확인했습니다.": "Source cleanup confirmed.",
+    # S3 DB 백업 — system/general 화면
+    "DB 백업 (S3)": "DB backup (S3)",
+    "index.db 와 rules.json 을 S3 의 db-backups/ 에 백업합니다 (S3 모드 전용). 전체 백업의 대체 내구성 수단입니다.":
+        "Back up index.db and rules.json to db-backups/ on S3 (S3 mode only) — a "
+        "durability alternative to full backups.",
+    "S3 모드에서만 사용할 수 있습니다.": "Available in S3 mode only.",
+    "마지막 백업": "Last backup",
+    "S3 백업 개수": "S3 backup count",
+    "목록 조회 오류": "List error",
+    "지금 백업": "Back up now",
+    "백업 중…": "Backing up…",
+    "백업 주기(시간)": "Backup interval (hours)",
+    "보존 개수": "Keep count",
+    "DB 백업을 완료했습니다.": "DB backup complete.",
+    # 첫 구동 분기 + 복구 (setup 마법사·복구-선택·스냅샷 토글, P5b)
+    "기존 아카이브 데이터를 발견해 보존했습니다. 관리자 계정을 만들어 시작하세요.":
+        "Existing archive data was found and preserved. Create an admin account to start.",
+    "고급 — 감지된 데이터를 대체하는 작업": "Advanced — actions that replace detected data",
+    "아래 작업은 방금 감지된 기존 데이터를 대체합니다. 의도한 경우에만 사용하세요.":
+        "The actions below replace the existing data just detected. Use only if intended.",
+    "S3 에 DB 백업이 있습니다. 복원하면 사용자 계정을 포함한 전체가 백업 시점으로 복구됩니다.":
+        "A DB backup exists on S3. Restoring recovers everything, including user accounts, "
+        "to the backup point.",
+    "S3 DB 백업에서 복원": "Restore from S3 DB backup",
+    "S3 DB 백업 복원": "Restore S3 DB backup",
+    "S3 db-backups/ 의 최신 백업으로 복원합니다. 완료되면 백업의 계정으로 로그인합니다.":
+        "Restore from the latest backup in S3 db-backups/. When done, log in with the "
+        "backup's account.",
+    "S3 DB 백업에서 복원하면 사용자 계정을 포함한 전체 인덱스가 백업 시점으로 채워집니다. 계속할까요?":
+        "Restoring from the S3 DB backup fills the entire index — including user accounts — "
+        "to the backup point. Continue?",
+    "또는 새로 시작 (관리자 생성)": "Or start fresh (create admin)",
+    "아카이브 blob 을 발견했지만 인덱스(DB)가 비어 있습니다. 복구모드로 blob 에서 인덱스를 재구축할 수 있습니다 — 복구된 스냅샷은 기본적으로 관리자 전용으로 제한되고, 복구 후 관리자 계정을 만듭니다.":
+        "Archive blobs were found but the index (DB) is empty. Recovery mode can rebuild "
+        "the index from blobs — recovered snapshots are admin-only by default, and you "
+        "create an admin account afterward.",
+    "복구모드": "Recovery mode",
+    "복구모드 시작": "Start recovery mode",
+    "인덱스 재구축 중": "Rebuilding index",
+    "복구 재시도": "Retry recovery",
+    "복구를 완료했습니다. 복구된 스냅샷은 기본적으로 관리자 전용으로 제한됩니다 — 관리자 계정을 만든 뒤 공개 정책을 선택하세요.":
+        "Recovery complete. Recovered snapshots are admin-only by default — create an admin "
+        "account, then choose the disclosure policy.",
+    "복구 스냅샷 분류 대기": "Recovered snapshots awaiting classification",
+    "복구된 스냅샷 {n}개가 보안상 관리자 전용으로 제한되어 있습니다 (로그인 캡처 여부를 알 수 없어 보수적으로 제한).":
+        "{n} recovered snapshots are restricted to admins for safety (conservative — whether "
+        "they were login captures is unknown).",
+    "각 스냅샷 화면에서 개별로 검토해 공개하거나, 아래에서 한 번에 전체 공개로 바꿀 수 있습니다.":
+        "Review and expose them individually on each snapshot page, or expose all at once below.",
+    "복구 스냅샷 전체 공개": "Expose all recovered snapshots",
+    "복구된 스냅샷을 모두 전체 공개로 바꿀까요? 로그인 캡처였을 수 있어 비공개 정보가 노출될 수 있습니다.":
+        "Expose all recovered snapshots to everyone? They may have been login captures, so "
+        "private information could be disclosed.",
+    "복구 스냅샷 {n}개를 전체 공개로 바꿨습니다.": "Exposed {n} recovered snapshots.",
+    "접근": "Access",
+    "관리자 전용 (제한됨)": "Admin only (restricted)",
+    "전체 공개": "Public",
+    "전체 공개로 전환": "Make public",
+    "관리자 전용으로 제한": "Restrict to admins",
+    "이 스냅샷을 관리자 전용으로 제한할까요?": "Restrict this snapshot to admins?",
+    "이 스냅샷을 모든 사용자에게 공개할까요? 로그인 캡처였다면 비공개 정보가 노출될 수 있습니다.":
+        "Make this snapshot visible to everyone? If it was a login capture, private "
+        "information could be disclosed.",
+    # 온디맨드 사용량 (system/general, P6)
+    "로컬 사용량": "Local usage",
+    "Object Storage 사용량": "Object Storage usage",
+    "캐시": "Cache",
+    "read-through 캐시": "Read-through cache",
+    "DB 백업": "DB backups",
+    "기타": "Other",
+    "총합": "Total",
+    "마지막 조회": "Last scanned",
+    "미조회": "Not scanned",
+    "업데이트": "Update",
+    "조회 중…": "Scanning…",
+    "사용량을 갱신했습니다.": "Usage updated.",
+    "아직 조회한 적이 없습니다. [업데이트] 로 S3 사용량을 조회하세요.":
+        "Not scanned yet. Use [Update] to scan S3 usage.",
+    "모든 객체를 조회하므로 부하가 발생합니다. 진행하시겠습니까?":
+        "This lists every object and may be costly. Continue?",
+    "S3 모드에서는 전체 백업·복원이 비활성화됩니다 (blob 이 로컬에 없음). 내구성은 S3 DB 백업으로, 데이터 이동은 내보내기/가져오기로 하세요.":
+        "Full backup/restore is disabled in S3 mode (blobs are not local). Use S3 DB "
+        "backups for durability and export/import to move data.",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

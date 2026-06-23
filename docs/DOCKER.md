@@ -142,6 +142,25 @@ services:
       # WCCG_PUBLIC_URL: "https://archive.example.com"   # 리버스 프록시로 외부 노출 시
 ```
 
+#### (선택) S3 객체 저장소에 blob 저장
+
+대용량·원격 운영이면 blob(`sites/`·`resources/`·`documents/`)을 S3 호환 저장소에
+둘 수 있다 (자체 호스팅은 **MinIO 권장**). `index.db`·캐시는 로컬에 남는다. env 는
+**가용성**만 설정하고, 실제 전환은 대시보드 시스템 화면의 **양방향 마이그레이션**
+(또는 첫 구동 setup)으로 한다 — 설계·동작 상세는 [STORAGE.md](STORAGE.md#s3-객체-저장소-백엔드-선택).
+비밀값은 추적 파일에 넣지 말고 `.env`/override 에 둔다 (아래는 **플레이스홀더**).
+
+```yaml
+      WCCG_S3_ENDPOINT_URL: "https://minio.example:9000"  # AWS 면 비우고 region 사용
+      WCCG_S3_BUCKET: "chunchugwan"
+      WCCG_S3_ACCESS_KEY_ID: "<ACCESS_KEY>"
+      WCCG_S3_SECRET_ACCESS_KEY: "<SECRET_KEY>"
+      # WCCG_S3_REGION: "us-east-1"           # 기본값
+      # WCCG_S3_FORCE_PATH_STYLE: "on"         # MinIO 기본 on
+      # WCCG_S3_PREFIX: ""                     # 버킷 내 키 프리픽스(선택)
+      # WCCG_BLOB_CACHE_MAX_MB: "2048"         # read-through 캐시 상한
+```
+
 > `WCCG_HOST: "0.0.0.0"` 는 컨테이너 **내부** 바인딩이라 그대로 둔다 — 외부 노출은
 > `127.0.0.1:8765` 포트 매핑이 막고, 그래서 컨테이너 대시보드는 인증이 항상 켜진다
 > (보안 동작 상세 → [공통 사항](#공통-사항)).

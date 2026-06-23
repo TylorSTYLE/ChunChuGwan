@@ -1,10 +1,17 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize } from '$lib/format';
 	import { api, ApiError, download } from '$lib/api';
-	import type { SystemOverview } from '$lib/types';
+	import type {
+		SystemOverview,
+		StorageStatus,
+		DbBackupStatus,
+		RecoveryStatus,
+		StorageUsage
+	} from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -82,6 +89,45 @@
 
 	// 데이터 이전(마이그레이션) — 발급 토큰은 1회만 표시
 	let migrationToken = $state('');
+
+	// 스토리지(blob 백엔드) 마이그레이션 — 서버 status 가 진행/정리대기의 정본.
+	let storage = $state<StorageStatus | null>(null);
+	const storageRunning = $derived(
+		storage?.status === 'manifest' || storage?.status === 'copying'
+	);
+	const migrateDir = $derived(
+		storage?.active_backend === 's3' ? t('S3 → 로컬') : t('로컬 → S3')
+	);
+	const migratePct = $derived(
+		storage?.total ? `${Math.round(((storage.done ?? 0) / storage.total) * 100)}%` : '0%'
+	);
+	function directionLabel(dir?: string): string {
+		if (dir === 'local_to_s3') return t('로컬 → S3');
+		if (dir === 's3_to_local') return t('S3 → 로컬');
+		return dir ?? '';
+	}
+
+	// S3 DB 백업 — 서버 status 가 마지막 백업·목록·설정의 정본. 빈번 폴링 없이
+	// 진입 시 1회 로드 + [지금 백업] 후 갱신.
+	let dbBackup = $state<DbBackupStatus | null>(null);
+	let dbbInterval = $state(24);
+	let dbbKeep = $state(14);
+
+	// 복구-선택 — 서버 status 의 restricted_count 가 정본(새로고침/세션 간 영속).
+	// 복구된 스냅샷이 아직 제한(authenticated=1)인 동안에만 배너가 뜬다.
+	let recovery = $state<RecoveryStatus | null>(null);
+	const recoveryPending = $derived((recovery?.restricted_count ?? 0) > 0);
+
+	// 저장 사용량 — S3 모드에서 로컬/Object Storage 분리. GET 은 캐시만(S3 미호출),
+	// [업데이트] 만 명시 스캔. 로컬 모드는 기존 미터(s.usage) 그대로.
+	const isS3 = $derived(s.storage_backend === 's3');
+	let usage = $state<StorageUsage | null>(null);
+	$effect(() => {
+		if (dbBackup) {
+			dbbInterval = dbBackup.interval_hours;
+			dbbKeep = dbBackup.keep;
+		}
+	});
 
 	$effect(() => {
 		signupEnabled = s.signup_enabled;
@@ -259,6 +305,162 @@
 		}
 	}
 
+	async function loadStorage() {
+		try {
+			storage = await api<StorageStatus>('/system/storage/status');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	// 재색인 폴링(pollReindex) 미러 — 진행 중이면 setTimeout 으로 재폴링.
+	async function pollStorage() {
+		try {
+			const st = await api<StorageStatus>('/system/storage/status');
+			storage = st;
+			if (st.status === 'manifest' || st.status === 'copying') {
+				setTimeout(pollStorage, 1000);
+			} else {
+				if (st.status === 'error') {
+					notice = `${t('마이그레이션 실패')}: ${st.error ?? ''}`;
+				} else if (st.status === 'partial') {
+					notice = t('일부 파일이 실패했습니다 — 재시도하세요.');
+				} else if (st.status === 'done') {
+					notice = t('마이그레이션을 완료했습니다.');
+				}
+				await invalidateAll(); // 활성 백엔드·용량이 바뀌었을 수 있다
+			}
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function startMigration() {
+		if (!confirm(t('마이그레이션 중에는 캡처·스케줄·크롤이 중지됩니다. 진행하시겠습니까?'))) return;
+		error = '';
+		notice = '';
+		try {
+			await api('/system/storage/migrate/start', { method: 'POST' });
+			pollStorage();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function retryMigration() {
+		error = '';
+		notice = '';
+		try {
+			await api('/system/storage/migrate/retry', { method: 'POST' });
+			pollStorage();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function confirmCleanup() {
+		error = '';
+		notice = '';
+		try {
+			await api('/system/storage/cleanup/confirm', { method: 'POST' });
+			notice = t('원본 정리를 확인했습니다.');
+			await loadStorage();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function loadDbBackup() {
+		try {
+			dbBackup = await api<DbBackupStatus>('/system/db-backup/status');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function runDbBackup() {
+		busy = true;
+		pending = 'db-backup';
+		error = '';
+		notice = '';
+		try {
+			dbBackup = await api<DbBackupStatus>('/system/db-backup/run', { method: 'POST' });
+			notice = t('DB 백업을 완료했습니다.');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+			pending = '';
+		}
+	}
+
+	async function saveDbBackupSettings() {
+		if (await save('/system/db-backup/settings', { interval_hours: dbbInterval, keep: dbbKeep })) {
+			await loadDbBackup();
+		}
+	}
+
+	async function loadRecovery() {
+		try {
+			recovery = await api<RecoveryStatus>('/system/recovery/status');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function exposeAllRecovered() {
+		if (
+			!confirm(
+				t('복구된 스냅샷을 모두 전체 공개로 바꿀까요? 로그인 캡처였을 수 있어 비공개 정보가 노출될 수 있습니다.')
+			)
+		)
+			return;
+		busy = true;
+		error = '';
+		notice = '';
+		try {
+			const r = await api<{ exposed: number }>('/system/recovery/expose-all', { method: 'POST' });
+			notice = t('복구 스냅샷 {n}개를 전체 공개로 바꿨습니다.').replace('{n}', String(r.exposed));
+			await loadRecovery();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function loadUsage() {
+		try {
+			usage = await api<StorageUsage>('/system/storage/usage');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function scanUsage() {
+		if (!confirm(t('모든 객체를 조회하므로 부하가 발생합니다. 진행하시겠습니까?'))) return;
+		busy = true;
+		pending = 'usage-scan';
+		error = '';
+		notice = '';
+		try {
+			usage = await api<StorageUsage>('/system/storage/usage/scan', { method: 'POST' });
+			notice = t('사용량을 갱신했습니다.');
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			busy = false;
+			pending = '';
+		}
+	}
+
+	onMount(() => {
+		loadStorage();
+		loadDbBackup();
+		loadRecovery();
+		if (isS3) loadUsage();
+	});
+
 	async function uploadFile(e: Event, path: string, confirmMsg: string, extra: Record<string, string> = {}) {
 		const input = e.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
@@ -299,24 +501,61 @@
 	<div class="stat-card"><div class="label">{t('사용자')}</div><div class="value">{s.counts.users}</div></div>
 </div>
 
-<div class="meter-box">
-	<div class="meter-head">
-		<span>{t('저장 용량')}</span>
-		<span class="mono muted">{filesize(usageTotal)}</span>
+{#if !isS3}
+	<div class="meter-box">
+		<div class="meter-head">
+			<span>{t('저장 용량')}</span>
+			<span class="mono muted">{filesize(usageTotal)}</span>
+		</div>
+		<div class="meter">
+			<span class="seg seg-db" style="width:{pct(s.usage.db)}" title="DB {filesize(s.usage.db)}"></span>
+			<span class="seg seg-sites" style="width:{pct(s.usage.sites)}" title="{t('사이트')} {filesize(s.usage.sites)}"></span>
+			<span class="seg seg-res" style="width:{pct(s.usage.resources)}" title="{t('공유 자원')} {filesize(s.usage.resources)}"></span>
+			<span class="seg seg-docs" style="width:{pct(s.usage.documents)}" title="{t('문서')} {filesize(s.usage.documents)}"></span>
+		</div>
+		<ul class="legend-list mono">
+			<li><span class="dot seg-db"></span>DB {filesize(s.usage.db)}</li>
+			<li><span class="dot seg-sites"></span>{t('사이트')} {filesize(s.usage.sites)}</li>
+			<li><span class="dot seg-res"></span>{t('공유 자원')} {filesize(s.usage.resources)}</li>
+			<li><span class="dot seg-docs"></span>{t('문서')} {filesize(s.usage.documents)}</li>
+		</ul>
 	</div>
-	<div class="meter">
-		<span class="seg seg-db" style="width:{pct(s.usage.db)}" title="DB {filesize(s.usage.db)}"></span>
-		<span class="seg seg-sites" style="width:{pct(s.usage.sites)}" title="{t('사이트')} {filesize(s.usage.sites)}"></span>
-		<span class="seg seg-res" style="width:{pct(s.usage.resources)}" title="{t('공유 자원')} {filesize(s.usage.resources)}"></span>
-		<span class="seg seg-docs" style="width:{pct(s.usage.documents)}" title="{t('문서')} {filesize(s.usage.documents)}"></span>
+{:else}
+	<!-- S3 모드 — 로컬 사용량과 Object Storage 사용량을 분리 -->
+	<div class="meter-box">
+		<div class="meter-head"><span>{t('로컬 사용량')}</span></div>
+		<ul class="legend-list mono">
+			<li><span class="dot seg-db"></span>DB {filesize(usage?.local?.db ?? s.usage.db ?? 0)}</li>
+			<li><span class="dot seg-sites"></span>{t('캐시')} {filesize(usage?.local?.cache ?? s.usage.cache ?? 0)}</li>
+			<li><span class="dot seg-res"></span>{t('read-through 캐시')} {filesize(usage?.local?.blobcache ?? s.usage.blobcache ?? 0)}</li>
+		</ul>
 	</div>
-	<ul class="legend-list mono">
-		<li><span class="dot seg-db"></span>DB {filesize(s.usage.db)}</li>
-		<li><span class="dot seg-sites"></span>{t('사이트')} {filesize(s.usage.sites)}</li>
-		<li><span class="dot seg-res"></span>{t('공유 자원')} {filesize(s.usage.resources)}</li>
-		<li><span class="dot seg-docs"></span>{t('문서')} {filesize(s.usage.documents)}</li>
-	</ul>
-</div>
+	<div class="meter-box">
+		<div class="meter-head">
+			<span>{t('Object Storage 사용량')}</span>
+			<span class="mono muted">
+				{usage?.s3 ? `${t('마지막 조회')}: ${usage.s3.scanned_at}` : t('미조회')}
+			</span>
+		</div>
+		{#if usage?.s3}
+			<ul class="legend-list mono">
+				<li><span class="dot seg-sites"></span>{t('사이트')} {filesize(usage.s3.categories.sites ?? 0)}</li>
+				<li><span class="dot seg-res"></span>{t('공유 자원')} {filesize(usage.s3.categories.resources ?? 0)}</li>
+				<li><span class="dot seg-docs"></span>{t('문서')} {filesize(usage.s3.categories.documents ?? 0)}</li>
+				<li><span class="dot seg-db"></span>{t('DB 백업')} {filesize(usage.s3.categories['db-backups'] ?? 0)}</li>
+				{#if usage.s3.categories.other}
+					<li><span class="dot"></span>{t('기타')} {filesize(usage.s3.categories.other)}</li>
+				{/if}
+				<li class="muted">{t('총합')} {filesize(usage.s3.total)}</li>
+			</ul>
+		{:else}
+			<p class="desc">{t('아직 조회한 적이 없습니다. [업데이트] 로 S3 사용량을 조회하세요.')}</p>
+		{/if}
+		<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={scanUsage} aria-busy={pending === 'usage-scan'}>
+			{#if pending === 'usage-scan'}<Spinner />{t('조회 중…')}{:else}{t('업데이트')}{/if}
+		</Button>
+	</div>
+{/if}
 
 <!-- ── 유지관리 ── -->
 <h3 class="group">{t('유지관리')}</h3>
@@ -325,7 +564,7 @@
 	<legend>{t('검색 인덱스')}</legend>
 	<p class="desc">{t('아직 색인되지 않은 스냅샷을 다시 색인합니다.')}</p>
 	<div class="btn-row">
-		<Button variant="outline" size="sm" disabled={busy || reindexRunning} onclick={startReindex} aria-busy={reindexRunning}>
+		<Button variant="outline" size="sm" disabled={busy || reindexRunning || storageRunning} onclick={startReindex} aria-busy={reindexRunning}>
 			{#if reindexRunning}<Spinner />{/if}{t('검색 인덱스 전체 재색인')}
 		</Button>
 		{#if reindexRunning}<span class="muted">{t('재색인 중')} {reindexDone}/{reindexTotal}</span>{/if}
@@ -334,9 +573,103 @@
 <fieldset class="sec">
 	<legend>{t('저장공간 최적화')}</legend>
 	<p class="desc">{t('압축·자원 공유로 저장공간을 줄입니다 (내용은 그대로).')}</p>
-	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={compact} aria-busy={pending === 'compact'}>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy || storageRunning} onclick={compact} aria-busy={pending === 'compact'}>
 		{#if pending === 'compact'}<Spinner />{t('최적화 중…')}{:else}{t('저장공간 최적화')}{/if}
 	</Button>
+</fieldset>
+
+<!-- ── 스토리지 ── -->
+<h3 class="group">{t('스토리지')}</h3>
+<p class="desc">{t('blob 저장 백엔드를 로컬과 S3 사이에서 옮깁니다. 마이그레이션 중에는 캡처·스케줄·크롤이 중지되고, 0건 실패로 끝나야 활성 백엔드가 전환됩니다.')}</p>
+
+{#if recoveryPending}
+	<fieldset class="sec danger">
+		<legend>{t('복구 스냅샷 분류 대기')}</legend>
+		<p class="desc">
+			{t('복구된 스냅샷 {n}개가 보안상 관리자 전용으로 제한되어 있습니다 (로그인 캡처 여부를 알 수 없어 보수적으로 제한).').replace('{n}', String(recovery?.restricted_count ?? 0))}
+		</p>
+		<p class="desc">
+			{t('각 스냅샷 화면에서 개별로 검토해 공개하거나, 아래에서 한 번에 전체 공개로 바꿀 수 있습니다.')}
+		</p>
+		<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={exposeAllRecovered}>
+			{t('복구 스냅샷 전체 공개')}
+		</Button>
+	</fieldset>
+{/if}
+
+{#if storage}
+	<fieldset class="sec">
+		<legend>{t('blob 저장 백엔드')}</legend>
+		<p class="desc">
+			<span class="muted">{t('활성 백엔드')}:</span>
+			<span class="mono">{storage.active_backend === 's3' ? t('S3 (객체 저장소)') : t('로컬 저장소')}</span>
+		</p>
+		<p class="desc">
+			<span class="muted">{t('전환 방향')}:</span> <span class="mono">{migrateDir}</span>
+		</p>
+		<div class="btn-row">
+			<Button variant="outline" size="sm" disabled={busy || storageRunning} onclick={startMigration} aria-busy={storageRunning}>
+				{#if storageRunning}<Spinner />{t('마이그레이션 중…')}{:else}{t('마이그레이션 시작')}{/if}
+			</Button>
+			{#if storageRunning}<span class="muted">{t('마이그레이션 중')} {storage.done ?? 0}/{storage.total ?? 0} ({migratePct})</span>{/if}
+		</div>
+
+		{#if storage.status === 'partial' && storage.failed?.length}
+			<p class="desc warn">{t('실패한 파일')} ({storage.failed.length})</p>
+			<ul class="faillist mono">
+				{#each storage.failed.slice(0, 50) as f}
+					<li title={f.error}>{f.path}</li>
+				{/each}
+			</ul>
+			<Button variant="outline" size="sm" class="self-start" disabled={busy || storageRunning} onclick={retryMigration}>{t('전체 재시도')}</Button>
+		{/if}
+	</fieldset>
+
+	{#if storage.summary?.cleanup_pending}
+		<fieldset class="sec danger">
+			<legend>{t('원본 정리 대기')}</legend>
+			<p class="desc">{t('마이그레이션이 완료되었습니다. 아래 원본을 수동으로 삭제한 뒤 정리 완료를 확인하세요 (원본은 자동 삭제되지 않습니다).')}</p>
+			<p class="desc">
+				<span class="muted">{t('전환 방향')}:</span>
+				<span class="mono">{directionLabel(storage.summary.direction)}</span>
+			</p>
+			<p class="desc">
+				<span class="muted">{t('원본 위치')}:</span>
+				<span class="mono">{storage.summary.source_location ?? ''}</span>
+			</p>
+			<Button variant="outline" size="sm" class="self-start" disabled={busy || storageRunning} onclick={confirmCleanup}>{t('정리 완료 확인')}</Button>
+		</fieldset>
+	{/if}
+{/if}
+
+<fieldset class="sec">
+	<legend>{t('DB 백업 (S3)')}</legend>
+	<p class="desc">{t('index.db 와 rules.json 을 S3 의 db-backups/ 에 백업합니다 (S3 모드 전용). 전체 백업의 대체 내구성 수단입니다.')}</p>
+	{#if !dbBackup}
+		<p class="muted">{t('불러오는 중…')}</p>
+	{:else if !dbBackup.s3_mode}
+		<p class="muted">{t('S3 모드에서만 사용할 수 있습니다.')}</p>
+	{:else}
+		<p class="desc">
+			<span class="muted">{t('마지막 백업')}:</span>
+			<span class="mono">{dbBackup.last_at ?? t('없음')}</span>
+			{#if dbBackup.last_status === 'error'}
+				<span class="warn"> ({t('실패')}{dbBackup.last_error ? `: ${dbBackup.last_error}` : ''})</span>
+			{/if}
+		</p>
+		<p class="desc">
+			<span class="muted">{t('S3 백업 개수')}:</span> <span class="mono">{dbBackup.count}</span>
+			{#if dbBackup.list_error}<span class="warn"> ({t('목록 조회 오류')}: {dbBackup.list_error})</span>{/if}
+		</p>
+		<div class="btn-row">
+			<Button variant="outline" size="sm" disabled={busy} onclick={runDbBackup} aria-busy={pending === 'db-backup'}>
+				{#if pending === 'db-backup'}<Spinner />{t('백업 중…')}{:else}{t('지금 백업')}{/if}
+			</Button>
+		</div>
+		<label>{t('백업 주기(시간)')} <Input type="number" bind:value={dbbInterval} min="1" max="720" /></label>
+		<label>{t('보존 개수')} <Input type="number" bind:value={dbbKeep} min="1" max="365" /></label>
+		<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={saveDbBackupSettings}>{t('저장')}</Button>
+	{/if}
 </fieldset>
 
 <!-- ── 아카이브 설정 ── -->
@@ -504,8 +837,11 @@
 <fieldset class="sec danger">
 	<legend>{t('데이터 관리')}</legend>
 	<p class="desc">{t('전체 백업·복원과 아카이브 내보내기·가져오기입니다.')}</p>
+	{#if isS3}
+		<p class="desc warn">{t('S3 모드에서는 전체 백업·복원이 비활성화됩니다 (blob 이 로컬에 없음). 내구성은 S3 DB 백업으로, 데이터 이동은 내보내기/가져오기로 하세요.')}</p>
+	{/if}
 	<div class="btn-row">
-		<Button variant="outline" size="sm" disabled={busy} onclick={() => doDownload('/system/backup')} aria-busy={pending === '/system/backup'}>
+		<Button variant="outline" size="sm" disabled={busy || isS3} onclick={() => doDownload('/system/backup')} aria-busy={pending === '/system/backup'}>
 			{#if pending === '/system/backup'}<Spinner />{t('백업 준비중…')}{:else}{t('전체 백업 다운로드')}{/if}
 		</Button>
 		<Button variant="outline" size="sm" disabled={busy} onclick={() => doDownload('/system/export')} aria-busy={pending === '/system/export'}>
@@ -513,7 +849,7 @@
 		</Button>
 	</div>
 	<label>{t('백업 복원')}
-		<input type="file" accept=".ccg.backup" disabled={busy}
+		<input type="file" accept=".ccg.backup" disabled={busy || isS3}
 			onchange={(e) => uploadFile(e, '/system/restore', t('정말 복원하시겠습니까? 현재 데이터가 백업 시점으로 교체됩니다.'))} />
 	</label>
 	<label>{t('가져오기 모드')}
@@ -681,6 +1017,22 @@
 		border-radius: 4px;
 		padding: 8px 10px;
 		font-size: 12px;
+		word-break: break-all;
+	}
+	/* 마이그레이션 실패 파일 목록 — 길면 스크롤 */
+	.faillist {
+		list-style: none;
+		padding: 6px 10px;
+		margin: 0;
+		max-width: 560px;
+		max-height: 160px;
+		overflow-y: auto;
+		background: var(--bg-soft);
+		border-radius: 4px;
+		font-size: 12px;
+	}
+	.faillist li {
+		padding: 2px 0;
 		word-break: break-all;
 	}
 </style>

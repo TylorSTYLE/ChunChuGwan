@@ -2075,9 +2075,12 @@ def system_overview(
             conn, db.MIGRATION_TOKEN_CREATED_AT_KEY
         )
     usage = storage.archive_disk_usage()
+    with db.connect() as conn:
+        active_backend = db.storage_backend(conn)
     return {
         "version": __version__,
         "counts": counts,
+        "storage_backend": active_backend,
         "signup_enabled": signup_enabled,
         "signup_default_role": signup_default_role,
         "signup_roles": list(signup_role_choices),
@@ -2557,6 +2560,10 @@ def system_backup(
     from .. import backup as backup_mod
 
     _require_manage_system(user)
+    with db.connect() as conn:
+        if db.storage_backend(conn) == "s3":
+            raise HTTPException(
+                409, "전체 백업은 S3 모드에서 비활성화됩니다 — S3 DB백업·내보내기를 사용하세요.")
     audit.log(request, "전체 백업 다운로드")
     return tar_download(backup_mod.create_backup, "backup")
 
@@ -2586,6 +2593,10 @@ def system_restore(
     from .. import backup as backup_mod
 
     _require_manage_system(user)
+    with db.connect() as conn:
+        if db.storage_backend(conn) == "s3":
+            raise HTTPException(
+                409, "전체 복원은 S3 모드에서 비활성화됩니다 — S3 DB백업 복원·가져오기를 사용하세요.")
     if not backup_mod.is_backup_filename(file.filename or ""):
         raise HTTPException(400, "복원은 .ccg.backup 확장자 파일만 받습니다.")
     tmp = _save_upload(file)
@@ -2693,6 +2704,196 @@ def system_search_reindex_status(
 
     _require_manage_system(user)
     return reindex_status()
+
+
+@router.get("/system/storage/status")
+def system_storage_status(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """스토리지(blob 백엔드) 마이그레이션 상태 — 재색인 status 미러."""
+    from .. import storage_migration
+
+    _require_manage_system(user)
+    return storage_migration.status()
+
+
+@router.get("/system/storage/usage")
+def system_storage_usage(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """저장 사용량 — 캐시만 읽고 S3 를 호출하지 않는다 (요청 경로 자동 스캔 금지)."""
+    from .. import storage_usage
+
+    _require_manage_system(user)
+    return storage_usage.usage_snapshot()
+
+
+@router.post("/system/storage/usage/scan")
+def system_storage_usage_scan(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """S3 전 객체를 스캔해 카테고리별 사용량을 갱신·캐시 (명시 트리거 — 부하 주의)."""
+    from .. import storage_usage
+
+    _require_manage_system(user)
+    with db.connect() as conn:
+        if db.storage_backend(conn) != "s3":
+            raise HTTPException(409, "S3 모드에서만 사용량 스캔을 쓸 수 있습니다.")
+    try:
+        storage_usage.scan_s3_usage()
+    except RuntimeError as e:  # env 불완전 등 (비밀값 미포함)
+        raise HTTPException(409, str(e))
+    except Exception:  # S3 오류 — 내용·비밀값 노출 없이 일반 메시지
+        raise HTTPException(500, "사용량 스캔에 실패했습니다.")
+    audit.log(request, "S3 사용량 스캔")
+    return storage_usage.usage_snapshot()
+
+
+@router.post("/system/storage/migrate/start")
+def system_storage_migrate_start(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """활성 백엔드 → 반대 백엔드 마이그레이션을 백그라운드로 시작."""
+    from .. import storage_migration
+
+    _require_manage_system(user)
+    err = storage_migration.start_migration()
+    if err is not None:
+        raise HTTPException(409, err)
+    audit.log(request, "스토리지 마이그레이션 시작")
+    return {"ok": True, "started": True}
+
+
+@router.post("/system/storage/migrate/retry")
+def system_storage_migrate_retry(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """마이그레이션 실패 파일만 재시도 (partial 상태)."""
+    from .. import storage_migration
+
+    _require_manage_system(user)
+    err = storage_migration.retry_failed()
+    if err is not None:
+        raise HTTPException(409, err)
+    audit.log(request, "스토리지 마이그레이션 재시도")
+    return {"ok": True, "started": True}
+
+
+@router.post("/system/storage/cleanup/confirm")
+def system_storage_cleanup_confirm(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """원본 정리 완료 확인 — "정리 대기" 플래그 해제 (데이터는 삭제하지 않는다)."""
+    from .. import storage_migration
+
+    _require_manage_system(user)
+    err = storage_migration.confirm_cleanup()
+    if err is not None:
+        raise HTTPException(409, err)
+    audit.log(request, "스토리지 마이그레이션 원본 정리 확인")
+    return {"ok": True}
+
+
+class DbBackupSettingsReq(BaseModel):
+    interval_hours: int
+    keep: int
+
+
+@router.get("/system/db-backup/status")
+def system_db_backup_status(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """S3 DB 백업 상태 — 설정·마지막 결과·백업 목록 요약 (관리자)."""
+    from .. import db_backup
+
+    _require_manage_system(user)
+    return db_backup.status()
+
+
+@router.post("/system/db-backup/run")
+def system_db_backup_run(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """즉시 DB 백업 1회 — S3 모드 전용 (관리자)."""
+    from .. import db_backup
+
+    _require_manage_system(user)
+    try:
+        db_backup.run_blocking()
+    except RuntimeError as e:  # S3 아님·진행 중 등 (안내 메시지, 비밀값 없음)
+        raise HTTPException(409, str(e))
+    except Exception:  # 업로드 실패 등 — 내용·비밀값 노출 없이 일반 메시지
+        raise HTTPException(500, "DB 백업에 실패했습니다.")
+    audit.log(request, "DB 백업 즉시 실행")
+    return db_backup.status()
+
+
+@router.post("/system/db-backup/settings")
+def system_db_backup_settings(
+    request: Request, body: DbBackupSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """DB 백업 주기(시간)·보존 개수 설정 (관리자). 범위 밖이면 400."""
+    _require_manage_system(user)
+    ih_lo, ih_hi = config.DB_BACKUP_INTERVAL_HOURS_MIN, config.DB_BACKUP_INTERVAL_HOURS_MAX
+    k_lo, k_hi = config.DB_BACKUP_KEEP_MIN, config.DB_BACKUP_KEEP_MAX
+    if not (ih_lo <= body.interval_hours <= ih_hi):
+        raise HTTPException(400, f"백업 주기는 {ih_lo} ~ {ih_hi}시간 사이여야 합니다")
+    if not (k_lo <= body.keep <= k_hi):
+        raise HTTPException(400, f"보존 개수는 {k_lo} ~ {k_hi} 사이여야 합니다")
+    with db.connect() as conn:
+        db.set_db_backup_settings(conn, body.interval_hours, body.keep)
+    audit.log(request, "DB 백업 설정 변경")
+    return {"ok": True}
+
+
+class SnapshotAuthReq(BaseModel):
+    value: bool
+
+
+@router.get("/system/recovery/status")
+def system_recovery_status(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """복구모드 상태·복구 메타 (관리자) — 복구 후 공개 정책 선택 화면용."""
+    from .. import recovery
+
+    _require_manage_system(user)
+    return recovery.status()
+
+
+@router.post("/system/recovery/expose-all")
+def system_recovery_expose_all(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """복구된 스냅샷을 전체 노출(authenticated=0)로 일괄 변경 (관리자가 명시 선택).
+
+    복구분(baseline < id <= last_id)만 대상으로 한다 — 복구 이후의 다른 스냅샷은
+    건드리지 않는다. 복구 이력이 없으면 409.
+    """
+    _require_manage_system(user)
+    with db.connect() as conn:
+        meta = db.recovery_meta(conn)
+        if not meta or meta.get("last_id") is None:
+            raise HTTPException(409, "복구 이력이 없습니다.")
+        n = db.expose_recovered_snapshots(
+            conn, meta["baseline_max_id"], meta["last_id"])
+    audit.log(request, "복구 스냅샷 전체 노출 (%d건)", n, action="admin")
+    return {"ok": True, "exposed": n}
+
+
+@router.post("/system/recovery/snapshot/{snapshot_id}/authenticated")
+def system_recovery_toggle_snapshot(
+    request: Request, snapshot_id: int, body: SnapshotAuthReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """단일 스냅샷의 authenticated 플래그 설정 (관리자 개별 검토·해제)."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        db.set_snapshot_authenticated(conn, snapshot_id, 1 if body.value else 0)
+    audit.log(request, "스냅샷 authenticated 변경: #%d → %s", snapshot_id,
+              "제한" if body.value else "공개", action="admin")
+    return {"ok": True}
 
 
 def _issue_migration_token(request: Request) -> dict:

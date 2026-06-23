@@ -103,17 +103,25 @@ def _require_setup_token(request: Request) -> None:
 
 @router.get("/setup")
 def setup_status() -> dict:
-    """최초 설정 상태 — 관리자 등록 필요 여부 + 진행 중 네트워크 이전 상태.
+    """최초 설정 상태 — 관리자 등록 필요 여부 + 분류(옵션) + 진행 중 이전/복구 상태.
 
     auth_gate 가 first_run 중에도 이 경로는 통과시킨다(SPA 부트스트랩용).
+    사용자가 있으면(1-a) 분류·blob/S3 스캔을 하지 않고 그대로 'operating' 으로
+    반환한다 — 기존 운영 경로에 새 동작을 더하지 않는다.
     """
-    with db.connect() as conn:
-        needed = db.count_users(conn) == 0
-    return {
+    from .. import recovery
+
+    cls = recovery.classify()  # 사용자>0 이면 {"case":"operating"} 만 (스캔 없음)
+    needed = cls["case"] != "operating"
+    out = {
         "needed": needed,
         "migration": migration.pull_status(),
         "token_required": bool(config.SETUP_TOKEN),  # 최초 설정 토큰 요구 여부 (F3)
+        **cls,
     }
+    if needed:
+        out["recovery"] = recovery.status()
+    return out
 
 
 @router.post("/setup")
@@ -186,6 +194,64 @@ def setup_migrate_finish(request: Request) -> dict:
     _require_setup_token(request)
     _require_first_run()
     migration.finish_pull()
+    return {"ok": True}
+
+
+@router.post("/setup/restore-s3")
+def setup_restore_s3(request: Request) -> dict:
+    """S3 db-backups/ 최신 백업으로 완전 복원 (인증 데이터 포함 → 관리자 생성 불필요).
+
+    무결성 검증 후에만 DB 를 교체한다(손상/없음이면 기존 DB 보존). 복원본은
+    사용자를 포함하므로 first_run 이 해제된다.
+    """
+    _require_setup_token(request)
+    _require_first_run()
+    from .. import db_backup
+
+    try:
+        result = db_backup.restore_latest()
+    except RuntimeError as e:  # 백업 없음·무결성 실패 (비밀값 미포함 메시지)
+        raise HTTPException(400, str(e))
+    except Exception:  # S3/추출 오류 — 내용·비밀값 노출 없이 일반 메시지
+        raise HTTPException(500, "S3 DB 백업 복원에 실패했습니다.")
+    return {"ok": True, "restored_key": result["restored_key"]}
+
+
+@router.post("/setup/recover")
+def setup_recover(request: Request) -> dict:
+    """복구모드 시작 — blob 에서 인덱스 재구축(부분, 복구분 authenticated=1).
+
+    복구는 사용자를 만들지 않으므로 완료 후에도 first_run 이며 관리자 생성이
+    필요하다 (S3 DB백업 복원과의 차이).
+    """
+    _require_setup_token(request)
+    _require_first_run()
+    from .. import recovery
+
+    err = recovery.start_recovery()
+    if err is not None:
+        raise HTTPException(409, err)
+    return {"ok": True}
+
+
+@router.get("/setup/recover/status")
+def setup_recover_status() -> dict:
+    """복구 진행 상태 (폴링용). first_run 중에도 통과 (migrate/status 와 동일)."""
+    from .. import recovery
+
+    return recovery.status()
+
+
+@router.post("/setup/recover/retry")
+def setup_recover_retry(request: Request) -> dict:
+    """복구 재실행 (멱등 — 이미 재구축된 스냅샷은 스킵)."""
+    _require_setup_token(request)
+    _require_first_run()
+    from .. import recovery
+
+    err = recovery.start_recovery()
+    if err is not None:
+        raise HTTPException(409, err)
     return {"ok": True}
 
 

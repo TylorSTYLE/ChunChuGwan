@@ -78,6 +78,44 @@ content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 
   저장되고, 삭제 시 참조가 0 이 된 CAS 파일은 deletion.py 가 GC 한다.
   대시보드 `/documents` 통합 목록의 데이터 소스
 
+## S3 객체 저장소 백엔드 (blobstore.py)
+
+blob 입출력은 **StorageBackend 인터페이스**(blobstore.py)를 경유한다 — 코어
+(storage·resources·documents)·서빙·export/import 가 직접 파일 I/O 대신
+`config.blob_store()` 를 쓴다. 구현은 `LocalBlobStore`(기본)와 `S3BlobStore`(boto3,
+endpoint_url + path-style). 인터페이스는 함부로 바꾸지 말 것.
+
+- **S3 대상은 blob 만**(`sites/`·`resources/`·`documents/`). `index.db`(SQLite WAL)·
+  `cache/`·read-through 캐시(`blobcache/`)는 **항상 로컬**. DB 는 S3 에 두지 않는다.
+- **활성 백엔드 = DB 설정 `storage_backend`**(`local`|`s3`, 기본 local). env
+  `WCCG_S3_*` 는 **가용성/자격증명**일 뿐 활성 백엔드를 바꾸지 않는다(데이터 접근
+  불가 상태로의 무단 전환 방지). 전환은 **마이그레이션 0실패 완료** 또는 **첫 구동
+  setup** 으로만. `storage_backend=s3` 인데 env 불완전 시 부팅 실패. 비밀값(키)은
+  env 전용 — DB·로그·예외·응답에 출력 금지. `config.active_backend()` 로 모드 판정.
+- **서빙은 원칙 5 유지** — presigned 금지. 존재 확인은 HEAD(비다운로드), 서빙
+  시점에만 `local_path()` 로 blob 을 read-through 캐시에 materialize 해 그 로컬
+  경로로 기존과 동일한 FileResponse(헤더·gzip·attachment·Range·CSP sandbox).
+  blob 은 불변이라 캐시 무효화 없음(LRU 용량 제거만).
+- **양방향 마이그레이션**(storage_migration.py): 매니페스트 → 파일 단위 copy
+  (업로드 sha256 체크섬) → 존재+크기 검증 → 파일당 3회 재시도 → **0실패에서만
+  완료·전환**. 진행 중 캡처·스케줄·크롤 일시중지(`db.writes_paused`), 읽기 유지.
+  원본 자동삭제 금지(수동 정리). `put_verified`(로컬 원자적, S3 ChecksumSHA256).
+- **S3 DB 백업**(db_backup.py): `index.db`+`rules.json` 일관복사 → tar.gz 단일
+  객체로 `<prefix>/db-backups/<UTC>.tar.gz`(체크섬). 정기(스케줄러)+즉시, 보존 개수
+  rotation(최신 보존). S3 모드 전체 백업의 대체 내구성.
+- **첫 구동 분기·복구**(recovery.py): 사용자0+blob 시 — db-backup 있으면 복원(완전),
+  없으면 복구모드(blob→인덱스 재구축, 부분). ⚠ **복구 스냅샷은 meta 에 없는
+  authenticated 를 보수적으로 1(관리자 전용)로 전수 설정** — DEFAULT 0 에 기대면
+  비공개 스냅샷이 노출되는 사고. 공개 전환은 관리자 명시 선택(전체/개별)으로만.
+- **온디맨드 사용량**(storage_usage.py): 요청 경로·화면 진입은 **S3 자동 호출
+  금지** — 캐시(DB 설정)만 읽는다. ListObjectsV2 스캔은 [업데이트]/`--scan` 명시
+  트리거에서만(카테고리별 합산·시각 캐시). 로컬 사용량(db+cache+blobcache)은
+  `storage.local_usage()` 가 S3 없이 계산, S3 모드 `archive_disk_usage` 도 로컬 분해만.
+- **full backup 차단 / export 유지**: S3 모드에서 `create_backup`/`restore_backup`
+  은 `_require_local_mode` 로 비활성(blob 로컬 부재로 일관 백업 불가). `export`/
+  `import` 는 S3 모드에서도 동작 — export 가 blob 을 백엔드 read 로 스트리밍(로컬과
+  동일 tar 구조), import 는 백엔드 쓰기 경로로 기록(S3 면 S3). cross-mode 호환.
+
 ## 삭제·휴지통 (deletion.py)
 
 페이지·사이트 삭제는 기본적으로 **휴지통(소프트 삭제)**으로 간다 — `deletion.delete_page`/
