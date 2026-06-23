@@ -146,9 +146,14 @@ def _store_css(data: bytes) -> str:
 
 
 def is_gzipped(path: Path) -> bool:
-    """CAS 파일이 gzip 으로 저장됐는지 (매직 바이트) — /resource/ 서빙용."""
+    """CAS 파일이 gzip 으로 저장됐는지 (매직 바이트) — /resource/ 서빙용.
+
+    서빙 경로가 항상 로컬(또는 백엔드가 materialize 한) 파일 경로를 넘기므로
+    매직 바이트는 그 로컬 파일에서 직접 읽는다.
+    """
     try:
-        return config.blob_store().read_bytes(path, size=2) == b"\x1f\x8b"
+        with open(path, "rb") as f:
+            return f.read(2) == b"\x1f\x8b"
     except OSError:
         return False
 

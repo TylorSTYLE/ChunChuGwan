@@ -29,6 +29,24 @@ CACHE_DIR = ARCHIVE_ROOT / "cache"          # 파생 산출물(픽셀 diff 등),
 RULES_PATH = ARCHIVE_ROOT / "rules.json"    # 도메인별 정규화 룰
 RESOURCES_DIR = ARCHIVE_ROOT / "resources"  # 스냅샷 간 공유 자원 CAS (resources.py)
 DOCUMENTS_DIR = ARCHIVE_ROOT / "documents"  # 문서 파일 CAS (documents.py — 인증 라우트 전용)
+# S3 백엔드 read-through 캐시 위치 — 픽셀 diff 캐시(CACHE_DIR)와 분리해 compact 의
+# CACHE_DIR rmtree 영향을 받지 않게 한다. 로컬 백엔드에서는 쓰이지 않는다.
+BLOB_CACHE_DIR = ARCHIVE_ROOT / "blobcache"
+
+# ---- S3/MinIO blob 백엔드 (선택 — blobstore.S3BlobStore) ----
+# WCCG_S3_* 중 식별 정보(endpoint·bucket·access key·secret) 중 하나라도 있으면
+# S3 백엔드를 요청한 것으로 보고, 필수 세트가 완전해야 활성화한다 (일부만 설정 시
+# 조용히 로컬로 폴백하지 않고 부팅 시 명확히 실패 — 데이터 혼선 방지). 비밀값은
+# env 전용으로 DB·로그·예외 메시지에 노출하지 않는다.
+S3_ENDPOINT_URL = os.environ.get("WCCG_S3_ENDPOINT_URL", "").strip()
+S3_BUCKET = os.environ.get("WCCG_S3_BUCKET", "").strip()
+S3_REGION = os.environ.get("WCCG_S3_REGION", "").strip() or "us-east-1"
+S3_ACCESS_KEY_ID = os.environ.get("WCCG_S3_ACCESS_KEY_ID", "").strip()
+S3_SECRET_ACCESS_KEY = os.environ.get("WCCG_S3_SECRET_ACCESS_KEY", "")
+S3_FORCE_PATH_STYLE = os.environ.get("WCCG_S3_FORCE_PATH_STYLE", "on") != "off"
+S3_PREFIX = os.environ.get("WCCG_S3_PREFIX", "").strip()
+# read-through 캐시 용량 상한 (MB) — 초과 시 LRU 제거
+BLOB_CACHE_MAX_MB = int(os.environ.get("WCCG_BLOB_CACHE_MAX_MB", "2048"))
 
 PAGE_LOAD_TIMEOUT_MS = 30_000
 # load 도달 후 networkidle 추가 대기 상한 — 분석 스크립트·롱폴링이 있는
@@ -297,22 +315,61 @@ def oidc_enabled() -> bool:
     return bool(OIDC_ISSUER and OIDC_CLIENT_ID and OIDC_CLIENT_SECRET)
 
 
+def s3_requested() -> bool:
+    """WCCG_S3_* 식별 정보 중 하나라도 설정돼 S3 백엔드를 요청했는지."""
+    return bool(S3_ENDPOINT_URL or S3_BUCKET or S3_ACCESS_KEY_ID or S3_SECRET_ACCESS_KEY)
+
+
+def s3_settings() -> dict:
+    """S3 백엔드 생성 인자 (필수 세트 검증). 불완전하면 RuntimeError.
+
+    필수: bucket·access key·secret. 누락 시 무엇이 빠졌는지 변수명만 알리고
+    값(비밀)은 노출하지 않는다.
+    """
+    required = {
+        "WCCG_S3_BUCKET": S3_BUCKET,
+        "WCCG_S3_ACCESS_KEY_ID": S3_ACCESS_KEY_ID,
+        "WCCG_S3_SECRET_ACCESS_KEY": S3_SECRET_ACCESS_KEY,
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        raise RuntimeError(
+            "S3 백엔드 설정이 불완전합니다 — 누락된 환경변수: " + ", ".join(missing)
+        )
+    return {
+        "bucket": S3_BUCKET,
+        "archive_root": ARCHIVE_ROOT,
+        "cache_dir": BLOB_CACHE_DIR,
+        "cache_max_bytes": BLOB_CACHE_MAX_MB * 1024 * 1024,
+        "endpoint_url": S3_ENDPOINT_URL,
+        "region": S3_REGION,
+        "access_key_id": S3_ACCESS_KEY_ID,
+        "secret_access_key": S3_SECRET_ACCESS_KEY,
+        "force_path_style": S3_FORCE_PATH_STYLE,
+        "prefix": S3_PREFIX,
+    }
+
+
 _blob_store = None
 
 
 def blob_store():
     """blob 저장 백엔드 인스턴스 (싱글턴).
 
-    현재는 항상 로컬 파일시스템 백엔드(LocalBlobStore)를 반환한다 — 이후
-    단계에서 WCCG_S3_* 환경변수 유무로 원격 객체 저장소 백엔드를 끼울 분기
-    지점이다. LocalBlobStore 는 절대 경로만 다루고 상태가 없어, 테스트가
-    아카이브 루트를 바꿔도 같은 인스턴스를 안전하게 재사용한다.
+    WCCG_S3_* 가 완전한 세트로 설정되면 S3BlobStore, 아니면 로컬
+    파일시스템 백엔드(LocalBlobStore)를 반환한다. 일부만 설정되면
+    s3_settings() 가 부팅 시 RuntimeError 로 실패한다(조용한 폴백 금지).
     """
     global _blob_store
     if _blob_store is None:
-        from .blobstore import LocalBlobStore
+        if s3_requested():
+            from .blobstore import S3BlobStore
 
-        _blob_store = LocalBlobStore()
+            _blob_store = S3BlobStore(**s3_settings())
+        else:
+            from .blobstore import LocalBlobStore
+
+            _blob_store = LocalBlobStore()
     return _blob_store
 
 
@@ -326,6 +383,12 @@ def ensure_dirs() -> None:
             "확인하세요 (도커 바인드 마운트라면 호스트 디렉토리 소유자가 "
             "컨테이너 사용자 uid 1000 과 다른 경우)"
         ) from e
+    # S3 백엔드를 요청했으면 부팅 시점에 설정을 검증하고(불완전하면 즉시 실패)
+    # read-through 캐시 디렉토리를 준비한다. 로컬 모드는 새 디렉토리를 만들지
+    # 않아 기존 아카이브 레이아웃을 그대로 유지한다.
+    if s3_requested():
+        BLOB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        blob_store()
 
 
 def load_domain_rules(domain: str) -> dict:

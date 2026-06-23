@@ -13,6 +13,14 @@
 LocalBlobStore 의 각 메서드는 종전 코어 코드의 파일 연산을 그대로 옮긴
 것이라 로컬 동작이 1바이트도 바뀌지 않는다 (원자적 쓰기·mtime 갱신·EXDEV
 이동 폴백 등 미묘한 동작 포함).
+
+S3BlobStore 는 같은 계약을 boto3(endpoint_url + path-style)로 구현한다 —
+키 레이아웃은 로컬 상대 경로를 미러(``sites/…``·``resources/{ab}/…``·
+``documents/{ab}/…``)하고 선택적 키 프리픽스 하위에 둔다. 존재 확인
+(``is_file``·``is_dir``·``size``)은 HEAD/LIST 로 객체를 받지 않고, 서빙·읽기
+시점의 ``local_path`` 만 객체를 로컬 read-through 캐시로 materialize 한다
+(콘텐츠 주소·불변이라 무효화 없이 용량 상한 + LRU 제거만). 비밀값은 로그·
+예외에 노출하지 않는다.
 """
 
 from __future__ import annotations
@@ -70,7 +78,11 @@ class StorageBackend(Protocol):
         ...
 
     def local_path(self, path: Path) -> Path:
-        """로컬에서 직접 읽고/쓸 수 있는 경로 (PIL·스트리밍 등 경로 의존 연산용)."""
+        """로컬에서 직접 읽고/쓸 수 있는 경로 (PIL·스트리밍·FileResponse 서빙용).
+
+        로컬 백엔드는 입력 경로 그대로(identity), 원격 백엔드는 객체를 로컬
+        read-through 캐시로 materialize 한 뒤 그 캐시 경로를 돌려준다.
+        """
         ...
 
     # ---- 수명 ----
@@ -187,3 +199,276 @@ class LocalBlobStore:
 
     def rglob(self, path: Path, pattern: str) -> Iterator[Path]:
         return path.rglob(pattern)
+
+
+# ---- S3(객체 저장소) 백엔드 ----
+
+
+class S3BlobStore:
+    """boto3 기반 S3/MinIO blob 백엔드 (read-through 캐시 포함).
+
+    blob 절대 경로를 아카이브 루트 기준 상대 경로로 바꿔 S3 키로 쓴다
+    (선택적 프리픽스 하위). 존재 확인은 HEAD/LIST 로 객체를 받지 않고,
+    서빙·경로 의존 연산(local_path)만 객체를 로컬 캐시로 materialize 한다.
+    """
+
+    def __init__(
+        self,
+        *,
+        bucket: str,
+        archive_root: Path,
+        cache_dir: Path,
+        cache_max_bytes: int,
+        endpoint_url: str = "",
+        region: str = "us-east-1",
+        access_key_id: str,
+        secret_access_key: str,
+        force_path_style: bool = True,
+        prefix: str = "",
+    ) -> None:
+        import boto3
+        from botocore.config import Config
+
+        self._bucket = bucket
+        self._archive_root = archive_root
+        self._cache_dir = cache_dir
+        self._cache_max_bytes = cache_max_bytes
+        # 키 프리픽스는 슬래시로 정규화 (빈 값이면 프리픽스 없음)
+        self._prefix = prefix.strip("/")
+        self._client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url or None,
+            region_name=region,
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path" if force_path_style else "auto"},
+                connect_timeout=10,
+                read_timeout=60,
+                retries={"max_attempts": 3, "mode": "standard"},
+            ),
+        )
+
+    # ---- 키 ↔ 경로 매핑 ----
+    def _rel(self, path: Path) -> str:
+        """blob 절대 경로 → 아카이브 루트 기준 상대 POSIX 경로."""
+        return path.relative_to(self._archive_root).as_posix()
+
+    def _key(self, path: Path) -> str:
+        """blob 절대 경로 → S3 객체 키 (프리픽스 포함)."""
+        rel = self._rel(path)
+        return f"{self._prefix}/{rel}" if self._prefix else rel
+
+    def _to_path(self, key: str) -> Path:
+        """S3 객체 키 → blob 절대 경로 (프리픽스 제거)."""
+        rel = key[len(self._prefix) + 1:] if self._prefix else key
+        return self._archive_root / rel
+
+    def _client_error_code(self, e) -> str:
+        """ClientError 의 HTTP/에러 코드 문자열 (없으면 빈 문자열)."""
+        return str(e.response.get("Error", {}).get("Code", ""))
+
+    # ---- 읽기 ----
+    def read_bytes(self, path: Path, *, size: int | None = None) -> bytes:
+        kwargs = {"Bucket": self._bucket, "Key": self._key(path)}
+        if size is not None:
+            kwargs["Range"] = f"bytes=0-{size - 1}"
+        resp = self._client.get_object(**kwargs)
+        try:
+            return resp["Body"].read()
+        finally:
+            resp["Body"].close()
+
+    def read_text(self, path: Path, *, encoding: str = "utf-8") -> str:
+        return self.read_bytes(path).decode(encoding)
+
+    # ---- 쓰기 (S3 PUT 는 원자적) ----
+    def write_bytes(self, path: Path, data: bytes) -> None:
+        self._client.put_object(Bucket=self._bucket, Key=self._key(path), Body=data)
+
+    def write_text(self, path: Path, text: str, *, encoding: str = "utf-8") -> None:
+        self.write_bytes(path, text.encode(encoding))
+
+    def write_atomic(self, path: Path, data: bytes) -> None:
+        self.write_bytes(path, data)
+
+    # ---- 이동 (로컬 스테이징 → S3 업로드) ----
+    def move(self, src: Path, dst: Path) -> None:
+        if src.is_dir():
+            for child in sorted(src.rglob("*")):
+                if child.is_file():
+                    rel = child.relative_to(src)
+                    self._client.upload_file(
+                        str(child), self._bucket, self._key(dst / rel)
+                    )
+            shutil.rmtree(src, ignore_errors=True)
+        else:
+            self._client.upload_file(str(src), self._bucket, self._key(dst))
+            src.unlink()
+
+    # ---- 검사 (객체 다운로드 없음) ----
+    def is_file(self, path: Path) -> bool:
+        try:
+            self._client.head_object(Bucket=self._bucket, Key=self._key(path))
+            return True
+        except self._client.exceptions.ClientError as e:
+            if self._client_error_code(e) in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise
+
+    def is_dir(self, path: Path) -> bool:
+        prefix = self._key(path).rstrip("/") + "/"
+        resp = self._client.list_objects_v2(
+            Bucket=self._bucket, Prefix=prefix, MaxKeys=1
+        )
+        return resp.get("KeyCount", 0) > 0
+
+    def size(self, path: Path) -> int:
+        resp = self._client.head_object(Bucket=self._bucket, Key=self._key(path))
+        return int(resp["ContentLength"])
+
+    def local_path(self, path: Path) -> Path:
+        """객체를 로컬 read-through 캐시로 materialize 한 뒤 캐시 경로 반환.
+
+        캐시 히트면 다운로드 없이 mtime 만 갱신(LRU 기준)하고, 미스면 임시
+        파일로 받아 원자적 교체(temp→os.replace)한다 — 부분 파일이 서빙되지
+        않게 하고 동시 다운로드 경합을 허용한다. blob 은 불변이라 무효화는
+        없고 용량 상한 초과 시 LRU 제거만 한다.
+        """
+        cache_file = self._cache_dir / self._rel(path)
+        if cache_file.is_file():
+            try:
+                os.utime(cache_file)
+            except OSError:
+                pass
+            return cache_file
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=cache_file.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                self._client.download_fileobj(self._bucket, self._key(path), f)
+            os.replace(tmp, cache_file)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        _enforce_cache_budget(self._cache_dir, self._cache_max_bytes)
+        return cache_file
+
+    # ---- 수명 ----
+    def touch_mtime(self, path: Path) -> None:
+        # S3 객체는 불변/콘텐츠 주소라 sweep 유예 창 개념이 없다 — no-op.
+        pass
+
+    def touch_create(self, path: Path) -> None:
+        self._client.put_object(Bucket=self._bucket, Key=self._key(path), Body=b"")
+
+    def delete(self, path: Path) -> None:
+        self._client.delete_object(Bucket=self._bucket, Key=self._key(path))
+
+    def rmdir(self, path: Path) -> None:
+        # S3 에는 빈 디렉토리 개념이 없다 — no-op.
+        pass
+
+    def rmtree(self, path: Path) -> None:
+        prefix = self._key(path).rstrip("/") + "/"
+        paginator = self._client.get_paginator("list_objects_v2")
+        batch: list[dict] = []
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                batch.append({"Key": obj["Key"]})
+                if len(batch) == 1000:
+                    self._client.delete_objects(
+                        Bucket=self._bucket, Delete={"Objects": batch}
+                    )
+                    batch = []
+        if batch:
+            self._client.delete_objects(Bucket=self._bucket, Delete={"Objects": batch})
+
+    def mkdir(self, path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
+        # S3 에는 디렉토리 개념이 없다 — 키 쓰기 시 프리픽스가 자동 생성된다.
+        pass
+
+    # ---- 열거 (list_objects_v2) ----
+    def _all_keys(self, prefix: str) -> Iterator[str]:
+        paginator = self._client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                yield obj["Key"]
+
+    def iterdir(self, path: Path) -> Iterator[Path]:
+        prefix = self._key(path).rstrip("/") + "/"
+        paginator = self._client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(
+            Bucket=self._bucket, Prefix=prefix, Delimiter="/"
+        ):
+            for obj in page.get("Contents", []):
+                yield self._to_path(obj["Key"])
+            for cp in page.get("CommonPrefixes", []):
+                yield self._to_path(cp["Prefix"].rstrip("/"))
+
+    def glob(self, path: Path, pattern: str) -> Iterator[Path]:
+        import fnmatch
+
+        segments = pattern.split("/")
+        depth = len(segments)
+        base_prefix = self._key(path).rstrip("/") + "/"
+        base_rel_parts = self._rel(path).split("/") if self._rel(path) else []
+        seen: set[str] = set()
+        for key in self._all_keys(base_prefix):
+            rel_parts = self._to_path(key).relative_to(path).parts
+            if len(rel_parts) < depth:
+                continue
+            candidate = rel_parts[:depth]
+            if not all(
+                fnmatch.fnmatch(seg, pat) for seg, pat in zip(candidate, segments)
+            ):
+                continue
+            joined = "/".join(candidate)
+            if joined not in seen:
+                seen.add(joined)
+                yield self._archive_root.joinpath(*base_rel_parts, *candidate)
+
+    def rglob(self, path: Path, pattern: str) -> Iterator[Path]:
+        import fnmatch
+
+        base_prefix = self._key(path).rstrip("/") + "/"
+        for key in self._all_keys(base_prefix):
+            p = self._to_path(key)
+            if fnmatch.fnmatch(p.name, pattern):
+                yield p
+
+
+def _enforce_cache_budget(cache_dir: Path, max_bytes: int) -> None:
+    """read-through 캐시 총량이 상한을 넘으면 LRU(가장 오래 미접근)부터 제거.
+
+    blob 은 불변이라 콘텐츠 무효화는 없고 용량 관리만 한다. 동시 서빙
+    프로세스 간 제거 경합은 best-effort 로 무시한다 (이미 지워진 파일 등).
+    """
+    if max_bytes <= 0 or not cache_dir.is_dir():
+        return
+    files: list[tuple[float, int, Path]] = []
+    total = 0
+    for f in cache_dir.rglob("*"):
+        if not f.is_file() or f.suffix == ".tmp":
+            continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        files.append((st.st_mtime, st.st_size, f))
+        total += st.st_size
+    if total <= max_bytes:
+        return
+    files.sort(key=lambda x: x[0])  # 오래된 접근(mtime) 우선
+    for _mtime, fsize, f in files:
+        if total <= max_bytes:
+            break
+        try:
+            f.unlink()
+            total -= fsize
+        except OSError:
+            pass
