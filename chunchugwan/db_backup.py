@@ -79,6 +79,9 @@ def _client_bucket_prefix():
             retries={"max_attempts": 3, "mode": "standard"},
         ),
     )
+    from .blobstore import _disable_expect_100_continue
+
+    _disable_expect_100_continue(client)  # Garage/MinIO 100-continue 경고 제거
     prefix = s["prefix"]
     base = f"{prefix}/{_BACKUP_DIR}/" if prefix else f"{_BACKUP_DIR}/"
     return client, s["bucket"], base

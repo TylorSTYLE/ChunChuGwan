@@ -111,7 +111,12 @@ def _copy_file(source, target, path_obj: Path, entry: dict) -> str | None:
                 return None
             data = source.read_bytes(path_obj)
             actual = hashlib.sha256(data).hexdigest()
-            if entry["sha256"] and actual != entry["sha256"]:
+            # CAS 이름 해시는 '저장된 바이트'의 sha256 과 같다(이미지·문서 등) —
+            # 단 .css 는 gzip 으로 저장하고 이름은 '압축 전' 원본의 sha256 이라
+            # 저장 바이트와 다르다(resources._store_css). .css 는 이름 대조를
+            # 건너뛰고, 전송 무결성은 put_verified 의 종단 체크섬(actual)으로 확보한다.
+            if (entry["sha256"] and not entry["path"].endswith(".css")
+                    and actual != entry["sha256"]):
                 raise ValueError("원본 sha256 불일치 (CAS 손상)")
             target.put_verified(path_obj, data, actual)
             if not _verified(target, path_obj, entry):
@@ -252,6 +257,8 @@ def _migrate_worker(source_name: str, target_name: str, *,
         workers = max(1, min(config.S3_MIGRATION_WORKERS, 16))
         _set_state(status="copying", total=len(manifest), done=0, failed=[],
                    failed_count=0, workers=workers)
+        logger.info("스토리지 마이그레이션 시작: %s→%s, 파일 %d개, 동시 전송 %d",
+                    source_name, target_name, len(manifest), workers)
 
         # 파일 단위 copy 를 동시 전송한다 — 네트워크 I/O 바운드라 병렬도가 곧
         # 처리량이다. 진행/실패 카운트는 락으로 안전하게 누적해 라이브로 보인다.
@@ -281,6 +288,9 @@ def _migrate_worker(source_name: str, target_name: str, *,
                     _handle(entry, err)
 
         if failed:
+            logger.warning(
+                "스토리지 마이그레이션 미완료(partial): 전체 %d개 중 %d개 실패 — "
+                "재시도로 0실패까지 해소해야 전환됩니다.", len(manifest), len(failed))
             # 실패가 남으면 미완료 — 전환·일시중지 해제 금지 (재시도로 0실패까지)
             _set_state(status="partial", failed=failed)
             _persist_summary()
@@ -311,6 +321,9 @@ def _complete(source_name: str, target_name: str) -> None:
             "total": total, "finished_at": _utcnow(),
         })
     config.reset_blob_store()  # 새 활성 백엔드로 재생성
+    logger.info("스토리지 마이그레이션 완료: %s→%s, %d개 전송, 활성 백엔드 → %s "
+                "(원본 정리 대기: %s)", source_name, target_name, total,
+                target_name, source_location)
     _set_state(status="done", finished_at=_utcnow(),
                cleanup_pending=True, source_location=source_location)
 
