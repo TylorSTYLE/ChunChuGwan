@@ -84,6 +84,11 @@ npm --prefix frontend run build          # 대시보드(SvelteKit) 빌드 → fr
                                          #   (Docker 이미지는 빌드 단계에서 자동 동봉)
 ```
 
+설정·시크릿(관리자 계정·`WCCG_SECRET_KEY`·OIDC·SMTP 등)은 셸 환경변수로 두거나
+프로젝트 루트의 `.env` 에 둘 수 있다 — `uv run wccg` 가 시작 시 자동 로드한다.
+`cp .env.example .env` 후 필요한 값만 채운다(전체 목록은
+[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md#환경변수)). `.env` 는 커밋되지 않는다.
+
 ## 사용법
 
 ```bash
@@ -125,7 +130,8 @@ run`)가 소비해 실행한다 — `crawl add`/`crawl run` 과 같은 모델이
 
 로컬에 Python/uv 를 설치하지 않고 Docker Compose 로 실행할 수 있다. 리포의
 `docker-compose.yml`(`:latest` 이미지)을 그대로 띄운다. 관리자 비번·OIDC·SMTP 같은
-개인 설정·시크릿은 gitignore 대상인 `docker-compose.override.yml` 에 둔다.
+개인 설정·시크릿은 gitignore 대상인 `.env`(`cp .env.example .env`) 또는
+`docker-compose.override.yml` 에 둔다.
 
 ```bash
 docker compose up -d dashboard         # 대시보드 + 워커 (http://127.0.0.1:8765)

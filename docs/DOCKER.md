@@ -62,7 +62,8 @@ cd ChunChuGwan
 ```
 
 관리자 비번·OIDC·SMTP 같은 **개인 설정·시크릿은 추적 파일(`docker-compose.yml`)을
-직접 고치지 말고** gitignore 대상인 `docker-compose.override.yml`(또는 `.env`)에 둔다 —
+직접 고치지 말고** gitignore 대상인 `.env`(`cp .env.example .env`) 또는
+`docker-compose.override.yml` 에 둔다 — 각 서비스가 `env_file: .env` 로 읽고 override 는
 compose 가 자동 병합하므로 시크릿이 커밋될 일이 없다 (→ **환경변수 설정**).
 
 ### 5. (선택) GHCR 로그인
@@ -127,6 +128,9 @@ docker compose logs -f worker     # 워커(캡처) 로그
 등록·공개 URL·OIDC·SMTP)이 주석으로 들어 있다. **필요한 것만 `docker-compose.override.yml`
 로 복사해** 값을 채운다 (추적 파일을 직접 고치지 않는다). 변수 전체 목록은
 [환경변수](AUTHENTICATION.md#환경변수) 절을 참조한다 (여기서는 중복 나열하지 않는다).
+
+또는 리포의 `.env.example` 을 `.env` 로 복사해(`cp .env.example .env`) `KEY=값` 으로
+채워도 된다 — 각 서비스가 `env_file: .env` 로 읽는다(`environment:` 고정값이 우선).
 
 ```yaml
 # docker-compose.override.yml
@@ -209,8 +213,11 @@ main 푸시마다 빌드해 GHCR 에 게시하는 이미지(`ghcr.io/tylorstyle/
 amd64/arm64)를 사용한다.
 
 관리자 비번·OIDC·SMTP 같은 개인 설정·시크릿은 추적 파일을 직접 고치지 말고
-gitignore 대상인 `docker-compose.override.yml`(또는 `.env`)에 둔다 — compose 가
-자동 병합하므로 시크릿이 커밋될 일이 없다. 로컬 소스로 직접 빌드하려면 override 에서
+gitignore 대상인 `.env`(`KEY=값`) 또는 `docker-compose.override.yml` 에 둔다 — 각
+서비스가 `env_file: .env` 로 읽고(`.env` 가 없어도 무방), override 는 compose 가 자동
+병합하므로 시크릿이 커밋될 일이 없다. 리포의 [`.env.example`](../.env.example) 을
+`.env` 로 복사해 시작하면 된다(`cp .env.example .env`). 고정 운영값(`environment:` 의
+`WCCG_HOST` 등)이 `.env` 보다 우선한다. 로컬 소스로 직접 빌드하려면 override 에서
 `image:` 대신 `build: .` 를 지정한다.
 
 테스트(`develop`) 이미지로 띄우려면 `docker-compose.dev.yml` 오버라이드를 함께 넘긴다:
