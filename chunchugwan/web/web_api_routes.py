@@ -2075,9 +2075,12 @@ def system_overview(
             conn, db.MIGRATION_TOKEN_CREATED_AT_KEY
         )
     usage = storage.archive_disk_usage()
+    with db.connect() as conn:
+        active_backend = db.storage_backend(conn)
     return {
         "version": __version__,
         "counts": counts,
+        "storage_backend": active_backend,
         "signup_enabled": signup_enabled,
         "signup_default_role": signup_default_role,
         "signup_roles": list(signup_role_choices),
@@ -2557,6 +2560,10 @@ def system_backup(
     from .. import backup as backup_mod
 
     _require_manage_system(user)
+    with db.connect() as conn:
+        if db.storage_backend(conn) == "s3":
+            raise HTTPException(
+                409, "전체 백업은 S3 모드에서 비활성화됩니다 — S3 DB백업·내보내기를 사용하세요.")
     audit.log(request, "전체 백업 다운로드")
     return tar_download(backup_mod.create_backup, "backup")
 
@@ -2586,6 +2593,10 @@ def system_restore(
     from .. import backup as backup_mod
 
     _require_manage_system(user)
+    with db.connect() as conn:
+        if db.storage_backend(conn) == "s3":
+            raise HTTPException(
+                409, "전체 복원은 S3 모드에서 비활성화됩니다 — S3 DB백업 복원·가져오기를 사용하세요.")
     if not backup_mod.is_backup_filename(file.filename or ""):
         raise HTTPException(400, "복원은 .ccg.backup 확장자 파일만 받습니다.")
     tmp = _save_upload(file)
@@ -2704,6 +2715,38 @@ def system_storage_status(
 
     _require_manage_system(user)
     return storage_migration.status()
+
+
+@router.get("/system/storage/usage")
+def system_storage_usage(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """저장 사용량 — 캐시만 읽고 S3 를 호출하지 않는다 (요청 경로 자동 스캔 금지)."""
+    from .. import storage_usage
+
+    _require_manage_system(user)
+    return storage_usage.usage_snapshot()
+
+
+@router.post("/system/storage/usage/scan")
+def system_storage_usage_scan(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """S3 전 객체를 스캔해 카테고리별 사용량을 갱신·캐시 (명시 트리거 — 부하 주의)."""
+    from .. import storage_usage
+
+    _require_manage_system(user)
+    with db.connect() as conn:
+        if db.storage_backend(conn) != "s3":
+            raise HTTPException(409, "S3 모드에서만 사용량 스캔을 쓸 수 있습니다.")
+    try:
+        storage_usage.scan_s3_usage()
+    except RuntimeError as e:  # env 불완전 등 (비밀값 미포함)
+        raise HTTPException(409, str(e))
+    except Exception:  # S3 오류 — 내용·비밀값 노출 없이 일반 메시지
+        raise HTTPException(500, "사용량 스캔에 실패했습니다.")
+    audit.log(request, "S3 사용량 스캔")
+    return storage_usage.usage_snapshot()
 
 
 @router.post("/system/storage/migrate/start")

@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import shutil
@@ -27,6 +28,36 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config, db, documents, resources, storage
+
+
+def _require_local_mode(action: str) -> None:
+    """전체 백업/복원은 로컬 모드에서만 허용 — S3 모드는 blob 이 로컬에 없어
+    일관 백업이 불가하다. 내구성은 P4 S3 DB백업·S3 의 blob 으로 확보하고,
+    데이터 이동은 내보내기(export, blob 을 백엔드에서 스트리밍)를 쓴다."""
+    if config.active_backend() == "s3":
+        raise RuntimeError(
+            f"{action}은 S3 모드에서 비활성화됩니다 (blob 이 로컬에 없어 일관 백업 불가). "
+            "S3 모드 내구성은 S3 DB백업과 S3 의 blob 으로 확보됩니다 — "
+            "데이터 이동은 내보내기(export)를 사용하세요."
+        )
+
+
+def _addfile_bytes(tar: tarfile.TarFile, arcname: str, data: bytes) -> None:
+    """tar 에 메모리 바이트를 파일 엔트리로 추가 (S3 스트리밍 export 용)."""
+    info = tarfile.TarInfo(arcname)
+    info.size = len(data)
+    info.mtime = 0
+    tar.addfile(info, io.BytesIO(data))
+
+
+def _export_blob_tree(tar: tarfile.TarFile, store, root: Path, arcname_root: str) -> None:
+    """백엔드의 디렉토리 트리를 tar 에 담는다 (S3: read 로 스트리밍, 로컬과 동일 arcname)."""
+    if not store.is_dir(root):
+        return
+    for p in sorted(store.rglob(root, "*")):
+        if store.is_file(p):
+            rel = p.relative_to(root).as_posix()
+            _addfile_bytes(tar, f"{arcname_root}/{rel}", store.read_bytes(p))
 
 # 2: 압축 저장 형태 도입 — 공유 자원 디렉토리(resources/) 포함,
 #    스냅샷 파일이 page.html.gz/raw.html.gz/screenshot.webp 일 수 있음.
@@ -135,7 +166,11 @@ def read_manifest(src: Path) -> dict:
 
 
 def create_backup(dest: Path) -> Path:
-    """전체 백업 tar.gz 생성 후 경로 반환. DB(인증 포함)·sites·rules.json 포함."""
+    """전체 백업 tar.gz 생성 후 경로 반환. DB(인증 포함)·sites·rules.json 포함.
+
+    S3 모드에서는 비활성화된다 (blob 이 로컬에 없어 일관 백업 불가 — _require_local_mode).
+    """
+    _require_local_mode("전체 백업")
     config.ensure_dirs()
     out = _resolve_dest(dest, "chunchugwan-backup", ext=BACKUP_SUFFIX)
     with db.connect() as conn:
@@ -181,7 +216,9 @@ def restore_backup(src: Path) -> dict:
 
     현재 DB(인증 데이터 포함)·sites·rules.json 이 모두 백업 내용으로 대체된다.
     파괴적이므로 호출 전 확인은 CLI 가 책임진다. manifest 반환.
+    S3 모드에서는 비활성화된다 (전체 백업과 짝 — _require_local_mode).
     """
+    _require_local_mode("전체 복원")
     manifest = read_manifest(src)
     if manifest["kind"] != "full":
         raise ValueError(
@@ -469,30 +506,42 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
         (tmp / ARCHIVE_DATA_NAME).write_text(
             json.dumps(data, ensure_ascii=False), encoding="utf-8"
         )
+        # blob 은 활성 백엔드에서 담는다 — 로컬은 tar.add(디렉토리, 메타 포함, 기존
+        # 그대로), S3 는 백엔드 read 로 스트리밍해 같은 arcname 으로 담는다(동일 구조).
+        store = config.blob_store()
+        is_s3 = config.active_backend() == "s3"
         with tarfile.open(out, "w:gz", compresslevel=_BACKUP_COMPRESSLEVEL) as tar:
             tar.add(tmp / MANIFEST_NAME, arcname=MANIFEST_NAME)
             tar.add(tmp / ARCHIVE_DATA_NAME, arcname=ARCHIVE_DATA_NAME)
             for s in snapshots:
                 snap_dir = storage.page_dir(s["domain"], s["slug"]) / s["dir_name"]
-                if snap_dir.is_dir():
-                    tar.add(
-                        snap_dir,
-                        arcname=f"sites/{s['domain']}/{s['slug']}/{s['dir_name']}",
-                    )
+                arc = f"sites/{s['domain']}/{s['slug']}/{s['dir_name']}"
+                if is_s3:
+                    _export_blob_tree(tar, store, snap_dir, arc)
+                elif snap_dir.is_dir():
+                    tar.add(snap_dir, arcname=arc)
             if resource_names is None:
                 # 모든 스냅샷을 내보내므로 공유 자원·문서 CAS 도 전량 포함한다
-                if config.RESOURCES_DIR.is_dir():
-                    tar.add(config.RESOURCES_DIR, arcname="resources")
-                if config.DOCUMENTS_DIR.is_dir():
-                    tar.add(config.DOCUMENTS_DIR, arcname="documents")
+                if is_s3:
+                    _export_blob_tree(tar, store, config.RESOURCES_DIR, "resources")
+                    _export_blob_tree(tar, store, config.DOCUMENTS_DIR, "documents")
+                else:
+                    if config.RESOURCES_DIR.is_dir():
+                        tar.add(config.RESOURCES_DIR, arcname="resources")
+                    if config.DOCUMENTS_DIR.is_dir():
+                        tar.add(config.DOCUMENTS_DIR, arcname="documents")
             else:
                 # 사이트 한정 — 소속 스냅샷이 참조하는 CAS 파일만 담는다
                 for name in resource_names:
                     if not resources.is_valid_name(name):
                         continue
                     f = resources.resource_path(name)
-                    if f.is_file():
-                        tar.add(f, arcname=f"resources/{name[:2]}/{name}")
+                    arc = f"resources/{name[:2]}/{name}"
+                    if is_s3:
+                        if store.is_file(f):
+                            _addfile_bytes(tar, arc, store.read_bytes(f))
+                    elif f.is_file():
+                        tar.add(f, arcname=arc)
                 doc_names = sorted({
                     n
                     for n in (
@@ -502,8 +551,12 @@ def export_archive(dest: Path, site_id: int | None = None) -> Path:
                 })
                 for name in doc_names:
                     f = documents.cas_path(name)
-                    if f.is_file():
-                        tar.add(f, arcname=f"documents/{name[:2]}/{name}")
+                    arc = f"documents/{name[:2]}/{name}"
+                    if is_s3:
+                        if store.is_file(f):
+                            _addfile_bytes(tar, arc, store.read_bytes(f))
+                    elif f.is_file():
+                        tar.add(f, arcname=arc)
     return out
 
 
@@ -588,29 +641,33 @@ def _merge_resources(src_root: Path) -> None:
     """가져온 공유 자원을 CAS 로 병합 — 콘텐츠 주소라 같은 이름은 같은 내용.
 
     이름 형식이 유효한 파일만 받는다 (resources.is_valid_name — path traversal).
+    신규 blob 은 활성 백엔드 쓰기 경로로 기록한다 (S3 모드면 S3 로 업로드).
     """
     if not src_root.is_dir():
         return
+    store = config.blob_store()
     for f in src_root.glob("*/*"):
         if not (f.is_file() and resources.is_valid_name(f.name)):
             continue
         dst = resources.resource_path(f.name)
-        if not dst.exists():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(f, dst)
+        if not store.is_file(dst):
+            store.write_atomic(dst, f.read_bytes())
 
 
 def _merge_documents(src_root: Path) -> None:
-    """가져온 문서 CAS 파일 병합 (documents.is_valid_cas_name — path traversal)."""
+    """가져온 문서 CAS 파일 병합 (documents.is_valid_cas_name — path traversal).
+
+    신규 blob 은 활성 백엔드 쓰기 경로로 기록한다 (S3 모드면 S3 로 업로드).
+    """
     if not src_root.is_dir():
         return
+    store = config.blob_store()
     for f in src_root.glob("*/*"):
         if not (f.is_file() and documents.is_valid_cas_name(f.name)):
             continue
         dst = documents.cas_path(f.name)
-        if not dst.exists():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(f, dst)
+        if not store.is_file(dst):
+            store.write_atomic(dst, f.read_bytes())
 
 
 def import_archive(src: Path, mode: str = "merge") -> ImportResult:
@@ -639,6 +696,7 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
             tar.extractall(tmp, filter="data")
         data = json.loads((tmp / ARCHIVE_DATA_NAME).read_text(encoding="utf-8"))
         _validate_archive_data(data)
+        store = config.blob_store()  # 신규 blob 을 활성 백엔드로 기록 (S3 모드면 S3)
 
         with db.connect() as conn:
             if mode == "overwrite":
@@ -700,9 +758,12 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                 domain, slug = page_paths[s["page_url"]]
                 src_dir = tmp / "sites" / s["domain"] / s["slug"] / s["dir_name"]
                 dst_dir = storage.page_dir(domain, slug) / s["dir_name"]
-                if src_dir.is_dir() and not dst_dir.exists():
-                    dst_dir.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(src_dir, dst_dir)
+                # 신규 스냅샷 파일을 활성 백엔드 쓰기 경로로 기록 (S3 모드면 S3 로).
+                if src_dir.is_dir() and not store.is_dir(dst_dir):
+                    for f in sorted(src_dir.rglob("*")):
+                        if f.is_file():
+                            rel = f.relative_to(src_dir).as_posix()
+                            store.write_atomic(dst_dir / rel, f.read_bytes())
                 # 옮긴 실제 파일 기준으로 bytes 를 권위적으로 다시 맞춘다 — 구버전
                 # 내보내기(bytes 없음)나 직렬화 값과 파일의 불일치를 모두 흡수한다.
                 db.update_snapshot_bytes(

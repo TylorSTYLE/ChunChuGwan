@@ -1571,6 +1571,26 @@ _EN: dict[str, str] = {
     "이 스냅샷을 모든 사용자에게 공개할까요? 로그인 캡처였다면 비공개 정보가 노출될 수 있습니다.":
         "Make this snapshot visible to everyone? If it was a login capture, private "
         "information could be disclosed.",
+    # 온디맨드 사용량 (system/general, P6)
+    "로컬 사용량": "Local usage",
+    "Object Storage 사용량": "Object Storage usage",
+    "캐시": "Cache",
+    "read-through 캐시": "Read-through cache",
+    "DB 백업": "DB backups",
+    "기타": "Other",
+    "총합": "Total",
+    "마지막 조회": "Last scanned",
+    "미조회": "Not scanned",
+    "업데이트": "Update",
+    "조회 중…": "Scanning…",
+    "사용량을 갱신했습니다.": "Usage updated.",
+    "아직 조회한 적이 없습니다. [업데이트] 로 S3 사용량을 조회하세요.":
+        "Not scanned yet. Use [Update] to scan S3 usage.",
+    "모든 객체를 조회하므로 부하가 발생합니다. 진행하시겠습니까?":
+        "This lists every object and may be costly. Continue?",
+    "S3 모드에서는 전체 백업·복원이 비활성화됩니다 (blob 이 로컬에 없음). 내구성은 S3 DB 백업으로, 데이터 이동은 내보내기/가져오기로 하세요.":
+        "Full backup/restore is disabled in S3 mode (blobs are not local). Use S3 DB "
+        "backups for durability and export/import to move data.",
 }
 
 # 설정값이 들어간 검증 메시지 — 원문이 f-string 이라 임포트 시점 값으로 키를 만든다

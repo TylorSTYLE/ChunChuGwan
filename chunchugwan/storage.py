@@ -307,6 +307,26 @@ def dir_bytes(root: Path) -> int:
     return sum(store.size(p) for p in store.rglob(root, "*") if store.is_file(p))
 
 
+def _local_dir_bytes(root: Path) -> int:
+    """로컬 파일시스템 디렉토리 용량 합 (백엔드 무관) — cache/blobcache 등 항상 로컬."""
+    if not root.is_dir():
+        return 0
+    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+
+
+def local_usage() -> dict[str, int]:
+    """S3 모드의 로컬 디스크 사용량 — index.db + cache/ + read-through 캐시(blobcache).
+
+    S3 모드에선 sites/resources/documents 가 로컬에 없고 S3 에 있으므로(별도
+    온디맨드 스캔), 로컬 사용량은 이 셋만 합산한다. S3 를 호출하지 않는다.
+    """
+    return {
+        "db": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
+        "cache": _local_dir_bytes(config.CACHE_DIR),
+        "blobcache": _local_dir_bytes(config.BLOB_CACHE_DIR),
+    }
+
+
 # 아카이브 디스크 사용량 캐시 — sites/resources/documents 트리를 전부 rglob 하는
 # 비싼 계산이라 짧은 TTL 로 캐시한다. 현황·시스템 화면의 표시 전용 파생값이라
 # 약간의 부정확(최대 TTL)은 허용된다. 아카이브 루트별로 키를 둬 테스트·다중 루트
@@ -316,11 +336,12 @@ _disk_usage_cache: "tuple[float, str, dict[str, int]] | None" = None
 
 
 def archive_disk_usage(*, fresh: bool = False) -> dict[str, int]:
-    """아카이브 실제 저장공간 사용량 (바이트) — db/sites/resources/documents.
+    """아카이브 실제 저장공간 사용량 (바이트).
 
-    스냅샷 파일 합산과 달리 DB·공유 자원 CAS·문서 CAS 를 포함한 디스크
-    사용량이다. 현황·시스템 화면의 용량 표시가 같은 기준을 쓴다.
-    fresh=True 면 캐시를 무시하고 즉시 계산한다.
+    로컬 모드: db/sites/resources/documents (DB·공유 자원 CAS·문서 CAS 포함).
+    S3 모드: db/cache/blobcache — sites/resources/documents 는 S3 에 있어 로컬엔
+    없으므로 요청 경로에서 S3 를 호출하지 않고 로컬 분해만 돌려준다(S3 카테고리
+    사용량은 온디맨드 스캔 — storage_usage). fresh=True 면 캐시 무시.
     """
     global _disk_usage_cache
     root = str(config.ARCHIVE_ROOT)
@@ -331,12 +352,15 @@ def archive_disk_usage(*, fresh: bool = False) -> dict[str, int]:
         and now - cached[0] < _DISK_USAGE_TTL_SECONDS
     ):
         return dict(cached[2])
-    usage = {
-        "db": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
-        "sites": dir_bytes(config.SITES_DIR),
-        "resources": dir_bytes(config.RESOURCES_DIR),
-        "documents": dir_bytes(config.DOCUMENTS_DIR),
-    }
+    if config.active_backend() == "s3":
+        usage = local_usage()  # S3 미호출 — 로컬 분해만
+    else:
+        usage = {
+            "db": config.DB_PATH.stat().st_size if config.DB_PATH.is_file() else 0,
+            "sites": dir_bytes(config.SITES_DIR),
+            "resources": dir_bytes(config.RESOURCES_DIR),
+            "documents": dir_bytes(config.DOCUMENTS_DIR),
+        }
     _disk_usage_cache = (now, root, usage)
     return dict(usage)
 

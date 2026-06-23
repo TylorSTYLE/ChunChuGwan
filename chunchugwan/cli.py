@@ -850,15 +850,41 @@ def storage_group() -> None:
     """blob 저장 백엔드 상태 — wccg storage status (읽기 전용)."""
 
 
+def _fmt_bytes(n: int) -> str:
+    """사람이 읽는 용량 표기 (CLI 표시용)."""
+    val = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if val < 1024 or unit == "TB":
+            return f"{val:.0f}{unit}" if unit == "B" else f"{val:.1f}{unit}"
+        val /= 1024
+    return f"{val:.1f}TB"
+
+
 @storage_group.command("status")
-def storage_status_cmd() -> None:
-    """활성 백엔드·S3 가용성(env)·마이그레이션 상태·정리 대기를 표시 (읽기 전용)."""
-    from . import config, db
+@click.option("--scan", is_flag=True, help="S3 사용량을 지금 스캔(전 객체 조회 — 부하 주의)")
+def storage_status_cmd(scan: bool) -> None:
+    """활성 백엔드·S3 가용성(env)·마이그레이션 상태·정리 대기·사용량 표시 (읽기 전용).
+
+    사용량은 캐시만 읽는다(요청 경로 S3 미호출) — 갱신은 --scan.
+    """
+    from . import config, db, storage, storage_usage
+
+    if scan:
+        with db.connect() as conn:
+            is_s3 = db.storage_backend(conn) == "s3"
+        if is_s3:
+            try:
+                storage_usage.scan_s3_usage()
+            except Exception as e:  # noqa: BLE001 — 스캔 실패는 안내만 (비밀값 미출력)
+                click.echo(f"사용량 스캔 실패: {type(e).__name__}")
+        else:
+            click.echo("--scan 은 S3 모드에서만 의미가 있습니다 (현재 로컬).")
 
     with db.connect() as conn:
         active = db.storage_backend(conn)
         paused = db.writes_paused(conn)
         summary = db.storage_migration_summary(conn)
+        s3_usage = db.s3_usage(conn)
     click.echo(f"활성 백엔드: {active}")
     # S3 자격증명은 유무만 표시 — 비밀값(access key/secret)은 절대 출력하지 않는다
     env_ok = bool(
@@ -881,6 +907,29 @@ def storage_status_cmd() -> None:
             )
     else:
         click.echo("마이그레이션: 이력 없음")
+    # 사용량
+    if active == "s3":
+        local = storage.local_usage()
+        click.echo(
+            f"로컬 사용량: DB {_fmt_bytes(local['db'])}, 캐시 {_fmt_bytes(local['cache'])}, "
+            f"read-through {_fmt_bytes(local['blobcache'])}"
+        )
+        if s3_usage:
+            cats = s3_usage.get("categories", {})
+            parts = ", ".join(
+                f"{k} {_fmt_bytes(v)}" for k, v in cats.items() if v
+            ) or "(빈 버킷)"
+            click.echo(
+                f"Object Storage 사용량 [{s3_usage.get('scanned_at', '?')}]: {parts} "
+                f"(총 {_fmt_bytes(s3_usage.get('total', 0))})"
+            )
+        else:
+            click.echo("Object Storage 사용량: 미조회 (--scan 으로 갱신)")
+    else:
+        usage = storage.archive_disk_usage()
+        click.echo(
+            "로컬 사용량: " + ", ".join(f"{k} {_fmt_bytes(v)}" for k, v in usage.items())
+        )
 
 
 @main.group("db-backup", invoke_without_command=True)
@@ -1043,9 +1092,14 @@ def _counts_label(manifest: dict) -> str:
 @main.command()
 @click.argument("dest", type=click.Path(path_type=Path), default=".", required=False)
 def backup(dest: Path) -> None:
-    """전체 백업 파일(.ccg.backup) 생성 — DB(인증 포함)·스냅샷 파일·rules.json."""
+    """전체 백업 파일(.ccg.backup) 생성 — DB(인증 포함)·스냅샷 파일·rules.json.
+
+    S3 모드에서는 비활성화된다 (blob 이 로컬에 없어 일관 백업 불가).
+    """
     try:
         out = backup_mod.create_backup(dest)
+    except RuntimeError as e:  # S3 모드 차단 안내
+        raise click.ClickException(str(e))
     except OSError as e:
         raise click.ClickException(f"백업 실패: {e}")
     click.echo(f"백업 생성: {out}")
@@ -1055,7 +1109,17 @@ def backup(dest: Path) -> None:
 @click.argument("src", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--yes", is_flag=True, help="확인 없이 진행")
 def restore(src: Path, yes: bool) -> None:
-    """전체 백업에서 복원 — 현재 아카이브 루트를 백업 시점 상태로 교체."""
+    """전체 백업에서 복원 — 현재 아카이브 루트를 백업 시점 상태로 교체.
+
+    S3 모드에서는 비활성화된다 (전체 백업과 짝).
+    """
+    from . import config as _config
+
+    if _config.active_backend() == "s3":
+        raise click.ClickException(
+            "전체 복원은 S3 모드에서 비활성화됩니다 — S3 DB백업 복원(첫 구동 setup)이나 "
+            "내보내기/가져오기를 사용하세요."
+        )
     if not backup_mod.is_backup_filename(src.name):
         raise click.ClickException(
             f"복원은 {backup_mod.BACKUP_SUFFIX} 확장자 파일만 받습니다: {src.name}"

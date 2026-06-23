@@ -5066,6 +5066,28 @@ def set_db_backup_meta(conn: sqlite3.Connection, meta: dict) -> None:
     set_setting(conn, DB_BACKUP_META_KEY, json.dumps(meta, ensure_ascii=False))
 
 
+# S3 카테고리별 사용량 캐시 (storage_usage.py) — JSON: categories·total·scanned_at.
+# 온디맨드 스캔(ListObjectsV2) 결과만 담고, 요청 경로는 이 캐시만 읽는다(S3 미호출).
+S3_USAGE_KEY = "s3_usage"
+
+
+def s3_usage(conn: sqlite3.Connection) -> dict | None:
+    """캐시된 S3 카테고리 사용량(JSON) — 없거나 깨졌으면 None."""
+    raw = get_setting(conn, S3_USAGE_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_s3_usage(conn: sqlite3.Connection, usage: dict) -> None:
+    """S3 카테고리 사용량 캐시 저장 (스캔 결과)."""
+    set_setting(conn, S3_USAGE_KEY, json.dumps(usage, ensure_ascii=False))
+
+
 # ---- 첫 구동 분류·복구모드 (recovery.py) ----
 RECOVERY_META_KEY = "recovery_meta"  # JSON: baseline_max_id·last_id·status·counts
 

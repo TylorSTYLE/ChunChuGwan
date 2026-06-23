@@ -589,6 +589,7 @@ export interface SystemApiKeysData {
 export interface SystemOverview {
 	version: string;
 	counts: Record<string, number>;
+	storage_backend: string; // local | s3 — 사용량 UI 분기
 	signup_enabled: boolean;
 	signup_default_role: string;
 	signup_roles: string[];
@@ -798,6 +799,20 @@ export interface SetupStatus {
 	s3_blob?: boolean;
 	s3_db_backup?: boolean;
 	recovery?: RecoveryStatus | null;
+}
+
+// 저장 사용량 — /api/web/system/storage/usage 응답 (캐시·로컬, S3 미호출).
+export interface S3Usage {
+	categories: Record<string, number>; // sites·resources·documents·db-backups·other
+	total: number;
+	scanned_at: string;
+}
+
+export interface StorageUsage {
+	backend: string; // local | s3
+	local: { db: number; cache: number; blobcache: number } | null; // S3 모드
+	s3: S3Usage | null; // 캐시 (미스캔이면 null)
+	archive: Record<string, number> | null; // 로컬 모드 (db/sites/resources/documents)
 }
 
 // S3 DB 백업 — /api/web/system/db-backup/status 응답.
