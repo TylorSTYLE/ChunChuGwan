@@ -216,6 +216,23 @@ class LocalBlobStore:
 # ---- S3(객체 저장소) 백엔드 ----
 
 
+def _disable_expect_100_continue(client) -> None:
+    """S3 클라이언트의 ``Expect: 100-continue`` 를 끈다 (PUT 헤더를 한 번에 전송).
+
+    일부 S3 호환 서버(Garage/MinIO 등)는 100-continue 의 중간 응답을 Python
+    http.client 가 엄격 파싱하다 HeaderParsingError 경고(+트레이스백)를 쏟는다 —
+    업로드 자체는 200 으로 성공하지만 로그가 시끄럽다. Expect 헤더를 빼면 한 번의
+    요청/응답으로 처리돼 경고가 사라진다(업로드 동작은 동일). botocore 내부가
+    바뀌어 핸들러가 없어도 죽지 않게 best-effort 로 무시한다.
+    """
+    try:
+        from botocore.handlers import add_expect_header
+
+        client.meta.events.unregister("before-call.s3", add_expect_header)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class S3BlobStore:
     """boto3 기반 S3/MinIO blob 백엔드 (read-through 캐시 포함).
 
@@ -263,6 +280,7 @@ class S3BlobStore:
                 max_pool_connections=16,
             ),
         )
+        _disable_expect_100_continue(self._client)
 
     # ---- 키 ↔ 경로 매핑 ----
     def _rel(self, path: Path) -> str:

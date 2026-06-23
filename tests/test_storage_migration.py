@@ -220,6 +220,27 @@ def test_migrate_s3_to_local_completes_and_flips(s3_env):
     assert (root / seeded["doc_rel"]).read_bytes() == b"%PDF-1.4 document body"
 
 
+def test_css_cas_migrates_despite_gzip_name(s3_env):
+    """gzip 저장된 .css CAS(이름=압축 전 sha256)가 거짓 'CAS 손상'으로 실패하지 않는다."""
+    import gzip
+    import hashlib
+
+    client, root = s3_env
+    css = b"body{color:red}"
+    name = hashlib.sha256(css).hexdigest() + ".css"  # 이름 = 압축 전 원본 sha256
+    stored = gzip.compress(css, mtime=0)             # 저장본 = gzip
+    d = root / "resources" / name[:2]
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_bytes(stored)
+    _seed_local_blobs(root)
+    assert storage_migration.start_migration() is None
+    _join()
+    st = storage_migration.status()
+    assert st["status"] == "done"       # .css 가 거짓 손상으로 막히지 않음
+    assert st["failed_count"] == 0
+    assert _s3_backend().read_bytes(d / name) == stored  # gzip 저장본 그대로 업로드
+
+
 def test_corruption_stays_partial_no_flip_no_unpause(s3_env):
     """CAS 손상(내용≠이름) 파일은 재시도 후에도 실패 → partial, 전환·해제 금지."""
     client, root = s3_env
@@ -314,6 +335,29 @@ def test_idempotent_rerun_skips_existing(s3_env):
     assert storage_migration.start_migration() is None
     _join()
     assert storage_migration.status()["status"] == "done"  # 멱등: 다시 0실패 완료
+
+
+def test_migration_lifecycle_logged_to_system_logs(s3_env):
+    """시작·완료 라이프사이클이 system_logs(chunchugwan.storage_migration)에 남는다."""
+    from chunchugwan import system_log
+
+    client, root = s3_env
+    _seed_local_blobs(root)
+    system_log.install("serve")
+    try:
+        storage_migration.start_migration()
+        _join()
+        system_log.flush(5)
+        with db.connect() as conn:
+            msgs = [
+                r["message"] for r in conn.execute(
+                    "SELECT message FROM system_logs "
+                    "WHERE logger = 'chunchugwan.storage_migration'").fetchall()
+            ]
+        assert any("시작" in m for m in msgs)
+        assert any("완료" in m for m in msgs)
+    finally:
+        system_log.uninstall()
 
 
 def test_confirm_cleanup_clears_flag(s3_env):

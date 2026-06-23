@@ -309,16 +309,28 @@
 		}
 	}
 
+	let storagePolling = false;
 	async function loadStorage() {
 		try {
 			storage = await api<StorageStatus>('/system/storage/status');
+			// 화면을 떠났다 돌아와도(컴포넌트 재마운트) 진행 중이면 폴링을 재개한다 —
+			// 마이그레이션은 서버 백그라운드 스레드라 멈추지 않으나 폴링이 끊겨
+			// '중단된 것처럼' 보였다. 중복 폴링 루프는 storagePolling 가드로 막는다.
+			if (
+				!storagePolling &&
+				(storage.status === 'manifest' || storage.status === 'copying')
+			) {
+				pollStorage();
+			}
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
 		}
 	}
 
 	// 재색인 폴링(pollReindex) 미러 — 진행 중이면 setTimeout 으로 재폴링.
+	let storageTimer: ReturnType<typeof setTimeout> | null = null;
 	async function pollStorage() {
+		storagePolling = true;
 		try {
 			const st = await api<StorageStatus>('/system/storage/status');
 			storage = st;
@@ -330,8 +342,10 @@
 				}
 				lastDone = st.done ?? 0;
 				lastTick = now;
-				setTimeout(pollStorage, 1000);
+				storageTimer = setTimeout(pollStorage, 1000);
+				return;
 			} else {
+				storagePolling = false;
 				migrateRate = 0;
 				if (st.status === 'error') {
 					notice = `${t('마이그레이션 실패')}: ${st.error ?? ''}`;
@@ -343,6 +357,7 @@
 				await invalidateAll(); // 활성 백엔드·용량이 바뀌었을 수 있다
 			}
 		} catch (err) {
+			storagePolling = false;
 			error = err instanceof ApiError ? err.message : String(err);
 		}
 	}
@@ -473,10 +488,15 @@
 	}
 
 	onMount(() => {
-		loadStorage();
+		loadStorage(); // 진행 중이면 폴링을 재개한다(화면 재진입 대응)
 		loadDbBackup();
 		loadRecovery();
 		if (isS3) loadUsage();
+		// 화면을 떠나면 폴링 루프를 정리한다(고아 setTimeout 누적 방지).
+		return () => {
+			if (storageTimer) clearTimeout(storageTimer);
+			storagePolling = false;
+		};
 	});
 
 	async function uploadFile(e: Event, path: string, confirmMsg: string, extra: Record<string, string> = {}) {
