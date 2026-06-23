@@ -8,6 +8,18 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
+# .env 파일 로드 — 로컬 실행(`uv run wccg`) 편의용. 실제 환경변수가 항상 우선이며
+# (override=False), python-dotenv 미설치 시 조용히 건너뛴다. 도커 이미지엔 .env 를
+# 동봉하지 않으므로(.dockerignore) 컨테이너에선 no-op 이고, compose 는 각 서비스의
+# env_file 로 주입한다. 모든 WCCG_* 읽기가 이 모듈에 있으므로 여기서 한 번 로드하면
+# 전 모듈에 적용된다.
+try:
+    from dotenv import find_dotenv, load_dotenv
+except ImportError:  # python-dotenv 없음 — 환경변수만 사용
+    pass
+else:
+    load_dotenv(find_dotenv(usecwd=True))  # CWD 부터 위로 .env 탐색 (없으면 no-op)
+
 logger = logging.getLogger(__name__)
 
 ARCHIVE_ROOT = Path(os.environ.get("WCCG_ROOT", "archive")).resolve()
@@ -17,6 +29,34 @@ CACHE_DIR = ARCHIVE_ROOT / "cache"          # 파생 산출물(픽셀 diff 등),
 RULES_PATH = ARCHIVE_ROOT / "rules.json"    # 도메인별 정규화 룰
 RESOURCES_DIR = ARCHIVE_ROOT / "resources"  # 스냅샷 간 공유 자원 CAS (resources.py)
 DOCUMENTS_DIR = ARCHIVE_ROOT / "documents"  # 문서 파일 CAS (documents.py — 인증 라우트 전용)
+# S3 백엔드 read-through 캐시 위치 — 픽셀 diff 캐시(CACHE_DIR)와 분리해 compact 의
+# CACHE_DIR rmtree 영향을 받지 않게 한다. 로컬 백엔드에서는 쓰이지 않는다.
+BLOB_CACHE_DIR = ARCHIVE_ROOT / "blobcache"
+
+# ---- S3/MinIO blob 백엔드 (선택 — blobstore.S3BlobStore) ----
+# WCCG_S3_* 중 식별 정보(endpoint·bucket·access key·secret) 중 하나라도 있으면
+# S3 백엔드를 요청한 것으로 보고, 필수 세트가 완전해야 활성화한다 (일부만 설정 시
+# 조용히 로컬로 폴백하지 않고 부팅 시 명확히 실패 — 데이터 혼선 방지). 비밀값은
+# env 전용으로 DB·로그·예외 메시지에 노출하지 않는다.
+S3_ENDPOINT_URL = os.environ.get("WCCG_S3_ENDPOINT_URL", "").strip()
+S3_BUCKET = os.environ.get("WCCG_S3_BUCKET", "").strip()
+S3_REGION = os.environ.get("WCCG_S3_REGION", "").strip() or "us-east-1"
+S3_ACCESS_KEY_ID = os.environ.get("WCCG_S3_ACCESS_KEY_ID", "").strip()
+S3_SECRET_ACCESS_KEY = os.environ.get("WCCG_S3_SECRET_ACCESS_KEY", "")
+S3_FORCE_PATH_STYLE = os.environ.get("WCCG_S3_FORCE_PATH_STYLE", "on") != "off"
+S3_PREFIX = os.environ.get("WCCG_S3_PREFIX", "").strip()
+# read-through 캐시 용량 상한 (MB) — 초과 시 LRU 제거
+BLOB_CACHE_MAX_MB = int(os.environ.get("WCCG_BLOB_CACHE_MAX_MB", "2048"))
+
+# ---- S3 DB 백업 (db_backup.py — S3 모드에서 index.db+rules.json 을 db-backups/ 로) ----
+# 주기(시간)와 보존 개수는 시스템 설정으로 변경하며, 오염·범위 밖이면 기본값으로
+# 클램핑한다 (db.db_backup_interval_hours / db_backup_keep).
+DB_BACKUP_INTERVAL_HOURS_DEFAULT = 24       # 정기 백업 주기 (시간)
+DB_BACKUP_INTERVAL_HOURS_MIN = 1
+DB_BACKUP_INTERVAL_HOURS_MAX = 720          # 30일
+DB_BACKUP_KEEP_DEFAULT = 14                 # 보존할 최신 백업 개수
+DB_BACKUP_KEEP_MIN = 1
+DB_BACKUP_KEEP_MAX = 365
 
 PAGE_LOAD_TIMEOUT_MS = 30_000
 # load 도달 후 networkidle 추가 대기 상한 — 분석 스크립트·롱폴링이 있는
@@ -167,7 +207,7 @@ SYSTEM_LOG_MAX_ROWS = int(os.environ.get("WCCG_SYSTEM_LOG_MAX_ROWS", "20000"))
 
 # ---- 로그 파일 (선택 — 콘솔 로그를 회전 파일로도 남긴다, cli.py 가 설치) ----
 # WCCG_LOG_FILE 가 설정되면 그 경로에 INFO 이상 로그를 회전 파일로 기록한다
-# (도커는 볼륨에 마운트해 호스트에서 읽기 — compose.example.yaml 참조). 미설정
+# (도커는 볼륨에 마운트해 호스트에서 읽기 — docker-compose.yml 참조). 미설정
 # 이면 콘솔(stderr)·DB(system_logs) 만. 다중 프로세스(dashboard/worker)는 서로
 # 다른 파일을 써야 한다 — 회전이 같은 파일에서 경합하면 깨질 수 있다.
 LOG_FILE = os.environ.get("WCCG_LOG_FILE", "").strip()
@@ -283,6 +323,87 @@ OIDC_STATE_TTL_SECONDS = 600
 def oidc_enabled() -> bool:
     """OIDC 설정이 모두 채워졌는지 (테스트에서 monkeypatch 가능하도록 함수)."""
     return bool(OIDC_ISSUER and OIDC_CLIENT_ID and OIDC_CLIENT_SECRET)
+
+
+def s3_requested() -> bool:
+    """WCCG_S3_* 식별 정보 중 하나라도 설정돼 S3 백엔드를 요청했는지."""
+    return bool(S3_ENDPOINT_URL or S3_BUCKET or S3_ACCESS_KEY_ID or S3_SECRET_ACCESS_KEY)
+
+
+def s3_settings() -> dict:
+    """S3 백엔드 생성 인자 (필수 세트 검증). 불완전하면 RuntimeError.
+
+    필수: bucket·access key·secret. 누락 시 무엇이 빠졌는지 변수명만 알리고
+    값(비밀)은 노출하지 않는다.
+    """
+    required = {
+        "WCCG_S3_BUCKET": S3_BUCKET,
+        "WCCG_S3_ACCESS_KEY_ID": S3_ACCESS_KEY_ID,
+        "WCCG_S3_SECRET_ACCESS_KEY": S3_SECRET_ACCESS_KEY,
+    }
+    missing = [name for name, value in required.items() if not value]
+    if missing:
+        raise RuntimeError(
+            "S3 백엔드 설정이 불완전합니다 — 누락된 환경변수: " + ", ".join(missing)
+        )
+    return {
+        "bucket": S3_BUCKET,
+        "archive_root": ARCHIVE_ROOT,
+        "cache_dir": BLOB_CACHE_DIR,
+        "cache_max_bytes": BLOB_CACHE_MAX_MB * 1024 * 1024,
+        "endpoint_url": S3_ENDPOINT_URL,
+        "region": S3_REGION,
+        "access_key_id": S3_ACCESS_KEY_ID,
+        "secret_access_key": S3_SECRET_ACCESS_KEY,
+        "force_path_style": S3_FORCE_PATH_STYLE,
+        "prefix": S3_PREFIX,
+    }
+
+
+_blob_store = None
+
+
+def active_backend() -> str:
+    """현재 활성 blob 백엔드 ('local'|'s3').
+
+    DB 설정 `storage_backend` 가 정본이고 기본은 'local'. env(WCCG_S3_*)는
+    S3 가용성/자격증명일 뿐 활성 백엔드를 바꾸지 않는다 — 전환은 마이그레이션
+    0실패 완료(또는 P5 setup)로만 일어난다. DB 파일이 아직 없으면(빈/순수
+    단위 테스트) 설정을 읽으려 DB 를 만들지 않고 'local' 로 본다.
+    """
+    if not DB_PATH.is_file():
+        return "local"
+    from . import db
+
+    with db.connect() as conn:
+        return db.storage_backend(conn)
+
+
+def blob_store():
+    """활성 blob 저장 백엔드 인스턴스 (싱글턴).
+
+    활성 백엔드가 's3'면 WCCG_S3_* 가 완전해야 하고(s3_settings() 가 불완전
+    시 RuntimeError 로 실패), 'local'/미설정이면 LocalBlobStore 를 쓴다.
+    인스턴스는 캐시되며, 마이그레이션 완료로 활성 백엔드가 바뀌면
+    reset_blob_store() 로 무효화한다.
+    """
+    global _blob_store
+    if _blob_store is None:
+        if active_backend() == "s3":
+            from .blobstore import S3BlobStore
+
+            _blob_store = S3BlobStore(**s3_settings())
+        else:
+            from .blobstore import LocalBlobStore
+
+            _blob_store = LocalBlobStore()
+    return _blob_store
+
+
+def reset_blob_store() -> None:
+    """캐시된 백엔드 인스턴스를 비운다 — 활성 백엔드 전환 후 재생성용."""
+    global _blob_store
+    _blob_store = None
 
 
 def ensure_dirs() -> None:

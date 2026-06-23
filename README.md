@@ -38,6 +38,8 @@
 - 타임스탬프·상대시각·광고 줄 등 노이즈는 정규화 단계에서 제거 후 비교
 - 이미지/CSS/폰트를 보존하는 단일 page.html — 큰 자원은 스냅샷 간 공유
   저장소(CAS)로 중복 제거, HTML 은 gzip, 스크린샷은 WebP 로 저장 공간 절약
+- (선택) blob 을 로컬 대신 **S3 호환 객체 저장소**(MinIO 권장)에 저장 — 양방향
+  마이그레이션·read-through 캐시 서빙·S3 DB 백업·복구 ([STORAGE.md](docs/STORAGE.md#s3-객체-저장소-백엔드-선택))
 - 페이지가 링크한 문서 파일(PDF·워드·파워포인트·한글·키노트 등)도 함께 저장 —
   같은 내용은 한 번만 저장(문서 CAS)하고, 스냅샷 뷰어의 "첨부 문서" 목록과
   대시보드 "문서" 통합 목록(`/archive/documents`)에서 다운로드. 참조하는 스냅샷이
@@ -84,6 +86,11 @@ npm --prefix frontend run build          # 대시보드(SvelteKit) 빌드 → fr
                                          #   (Docker 이미지는 빌드 단계에서 자동 동봉)
 ```
 
+설정·시크릿(관리자 계정·`WCCG_SECRET_KEY`·OIDC·SMTP 등)은 셸 환경변수로 두거나
+프로젝트 루트의 `.env` 에 둘 수 있다 — `uv run wccg` 가 시작 시 자동 로드한다.
+`cp .env.example .env` 후 필요한 값만 채운다(전체 목록은
+[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md#환경변수)). `.env` 는 커밋되지 않는다.
+
 ## 사용법
 
 ```bash
@@ -123,19 +130,23 @@ run`)가 소비해 실행한다 — `crawl add`/`crawl run` 과 같은 모델이
 
 ## 도커 빠른 시작
 
-로컬에 Python/uv 를 설치하지 않고 Docker Compose 로 실행할 수 있다. 예제
-파일을 복사해 로컬 전용 `compose.yaml` 을 만들고(개인 설정은 거기서만 수정),
-대시보드 + 워커를 띄운다.
+로컬에 Python/uv 를 설치하지 않고 Docker Compose 로 실행할 수 있다. 리포의
+`docker-compose.yml`(`:latest` 이미지)을 그대로 띄운다. 관리자 비번·OIDC·SMTP 같은
+개인 설정·시크릿은 gitignore 대상인 `.env`(`cp .env.example .env`) 또는
+`docker-compose.override.yml` 에 둔다.
 
 ```bash
-cp compose.example.yaml compose.yaml   # 예제 복사 (최초 1회)
 docker compose up -d dashboard         # 대시보드 + 워커 (http://127.0.0.1:8765)
 docker compose run --rm cli add <url>  # 스냅샷 생성
 docker compose down                    # 대시보드 중지
+# develop(테스트) 이미지로 띄우려면:
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d dashboard
 ```
 
 포트는 호스트의 127.0.0.1 에만 바인딩되고, 컨테이너 대시보드는 인증이 항상
-켜진다. 도커 단독 실행·공통 사항·이미지 빌드 등 자세한 내용은
+켜진다. 윈도우·macOS 에서 Docker Desktop(GUI 앱)으로 처음 구동한다면
+[Docker Desktop 설치·설정 안내](docs/DOCKER.md#docker-desktop으로-설치-및-설정)
+를 따라 하면 된다. 도커 단독 실행·공통 사항·이미지 빌드 등 자세한 내용은
 [docs/DOCKER.md](docs/DOCKER.md) 참조.
 
 ## 대시보드

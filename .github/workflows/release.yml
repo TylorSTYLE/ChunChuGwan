@@ -47,7 +47,7 @@ jobs:
 
       - name: 체크아웃
         if: steps.bump.outputs.skip != 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           ref: main
           fetch-depth: 0
@@ -69,6 +69,10 @@ jobs:
           fi
           # 프리릴리스/빌드 메타 제거 후 major.minor.patch 분해
           base="${base%%[-+]*}"
+          # 비정상 base 로 산술이 0/에러로 새지 않게 3-파트 숫자 semver 만 허용
+          if [[ ! "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::기준 버전이 정상 semver 가 아니다 (base=$base)"; exit 1
+          fi
           IFS='.' read -r major minor patch <<< "$base"
           case "$BUMP" in
             major) major=$((major + 1)); minor=0; patch=0 ;;
@@ -86,7 +90,7 @@ jobs:
 
       - name: uv 설치
         if: steps.bump.outputs.skip != 'true'
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
           # 호스티드 러너는 런마다 새 VM 이라 로컬 uv 캐시가 보존되지 않는다.
           # GHA 캐시를 켜 의존성 다운로드를 런 간 재사용한다.
@@ -94,6 +98,7 @@ jobs:
           python-version: "3.14"
 
       - name: pyproject.toml · uv.lock · 릴리스 노트 번들 갱신 · 태그 · 푸시
+        id: push
         if: steps.bump.outputs.skip != 'true'
         env:
           NEXT: ${{ steps.ver.outputs.next }}
@@ -119,40 +124,63 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add chunchugwan/web/release_notes.json
           git commit -am "춘추관 v$NEXT (#$PR_NUM)"
+          # main 푸시 — 체크아웃 이후 main 이 전진했으면(non-FF 거부) origin/main 을
+          # 다시 받아 rebase 후 재시도한다. 태그는 '실제로 main 에 올라간' 커밋을
+          # 가리켜야 하므로(rebase 로 SHA 가 바뀌어도 정합) 푸시 성공 뒤에 만든다.
+          pushed=0
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then pushed=1; break; fi
+            echo "::warning::main 푸시 거부(non-FF) — origin/main 재취득 후 rebase 재시도 ($attempt/3)"
+            git fetch origin main
+            git rebase origin/main \
+              || { echo "::error::rebase 충돌 — 릴리스 커밋을 main 에 올릴 수 없음(수동 개입 필요)"; exit 1; }
+          done
+          [ "$pushed" = 1 ] || { echo "::error::main 푸시 3회 실패"; exit 1; }
+          # main 에 올라간 커밋(HEAD)에 태그를 찍고 푸시 (docker.yml 의 vX.Y.Z 빌드 트리거)
           git tag -a "v$NEXT" -m "v$NEXT"
-          git push origin HEAD:main
           git push origin "v$NEXT"
 
-      - name: GitHub Release 생성
+      - name: SBOM 생성 (CycloneDX)
+        # Release 생성보다 먼저 만들어 생성 시점에 자산으로 동봉한다 — immutable
+        # release 는 게시 후 자산 추가/교체(upload --clobber)를 422 로 거부하기 때문.
+        # 실패해도 릴리스·FF 를 막지 않는다(continue-on-error): 산출물은 SBOM 뿐이며
+        # 뒤따르는 develop FF 동기화가 스킵되지 않게 한다.
+        if: steps.bump.outputs.skip != 'true'
+        continue-on-error: true
+        id: sbom
+        env:
+          NEXT: ${{ steps.ver.outputs.next }}
+        run: |
+          # 런타임 전용 의존성 폐포를 설치한 뒤 그 환경의 패키지 메타데이터로 SBOM 생성.
+          # environment 모드라야 컴포넌트별 라이선스가 채워진다(requirements 모드는 비움).
+          uv sync --frozen --no-dev
+          sbom="chunchugwan-v$NEXT.cdx.json"
+          uvx --from 'cyclonedx-bom==7.3.0' cyclonedx-py environment .venv/bin/python \
+            --of JSON -o "$sbom" --pyproject pyproject.toml
+          echo "path=$sbom" >> "$GITHUB_OUTPUT"
+
+      - name: GitHub Release 생성 (SBOM 동봉)
         if: steps.bump.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           NEXT: ${{ steps.ver.outputs.next }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          SBOM: ${{ steps.sbom.outputs.path }}
         run: |
+          # SBOM 생성이 성공했을 때만 자산으로 첨부(생성 단계는 continue-on-error 라
+          # 실패 시 SBOM 이 빈 문자열). immutable release 와 호환되도록 create 시점에 동봉.
           gh release create "v$NEXT" \
             --title "v$NEXT" \
             --notes "$PR_TITLE ($PR_URL)" \
-            --generate-notes
-
-      - name: SBOM 생성·릴리스 첨부 (CycloneDX)
-        if: steps.bump.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          NEXT: ${{ steps.ver.outputs.next }}
-        run: |
-          # 런타임 전용 의존성 폐포를 설치한 뒤 그 환경의 패키지 메타데이터로 SBOM 생성.
-          # environment 모드라야 컴포넌트별 라이선스가 채워진다(requirements 모드는 비움).
-          # 실패해도 릴리스 자체는 막지 않는다(이미 태그·Release 가 찍힌 뒤이므로).
-          uv sync --frozen --no-dev
-          sbom="chunchugwan-v$NEXT.cdx.json"
-          uvx --from 'cyclonedx-bom>=7,<8' cyclonedx-py environment .venv/bin/python \
-            --of JSON -o "$sbom" --pyproject pyproject.toml
-          gh release upload "v$NEXT" "$sbom" --clobber
+            --generate-notes \
+            ${SBOM:+"$SBOM"}
 
       - name: develop 를 릴리스 커밋으로 동기화 (FF)
-        if: steps.bump.outputs.skip != 'true'
+        # 핵심 커밋·태그·main 푸시(steps.push)가 성공했으면, 그 뒤 SBOM/Release 생성이
+        # 실패해도 FF 는 반드시 돈다 — gitflow 불변식(develop = main 조상)을 지킨다.
+        # 반대로 main 푸시 자체가 실패했으면 FF 도 건너뛴다(불완전 상태를 develop 에 밀지 않음).
+        if: ${{ !cancelled() && steps.bump.outputs.skip != 'true' && steps.push.outcome == 'success' }}
         run: |
           # 릴리스 후 main = develop + 버전 범프 커밋. develop 를 main 으로 FF 해
           # 다음 사이클의 develop→main diff 가 버전 파일 되돌림으로 보이지 않게 한다.

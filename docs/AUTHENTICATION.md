@@ -225,6 +225,13 @@ rate limit 을 건다. 시스템 메뉴의 **시스템 설정 → 인증 보호*
 > 프로젝트 이름이 춘추관(ChunChuGwan)으로 바뀌면서 기존 `ARCHIVER_*` 환경변수는
 > 모두 `WCCG_*` 로 이름이 변경됐다. 기존 배포의 셸/compose 환경을 함께 갱신할 것.
 
+아래 변수는 셸 환경변수로 직접 두거나 프로젝트 루트의 `.env` 파일(`KEY=값`)에 둘 수
+있다 — 로컬 실행(`uv run wccg`)은 시작 시 `.env` 를 자동 로드하고(python-dotenv),
+도커 compose 는 각 서비스가 `env_file: .env` 로 주입한다. 실제 환경변수가 `.env` 보다
+우선한다. 리포의 [`.env.example`](../.env.example) 을 `.env` 로 복사해
+(`cp .env.example .env`) 필요한 값만 채운다. `.env` 는 `.gitignore` 로 제외되므로
+시크릿을 여기에 둔다.
+
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `WCCG_AUTH` | `on` | `off` 로 인증 비활성화 — loopback 바인딩일 때만 허용 |

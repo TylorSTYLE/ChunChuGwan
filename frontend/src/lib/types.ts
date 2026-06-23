@@ -589,6 +589,7 @@ export interface SystemApiKeysData {
 export interface SystemOverview {
 	version: string;
 	counts: Record<string, number>;
+	storage_backend: string; // local | s3 — 사용량 UI 분기
 	signup_enabled: boolean;
 	signup_default_role: string;
 	signup_roles: string[];
@@ -735,4 +736,96 @@ export interface MyArchivesData {
 	total: number;
 	total_pages: number;
 	page_num: number;
+}
+
+// 스토리지(blob 백엔드) 마이그레이션 — /api/web/system/storage/status 응답.
+// DB 요약(세션 간 유지)은 정리 대기 배너의 영속 소스다.
+export interface StorageMigrationSummary {
+	status?: string;
+	direction?: string;
+	source_backend?: string;
+	target_backend?: string;
+	source_location?: string;
+	cleanup_pending?: boolean;
+	total?: number;
+	finished_at?: string;
+}
+
+export interface StorageStatus {
+	status: string; // idle | manifest | copying | partial | done | error
+	active_backend: string; // local | s3
+	paused: boolean;
+	done?: number;
+	total?: number;
+	failed?: { path: string; error: string }[];
+	direction?: string;
+	source_backend?: string;
+	target_backend?: string;
+	error?: string | null;
+	source_location?: string;
+	cleanup_pending?: boolean;
+	summary?: StorageMigrationSummary | null;
+}
+
+// 복구모드 — /auth/setup/recover/status·/system/recovery/status 응답.
+export interface RecoveryMeta {
+	baseline_max_id?: number;
+	last_id?: number;
+	status?: string;
+	recovered?: number;
+	source_backend?: string;
+	finished_at?: string;
+}
+
+export interface RecoveryStatus {
+	status: string; // idle | scanning | rebuilding | done | error
+	done?: number;
+	total?: number;
+	error?: string | null;
+	source_backend?: string;
+	restricted_count?: number; // 복구분 중 아직 제한(authenticated=1)인 개수 (배너 기준)
+	recovery_meta?: RecoveryMeta | null;
+}
+
+// 첫 구동 분류 — /auth/setup 응답 (P5a recovery.classify + 진행 상태).
+export interface SetupStatus {
+	needed: boolean;
+	migration: MigrationStatus;
+	token_required: boolean;
+	case: string; // operating | data_preserved | restore_s3 | recover_local | recover_s3 | fresh
+	has_archive_data?: boolean;
+	local_blob?: boolean;
+	s3_configured?: boolean;
+	s3_blob?: boolean;
+	s3_db_backup?: boolean;
+	recovery?: RecoveryStatus | null;
+}
+
+// 저장 사용량 — /api/web/system/storage/usage 응답 (캐시·로컬, S3 미호출).
+export interface S3Usage {
+	categories: Record<string, number>; // sites·resources·documents·db-backups·other
+	total: number;
+	scanned_at: string;
+}
+
+export interface StorageUsage {
+	backend: string; // local | s3
+	local: { db: number; cache: number; blobcache: number } | null; // S3 모드
+	s3: S3Usage | null; // 캐시 (미스캔이면 null)
+	archive: Record<string, number> | null; // 로컬 모드 (db/sites/resources/documents)
+}
+
+// S3 DB 백업 — /api/web/system/db-backup/status 응답.
+export interface DbBackupStatus {
+	s3_mode: boolean;
+	running: boolean;
+	interval_hours: number;
+	keep: number;
+	last_at?: string | null;
+	last_status?: string | null;
+	last_error?: string | null;
+	last_bytes?: number | null;
+	count: number;
+	backups: { key: string; bytes: number; at: string }[];
+	list_error?: string;
 }

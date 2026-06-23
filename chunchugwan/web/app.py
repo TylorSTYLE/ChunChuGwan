@@ -819,9 +819,10 @@ def snapshot_file(request: Request, snapshot_id: int, name: str):
         raise HTTPException(404, t(request, "허용되지 않은 파일"))
     snap = _load_snapshot(request, snapshot_id)
     snap_dir = _snapshot_dir(snap)
+    store = config.blob_store()
     for filename, media_type in candidates:
         path = snap_dir / filename
-        if path.is_file():
+        if store.is_file(path):  # 존재 확인만 (S3 는 HEAD, 객체 미다운로드)
             break
     else:
         raise HTTPException(404, t(request, "파일 없음"))
@@ -839,7 +840,8 @@ def snapshot_file(request: Request, snapshot_id: int, name: str):
         headers["Content-Security-Policy"] = (
             "sandbox allow-top-navigation-by-user-activation"
         )
-    return FileResponse(path, media_type=media_type, headers=headers)
+    # 서빙 시점에만 로컬로 materialize (로컬 백엔드는 identity → 경로·헤더 무변경)
+    return FileResponse(store.local_path(path), media_type=media_type, headers=headers)
 
 
 def _document_response(path: Path, filename: str) -> FileResponse:
@@ -865,6 +867,7 @@ def snapshot_document(request: Request, snapshot_id: int, name: str):
     _require_viewer(request)
     snap = _load_snapshot(request, snapshot_id)
     snap_dir = _snapshot_dir(snap)
+    store = config.blob_store()
     try:
         meta = storage.read_meta(snap_dir)
     except OSError:
@@ -877,16 +880,16 @@ def snapshot_document(request: Request, snapshot_id: int, name: str):
     audit.log(request, "문서 다운로드: %s (스냅샷 #%d)", name, snapshot_id,
               action="download", target=name)
     legacy = snap_dir / "files" / name
-    if legacy.is_file():
-        return _document_response(legacy, name)
+    if store.is_file(legacy):
+        return _document_response(store.local_path(legacy), name)
     with db.connect() as conn:
         row = db.get_snapshot_document(conn, snapshot_id, name)
     sha = row["sha256"] if row else str(entry.get("sha256") or "")
     cas_name = documents.cas_name(sha, name)
     if cas_name is not None:
         path = documents.cas_path(cas_name)
-        if path.is_file():
-            return _document_response(path, name)
+        if store.is_file(path):
+            return _document_response(store.local_path(path), name)
     raise HTTPException(404, t(request, "파일 없음"))
 
 
@@ -931,11 +934,12 @@ def document_download(request: Request, sha256: str, name: str):
         row = db.find_document(conn, sha256, name)
     if row is None:
         raise HTTPException(404, t(request, "허용되지 않은 파일"))
+    store = config.blob_store()
     path = documents.cas_path(cas_name)
-    if not path.is_file():
+    if not store.is_file(path):
         raise HTTPException(404, t(request, "파일 없음"))
     audit.log(request, "문서 다운로드: %s", name, action="download", target=name)
-    return _document_response(path, name)
+    return _document_response(store.local_path(path), name)
 
 
 @app.get("/resource/{name}")
@@ -948,19 +952,22 @@ def resource_file(request: Request, name: str):
     """
     if not resources.is_valid_name(name):
         raise HTTPException(404, t(request, "잘못된 자원 이름"))
+    store = config.blob_store()
     path = resources.resource_path(name)
-    if not path.is_file():
+    if not store.is_file(path):  # 존재 확인만 (S3 는 HEAD)
         raise HTTPException(404, t(request, "자원 없음"))
+    # 서빙 시점에 로컬로 materialize (로컬 백엔드는 identity)
+    served = store.local_path(path)
     headers = {
         "Content-Security-Policy": "sandbox",
         "Cache-Control": "public, max-age=31536000, immutable",
     }
     # CSS 는 gzip 으로 저장된다 (resources._store_css). 구형 아카이브의
-    # 비압축 .css 와 공존하므로 매직 바이트로 판별한다.
-    if name.endswith(".css") and resources.is_gzipped(path):
+    # 비압축 .css 와 공존하므로 매직 바이트로 판별한다 (materialize 된 로컬 파일).
+    if name.endswith(".css") and resources.is_gzipped(served):
         headers["Content-Encoding"] = "gzip"
     return FileResponse(
-        path,
+        served,
         media_type=resources.EXT_MEDIA_TYPES[Path(name).suffix],
         headers=headers,
     )
@@ -1049,8 +1056,12 @@ def shotdiff(
     old_shot_path, new_shot_path = _screenshot_paths(page, old_snap, new_snap)
     if old_shot_path is None or new_shot_path is None:
         raise HTTPException(404, t(request, "스크린샷 없음"))
+    # differ 는 PIL 로 경로를 직접 연다 — 서빙 시점에 로컬로 materialize 해 넘긴다
+    # (로컬 백엔드는 identity). 결과 하이라이트는 로컬 CACHE_DIR 에 저장된다.
+    store = config.blob_store()
     _ratio, out_png = differ.cached_screenshot_diff(
-        old_shot_path, new_shot_path, f"shotdiff-{old_snap['id']}-{new_snap['id']}"
+        store.local_path(old_shot_path), store.local_path(new_shot_path),
+        f"shotdiff-{old_snap['id']}-{new_snap['id']}"
     )
     return FileResponse(out_png, media_type="image/png")
 

@@ -33,10 +33,8 @@ import gzip
 import hashlib
 import json
 import logging
-import os
 import re
 import shutil
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin
@@ -112,18 +110,12 @@ def _write_cas(name: str, payload: bytes) -> str:
     이미 있는 파일은 mtime 만 갱신한다 — 고아 자원 정리(sweep)의 유예 창이
     "방금 다시 쓰이기 시작한 파일"을 진행 중 캡처의 커밋 전에 지우지 않게.
     """
+    store = config.blob_store()
     path = resource_path(name)
-    if path.is_file():
-        os.utime(path)
+    if store.is_file(path):
+        store.touch_mtime(path)
         return name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # 동시 아카이빙(스케줄러 + 수동)에 안전하도록 임시 파일 후 원자적 교체
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        os.write(fd, payload)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
+    store.write_atomic(path, payload)
     return name
 
 
@@ -147,16 +139,20 @@ def _store_css(data: bytes) -> str:
     """
     name = hashlib.sha256(data).hexdigest() + ".css"
     path = resource_path(name)
-    if path.is_file():
-        os.utime(path)  # _write_cas 와 동일 — sweep 유예 창 갱신
+    if config.blob_store().is_file(path):
+        config.blob_store().touch_mtime(path)  # _write_cas 와 동일 — sweep 유예 창 갱신
         return name
     return _write_cas(name, gzip.compress(data, compresslevel=9, mtime=0))
 
 
 def is_gzipped(path: Path) -> bool:
-    """CAS 파일이 gzip 으로 저장됐는지 (매직 바이트) — /resource/ 서빙용."""
+    """CAS 파일이 gzip 으로 저장됐는지 (매직 바이트) — /resource/ 서빙용.
+
+    서빙 경로가 항상 로컬(또는 백엔드가 materialize 한) 파일 경로를 넘기므로
+    매직 바이트는 그 로컬 파일에서 직접 읽는다.
+    """
     try:
-        with path.open("rb") as f:
+        with open(path, "rb") as f:
             return f.read(2) == b"\x1f\x8b"
     except OSError:
         return False
@@ -181,11 +177,12 @@ def referenced_names_in_html(html: str) -> list[str]:
 
 def cas_files() -> list[Path]:
     """자원 CAS 의 파일 전체 (이름 형식이 유효한 것만) — sweep 대상 스캔."""
-    if not config.RESOURCES_DIR.is_dir():
+    store = config.blob_store()
+    if not store.is_dir(config.RESOURCES_DIR):
         return []
     return sorted(
-        f for f in config.RESOURCES_DIR.glob("*/*")
-        if f.is_file() and is_valid_name(f.name)
+        f for f in store.glob(config.RESOURCES_DIR, "*/*")
+        if store.is_file(f) and is_valid_name(f.name)
     )
 
 
@@ -194,15 +191,13 @@ def delete_cas(names: list[str]) -> None:
 
     잔존 참조 판정(snapshot_resources)은 호출부(deletion.py)가 한다.
     """
+    store = config.blob_store()
     for name in names:
         if not is_valid_name(name):
             continue
         path = resource_path(name)
-        path.unlink(missing_ok=True)
-        try:
-            path.parent.rmdir()
-        except OSError:
-            pass
+        store.delete(path)
+        store.rmdir(path.parent)
 
 
 def externalize_data_uris(html: str) -> tuple[str, list[str]]:
@@ -347,9 +342,10 @@ def externalize_style_blocks(
 
 def _gzip_replace(src: Path) -> Path:
     """src 를 gzip 압축한 ``{src}.gz`` 를 만들고 원본을 지운다."""
+    store = config.blob_store()
     dst = src.with_name(src.name + ".gz")
-    dst.write_bytes(gzip.compress(src.read_bytes(), compresslevel=9))
-    src.unlink()
+    store.write_bytes(dst, gzip.compress(store.read_bytes(src), compresslevel=9))
+    store.delete(src)
     return dst
 
 
@@ -366,22 +362,26 @@ def _screenshot_to_webp(png: Path) -> Path | None:
     """
     from PIL import Image
 
+    store = config.blob_store()
     dst = png.with_suffix(".webp")
     marker = png.with_name(png.name + ".keep")
     try:
-        with Image.open(png) as im:
-            im.save(dst, "WEBP", quality=config.SCREENSHOT_WEBP_QUALITY, method=4)
+        with Image.open(store.local_path(png)) as im:
+            im.save(
+                store.local_path(dst), "WEBP",
+                quality=config.SCREENSHOT_WEBP_QUALITY, method=4,
+            )
     except Exception as e:
         logger.warning("스크린샷 WebP 변환 실패, PNG 유지: %s (%s)", png, e)
-        dst.unlink(missing_ok=True)
-        marker.touch()
+        store.delete(dst)
+        store.touch_create(marker)
         return None
-    if dst.stat().st_size >= png.stat().st_size:
+    if store.size(dst) >= store.size(png):
         logger.info("WebP 가 PNG 보다 작지 않아 변환 생략, PNG 유지: %s", png)
-        dst.unlink()
-        marker.touch()
+        store.delete(dst)
+        store.touch_create(marker)
         return None
-    png.unlink()
+    store.delete(png)
     return dst
 
 
@@ -417,12 +417,13 @@ def compact_snapshot_dir(
     (externalize_style_blocks 참조).
     """
     stats = CompactStats()
+    store = config.blob_store()
 
     page = snap_dir / "page.html"
-    if page.is_file():
-        stats.before_bytes += page.stat().st_size
+    if store.is_file(page):
+        stats.before_bytes += store.size(page)
         html, stats.resource_names = externalize_data_uris(
-            page.read_text(encoding="utf-8")
+            store.read_text(page, encoding="utf-8")
         )
         html, css_names = externalize_style_blocks(html, base_url)
         stats.resource_names += [
@@ -430,14 +431,14 @@ def compact_snapshot_dir(
         ]
         stats.externalized = len(stats.resource_names)
         dst = snap_dir / "page.html.gz"
-        dst.write_bytes(gzip.compress(html.encode("utf-8"), compresslevel=9))
-        page.unlink()
-        stats.after_bytes += dst.stat().st_size
+        store.write_bytes(dst, gzip.compress(html.encode("utf-8"), compresslevel=9))
+        store.delete(page)
+        stats.after_bytes += store.size(dst)
 
     raw = snap_dir / "raw.html"
-    if raw.is_file():
-        stats.before_bytes += raw.stat().st_size
-        stats.after_bytes += _gzip_replace(raw).stat().st_size
+    if store.is_file(raw):
+        stats.before_bytes += store.size(raw)
+        stats.after_bytes += store.size(_gzip_replace(raw))
 
     # 데스크탑·모바일 스크린샷 모두 같은 규칙으로 WebP 변환 (마커가 있으면 생략)
     for png_name, marker_name in (
@@ -445,12 +446,12 @@ def compact_snapshot_dir(
         ("screenshot-mobile.png", storage.MOBILE_WEBP_SKIP_MARKER),
     ):
         png = snap_dir / png_name
-        if png.is_file() and not (snap_dir / marker_name).is_file():
-            before = png.stat().st_size
+        if store.is_file(png) and not store.is_file(snap_dir / marker_name):
+            before = store.size(png)
             webp = _screenshot_to_webp(png)
             if webp is not None:
                 stats.before_bytes += before
-                stats.after_bytes += webp.stat().st_size
+                stats.after_bytes += store.size(webp)
 
     return stats
 
@@ -461,10 +462,12 @@ def snapshot_dirs() -> list[Path]:
     finalize_snapshot 은 meta.json 을 마지막에 쓰므로, 저장 진행 중인
     디렉토리는 자연스럽게 제외된다.
     """
-    if not config.SITES_DIR.is_dir():
+    store = config.blob_store()
+    if not store.is_dir(config.SITES_DIR):
         return []
     return sorted(
-        p for p in config.SITES_DIR.glob("*/*/*") if (p / "meta.json").is_file()
+        p for p in store.glob(config.SITES_DIR, "*/*/*")
+        if store.is_file(p / "meta.json")
     )
 
 
@@ -504,7 +507,9 @@ def compactable_count() -> int:
 def _meta_final_url(snap_dir: Path) -> str | None:
     """스냅샷 meta.json 의 final_url — 상대 CSS 참조 절대화 기준 (없으면 None)."""
     try:
-        meta = json.loads((snap_dir / "meta.json").read_text(encoding="utf-8"))
+        meta = json.loads(
+            config.blob_store().read_text(snap_dir / "meta.json", encoding="utf-8")
+        )
     except (OSError, ValueError):
         return None
     url = meta.get("final_url") or meta.get("url")
@@ -513,9 +518,10 @@ def _meta_final_url(snap_dir: Path) -> str | None:
 
 def _tree_bytes(root: Path) -> int:
     """디렉토리 전체 파일 용량 (없으면 0)."""
-    if not root.is_dir():
+    store = config.blob_store()
+    if not store.is_dir(root):
         return 0
-    return sum(f.stat().st_size for f in root.rglob("*") if f.is_file())
+    return sum(store.size(f) for f in store.rglob(root, "*") if store.is_file(f))
 
 
 @dataclass

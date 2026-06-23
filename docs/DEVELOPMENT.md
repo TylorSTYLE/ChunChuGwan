@@ -7,6 +7,15 @@
 uv run pytest                            # 테스트 (네트워크 불필요, ~10초)
 ```
 
+## 설정 · 시크릿 (`.env`)
+
+`WCCG_*` 환경변수(관리자 계정·`WCCG_SECRET_KEY`·OIDC·SMTP·스텔스 캡처 등)는 셸에
+직접 export 하거나 프로젝트 루트의 `.env`(`KEY=값`)에 둘 수 있다 — `uv run wccg` 가
+시작 시 `config.py` 의 `load_dotenv` 로 현재 디렉토리(또는 상위)의 `.env` 를 자동
+로드한다(실제 환경변수가 우선). `cp .env.example .env` 후 필요한 값만 채운다. `.env`
+는 `.gitignore` 로 제외된다. 전체 변수 목록은
+[AUTHENTICATION.md](AUTHENTICATION.md#환경변수).
+
 ## PyCharm
 
 프로젝트를 열면 `.idea/runConfigurations/`에 포함된 실행/디버그 구성이

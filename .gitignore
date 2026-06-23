@@ -5,10 +5,12 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 
-# 개인 설정 — compose.example.yaml 을 복사해 만든 로컬 파일
+# 개인 설정 — docker-compose.yml 위에 덮어쓰는 로컬 전용 파일 (시크릿 커밋 방지)
+docker-compose.override.yml
+.env
+# 레거시 — 예전 compose.example.yaml 복사 패턴 잔재
 compose.yaml
 compose.override.yaml
-.env
 
 # SvelteKit SPA 빌드 산출물 — Docker/CI 가 빌드해 동봉(소스 커밋 안 함)
 chunchugwan/web/frontend_dist/
@@ -22,3 +24,4 @@ chunchugwan/web/frontend_dist/
 
 # PyCharm 로컬 전용 워크스페이스 설정 (절대 경로·개인 설정 포함)
 .idea/workspace.xml
+.idea/.name

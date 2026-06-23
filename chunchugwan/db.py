@@ -1868,24 +1868,57 @@ def _visible_snapshot_filter(
 
 
 def list_pages(
-    conn: sqlite3.Connection, *, viewer: "tuple[int | None, bool] | None" = None
+    conn: sqlite3.Connection,
+    *,
+    viewer: "tuple[int | None, bool] | None" = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[sqlite3.Row]:
     """페이지 목록 + 스냅샷 수 + 마지막 캡처 시각 (대시보드/CLI list 용).
 
     viewer 를 주면 그 요청자가 볼 수 있는 스냅샷만 집계한다 — 인증(로그인)
     스냅샷은 소유자/관리자만 카운트·시각에 반영(메타데이터 누출 차단). None=전체.
+    limit 을 주면 LIMIT/OFFSET 페이지네이션(기본 None=전체) — 페이지 수가 커질 때
+    전체 행 직렬화·메모리 로드를 피한다.
     """
     cond, params = _visible_snapshot_filter(viewer)
-    return conn.execute(
-        f"""
+    sql = f"""
         SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
         FROM pages p
         LEFT JOIN snapshots s ON s.page_id = p.id{cond}
         GROUP BY p.id
         ORDER BY last_taken_at DESC NULLS LAST, p.url
+    """
+    if limit is not None:
+        sql += " LIMIT :limit OFFSET :offset"
+        params = {**params, "limit": limit, "offset": offset}
+    return conn.execute(sql, params).fetchall()
+
+
+def get_page_aggregate(
+    conn: sqlite3.Connection,
+    url: str,
+    *,
+    viewer: "tuple[int | None, bool] | None" = None,
+) -> sqlite3.Row | None:
+    """정규화 URL 하나의 페이지 + 스냅샷 집계 (pages.url 인덱스 단건 조회).
+
+    list_pages 와 같은 viewer-aware 집계(`_visible_snapshot_filter`)를 쓰되
+    `WHERE p.url = ?` 로 한 페이지만 본다 — 확장 상태 배지(GET /pages?url=)가
+    전체 목록을 받아 파이썬에서 거르던 것을 인덱스 조회로 대체한다. 없으면 None.
+    """
+    cond, params = _visible_snapshot_filter(viewer)
+    params = {**params, "url": url}
+    return conn.execute(
+        f"""
+        SELECT p.*, COUNT(s.id) AS snapshot_count, MAX(s.taken_at) AS last_taken_at
+        FROM pages p
+        LEFT JOIN snapshots s ON s.page_id = p.id{cond}
+        WHERE p.url = :url
+        GROUP BY p.id
         """,
         params,
-    ).fetchall()
+    ).fetchone()
 
 
 def list_snapshots(conn: sqlite3.Connection, page_id: int) -> list[sqlite3.Row]:
@@ -4850,6 +4883,16 @@ MIGRATION_MODE_KEY = "migration_mode"               # 'on' | 'off' (기본 off)
 MIGRATION_TOKEN_HASH_KEY = "migration_token_hash"   # 발급 토큰의 SHA-256 (모드 끄면 삭제)
 MIGRATION_TOKEN_CREATED_AT_KEY = "migration_token_created_at"  # 발급 시각 (표시용)
 
+# 활성 blob 저장 백엔드 — 'local'(기본) | 's3'. env(WCCG_S3_*)는 가용성/자격증명일
+# 뿐이고 활성 백엔드는 이 설정으로만 결정된다(전환은 마이그레이션 0실패 완료로만).
+STORAGE_BACKEND_KEY = "storage_backend"
+# 스토리지 마이그레이션 진행 중 플래그 — 'on' 이면 캡처·스케줄·크롤을 멈춘다
+# (프로세스 간 공유라 DB 에 둔다 — worker 가 별도 프로세스로 읽는다).
+STORAGE_MIGRATION_ACTIVE_KEY = "storage_migration_in_progress"
+# 스토리지 마이그레이션 요약(JSON) — 세션 간/CLI 표시용. 원본 정리 대기·원본
+# 위치·방향·집계·시각을 담는다.
+STORAGE_MIGRATION_SUMMARY_KEY = "storage_migration"
+
 # 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한은
 # db.signup_roles(conn) (pending + admin 외 권한 보유 그룹). 기본은 권한없음
 # (pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.
@@ -4917,6 +4960,215 @@ def set_migration_mode(
         set_setting(conn, MIGRATION_MODE_KEY, "off")
         delete_setting(conn, MIGRATION_TOKEN_HASH_KEY)
         delete_setting(conn, MIGRATION_TOKEN_CREATED_AT_KEY)
+
+
+def storage_backend(conn: sqlite3.Connection) -> str:
+    """활성 blob 저장 백엔드 ('local'|'s3'). 미설정/오염 시 'local'."""
+    value = get_setting(conn, STORAGE_BACKEND_KEY)
+    return value if value in ("local", "s3") else "local"
+
+
+def set_storage_backend(conn: sqlite3.Connection, name: str) -> None:
+    """활성 blob 저장 백엔드 설정 ('local'|'s3')."""
+    if name not in ("local", "s3"):
+        raise ValueError(f"잘못된 storage_backend: {name!r}")
+    set_setting(conn, STORAGE_BACKEND_KEY, name)
+
+
+def storage_migration_active(conn: sqlite3.Connection) -> bool:
+    """스토리지 마이그레이션 진행 중 여부 (기본 off). 켜진 동안 쓰기 일시중지."""
+    return get_setting(conn, STORAGE_MIGRATION_ACTIVE_KEY) == "on"
+
+
+def set_storage_migration_active(conn: sqlite3.Connection, on: bool) -> None:
+    """스토리지 마이그레이션 진행 중 플래그 토글."""
+    set_setting(conn, STORAGE_MIGRATION_ACTIVE_KEY, "on" if on else "off")
+
+
+def writes_paused(conn: sqlite3.Connection) -> bool:
+    """쓰기(캡처·스케줄·크롤)를 멈춰야 하는지 — 인스턴스 이전 OR 스토리지 마이그레이션 진행 중."""
+    return migration_mode_enabled(conn) or storage_migration_active(conn)
+
+
+def storage_migration_summary(conn: sqlite3.Connection) -> dict | None:
+    """스토리지 마이그레이션 요약(JSON) — 없거나 깨졌으면 None."""
+    raw = get_setting(conn, STORAGE_MIGRATION_SUMMARY_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_storage_migration_summary(
+    conn: sqlite3.Connection, summary: dict | None
+) -> None:
+    """스토리지 마이그레이션 요약 저장 (None 이면 삭제)."""
+    if summary is None:
+        delete_setting(conn, STORAGE_MIGRATION_SUMMARY_KEY)
+    else:
+        set_setting(
+            conn, STORAGE_MIGRATION_SUMMARY_KEY,
+            json.dumps(summary, ensure_ascii=False),
+        )
+
+
+# S3 DB 백업 — 주기(시간)·보존 개수 설정 + 마지막 백업 메타(JSON).
+DB_BACKUP_INTERVAL_HOURS_KEY = "db_backup_interval_hours"
+DB_BACKUP_KEEP_KEY = "db_backup_keep"
+DB_BACKUP_META_KEY = "db_backup_meta"  # JSON: last_at·last_key·last_bytes·last_status 등
+
+
+def db_backup_interval_hours(conn: sqlite3.Connection) -> int:
+    """정기 DB 백업 주기(시간) — 오염·범위 밖이면 config 기본값으로 클램핑."""
+    return _clamped_int_setting(
+        conn, DB_BACKUP_INTERVAL_HOURS_KEY,
+        config.DB_BACKUP_INTERVAL_HOURS_DEFAULT,
+        config.DB_BACKUP_INTERVAL_HOURS_MIN,
+        config.DB_BACKUP_INTERVAL_HOURS_MAX,
+    )
+
+
+def db_backup_keep(conn: sqlite3.Connection) -> int:
+    """보존할 최신 DB 백업 개수 — 오염·범위 밖이면 config 기본값으로 클램핑."""
+    return _clamped_int_setting(
+        conn, DB_BACKUP_KEEP_KEY,
+        config.DB_BACKUP_KEEP_DEFAULT,
+        config.DB_BACKUP_KEEP_MIN,
+        config.DB_BACKUP_KEEP_MAX,
+    )
+
+
+def set_db_backup_settings(
+    conn: sqlite3.Connection, interval_hours: int, keep: int
+) -> None:
+    """DB 백업 주기·보존 설정 저장 (읽을 때 클램핑된다)."""
+    set_setting(conn, DB_BACKUP_INTERVAL_HOURS_KEY, str(interval_hours))
+    set_setting(conn, DB_BACKUP_KEEP_KEY, str(keep))
+
+
+def db_backup_meta(conn: sqlite3.Connection) -> dict | None:
+    """마지막 DB 백업 메타(JSON) — 없거나 깨졌으면 None."""
+    raw = get_setting(conn, DB_BACKUP_META_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_db_backup_meta(conn: sqlite3.Connection, meta: dict) -> None:
+    """마지막 DB 백업 메타 저장."""
+    set_setting(conn, DB_BACKUP_META_KEY, json.dumps(meta, ensure_ascii=False))
+
+
+# S3 카테고리별 사용량 캐시 (storage_usage.py) — JSON: categories·total·scanned_at.
+# 온디맨드 스캔(ListObjectsV2) 결과만 담고, 요청 경로는 이 캐시만 읽는다(S3 미호출).
+S3_USAGE_KEY = "s3_usage"
+
+
+def s3_usage(conn: sqlite3.Connection) -> dict | None:
+    """캐시된 S3 카테고리 사용량(JSON) — 없거나 깨졌으면 None."""
+    raw = get_setting(conn, S3_USAGE_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_s3_usage(conn: sqlite3.Connection, usage: dict) -> None:
+    """S3 카테고리 사용량 캐시 저장 (스캔 결과)."""
+    set_setting(conn, S3_USAGE_KEY, json.dumps(usage, ensure_ascii=False))
+
+
+# ---- 첫 구동 분류·복구모드 (recovery.py) ----
+RECOVERY_META_KEY = "recovery_meta"  # JSON: baseline_max_id·last_id·status·counts
+
+
+def count_snapshots_raw(conn: sqlite3.Connection) -> int:
+    """전체 스냅샷 수 (휴지통 무관 raw) — 첫 구동 분류용 '아카이브 데이터 유무'."""
+    return conn.execute("SELECT COUNT(*) AS c FROM snapshots").fetchone()["c"]
+
+
+def max_snapshot_id(conn: sqlite3.Connection) -> int:
+    """현재 최대 스냅샷 id (없으면 0) — 복구 baseline."""
+    row = conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM snapshots").fetchone()
+    return row["m"]
+
+
+def find_snapshot_by_dir(
+    conn: sqlite3.Connection, page_id: int, dir_name: str
+) -> sqlite3.Row | None:
+    """(page_id, dir_name) 으로 스냅샷 조회 (복구 멱등 스킵용)."""
+    return conn.execute(
+        "SELECT id FROM snapshots WHERE page_id = ? AND dir_name = ?",
+        (page_id, dir_name),
+    ).fetchone()
+
+
+def recovery_meta(conn: sqlite3.Connection) -> dict | None:
+    """복구 메타(JSON) — 없거나 깨졌으면 None."""
+    raw = get_setting(conn, RECOVERY_META_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_recovery_meta(conn: sqlite3.Connection, meta: dict) -> None:
+    """복구 메타 저장."""
+    set_setting(conn, RECOVERY_META_KEY, json.dumps(meta, ensure_ascii=False))
+
+
+def expose_recovered_snapshots(
+    conn: sqlite3.Connection, baseline_id: int, last_id: int
+) -> int:
+    """복구된 스냅샷(id 범위)을 전체 노출(authenticated=0)로 일괄 변경. 변경 건수 반환.
+
+    관리자가 '전체 노출' 을 명시적으로 선택했을 때만 호출한다 (보안 — 자동 노출 금지).
+    복구분(baseline < id <= last_id)만 대상으로 하고, 그 밖은 건드리지 않는다.
+    """
+    cur = conn.execute(
+        "UPDATE snapshots SET authenticated = 0 "
+        "WHERE id > ? AND id <= ? AND authenticated = 1",
+        (baseline_id, last_id),
+    )
+    return cur.rowcount
+
+
+def count_restricted_recovered(
+    conn: sqlite3.Connection, baseline_id: int, last_id: int
+) -> int:
+    """복구 범위(baseline < id <= last_id)에서 아직 제한(authenticated=1)인 스냅샷 수.
+
+    복구-선택 배너의 '현재 제한 개수' — 전체 노출·개별 해제로 줄어들고 0 이 되면
+    배너가 사라진다(서버 기반 표시).
+    """
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots "
+        "WHERE id > ? AND id <= ? AND authenticated = 1",
+        (baseline_id, last_id),
+    ).fetchone()["c"]
+
+
+def set_snapshot_authenticated(
+    conn: sqlite3.Connection, snapshot_id: int, value: int
+) -> None:
+    """단일 스냅샷의 authenticated 플래그 설정 (관리자 개별 해제·재설정)."""
+    conn.execute(
+        "UPDATE snapshots SET authenticated = ? WHERE id = ?",
+        (1 if value else 0, snapshot_id),
+    )
 
 
 def email_verification_ttl_minutes(conn: sqlite3.Connection) -> int:

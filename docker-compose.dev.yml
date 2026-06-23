@@ -1,0 +1,16 @@
+# develop 이미지 오버라이드 — 테스트 서버용.
+# 베이스 docker-compose.yml 의 :latest 를 :develop(= develop 브랜치, 푸시마다 게시)로 덮어쓴다.
+#
+# 사용:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d dashboard
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml pull   # 새 develop 이미지로 갱신
+#
+# 매번 -f 를 넘기기 번거로우면 .env 에 다음 한 줄을 둔다 (compose 가 자동 적용):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
+services:
+  dashboard:
+    image: ghcr.io/tylorstyle/chunchugwan:develop
+  worker:
+    image: ghcr.io/tylorstyle/chunchugwan:develop
+  cli:
+    image: ghcr.io/tylorstyle/chunchugwan:develop

@@ -159,6 +159,41 @@ def test_list_pages_counts(conn):
     assert pages["https://example.com/y"]["last_taken_at"] is None
 
 
+def test_get_page_aggregate(conn):
+    """단건 조회가 list_pages 와 같은 집계를 내고, 없으면 None."""
+    p1 = db.get_or_create_page(conn, "https://example.com/x", "example.com", "x-abcd1234")
+    db.get_or_create_page(conn, "https://example.com/y", "example.com", "y-abcd1234")
+    db.insert_snapshot(
+        conn, p1,
+        taken_at="2026-06-10T00:00:00+00:00", dir_name="2026-06-10T00-00-00",
+        content_hash="h1", final_url="https://example.com/x", changed=1,
+    )
+
+    row = db.get_page_aggregate(conn, "https://example.com/x")
+    assert row["id"] == p1
+    assert row["snapshot_count"] == 1
+    assert row["last_taken_at"] == "2026-06-10T00:00:00+00:00"
+
+    empty = db.get_page_aggregate(conn, "https://example.com/y")
+    assert empty["snapshot_count"] == 0 and empty["last_taken_at"] is None
+
+    assert db.get_page_aggregate(conn, "https://nope.example/") is None
+
+
+def test_list_pages_pagination(conn):
+    """limit/offset 으로 페이지네이션 — 기본 None 은 전체."""
+    for i in range(5):
+        db.get_or_create_page(
+            conn, f"https://example.com/{i}", "example.com", f"{i}-abcd1234"
+        )
+    assert len(db.list_pages(conn)) == 5
+    first2 = db.list_pages(conn, limit=2, offset=0)
+    next2 = db.list_pages(conn, limit=2, offset=2)
+    assert len(first2) == 2 and len(next2) == 2
+    # 같은 정렬에서 페이지가 겹치지 않는다
+    assert {r["id"] for r in first2}.isdisjoint({r["id"] for r in next2})
+
+
 def test_connect_uses_wal(conn):
     """WAL 저널 모드 — 쓰기가 대시보드 읽기를 막지 않게 한다."""
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
