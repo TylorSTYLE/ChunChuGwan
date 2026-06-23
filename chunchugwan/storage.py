@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import shutil
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -199,18 +198,22 @@ def new_snapshot_dir(domain: str, slug: str, taken_at: datetime | None = None) -
     """새 스냅샷 디렉토리 생성 후 경로 반환. 디렉토리명은 ISO 시각(콜론→하이픈)."""
     ts = (taken_at or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H-%M-%S")
     d = page_dir(domain, slug) / ts
-    d.mkdir(parents=True, exist_ok=False)
+    config.blob_store().mkdir(d, parents=True, exist_ok=False)
     return d
 
 
 def write_meta(snapshot_dir: Path, meta: SnapshotMeta) -> None:
-    (snapshot_dir / "meta.json").write_text(
-        json.dumps(asdict(meta), ensure_ascii=False, indent=2), encoding="utf-8"
+    config.blob_store().write_text(
+        snapshot_dir / "meta.json",
+        json.dumps(asdict(meta), ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
 
 
 def read_meta(snapshot_dir: Path) -> SnapshotMeta:
-    data = json.loads((snapshot_dir / "meta.json").read_text(encoding="utf-8"))
+    data = json.loads(
+        config.blob_store().read_text(snapshot_dir / "meta.json", encoding="utf-8")
+    )
     return SnapshotMeta(**data)
 
 
@@ -245,9 +248,10 @@ SNAPSHOT_FILES = (
 
 def find_screenshot(snapshot_dir: Path) -> Path | None:
     """스냅샷의 데스크탑 스크린샷 경로 — WebP(신규) 우선, PNG(구형) 폴백. 없으면 None."""
+    store = config.blob_store()
     for name in ("screenshot.webp", "screenshot.png"):
         path = snapshot_dir / name
-        if path.is_file():
+        if store.is_file(path):
             return path
     return None
 
@@ -257,9 +261,10 @@ def find_mobile_screenshot(snapshot_dir: Path) -> Path | None:
 
     모바일 스크린샷은 시스템 설정이 켜져 있을 때만 생성되므로, 없을 수 있다.
     """
+    store = config.blob_store()
     for name in ("screenshot-mobile.webp", "screenshot-mobile.png"):
         path = snapshot_dir / name
-        if path.is_file():
+        if store.is_file(path):
             return path
     return None
 
@@ -271,16 +276,17 @@ def snapshot_files(snapshot_dir: Path) -> list[dict[str, object]]:
     함께 저장된 문서가 있으면 'files/{이름}' 항목을 뒤에 붙인다.
     디렉토리가 없으면 빈 목록 (로그는 남아 있는데 파일이 지워진 경우 대비).
     """
+    store = config.blob_store()
     out: list[dict[str, object]] = []
     for name in SNAPSHOT_FILES:
         path = snapshot_dir / name
-        if path.is_file():
-            out.append({"name": name, "bytes": path.stat().st_size})
+        if store.is_file(path):
+            out.append({"name": name, "bytes": store.size(path)})
     files_dir = snapshot_dir / "files"
-    if files_dir.is_dir():
-        for path in sorted(files_dir.iterdir()):
-            if path.is_file():
-                out.append({"name": f"files/{path.name}", "bytes": path.stat().st_size})
+    if store.is_dir(files_dir):
+        for path in sorted(store.iterdir(files_dir)):
+            if store.is_file(path):
+                out.append({"name": f"files/{path.name}", "bytes": store.size(path)})
     return out
 
 
@@ -295,9 +301,10 @@ def snapshot_dir_bytes(snapshot_dir: Path) -> int:
 
 def dir_bytes(root: Path) -> int:
     """디렉토리 전체 파일 용량 합 (바이트). 없으면 0."""
-    if not root.is_dir():
+    store = config.blob_store()
+    if not store.is_dir(root):
         return 0
-    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+    return sum(store.size(p) for p in store.rglob(root, "*") if store.is_file(p))
 
 
 # 아카이브 디스크 사용량 캐시 — sites/resources/documents 트리를 전부 rglob 하는
@@ -347,31 +354,26 @@ def _validate_path_parts(*parts: str) -> None:
 
 def _prune_empty_dirs(domain: str) -> None:
     """빈 페이지/도메인 디렉토리 정리 (비어 있지 않으면 그대로 둔다)."""
+    store = config.blob_store()
     domain_dir = config.SITES_DIR / domain
-    if not domain_dir.is_dir():
+    if not store.is_dir(domain_dir):
         return
-    for d in domain_dir.iterdir():
-        try:
-            d.rmdir()
-        except OSError:
-            pass
-    try:
-        domain_dir.rmdir()
-    except OSError:
-        pass
+    for d in store.iterdir(domain_dir):
+        store.rmdir(d)
+    store.rmdir(domain_dir)
 
 
 def delete_snapshot_dir(domain: str, slug: str, dir_name: str) -> None:
     """스냅샷 디렉토리 하나 삭제 (이미 없으면 무시). 빈 상위 디렉토리도 정리."""
     _validate_path_parts(domain, slug, dir_name)
-    shutil.rmtree(page_dir(domain, slug) / dir_name, ignore_errors=True)
+    config.blob_store().rmtree(page_dir(domain, slug) / dir_name)
     _prune_empty_dirs(domain)
 
 
 def delete_page_dir(domain: str, slug: str) -> None:
     """페이지 디렉토리 전체(모든 스냅샷) 삭제. 빈 도메인 디렉토리도 정리."""
     _validate_path_parts(domain, slug)
-    shutil.rmtree(page_dir(domain, slug), ignore_errors=True)
+    config.blob_store().rmtree(page_dir(domain, slug))
     _prune_empty_dirs(domain)
 
 
@@ -388,14 +390,15 @@ def finalize_snapshot(
     캡처 산출물 이동 + content.md / meta.json 기록. 확정된 디렉토리는
     이후 수정하지 않는다(불변).
     """
+    store = config.blob_store()
     snap_dir = new_snapshot_dir(domain, slug, taken_at)
     for name in CAPTURE_ARTIFACTS:
         src = tmp_dir / name
         if src.exists():
-            shutil.move(str(src), snap_dir / name)
+            store.move(src, snap_dir / name)
     files_src = tmp_dir / "files"  # 함께 저장된 문서 파일 (documents.py)
     if files_src.is_dir():
-        shutil.move(str(files_src), snap_dir / "files")
-    (snap_dir / "content.md").write_text(normalized_text, encoding="utf-8")
+        store.move(files_src, snap_dir / "files")
+    store.write_text(snap_dir / "content.md", normalized_text, encoding="utf-8")
     write_meta(snap_dir, meta)
     return snap_dir

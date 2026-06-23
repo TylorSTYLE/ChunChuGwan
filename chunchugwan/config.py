@@ -297,6 +297,25 @@ def oidc_enabled() -> bool:
     return bool(OIDC_ISSUER and OIDC_CLIENT_ID and OIDC_CLIENT_SECRET)
 
 
+_blob_store = None
+
+
+def blob_store():
+    """blob 저장 백엔드 인스턴스 (싱글턴).
+
+    현재는 항상 로컬 파일시스템 백엔드(LocalBlobStore)를 반환한다 — 이후
+    단계에서 WCCG_S3_* 환경변수 유무로 원격 객체 저장소 백엔드를 끼울 분기
+    지점이다. LocalBlobStore 는 절대 경로만 다루고 상태가 없어, 테스트가
+    아카이브 루트를 바꿔도 같은 인스턴스를 안전하게 재사용한다.
+    """
+    global _blob_store
+    if _blob_store is None:
+        from .blobstore import LocalBlobStore
+
+        _blob_store = LocalBlobStore()
+    return _blob_store
+
+
 def ensure_dirs() -> None:
     """아카이브 루트 디렉토리 생성."""
     try:

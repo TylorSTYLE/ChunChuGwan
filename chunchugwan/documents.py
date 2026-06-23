@@ -453,33 +453,29 @@ def ingest_into_cas(files_dir: Path, manifest: list[dict[str, object]]) -> None:
     CAS 이름을 만들 수 없는 항목(비정상 확장자)은 manifest 에서 제거해
     스냅샷이 존재하지 않는 문서를 참조하지 않게 한다.
     """
+    store = config.blob_store()
     kept: list[dict[str, object]] = []
     for entry in manifest:
         name = cas_name(str(entry["sha256"]), str(entry["file"]))
         src = files_dir / str(entry["file"])
-        if name is None or not src.is_file():
+        if name is None or not store.is_file(src):
             logger.warning("문서 CAS 이전 불가(건너뜀): %s", entry.get("file"))
             continue
         _move_into_cas(src, name)
         kept.append(entry)
     manifest[:] = kept
-    try:
-        files_dir.rmdir()
-    except OSError:
-        pass
+    store.rmdir(files_dir)
 
 
 def delete_cas(names: list[str]) -> None:
     """참조가 사라진 문서 CAS 파일들 삭제 (빈 버킷 디렉토리도 정리)."""
+    store = config.blob_store()
     for name in names:
         if not is_valid_cas_name(name):
             continue
         path = cas_path(name)
-        path.unlink(missing_ok=True)
-        try:
-            path.parent.rmdir()
-        except OSError:
-            pass
+        store.delete(path)
+        store.rmdir(path.parent)
 
 
 # ---- 구형 스냅샷(files/) → 문서 CAS 이전 (wccg compact) ----
@@ -490,8 +486,9 @@ def _legacy_entries(snap_dir: Path) -> list[tuple[dict, Path]]:
 
     파일명은 meta 에 기록된 값이지만 경로 조립 전에 한 번 더 검증한다.
     """
+    store = config.blob_store()
     files_dir = snap_dir / "files"
-    if not files_dir.is_dir():
+    if not store.is_dir(files_dir):
         return []
     try:
         meta = storage.read_meta(snap_dir)
@@ -503,7 +500,7 @@ def _legacy_entries(snap_dir: Path) -> list[tuple[dict, Path]]:
         if not fname or Path(fname).name != fname:
             continue
         src = files_dir / fname
-        if src.is_file():
+        if store.is_file(src):
             out.append((entry, src))
     return out
 
@@ -516,7 +513,7 @@ def has_legacy_documents(snap_dir: Path) -> bool:
 def _file_sha256(path: Path) -> str:
     """파일 내용의 sha256 (스트리밍 — 문서는 최대 50MB)."""
     hasher = hashlib.sha256()
-    with path.open("rb") as f:
+    with config.blob_store().local_path(path).open("rb") as f:
         while chunk := f.read(1 << 20):
             hasher.update(chunk)
     return hasher.hexdigest()
@@ -539,13 +536,14 @@ def _compact_snapshot_documents(
     해시는 meta 값을 믿지 않고 다시 계산한다 — CAS 이름은 반드시 실제
     내용과 일치해야 한다 (콘텐츠 주소 불변 원칙).
     """
+    store = config.blob_store()
     manifest: list[dict[str, object]] = []
     for entry, src in _legacy_entries(snap_dir):
         sha = _file_sha256(src)
         name = cas_name(sha, src.name)
         if name is None:
             continue
-        size = src.stat().st_size
+        size = store.size(src)
         stats.before_bytes += size
         if _move_into_cas(src, name):
             stats.after_bytes += size
@@ -564,10 +562,7 @@ def _compact_snapshot_documents(
         # 다시 색인 필요로 표시만 하고(코어 경유), 실제 색인은 'wccg search
         # reindex'/시스템 메뉴 버튼이 백필한다 (compact ↔ 인덱스 정합).
         db.mark_snapshot_search_stale(conn, snapshot_id)
-    try:
-        (snap_dir / "files").rmdir()
-    except OSError:
-        pass
+    store.rmdir(snap_dir / "files")
 
 
 def compact_legacy_documents() -> DocCompactStats:
@@ -576,11 +571,12 @@ def compact_legacy_documents() -> DocCompactStats:
     resources.compact_all 이 호출한다 — 저장 형태만 바꾸는 내용 보존 변환.
     """
     stats = DocCompactStats()
+    store = config.blob_store()
     with db.connect() as conn:
         for snap in db.list_snapshot_dirs(conn):
             snap_dir = (
                 storage.page_dir(snap["domain"], snap["slug"]) / snap["dir_name"]
             )
-            if (snap_dir / "files").is_dir():
+            if store.is_dir(snap_dir / "files"):
                 _compact_snapshot_documents(conn, snap["id"], snap_dir, stats)
     return stats
