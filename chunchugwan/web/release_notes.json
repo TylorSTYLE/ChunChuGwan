@@ -305,5 +305,19 @@
         "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/227"
       }
     ]
+  },
+  "0.9.0": {
+    "items": [
+      {
+        "pr": 229,
+        "text": "feat: 마이그레이션 동시 전송 + 라이브 실패 카운트·처리 속도",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/229"
+      },
+      {
+        "pr": 231,
+        "text": "chore: .env.example 에 WCCG_S3_MIGRATION_WORKERS 추가",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/231"
+      }
+    ]
   }
 }
