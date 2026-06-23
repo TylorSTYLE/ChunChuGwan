@@ -845,6 +845,44 @@ class _SearchGroup(click.Group):
         return super().parse_args(ctx, args)
 
 
+@main.group("storage")
+def storage_group() -> None:
+    """blob 저장 백엔드 상태 — wccg storage status (읽기 전용)."""
+
+
+@storage_group.command("status")
+def storage_status_cmd() -> None:
+    """활성 백엔드·S3 가용성(env)·마이그레이션 상태·정리 대기를 표시 (읽기 전용)."""
+    from . import config, db
+
+    with db.connect() as conn:
+        active = db.storage_backend(conn)
+        paused = db.writes_paused(conn)
+        summary = db.storage_migration_summary(conn)
+    click.echo(f"활성 백엔드: {active}")
+    # S3 자격증명은 유무만 표시 — 비밀값(access key/secret)은 절대 출력하지 않는다
+    env_ok = bool(
+        config.S3_BUCKET and config.S3_ACCESS_KEY_ID and config.S3_SECRET_ACCESS_KEY
+    )
+    click.echo(f"S3 자격증명(env): {'완전' if env_ok else '미설정/불완전'}")
+    if config.S3_BUCKET:
+        loc = f"s3://{config.S3_BUCKET}"
+        if config.S3_PREFIX:
+            loc += f"/{config.S3_PREFIX}"
+        click.echo(f"S3 위치: {loc}")
+    click.echo(f"쓰기 일시중지: {'예' if paused else '아니오'}")
+    if summary:
+        click.echo(
+            f"마이그레이션: {summary.get('status')} (방향 {summary.get('direction')})"
+        )
+        if summary.get("cleanup_pending"):
+            click.echo(
+                f"  ⚠ 원본 정리 대기 — 원본 위치: {summary.get('source_location')}"
+            )
+    else:
+        click.echo("마이그레이션: 이력 없음")
+
+
 @main.group(cls=_SearchGroup)
 def search() -> None:
     """아카이브 전문 검색 — wccg search <검색어> | reindex | status.

@@ -179,8 +179,8 @@ def run_due(
     (오류 내용은 pipeline 이 archive_logs 에 남긴다).
     """
     with db.connect() as conn:
-        # 이전(마이그레이션) 모드 — 데이터 이전 중이면 스케줄 실행 중단
-        if db.migration_mode_enabled(conn):
+        # 쓰기 일시중지 — 인스턴스 이전 OR 스토리지 마이그레이션 진행 중이면 스케줄 실행 중단
+        if db.writes_paused(conn):
             return []
         # 만료된 확장 1회성 세션 자격증명 정리 (캡처 직후 삭제 누락 안전망)
         db.delete_expired_ext_credentials(conn)

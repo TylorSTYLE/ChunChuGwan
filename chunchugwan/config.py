@@ -353,16 +353,33 @@ def s3_settings() -> dict:
 _blob_store = None
 
 
-def blob_store():
-    """blob 저장 백엔드 인스턴스 (싱글턴).
+def active_backend() -> str:
+    """현재 활성 blob 백엔드 ('local'|'s3').
 
-    WCCG_S3_* 가 완전한 세트로 설정되면 S3BlobStore, 아니면 로컬
-    파일시스템 백엔드(LocalBlobStore)를 반환한다. 일부만 설정되면
-    s3_settings() 가 부팅 시 RuntimeError 로 실패한다(조용한 폴백 금지).
+    DB 설정 `storage_backend` 가 정본이고 기본은 'local'. env(WCCG_S3_*)는
+    S3 가용성/자격증명일 뿐 활성 백엔드를 바꾸지 않는다 — 전환은 마이그레이션
+    0실패 완료(또는 P5 setup)로만 일어난다. DB 파일이 아직 없으면(빈/순수
+    단위 테스트) 설정을 읽으려 DB 를 만들지 않고 'local' 로 본다.
+    """
+    if not DB_PATH.is_file():
+        return "local"
+    from . import db
+
+    with db.connect() as conn:
+        return db.storage_backend(conn)
+
+
+def blob_store():
+    """활성 blob 저장 백엔드 인스턴스 (싱글턴).
+
+    활성 백엔드가 's3'면 WCCG_S3_* 가 완전해야 하고(s3_settings() 가 불완전
+    시 RuntimeError 로 실패), 'local'/미설정이면 LocalBlobStore 를 쓴다.
+    인스턴스는 캐시되며, 마이그레이션 완료로 활성 백엔드가 바뀌면
+    reset_blob_store() 로 무효화한다.
     """
     global _blob_store
     if _blob_store is None:
-        if s3_requested():
+        if active_backend() == "s3":
             from .blobstore import S3BlobStore
 
             _blob_store = S3BlobStore(**s3_settings())
@@ -371,6 +388,12 @@ def blob_store():
 
             _blob_store = LocalBlobStore()
     return _blob_store
+
+
+def reset_blob_store() -> None:
+    """캐시된 백엔드 인스턴스를 비운다 — 활성 백엔드 전환 후 재생성용."""
+    global _blob_store
+    _blob_store = None
 
 
 def ensure_dirs() -> None:
@@ -383,12 +406,6 @@ def ensure_dirs() -> None:
             "확인하세요 (도커 바인드 마운트라면 호스트 디렉토리 소유자가 "
             "컨테이너 사용자 uid 1000 과 다른 경우)"
         ) from e
-    # S3 백엔드를 요청했으면 부팅 시점에 설정을 검증하고(불완전하면 즉시 실패)
-    # read-through 캐시 디렉토리를 준비한다. 로컬 모드는 새 디렉토리를 만들지
-    # 않아 기존 아카이브 레이아웃을 그대로 유지한다.
-    if s3_requested():
-        BLOB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        blob_store()
 
 
 def load_domain_rules(domain: str) -> dict:

@@ -2695,6 +2695,62 @@ def system_search_reindex_status(
     return reindex_status()
 
 
+@router.get("/system/storage/status")
+def system_storage_status(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """스토리지(blob 백엔드) 마이그레이션 상태 — 재색인 status 미러."""
+    from .. import storage_migration
+
+    _require_manage_system(user)
+    return storage_migration.status()
+
+
+@router.post("/system/storage/migrate/start")
+def system_storage_migrate_start(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """활성 백엔드 → 반대 백엔드 마이그레이션을 백그라운드로 시작."""
+    from .. import storage_migration
+
+    _require_manage_system(user)
+    err = storage_migration.start_migration()
+    if err is not None:
+        raise HTTPException(409, err)
+    audit.log(request, "스토리지 마이그레이션 시작")
+    return {"ok": True, "started": True}
+
+
+@router.post("/system/storage/migrate/retry")
+def system_storage_migrate_retry(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """마이그레이션 실패 파일만 재시도 (partial 상태)."""
+    from .. import storage_migration
+
+    _require_manage_system(user)
+    err = storage_migration.retry_failed()
+    if err is not None:
+        raise HTTPException(409, err)
+    audit.log(request, "스토리지 마이그레이션 재시도")
+    return {"ok": True, "started": True}
+
+
+@router.post("/system/storage/cleanup/confirm")
+def system_storage_cleanup_confirm(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """원본 정리 완료 확인 — "정리 대기" 플래그 해제 (데이터는 삭제하지 않는다)."""
+    from .. import storage_migration
+
+    _require_manage_system(user)
+    err = storage_migration.confirm_cleanup()
+    if err is not None:
+        raise HTTPException(409, err)
+    audit.log(request, "스토리지 마이그레이션 원본 정리 확인")
+    return {"ok": True}
+
+
 def _issue_migration_token(request: Request) -> dict:
     """이전 토큰 발급(또는 재발급)하고 모드를 켠다. 토큰 원문은 이 응답에서만 1회 노출.
 

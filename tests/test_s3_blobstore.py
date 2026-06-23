@@ -159,37 +159,52 @@ def test_s3_glob_and_iterdir(tmp_path):
         assert children == ["ab", "cd"]
 
 
-# ---- config 팩토리 / 활성 판정 ----
+# ---- config 팩토리 / 활성 판정 (활성 = DB 설정 storage_backend, env 는 가용성만) ----
 
 
-def test_factory_local_when_no_s3_env(monkeypatch):
-    monkeypatch.setattr(config, "S3_ENDPOINT_URL", "")
-    monkeypatch.setattr(config, "S3_BUCKET", "")
-    monkeypatch.setattr(config, "S3_ACCESS_KEY_ID", "")
-    monkeypatch.setattr(config, "S3_SECRET_ACCESS_KEY", "")
+def _isolated_db(tmp_path, monkeypatch):
+    """tmp 아카이브 루트/DB 로 격리 (storage_backend 설정을 쓰기 위함)."""
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
+    monkeypatch.setattr(config, "BLOB_CACHE_DIR", tmp_path / "blobcache")
     monkeypatch.setattr(config, "_blob_store", None)
+
+
+def test_factory_local_by_default(tmp_path, monkeypatch):
+    """storage_backend 미설정이면 env 가 있어도 LocalBlobStore (env 단독 전환 금지)."""
+    _isolated_db(tmp_path, monkeypatch)
+    # env 가 완전해도 활성 백엔드 설정이 없으면 로컬이어야 한다
+    monkeypatch.setattr(config, "S3_BUCKET", BUCKET)
+    monkeypatch.setattr(config, "S3_ACCESS_KEY_ID", "k")
+    monkeypatch.setattr(config, "S3_SECRET_ACCESS_KEY", "s")
     assert isinstance(config.blob_store(), blobstore.LocalBlobStore)
 
 
-def test_factory_s3_when_full_env(tmp_path, monkeypatch):
+def test_factory_s3_when_backend_setting_s3(tmp_path, monkeypatch):
+    """storage_backend='s3' + env 완전 → S3BlobStore."""
     with mock_aws():
-        monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
-        monkeypatch.setattr(config, "BLOB_CACHE_DIR", tmp_path / "blobcache")
+        _isolated_db(tmp_path, monkeypatch)
         monkeypatch.setattr(config, "S3_ENDPOINT_URL", "")
         monkeypatch.setattr(config, "S3_BUCKET", BUCKET)
         monkeypatch.setattr(config, "S3_ACCESS_KEY_ID", "k")
         monkeypatch.setattr(config, "S3_SECRET_ACCESS_KEY", "s")
+        with db.connect() as conn:
+            db.set_storage_backend(conn, "s3")
         monkeypatch.setattr(config, "_blob_store", None)
         assert isinstance(config.blob_store(), blobstore.S3BlobStore)
         monkeypatch.setattr(config, "_blob_store", None)
 
 
-def test_partial_s3_env_boot_fails_without_leaking_secret(monkeypatch):
-    """필수 세트가 불완전하면 부팅 실패 — 누락 변수명은 알리되 비밀값은 노출 안 함."""
+def test_s3_backend_setting_but_incomplete_env_boot_fails(tmp_path, monkeypatch):
+    """storage_backend='s3' 인데 env 불완전이면 부팅 실패 — 누락 변수명만, 비밀값 미노출."""
+    _isolated_db(tmp_path, monkeypatch)
     monkeypatch.setattr(config, "S3_ENDPOINT_URL", "https://minio.example")
     monkeypatch.setattr(config, "S3_BUCKET", "")  # 누락
     monkeypatch.setattr(config, "S3_ACCESS_KEY_ID", "")  # 누락
     monkeypatch.setattr(config, "S3_SECRET_ACCESS_KEY", "TOP-SECRET-VALUE")
+    with db.connect() as conn:
+        db.set_storage_backend(conn, "s3")
     monkeypatch.setattr(config, "_blob_store", None)
     with pytest.raises(RuntimeError) as ei:
         config.blob_store()
@@ -229,6 +244,9 @@ def s3_serving(tmp_path, monkeypatch):
         monkeypatch.setattr(config, "S3_SECRET_ACCESS_KEY", "s")
         monkeypatch.setattr(config, "S3_FORCE_PATH_STYLE", True)
         monkeypatch.setattr(config, "S3_PREFIX", "")
+        # 활성 백엔드를 DB 설정으로 's3' 로 전환 (env 단독으로는 활성화되지 않음)
+        with db.connect() as conn:
+            db.set_storage_backend(conn, "s3")
         monkeypatch.setattr(config, "_blob_store", None)
         web_app._active_jobs.clear()
         yield s3, tmp_path

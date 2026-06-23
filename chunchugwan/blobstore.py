@@ -59,6 +59,14 @@ class StorageBackend(Protocol):
         """blob 바이트를 원자적으로 쓰기 (부모 생성 + 임시 파일 → os.replace)."""
         ...
 
+    def put_verified(self, path: Path, data: bytes, sha256_hex: str) -> None:
+        """무결성 보장 쓰기 — 마이그레이션 copy 전용 (원자적 + 종단 체크섬).
+
+        로컬은 원자적 쓰기, 원격은 sha256 체크섬으로 업로드 종단 무결성을 확보한다.
+        호출부가 data 의 sha256 이 sha256_hex 와 일치함을 이미 검증한 상태여야 한다.
+        """
+        ...
+
     # ---- 이동 ----
     def move(self, src: Path, dst: Path) -> None:
         """파일/디렉토리를 blob 경로로 이동 (shutil.move 의미)."""
@@ -154,6 +162,10 @@ class LocalBlobStore:
         finally:
             os.close(fd)
         os.replace(tmp, path)
+
+    def put_verified(self, path: Path, data: bytes, sha256_hex: str) -> None:
+        # 로컬은 원자적 쓰기로 부분/손상 파일을 막는다 (sha256 은 호출부가 검증).
+        self.write_atomic(path, data)
 
     def move(self, src: Path, dst: Path) -> None:
         shutil.move(str(src), dst)
@@ -292,6 +304,17 @@ class S3BlobStore:
 
     def write_atomic(self, path: Path, data: bytes) -> None:
         self.write_bytes(path, data)
+
+    def put_verified(self, path: Path, data: bytes, sha256_hex: str) -> None:
+        # S3 가 본문 sha256 을 검증하게 해 업로드 종단 무결성을 확보한다
+        # (불일치면 boto3 가 오류 — 부분/손상 객체가 생기지 않는다).
+        import base64
+
+        checksum = base64.b64encode(bytes.fromhex(sha256_hex)).decode("ascii")
+        self._client.put_object(
+            Bucket=self._bucket, Key=self._key(path), Body=data,
+            ChecksumSHA256=checksum,
+        )
 
     # ---- 이동 (로컬 스테이징 → S3 업로드) ----
     def move(self, src: Path, dst: Path) -> None:

@@ -4883,6 +4883,16 @@ MIGRATION_MODE_KEY = "migration_mode"               # 'on' | 'off' (기본 off)
 MIGRATION_TOKEN_HASH_KEY = "migration_token_hash"   # 발급 토큰의 SHA-256 (모드 끄면 삭제)
 MIGRATION_TOKEN_CREATED_AT_KEY = "migration_token_created_at"  # 발급 시각 (표시용)
 
+# 활성 blob 저장 백엔드 — 'local'(기본) | 's3'. env(WCCG_S3_*)는 가용성/자격증명일
+# 뿐이고 활성 백엔드는 이 설정으로만 결정된다(전환은 마이그레이션 0실패 완료로만).
+STORAGE_BACKEND_KEY = "storage_backend"
+# 스토리지 마이그레이션 진행 중 플래그 — 'on' 이면 캡처·스케줄·크롤을 멈춘다
+# (프로세스 간 공유라 DB 에 둔다 — worker 가 별도 프로세스로 읽는다).
+STORAGE_MIGRATION_ACTIVE_KEY = "storage_migration_in_progress"
+# 스토리지 마이그레이션 요약(JSON) — 세션 간/CLI 표시용. 원본 정리 대기·원본
+# 위치·방향·집계·시각을 담는다.
+STORAGE_MIGRATION_SUMMARY_KEY = "storage_migration"
+
 # 회원 가입(셀프 가입·SSO 자동 생성)으로 만든 계정에 부여할 수 있는 초기 권한은
 # db.signup_roles(conn) (pending + admin 외 권한 보유 그룹). 기본은 권한없음
 # (pending) — 관리자가 사용자 관리에서 승인(권한 변경)해야 한다.
@@ -4950,6 +4960,59 @@ def set_migration_mode(
         set_setting(conn, MIGRATION_MODE_KEY, "off")
         delete_setting(conn, MIGRATION_TOKEN_HASH_KEY)
         delete_setting(conn, MIGRATION_TOKEN_CREATED_AT_KEY)
+
+
+def storage_backend(conn: sqlite3.Connection) -> str:
+    """활성 blob 저장 백엔드 ('local'|'s3'). 미설정/오염 시 'local'."""
+    value = get_setting(conn, STORAGE_BACKEND_KEY)
+    return value if value in ("local", "s3") else "local"
+
+
+def set_storage_backend(conn: sqlite3.Connection, name: str) -> None:
+    """활성 blob 저장 백엔드 설정 ('local'|'s3')."""
+    if name not in ("local", "s3"):
+        raise ValueError(f"잘못된 storage_backend: {name!r}")
+    set_setting(conn, STORAGE_BACKEND_KEY, name)
+
+
+def storage_migration_active(conn: sqlite3.Connection) -> bool:
+    """스토리지 마이그레이션 진행 중 여부 (기본 off). 켜진 동안 쓰기 일시중지."""
+    return get_setting(conn, STORAGE_MIGRATION_ACTIVE_KEY) == "on"
+
+
+def set_storage_migration_active(conn: sqlite3.Connection, on: bool) -> None:
+    """스토리지 마이그레이션 진행 중 플래그 토글."""
+    set_setting(conn, STORAGE_MIGRATION_ACTIVE_KEY, "on" if on else "off")
+
+
+def writes_paused(conn: sqlite3.Connection) -> bool:
+    """쓰기(캡처·스케줄·크롤)를 멈춰야 하는지 — 인스턴스 이전 OR 스토리지 마이그레이션 진행 중."""
+    return migration_mode_enabled(conn) or storage_migration_active(conn)
+
+
+def storage_migration_summary(conn: sqlite3.Connection) -> dict | None:
+    """스토리지 마이그레이션 요약(JSON) — 없거나 깨졌으면 None."""
+    raw = get_setting(conn, STORAGE_MIGRATION_SUMMARY_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_storage_migration_summary(
+    conn: sqlite3.Connection, summary: dict | None
+) -> None:
+    """스토리지 마이그레이션 요약 저장 (None 이면 삭제)."""
+    if summary is None:
+        delete_setting(conn, STORAGE_MIGRATION_SUMMARY_KEY)
+    else:
+        set_setting(
+            conn, STORAGE_MIGRATION_SUMMARY_KEY,
+            json.dumps(summary, ensure_ascii=False),
+        )
 
 
 def email_verification_ttl_minutes(conn: sqlite3.Connection) -> int:
