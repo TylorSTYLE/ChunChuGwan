@@ -5066,6 +5066,74 @@ def set_db_backup_meta(conn: sqlite3.Connection, meta: dict) -> None:
     set_setting(conn, DB_BACKUP_META_KEY, json.dumps(meta, ensure_ascii=False))
 
 
+# ---- 첫 구동 분류·복구모드 (recovery.py) ----
+RECOVERY_META_KEY = "recovery_meta"  # JSON: baseline_max_id·last_id·status·counts
+
+
+def count_snapshots_raw(conn: sqlite3.Connection) -> int:
+    """전체 스냅샷 수 (휴지통 무관 raw) — 첫 구동 분류용 '아카이브 데이터 유무'."""
+    return conn.execute("SELECT COUNT(*) AS c FROM snapshots").fetchone()["c"]
+
+
+def max_snapshot_id(conn: sqlite3.Connection) -> int:
+    """현재 최대 스냅샷 id (없으면 0) — 복구 baseline."""
+    row = conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM snapshots").fetchone()
+    return row["m"]
+
+
+def find_snapshot_by_dir(
+    conn: sqlite3.Connection, page_id: int, dir_name: str
+) -> sqlite3.Row | None:
+    """(page_id, dir_name) 으로 스냅샷 조회 (복구 멱등 스킵용)."""
+    return conn.execute(
+        "SELECT id FROM snapshots WHERE page_id = ? AND dir_name = ?",
+        (page_id, dir_name),
+    ).fetchone()
+
+
+def recovery_meta(conn: sqlite3.Connection) -> dict | None:
+    """복구 메타(JSON) — 없거나 깨졌으면 None."""
+    raw = get_setting(conn, RECOVERY_META_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_recovery_meta(conn: sqlite3.Connection, meta: dict) -> None:
+    """복구 메타 저장."""
+    set_setting(conn, RECOVERY_META_KEY, json.dumps(meta, ensure_ascii=False))
+
+
+def expose_recovered_snapshots(
+    conn: sqlite3.Connection, baseline_id: int, last_id: int
+) -> int:
+    """복구된 스냅샷(id 범위)을 전체 노출(authenticated=0)로 일괄 변경. 변경 건수 반환.
+
+    관리자가 '전체 노출' 을 명시적으로 선택했을 때만 호출한다 (보안 — 자동 노출 금지).
+    복구분(baseline < id <= last_id)만 대상으로 하고, 그 밖은 건드리지 않는다.
+    """
+    cur = conn.execute(
+        "UPDATE snapshots SET authenticated = 0 "
+        "WHERE id > ? AND id <= ? AND authenticated = 1",
+        (baseline_id, last_id),
+    )
+    return cur.rowcount
+
+
+def set_snapshot_authenticated(
+    conn: sqlite3.Connection, snapshot_id: int, value: int
+) -> None:
+    """단일 스냅샷의 authenticated 플래그 설정 (관리자 개별 해제·재설정)."""
+    conn.execute(
+        "UPDATE snapshots SET authenticated = ? WHERE id = ?",
+        (1 if value else 0, snapshot_id),
+    )
+
+
 def email_verification_ttl_minutes(conn: sqlite3.Connection) -> int:
     """이메일 인증 코드 만료 시간(분) — 기본·오염·범위 밖이면 config 기본값으로 클램핑."""
     raw = get_setting(conn, EMAIL_VERIFICATION_TTL_MINUTES_KEY)

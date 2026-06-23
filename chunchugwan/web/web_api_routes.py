@@ -2804,6 +2804,55 @@ def system_db_backup_settings(
     return {"ok": True}
 
 
+class SnapshotAuthReq(BaseModel):
+    value: bool
+
+
+@router.get("/system/recovery/status")
+def system_recovery_status(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """복구모드 상태·복구 메타 (관리자) — 복구 후 공개 정책 선택 화면용."""
+    from .. import recovery
+
+    _require_manage_system(user)
+    return recovery.status()
+
+
+@router.post("/system/recovery/expose-all")
+def system_recovery_expose_all(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """복구된 스냅샷을 전체 노출(authenticated=0)로 일괄 변경 (관리자가 명시 선택).
+
+    복구분(baseline < id <= last_id)만 대상으로 한다 — 복구 이후의 다른 스냅샷은
+    건드리지 않는다. 복구 이력이 없으면 409.
+    """
+    _require_manage_system(user)
+    with db.connect() as conn:
+        meta = db.recovery_meta(conn)
+        if not meta or meta.get("last_id") is None:
+            raise HTTPException(409, "복구 이력이 없습니다.")
+        n = db.expose_recovered_snapshots(
+            conn, meta["baseline_max_id"], meta["last_id"])
+    audit.log(request, "복구 스냅샷 전체 노출 (%d건)", n, action="admin")
+    return {"ok": True, "exposed": n}
+
+
+@router.post("/system/recovery/snapshot/{snapshot_id}/authenticated")
+def system_recovery_toggle_snapshot(
+    request: Request, snapshot_id: int, body: SnapshotAuthReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """단일 스냅샷의 authenticated 플래그 설정 (관리자 개별 검토·해제)."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        db.set_snapshot_authenticated(conn, snapshot_id, 1 if body.value else 0)
+    audit.log(request, "스냅샷 authenticated 변경: #%d → %s", snapshot_id,
+              "제한" if body.value else "공개", action="admin")
+    return {"ok": True}
+
+
 def _issue_migration_token(request: Request) -> dict:
     """이전 토큰 발급(또는 재발급)하고 모드를 켠다. 토큰 원문은 이 응답에서만 1회 노출.
 

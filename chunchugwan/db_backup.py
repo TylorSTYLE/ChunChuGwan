@@ -209,6 +209,74 @@ def run_scheduled() -> None:
             db.set_db_backup_meta(conn, prev)
 
 
+def has_restorable_backup() -> bool:
+    """db-backups/ 에 복원 가능한 백업이 하나라도 있는지 (비다운로드 list 1회).
+
+    S3 미설정·접근 실패는 False (분류는 보수적으로 — 없는 것으로 본다).
+    """
+    try:
+        client, bucket, base = _client_bucket_prefix()
+        return len(_list_backups(client, bucket, base)) > 0
+    except Exception:  # noqa: BLE001 — 설정/네트워크 문제는 '복원 불가' 로 본다
+        return False
+
+
+def _verify_sqlite(path: Path) -> None:
+    """복원 전 백업 DB 무결성·스키마 검증 — 실패면 RuntimeError (현재 DB 보존)."""
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    try:
+        row = conn.execute("PRAGMA integrity_check").fetchone()
+        if not row or row[0] != "ok":
+            raise RuntimeError("백업 DB 무결성 검사에 실패했습니다.")
+        tables = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if not {"users", "pages", "snapshots"} <= tables:
+            raise RuntimeError("백업 DB 스키마가 올바르지 않습니다.")
+    except sqlite3.DatabaseError as e:  # 손상 파일 — 명확한 오류로 (현재 DB 보존)
+        raise RuntimeError(f"백업 DB 가 손상되었습니다: {type(e).__name__}")
+    finally:
+        conn.close()
+
+
+def restore_latest() -> dict:
+    """db-backups/ 최신 백업을 복원 — 다운로드 → 무결성 검증 → DB 교체 + rules 배치.
+
+    검증 통과 후에만 backup._replace_db_file 로 교체한다(손상/불완전 백업으로 현재
+    DB 를 덮지 않는다). 복원본은 S3 모드 DB 이므로 storage_backend='s3' 로 둔다.
+    유효 백업이 없거나 검증 실패면 RuntimeError (기존 DB 보존).
+    """
+    client, bucket, base = _client_bucket_prefix()
+    items = _list_backups(client, bucket, base)
+    if not items:
+        raise RuntimeError("복원할 S3 DB 백업이 없습니다.")
+    key = items[-1]["key"]  # 최신 (타임스탬프 사전순 마지막)
+    obj = client.get_object(Bucket=bucket, Key=key)
+    data = obj["Body"].read()
+    tmp = Path(tempfile.mkdtemp(prefix="wccg-dbrestore-"))
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            tar.extractall(tmp, filter="data")
+        db_file = tmp / "index.db"
+        if not db_file.is_file():
+            raise RuntimeError("백업에 index.db 가 없습니다.")
+        _verify_sqlite(db_file)  # 검증 후에만 교체
+        backup._replace_db_file(db_file)  # WAL/-shm 정리 + 스키마 캐시 무효화
+        config.RULES_PATH.unlink(missing_ok=True)
+        rules_src = tmp / "rules.json"
+        if rules_src.is_file():
+            shutil.move(str(rules_src), str(config.RULES_PATH))
+        with db.connect() as conn:
+            db.set_storage_backend(conn, "s3")
+        config.reset_blob_store()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {"restored_key": key, "bytes": len(data)}
+
+
 def status() -> dict:
     """DB 백업 상태 — 설정·마지막 결과·진행 중 여부·백업 목록 요약.
 
