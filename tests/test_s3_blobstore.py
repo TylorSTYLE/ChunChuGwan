@@ -456,17 +456,18 @@ def test_s3_serving_all_routes(s3_serving):
 
 
 def test_s3_system_overview_usage_keys(s3_serving):
-    """S3 모드 /api/web/system 은 db/cache/blobcache 사용량을 내려준다 (KeyError 회귀).
+    """S3 모드 GET /api/web/system/usage 는 db/cache/blobcache 사용량을 내려준다 (KeyError 회귀).
 
     S3 모드 archive_disk_usage 는 sites/resources/documents 대신 로컬 분해
-    (db/cache/blobcache)를 돌려주므로, 엔드포인트가 고정 키를 골라내면 안 된다."""
+    (db/cache/blobcache)를 돌려주므로, 엔드포인트가 고정 키를 골라내면 안 된다.
+    (사용량은 system_overview 의 동기 페이로드에서 /system/usage 로 분리됐다.)"""
     s3, root = s3_serving
     with db.connect() as conn:
         db.create_first_admin(conn, "boss@test.co", auth.hash_password("bosspass1234"))
     client = TestClient(web_app.app, headers={"X-Requested-With": "fetch"})
     client.post("/api/web/auth/login",
                 json={"email": "boss@test.co", "password": "bosspass1234"})
-    r = client.get("/api/web/system")
+    r = client.get("/api/web/system/usage")
     assert r.status_code == 200
     usage = r.json()["usage"]
     assert set(usage) == {"db", "cache", "blobcache"}  # S3 모드 키

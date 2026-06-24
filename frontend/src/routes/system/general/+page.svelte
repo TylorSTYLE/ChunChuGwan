@@ -20,9 +20,16 @@
 	let { data }: { data: { sys: SystemOverview } } = $props();
 	const s = $derived(data.sys);
 
+	// 저장 사용량 분해 — sites/resources/documents 전체 스캔이라 페이지 진입을
+	// 막지 않도록 /system/usage 로 분리해 마운트 후 비동기로 받는다(도착 전 null).
+	let diskUsage = $state<Record<string, number> | null>(null);
+
 	// 저장 용량 미터 차트 — 각 영역이 전체에서 차지하는 비율
 	const usageTotal = $derived(
-		(s.usage.db + s.usage.sites + s.usage.resources + s.usage.documents) || 1
+		((diskUsage?.db ?? 0) +
+			(diskUsage?.sites ?? 0) +
+			(diskUsage?.resources ?? 0) +
+			(diskUsage?.documents ?? 0)) || 1
 	);
 	function pct(n: number): string {
 		return `${Math.round((n / usageTotal) * 100)}%`;
@@ -123,7 +130,7 @@
 	const recoveryPending = $derived((recovery?.restricted_count ?? 0) > 0);
 
 	// 저장 사용량 — S3 모드에서 로컬/Object Storage 분리. GET 은 캐시만(S3 미호출),
-	// [업데이트] 만 명시 스캔. 로컬 모드는 기존 미터(s.usage) 그대로.
+	// [업데이트] 만 명시 스캔. 로컬 분해는 diskUsage(/system/usage) 로 폴백.
 	const isS3 = $derived(s.storage_backend === 's3');
 	let usage = $state<StorageUsage | null>(null);
 	$effect(() => {
@@ -462,6 +469,15 @@
 		}
 	}
 
+	async function loadDiskUsage() {
+		try {
+			const r = await api<{ usage: Record<string, number> }>('/system/usage');
+			diskUsage = r.usage;
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
 	async function loadUsage() {
 		try {
 			usage = await api<StorageUsage>('/system/storage/usage');
@@ -491,6 +507,7 @@
 		loadStorage(); // 진행 중이면 폴링을 재개한다(화면 재진입 대응)
 		loadDbBackup();
 		loadRecovery();
+		loadDiskUsage(); // 저장 용량 미터(분리된 비싼 스캔) — 양 모드 모두
 		if (isS3) loadUsage();
 		// 화면을 떠나면 폴링 루프를 정리한다(고아 setTimeout 누적 방지).
 		return () => {
@@ -543,29 +560,33 @@
 	<div class="meter-box">
 		<div class="meter-head">
 			<span>{t('저장 용량')}</span>
-			<span class="mono muted">{filesize(usageTotal)}</span>
+			<span class="mono muted">{diskUsage ? filesize(usageTotal) : ''}</span>
 		</div>
-		<div class="meter">
-			<span class="seg seg-db" style="width:{pct(s.usage.db)}" title="DB {filesize(s.usage.db)}"></span>
-			<span class="seg seg-sites" style="width:{pct(s.usage.sites)}" title="{t('사이트')} {filesize(s.usage.sites)}"></span>
-			<span class="seg seg-res" style="width:{pct(s.usage.resources)}" title="{t('공유 자원')} {filesize(s.usage.resources)}"></span>
-			<span class="seg seg-docs" style="width:{pct(s.usage.documents)}" title="{t('문서')} {filesize(s.usage.documents)}"></span>
-		</div>
-		<ul class="legend-list mono">
-			<li><span class="dot seg-db"></span>DB {filesize(s.usage.db)}</li>
-			<li><span class="dot seg-sites"></span>{t('사이트')} {filesize(s.usage.sites)}</li>
-			<li><span class="dot seg-res"></span>{t('공유 자원')} {filesize(s.usage.resources)}</li>
-			<li><span class="dot seg-docs"></span>{t('문서')} {filesize(s.usage.documents)}</li>
-		</ul>
+		{#if diskUsage}
+			<div class="meter">
+				<span class="seg seg-db" style="width:{pct(diskUsage.db)}" title="DB {filesize(diskUsage.db)}"></span>
+				<span class="seg seg-sites" style="width:{pct(diskUsage.sites)}" title="{t('사이트')} {filesize(diskUsage.sites)}"></span>
+				<span class="seg seg-res" style="width:{pct(diskUsage.resources)}" title="{t('공유 자원')} {filesize(diskUsage.resources)}"></span>
+				<span class="seg seg-docs" style="width:{pct(diskUsage.documents)}" title="{t('문서')} {filesize(diskUsage.documents)}"></span>
+			</div>
+			<ul class="legend-list mono">
+				<li><span class="dot seg-db"></span>DB {filesize(diskUsage.db)}</li>
+				<li><span class="dot seg-sites"></span>{t('사이트')} {filesize(diskUsage.sites)}</li>
+				<li><span class="dot seg-res"></span>{t('공유 자원')} {filesize(diskUsage.resources)}</li>
+				<li><span class="dot seg-docs"></span>{t('문서')} {filesize(diskUsage.documents)}</li>
+			</ul>
+		{:else}
+			<p class="desc"><Spinner />{t('저장 용량 계산 중…')}</p>
+		{/if}
 	</div>
 {:else}
 	<!-- S3 모드 — 로컬 사용량과 Object Storage 사용량을 분리 -->
 	<div class="meter-box">
 		<div class="meter-head"><span>{t('로컬 사용량')}</span></div>
 		<ul class="legend-list mono">
-			<li><span class="dot seg-db"></span>DB {filesize(usage?.local?.db ?? s.usage.db ?? 0)}</li>
-			<li><span class="dot seg-sites"></span>{t('캐시')} {filesize(usage?.local?.cache ?? s.usage.cache ?? 0)}</li>
-			<li><span class="dot seg-res"></span>{t('read-through 캐시')} {filesize(usage?.local?.blobcache ?? s.usage.blobcache ?? 0)}</li>
+			<li><span class="dot seg-db"></span>DB {filesize(usage?.local?.db ?? diskUsage?.db ?? 0)}</li>
+			<li><span class="dot seg-sites"></span>{t('캐시')} {filesize(usage?.local?.cache ?? diskUsage?.cache ?? 0)}</li>
+			<li><span class="dot seg-res"></span>{t('read-through 캐시')} {filesize(usage?.local?.blobcache ?? diskUsage?.blobcache ?? 0)}</li>
 		</ul>
 	</div>
 	<div class="meter-box">

@@ -2193,8 +2193,6 @@ def system_overview(
         migration_token_created_at = db.get_setting(
             conn, db.MIGRATION_TOKEN_CREATED_AT_KEY
         )
-    usage = storage.archive_disk_usage()
-    with db.connect() as conn:
         active_backend = db.storage_backend(conn)
     return {
         "version": __version__,
@@ -2264,12 +2262,10 @@ def system_overview(
         },
         "smtp_tls_modes": list(mailer.SMTP_TLS_MODES),
         "archive_root": str(config.ARCHIVE_ROOT),
-        # 로컬 모드는 db/sites/resources/documents, S3 모드는 db/cache/blobcache
-        # 키를 돌려준다(archive_disk_usage). 프론트가 양쪽 형태를 모두 처리하므로
-        # 키를 골라내지 않고 그대로 내려준다.
-        "usage": dict(usage),
-        "optimize_pending": sum(optimize.pending_counts()),
-        "search": searchindex.verify(),
+        # 저장 사용량(usage)은 sites/resources/documents 트리를 전부 스캔하는
+        # 비싼 파생값이라 페이지 진입을 막지 않도록 GET /system/usage 로 분리해
+        # 화면 마운트 후 비동기로 받는다. (optimize_pending·search 는 프론트가
+        # 읽지 않던 죽은 필드라 제거 — 매 로드마다 sites/ 전체 스캔만 유발했다.)
         "migration_mode": migration_mode,
         "migration_token_created_at": migration_token_created_at,
         "public_url": config.PUBLIC_URL,
@@ -2834,6 +2830,20 @@ def system_storage_status(
 
     _require_manage_system(user)
     return storage_migration.status()
+
+
+@router.get("/system/usage")
+def system_usage(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """아카이브 저장 사용량 분해 — system_overview 에서 분리한 지연 로드 엔드포인트.
+
+    로컬 모드는 db/sites/resources/documents, S3 모드는 db/cache/blobcache 키를
+    돌려준다(archive_disk_usage — 30초 TTL 캐시, S3 미호출). 시스템 화면이 진입
+    직후 비동기로 받아 저장 용량 미터를 채운다.
+    """
+    _require_manage_system(user)
+    return {"usage": dict(storage.archive_disk_usage())}
 
 
 @router.get("/system/storage/usage")
