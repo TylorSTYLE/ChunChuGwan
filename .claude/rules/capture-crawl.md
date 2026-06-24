@@ -23,6 +23,17 @@ paths:
 > 기준 — 타임스탬프·CSRF·광고 제거 후 해시/diff)이 여기서 동작한다.
 > `pages` 의 캡처 폴백 사슬·https 승격·`client_captured` 동작 정의는 `.claude/rules/database.md` 참조.
 
+## 문서 다운로드는 브라우저 네트워크 스택 우선
+
+문서(첨부·직접 다운로드 URL)는 **Chromium 네트워크 스택으로 먼저 받는다** —
+일부 WAF 가 봇 차단으로 httpx 의 TLS ClientHello 를 핑거프린팅해 `start_tls`
+단계에서 연결을 끊기 때문이다(`[Errno 104] Connection reset by peer`). 직접
+다운로드는 capture 가 goto 중 받은 파일을 `CaptureDownloadError.download_path`
+로 운반하고(`_capture_download` — `page.expect`/`on("download")`), 링크 문서는
+`fetch_documents_via_browser`(`context.request`)로 받는다. 브라우저로 못 받은
+것만 `documents` 의 httpx 경로로 폴백한다. 상세·CAS 저장은
+`.claude/rules/storage.md` 참조.
+
 ## 사설 IP·루프백 게이트 (아키텍처 원칙 7)
 
 아카이빙 대상 호스트의 네트워크 대역은

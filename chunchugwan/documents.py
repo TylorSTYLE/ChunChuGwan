@@ -343,7 +343,7 @@ class DirectDownload:
 
     entry: dict[str, object]   # {url, file, bytes, sha256, content_type}
     final_url: str             # 리다이렉트 후 최종 URL
-    http_status: int
+    http_status: int | None    # 브라우저가 받은 파일을 쓰면 None (HTTP 요청 안 함)
 
 
 def download_direct(
@@ -391,6 +391,86 @@ def download_direct(
         final_url=str(resp.url),
         http_status=resp.status_code,
     )
+
+
+# content-type ← 확장자 (브라우저가 받은 다운로드는 응답 content-type 을 잃으므로
+# 확장자로 추정한다 — 문서 서빙은 항상 application/octet-stream + 첨부라 이 값은
+# meta/DB 표시용일 뿐 서빙 보안과 무관하다). 여러 타입이 한 확장자로 모이면(.zip 등)
+# 사전 뒤쪽 값이 남는다.
+_EXTENSION_TYPES = {ext: ct for ct, ext in _TYPE_EXTENSIONS.items()}
+
+
+def sniff_content_type(path: Path, filename: str) -> str:
+    """로컬 파일의 content-type 추정 — PDF 매직 우선, 아니면 확장자 매핑.
+
+    브라우저 다운로드(Playwright Download 객체)는 응답 content-type 을 노출하지
+    않으므로 파일 자체로 추정한다. 못 정하면 application/octet-stream.
+    """
+    try:
+        with path.open("rb") as f:
+            head = f.read(8)
+    except OSError:
+        head = b""
+    if head.startswith(b"%PDF"):
+        return "application/pdf"
+    return _EXTENSION_TYPES.get(Path(filename).suffix.lower(), "application/octet-stream")
+
+
+def _local_filename(
+    url: str, final_url: str, suggested: str | None, content_type: str | None
+) -> str | None:
+    """이미 받은 파일의 저장 파일명 — 브라우저 제안명을 최우선 후보로 쓴다.
+
+    suggested(Playwright download.suggested_filename)는 서버 Content-Disposition
+    에서 브라우저가 뽑은 값이라 가장 믿을 만하다. 화이트리스트 확장자면 그대로
+    채택하고, 아니면 direct_filename(URL 경로·쿼리·content-type) 로 폴백한다.
+    """
+    if suggested:
+        cand = PurePosixPath(suggested.replace("\\", "/"))
+        if cand.suffix.lower() in config.DOCUMENT_EXTENSIONS:
+            return _build_filename(cand.stem, cand.suffix.lower(), url)
+    return direct_filename(url, final_url, None, content_type)
+
+
+def entry_from_local_file(
+    url: str,
+    final_url: str,
+    path: Path,
+    *,
+    suggested_filename: str | None = None,
+    content_type: str | None = None,
+    limits: DocumentLimits | None = None,
+) -> dict[str, object]:
+    """이미 로컬에 저장된 문서 파일로 manifest 항목을 만든다 (네트워크 없음).
+
+    브라우저가 WAF 를 통과해 받은 다운로드를 httpx 재요청 없이 문서 스냅샷으로
+    만들 때 쓴다. 파일명은 _local_filename 으로 정하고(화이트리스트 확장자를 못
+    정하면 ValueError), path 를 그 파일명으로 같은 디렉토리에 옮긴다. 크기 한도
+    초과면 ValueError. sha256·bytes 는 파일에서 직접 계산한다.
+    """
+    limits = limits or DEFAULT_LIMITS
+    if content_type is None:
+        content_type = sniff_content_type(path, suggested_filename or path.name)
+    name = _local_filename(url, final_url, suggested_filename, content_type)
+    if name is None:
+        raise ValueError(
+            "문서 화이트리스트 확장자를 결정할 수 없습니다 "
+            f"(파일명 {suggested_filename or path.name!r}, content-type {content_type or '-'})"
+        )
+    size = path.stat().st_size
+    if size > limits.max_bytes:
+        raise ValueError(f"크기 한도 초과 (> {limits.max_bytes} bytes)")
+    sha256 = _file_sha256(path)
+    dest = path.parent / name
+    if dest != path:
+        os.replace(path, dest)
+    return {
+        "url": url,
+        "file": name,
+        "bytes": size,
+        "sha256": sha256,
+        "content_type": content_type or "application/octet-stream",
+    }
 
 
 # ---- 문서 CAS (콘텐츠 주소 저장소) ----

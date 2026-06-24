@@ -597,7 +597,7 @@ def _capture_in_browser(
     credential 이 있으면 종류별로 컨텍스트에 주입한다 (http_credentials/
     storage_state) — jwt 는 대상 origin 요청에만 Authorization 헤더를 붙인다.
     """
-    _, _, _, PlaywrightTimeoutError = browser_engine.get_engine()
+    _, _, PlaywrightError, PlaywrightTimeoutError = browser_engine.get_engine()
 
     context_kwargs, jwt_authorization = _context_options(credential, insecure_tls)
     context = browser.new_context(**context_kwargs)
@@ -607,6 +607,11 @@ def _capture_in_browser(
         page = context.new_page()
         page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
         _expose_sha256_binding(page)
+        # 탐색이 다운로드로 전환되면 goto 가 "Download is starting" 으로 실패하지만,
+        # 이 시점에 브라우저는 이미 WAF/안티봇을 통과해 파일을 받았다. 이미 발사된
+        # download 이벤트를 놓치지 않도록 goto 전에 리스너를 단다.
+        downloads: list = []
+        page.on("download", lambda d: downloads.append(d))
         try:
             response = page.goto(
                 url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS
@@ -634,6 +639,14 @@ def _capture_in_browser(
             except Exception as stop_err:
                 logger.warning("window.stop() 실패, 그대로 진행: %s", stop_err)
             response = None
+        except PlaywrightError as e:
+            # 탐색이 파일 다운로드로 전환 — URL 이 페이지가 아니라 파일이다.
+            # 컨텍스트가 살아 있는 지금 브라우저가 받은 파일을 out_dir 에 빼내고
+            # (httpx 재요청은 WAF 의 TLS 핑거프린팅에 막힌다) enriched 오류로
+            # 전파한다. 그 외 PlaywrightError 는 _capture_once 가 분류하도록 재전파.
+            if _DOWNLOAD_MARKER not in str(e):
+                raise
+            raise _capture_download(page, url, out_dir, downloads) from e
 
         raw_html = page.content()
         # 봇 차단/사람 확인 챌린지 페이지면 정상 콘텐츠가 아니므로 저장하지
@@ -702,6 +715,49 @@ def _capture_in_browser(
         )
     finally:
         context.close()
+
+
+def _capture_download(page, url: str, out_dir: Path, downloads: list) -> CaptureDownloadError:
+    """탐색이 다운로드로 전환됐을 때, 브라우저가 받은 파일을 out_dir 에 저장한다.
+
+    goto 가 "Download is starting" 으로 실패한 시점에 브라우저는 이미 WAF 를
+    통과해 파일을 받았다. 이미 발사된 download 이벤트(downloads)나 곧 도달할
+    이벤트를 받아 out_dir/files 에 임시 이름으로 저장하고(최종 파일명은 pipeline
+    이 documents 로 정한다), 파일·제안명·최종 URL 을 실은 CaptureDownloadError 를
+    돌려준다. 다운로드를 못 잡으면 정보 없이 돌려줘 pipeline 이 httpx 폴백하게 한다.
+    """
+    download = downloads[0] if downloads else None
+    if download is None:
+        try:
+            download = page.wait_for_event(
+                "download", timeout=config.RESOURCE_FETCH_TIMEOUT_MS
+            )
+        except Exception:  # noqa: BLE001 — 못 잡으면 httpx 폴백
+            download = None
+    if download is None:
+        return CaptureDownloadError(f"{url} 은 파일 다운로드 URL")
+    try:
+        files_dir = out_dir / "files"
+        files_dir.mkdir(parents=True, exist_ok=True)
+        # 임시 이름으로 저장 (확장자·정제는 documents.entry_from_local_file 이 처리)
+        saved = files_dir / f"download-{hashlib.sha256(url.encode()).hexdigest()[:16]}"
+        download.save_as(str(saved))
+    except Exception as e:  # noqa: BLE001 — 저장 실패 시 httpx 폴백
+        logger.warning("브라우저 다운로드 저장 실패(httpx 폴백): %s — %s", url, e)
+        return CaptureDownloadError(f"{url} 은 파일 다운로드 URL: {e}")
+    suggested = None
+    final_url = url
+    try:
+        suggested = download.suggested_filename
+        final_url = download.url or url
+    except Exception:  # noqa: BLE001 — 메타 조회 실패는 무해 (파일은 이미 저장됨)
+        pass
+    return CaptureDownloadError(
+        f"{url} 은 파일 다운로드 URL",
+        download_path=saved,
+        suggested_filename=suggested,
+        final_url=final_url,
+    )
 
 
 def _capture_mobile_screenshot(
@@ -952,6 +1008,108 @@ def _apply_resource_fallback(
     return still_failed
 
 
+def fetch_documents_via_browser(
+    session: "BrowserSession | None",
+    links: list[str],
+    dest_dir: Path,
+    *,
+    referer: str | None = None,
+    credential: CaptureCredential | None = None,
+    insecure_tls: bool = False,
+    limits: "documents.DocumentLimits | None" = None,
+) -> tuple[list[dict[str, object]], list[str]]:
+    """링크 문서들을 브라우저 네트워크 스택(context.request)으로 받아 (manifest, 실패 URL).
+
+    httpx 와 달리 Chromium 네트워크 스택을 경유하므로 WAF 의 TLS 핑거프린팅을
+    통과한다(루트 원인 — `[Errno 104] Connection reset by peer`). 컨텍스트가
+    credential(http_basic/storage_state)·insecure_tls 를 반영하지만 jwt 토큰은
+    context.request 에 안 붙으므로(_install_origin_scoped_header 한계), 그런 문서는
+    실패로 돌아가 호출부의 httpx 폴백이 인증을 싣는다. session 이 있으면 그 브라우저를
+    재사용하고(새 컨텍스트만), 없으면 일회용으로 띄운다.
+    """
+    limits = limits or documents.DEFAULT_LIMITS
+    links = list(dict.fromkeys(links))
+    if len(links) > limits.max_count:
+        logger.warning(
+            "문서 링크 %d개 중 앞 %d개만 시도 (개수 한도)", len(links), limits.max_count
+        )
+        links = links[: limits.max_count]
+    if not links:
+        return [], []
+
+    manifest: list[dict[str, object]] = []
+    failed: list[str] = []
+
+    def _run(browser) -> None:
+        context_kwargs, jwt_authorization = _context_options(credential, insecure_tls)
+        context = browser.new_context(**context_kwargs)
+        if jwt_authorization and credential is not None:
+            _install_origin_scoped_header(context, credential.origin, jwt_authorization)
+        try:
+            for url in links:
+                try:
+                    manifest.append(
+                        _fetch_document_via_context(context, url, dest_dir, referer, limits)
+                    )
+                except Exception as e:  # noqa: BLE001 — 실패분은 httpx 폴백 대상
+                    logger.warning("브라우저 문서 다운로드 실패(폴백 대상): %s — %s", url, e)
+                    failed.append(url)
+        finally:
+            context.close()
+
+    try:
+        if session is not None:
+            _run(session.browser())
+        else:
+            _, sync_playwright, _, _ = browser_engine.get_engine()
+            with sync_playwright() as p:
+                browser = _launch(p)
+                try:
+                    _run(browser)
+                finally:
+                    browser.close()
+    except Exception as e:  # noqa: BLE001 — 브라우저 기동·컨텍스트 실패는 전부 httpx 폴백
+        logger.warning("브라우저 문서 다운로드 불가(전부 httpx 폴백): %s", e)
+        done = {str(m["url"]) for m in manifest}
+        failed = [u for u in links if u not in done]
+    return manifest, failed
+
+
+def _fetch_document_via_context(
+    context, url: str, dest_dir: Path, referer: str | None,
+    limits: "documents.DocumentLimits",
+) -> dict[str, object]:
+    """문서 1개를 context.request 로 받아 dest_dir 에 저장하고 manifest 항목 반환.
+
+    HTML 응답(로그인/오류 페이지)·크기 한도 초과는 ValueError 로 거부한다
+    (httpx 경로와 동일 정책). 파일명은 documents.document_filename(URL 경로 기반).
+    """
+    headers = {"User-Agent": config.USER_AGENT}
+    if referer:
+        headers["Referer"] = referer
+    resp = context.request.get(
+        url, headers=headers, timeout=limits.timeout_seconds * 1000
+    )
+    if not resp.ok:
+        raise ValueError(f"http {resp.status}")
+    content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type in documents._HTML_TYPES:
+        raise ValueError(f"HTML 응답 — 문서 아님 ({content_type})")
+    body = resp.body()
+    if len(body) > limits.max_bytes:
+        raise ValueError(f"크기 한도 초과 (> {limits.max_bytes} bytes)")
+    name = documents.document_filename(url)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / name).write_bytes(body)
+    return {
+        "url": url,
+        "file": name,
+        "bytes": len(body),
+        "sha256": hashlib.sha256(body).hexdigest(),
+        "content_type": content_type or "application/octet-stream",
+    }
+
+
 def _fetch_via_context(page, url: str) -> tuple[str, bytes] | None:
     """자원 1개를 context.request 로 받아 (content-type, body) 반환. 실패 시 None."""
     try:
@@ -1141,8 +1299,24 @@ class CaptureConnectError(CaptureError):
 class CaptureDownloadError(CaptureError):
     """탐색이 파일 다운로드로 전환된 실패 — URL 이 페이지가 아니라 파일.
 
-    pipeline 이 문서 아카이빙(documents.download_direct)으로 전환하는 신호다.
+    pipeline 이 문서 아카이빙으로 전환하는 신호다. 브라우저가 WAF/안티봇을
+    통과해 이미 받은 다운로드 파일을 들고 올 수 있다(download_path) — 그러면
+    pipeline 은 httpx 재요청(WAF 에 TLS 단계에서 막힘) 없이 그 파일을 그대로
+    문서 스냅샷으로 만든다. 정보 없이 raise 되면 종전처럼 httpx 폴백한다.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        download_path: "Path | None" = None,
+        suggested_filename: str | None = None,
+        final_url: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.download_path = download_path
+        self.suggested_filename = suggested_filename
+        self.final_url = final_url
 
 
 class CaptureChallengeError(CaptureError):
