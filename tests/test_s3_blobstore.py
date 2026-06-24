@@ -68,6 +68,34 @@ def test_s3_existence_check_does_not_download(tmp_path):
         assert not cache.exists() or not any(cache.rglob("*"))
 
 
+def test_s3_is_file_independent_of_head_object_404_dialect(tmp_path):
+    """없는 객체의 HeadObject 에 400(404 아님) 을 주는 제공자에서도 동작.
+
+    일부 S3 호환 제공자는 없는 객체의 HeadObject 에 404 가 아니라 400 Bad
+    Request 를 돌려준다. is_file 이 HEAD 에 의존하면 그 400 을 "없음"으로
+    매핑하지 못해 캡처 dedup 체크(_write_cas)가 크래시한다. LIST 기반이면
+    HeadObject 가 어떤 방언을 쓰든 영향받지 않아야 한다.
+    """
+    from botocore.exceptions import ClientError
+
+    with mock_aws():
+        store, _ = _make_store(tmp_path)
+        existing = tmp_path / "resources" / "ab" / "ab1234.png"
+        missing = tmp_path / "resources" / "cd" / "cd5678.png"
+        store.write_atomic(existing, b"x")
+
+        # HeadObject 가 항상 400 을 던지게 해도 is_file 은 LIST 로 판정해야 한다.
+        def _boom(*_a, **_k):
+            raise ClientError(
+                {"Error": {"Code": "400", "Message": "Bad Request"}},
+                "HeadObject",
+            )
+
+        store._client.head_object = _boom
+        assert store.is_file(existing) is True
+        assert store.is_file(missing) is False
+
+
 def test_s3_put_omits_expect_100_continue(tmp_path):
     """PUT 에 Expect: 100-continue 를 보내지 않는다 (Garage/MinIO 헤더파싱 경고 회피)."""
     with mock_aws():

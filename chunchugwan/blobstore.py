@@ -17,7 +17,7 @@ LocalBlobStore 의 각 메서드는 종전 코어 코드의 파일 연산을 그
 S3BlobStore 는 같은 계약을 boto3(endpoint_url + path-style)로 구현한다 —
 키 레이아웃은 로컬 상대 경로를 미러(``sites/…``·``resources/{ab}/…``·
 ``documents/{ab}/…``)하고 선택적 키 프리픽스 하위에 둔다. 존재 확인
-(``is_file``·``is_dir``·``size``)은 HEAD/LIST 로 객체를 받지 않고, 서빙·읽기
+(``is_file``·``is_dir`` 는 LIST, ``size`` 는 HEAD)은 객체를 받지 않고, 서빙·읽기
 시점의 ``local_path`` 만 객체를 로컬 read-through 캐시로 materialize 한다
 (콘텐츠 주소·불변이라 무효화 없이 용량 상한 + LRU 제거만). 비밀값은 로그·
 예외에 노출하지 않는다.
@@ -372,15 +372,19 @@ class S3BlobStore:
 
     # ---- 검사 (객체 다운로드 없음) ----
     def is_file(self, path: Path) -> bool:
+        # HEAD 대신 LIST(Prefix=정확한 키) 로 존재를 확인한다 — 일부 S3 호환
+        # 제공자는 없는 객체의 HeadObject 에 404 가 아니라 400 Bad Request 를
+        # 돌려주는데, 그 400 은 정상 오류와 구분되지 않아 안전하게 "없음"으로
+        # 매핑할 수 없다. ListObjectsV2 는 없는 키에 200·KeyCount 0 으로 응답해
+        # 제공자 편차 없이 깔끔한 불리언을 주며(is_dir·glob 과 동일 능력),
+        # 신규 객체든 기존 객체든 라운드트립은 1 회로 같다.
         if not self._is_archive_path(path):
             return self._local.is_file(path)
-        try:
-            self._client.head_object(Bucket=self._bucket, Key=self._key(path))
-            return True
-        except self._client.exceptions.ClientError as e:
-            if self._client_error_code(e) in ("404", "NoSuchKey", "NotFound"):
-                return False
-            raise
+        key = self._key(path)
+        resp = self._client.list_objects_v2(
+            Bucket=self._bucket, Prefix=key, MaxKeys=1
+        )
+        return any(obj["Key"] == key for obj in resp.get("Contents", []))
 
     def is_dir(self, path: Path) -> bool:
         if not self._is_archive_path(path):
