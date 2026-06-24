@@ -880,6 +880,44 @@ _EN: dict[str, str] = {
     "폐기": "Revoke",
     "클러스터 보내기": "Cluster send",
     "클러스터 받기": "Cluster receive",
+    # ---- 클러스터(federation) 화면 (system/cluster) ----
+    "클러스터": "Cluster",
+    "여러 춘추관 인스턴스를 연결해 아카이브를 선택적으로 주고받습니다. 연결은 항상 이쪽에서 개시합니다(보내기=push, 받기=pull).":
+        "Connect multiple ChunChuGwan instances to exchange archives selectively. "
+        "This node always initiates (send = push, receive = pull).",
+    "WCCG_SECRET_KEY 가 설정되지 않아 피어 키를 안전하게 저장할 수 없습니다. 환경변수를 설정한 뒤 피어를 등록하세요.":
+        "WCCG_SECRET_KEY is not set, so peer keys cannot be stored securely. "
+        "Set the environment variable before adding a peer.",
+    "이 노드": "This node",
+    "노드 식별자 (UUID)": "Node ID (UUID)",
+    "표시 이름": "Display name",
+    "예: 집 NAS": "e.g. Home NAS",
+    "표시 전용입니다 — 피어 식별·신뢰는 항상 UUID 로 합니다.":
+        "Display only — peers are identified and trusted by UUID.",
+    "동기화 설정": "Sync settings",
+    "조정 주기 (초)": "Reconcile interval (sec)",
+    "{min}~{max}초": "{min}–{max} sec",
+    "기본 보호 (다른 클러스터로 보내지 않음)": "Protect by default (do not send to other clusters)",
+    "사이트·아카이브에 보호 설정이 없을 때 적용되는 시스템 기본값입니다.":
+        "System default applied when a site or archive has no protection set.",
+    "피어 연결 추가": "Add a peer",
+    "피어 주소": "Peer address",
+    "피어 발급 시스템 키": "System key issued by the peer",
+    "보내기 (이 피어로 push)": "Send (push to this peer)",
+    "받기 (이 피어에서 pull)": "Receive (pull from this peer)",
+    "연결": "Connect",
+    "피어": "Peer",
+    "방향": "Direction",
+    "마지막 동기화": "Last sync",
+    "(이름 없음)": "(no name)",
+    "보내기": "Send",
+    "받기": "Receive",
+    "연결된 피어가 없습니다.": "No peers connected.",
+    "이 피어 연결을 해제할까요? 받은 아카이브는 보존됩니다.":
+        "Disconnect this peer? Received archives are preserved.",
+    "연결됨": "Connected",
+    "일시 오류": "Temporary error",
+    "폐기됨": "Revoked",
     "발급된 키가 없습니다.": "No keys issued yet.",
     "새 키 발급": "Issue a new key",
     "키 이름 (예: rss-bot)": "Key name (e.g. rss-bot)",

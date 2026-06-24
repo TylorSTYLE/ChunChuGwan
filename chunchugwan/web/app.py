@@ -40,13 +40,13 @@ from fastapi.responses import (
 )
 
 from .. import (
-    __version__, archive_worker, auth, backup, config, crawler, credentials, crypto,
-    db, deletion, differ, documents, live_challenge, netcheck, resources, scheduler,
-    searchindex, storage, system_log,
+    __version__, archive_worker, auth, backup, cluster_sync, config, crawler,
+    credentials, crypto, db, deletion, differ, documents, live_challenge, netcheck,
+    resources, scheduler, searchindex, storage, system_log,
 )
 from . import (
-    api_routes, audit, auth_routes, i18n, migration_routes, permissions,
-    web_api_routes, web_auth_routes,
+    api_routes, audit, auth_routes, cluster_routes, i18n, migration_routes,
+    permissions, web_api_routes, web_auth_routes,
 )
 from pydantic import BaseModel
 from .i18n import t
@@ -95,6 +95,13 @@ async def _lifespan(app: FastAPI):
                 name="wccg-archive",
                 daemon=True,
             ),
+            # 클러스터 조정 루프 — 피어별 권한 갱신·델타 동기화(B 측에서만 동작).
+            threading.Thread(
+                target=cluster_sync.run_loop,
+                args=(stop,),
+                name="wccg-cluster",
+                daemon=True,
+            ),
         ]
         for thread in threads:
             thread.start()
@@ -108,6 +115,7 @@ app = FastAPI(title="춘추관", lifespan=_lifespan)
 app.include_router(auth_routes.router)
 app.include_router(api_routes.router)
 app.include_router(migration_routes.router)
+app.include_router(cluster_routes.router)
 app.include_router(web_api_routes.router)
 app.include_router(web_auth_routes.router)
 

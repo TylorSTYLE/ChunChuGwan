@@ -30,8 +30,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from .. import (
-    __version__, auth, config, crawler, crypto, db, deletion, differ, documents,
-    mailer, optimize, resources, scheduler, searchindex, storage,
+    __version__, auth, cluster, config, crawler, crypto, db, deletion, differ,
+    documents, mailer, optimize, resources, scheduler, searchindex, storage,
 )
 from . import audit, i18n, permissions, release_notes
 
@@ -2155,6 +2155,161 @@ def system_api_key_delete(
             raise HTTPException(404, "API 키 없음")
         db.delete_api_key(conn, key_id)
     audit.log(request, "API 키 폐기: #%d", key_id)
+    return {"ok": True}
+
+
+# ── 클러스터(federation) 관리 ────────────────────────────────────────────────
+
+
+def _public_cluster_peer(p: sqlite3.Row) -> dict:
+    """피어 행에서 화면 표시용 필드만 — 암호화 키(api_key_enc)는 절대 노출 금지(원칙 6)."""
+    return {
+        "id": p["id"],
+        "peer_node_id": p["peer_node_id"],
+        "display_name": p["display_name"],
+        "base_url": p["base_url"],
+        "send_enabled": bool(p["send_enabled"]),
+        "receive_enabled": bool(p["receive_enabled"]),
+        "status": p["status"],
+        "last_error": p["last_error"],
+        "send_cursor": p["send_cursor"],
+        "receive_cursor": p["receive_cursor"],
+        "last_synced_at": p["last_synced_at"],
+        "created_at": p["created_at"],
+    }
+
+
+class ClusterNodeReq(BaseModel):
+    display_name: str = ""
+
+
+class ClusterSyncSettingsReq(BaseModel):
+    sync_interval_seconds: int
+    protect_default: bool  # True=보호(미전송) 시스템 기본값
+
+
+class ClusterPeerReq(BaseModel):
+    base_url: str
+    api_key: str
+    send_enabled: bool = False
+    receive_enabled: bool = False
+
+
+class ClusterPeerUpdateReq(BaseModel):
+    send_enabled: bool = False
+    receive_enabled: bool = False
+
+
+@router.get("/system/cluster")
+def system_cluster(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """클러스터 화면 데이터 — 이 노드 신원 + 피어 목록 + 동기화 설정."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        identity = cluster.node_identity(conn)
+        peers = [_public_cluster_peer(p) for p in db.list_cluster_peers(conn)]
+        sync_interval = db.cluster_sync_interval_seconds(conn)
+        protect_default = db.cluster_protect_default(conn)
+    return {
+        "node": identity,
+        "peers": peers,
+        "secret_configured": crypto.is_configured(),
+        "sync_interval_seconds": sync_interval,
+        "protect_default": protect_default,
+        "sync_interval_min": config.CLUSTER_SYNC_INTERVAL_SECONDS_MIN,
+        "sync_interval_max": config.CLUSTER_SYNC_INTERVAL_SECONDS_MAX,
+    }
+
+
+@router.post("/system/cluster/node")
+def system_cluster_node(
+    request: Request, body: ClusterNodeReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """이 노드의 디스플레이 이름 설정 (표시 전용 — 식별은 UUID)."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        db.set_cluster_display_name(conn, body.display_name)
+    audit.log(request, "클러스터 노드 이름 변경: '%s'", body.display_name.strip())
+    return {"ok": True}
+
+
+@router.post("/system/cluster/sync-settings")
+def system_cluster_sync_settings(
+    request: Request, body: ClusterSyncSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """조정 주기·시스템 보호 기본값 저장 (범위 밖 주기는 db 가 클램핑)."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        db.set_setting(
+            conn, db.CLUSTER_SYNC_INTERVAL_KEY, str(int(body.sync_interval_seconds))
+        )
+        db.set_setting(
+            conn, db.CLUSTER_PROTECT_DEFAULT_KEY,
+            "on" if body.protect_default else "off",
+        )
+    audit.log(request, "클러스터 동기화 설정 변경")
+    return {"ok": True}
+
+
+@router.post("/system/cluster/peers")
+def system_cluster_peer_create(
+    request: Request, body: ClusterPeerReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """피어 연결 등록 — 핸드셰이크로 A 의 UUID·버전 획득 후 키 암호화 저장."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        try:
+            peer_id = cluster.register_peer(
+                conn,
+                base_url=body.base_url,
+                api_key=body.api_key,
+                send_enabled=body.send_enabled,
+                receive_enabled=body.receive_enabled,
+            )
+        except cluster.ClusterError as e:
+            raise HTTPException(400, str(e))
+        peer = db.get_cluster_peer(conn, peer_id)
+    audit.log(request, "클러스터 피어 등록: %s", peer["base_url"])
+    return {"ok": True, "peer": _public_cluster_peer(peer)}
+
+
+@router.post("/system/cluster/peers/{peer_id}")
+def system_cluster_peer_update(
+    request: Request, peer_id: int, body: ClusterPeerUpdateReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """피어 방향 토글(보내기/받기) 갱신. 둘 다 끄면 동기화는 멈추되 연결은 유지."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        peer = db.get_cluster_peer(conn, peer_id)
+        if peer is None:
+            raise HTTPException(404, "피어 없음")
+        db.update_cluster_peer_directions(
+            conn, peer_id,
+            send_enabled=body.send_enabled,
+            receive_enabled=body.receive_enabled,
+        )
+    audit.log(request, "클러스터 피어 방향 변경: %s", peer["base_url"])
+    return {"ok": True}
+
+
+@router.post("/system/cluster/peers/{peer_id}/delete")
+def system_cluster_peer_delete(
+    request: Request, peer_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """피어 연결 해제 — 즉시 동기화 중단. 수신 아카이브는 보존된다."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        peer = db.get_cluster_peer(conn, peer_id)
+        if peer is None:
+            raise HTTPException(404, "피어 없음")
+        db.delete_cluster_peer(conn, peer_id)
+    audit.log(request, "클러스터 피어 해제: %s", peer["base_url"])
     return {"ok": True}
 
 
