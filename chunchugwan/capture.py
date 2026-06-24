@@ -43,9 +43,12 @@ logger = logging.getLogger(__name__)
 # crypto.subtle(보안 컨텍스트)로 계산하고, http 페이지처럼 없는 환경에서는
 # expose_function 으로 노출된 Python 바인딩(_sha256_of_base64)으로 폴백한다.
 _INLINE_JS = """
-async ({ timeoutMs, concurrency }) => {
+async ({ timeoutMs, concurrency, baseUrl }) => {
   const failed = [];
   const inlined = [];
+  // 상대경로 해석 기준 — 링크 재작성이 <base> 를 떼기 전에 Python 이 떠 둔 값.
+  // 없으면(직접 호출 등) 현재 baseURI 로 폴백.
+  const base = baseUrl || document.baseURI;
   const shaHex = async (blob, dataUrl) => {
     if (crypto.subtle) {
       const buf = await blob.arrayBuffer();
@@ -59,7 +62,8 @@ async ({ timeoutMs, concurrency }) => {
     }
     return null;
   };
-  const toDataUrl = async (url) => {
+  const dataUrlCache = new Map();
+  const fetchDataUrl = async (url) => {
     const res = await fetch(url, {
       credentials: "omit", signal: AbortSignal.timeout(timeoutMs),
     });
@@ -76,6 +80,13 @@ async ({ timeoutMs, concurrency }) => {
       if (sha) inlined.push({ url, sha256: sha });
     } catch (e) { /* 해시 실패는 인라인을 막지 않는다 */ }
     return dataUrl;
+  };
+  // URL 단위로 in-flight 프로미스를 캐시 — 같은 자원을 여러 요소가 써도
+  // fetch·인코딩·inlined 기록은 1회. 실패(reject)도 공유해 재시도를 막는다.
+  const toDataUrl = (url) => {
+    let cached = dataUrlCache.get(url);
+    if (!cached) { cached = fetchDataUrl(url); dataUrlCache.set(url, cached); }
+    return cached;
   };
   const FONT_URL_RE = /url\\((['"]?)([^)'"]+?\\.(?:woff2?|ttf|otf|eot)(?:[?#][^)'"]*)?)\\1\\)/gi;
   const inlineFonts = async (cssText, baseUrl) => {
@@ -151,7 +162,7 @@ async ({ timeoutMs, concurrency }) => {
   }
   for (const style of Array.from(document.querySelectorAll("style"))) {
     tasks.push(async () => {
-      style.textContent = await inlineFonts(style.textContent, document.baseURI);
+      style.textContent = await inlineFonts(style.textContent, base);
     });
   }
   for (const img of Array.from(document.querySelectorAll("img[src]"))) {
@@ -167,11 +178,11 @@ async ({ timeoutMs, concurrency }) => {
       }
     });
   }
-  for (const el of Array.from(document.querySelectorAll('[style*="url("]'))) {
+  for (const el of Array.from(document.querySelectorAll('[style*="url(" i]'))) {
     const styleText = el.getAttribute("style");
     if (!styleText) continue;
     tasks.push(async () => {
-      const replaced = await inlineStyleUrls(styleText, document.baseURI);
+      const replaced = await inlineStyleUrls(styleText, base);
       if (replaced !== styleText) el.setAttribute("style", replaced);
     });
   }
@@ -774,6 +785,10 @@ def _capture_in_browser(
         (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
         document_links = _collect_document_links(page)
         page_links = _collect_page_links(page)
+        # 상대경로 자원 인라인 기준 base — 링크 재작성(_rewrite_links)이 <base> 를
+        # 떼기 전에 떠 둔다. 떼인 뒤 document.baseURI 로 풀면 <base href> 가 가리키던
+        # 곳이 아니라 문서 URL 로 잘못 절대화된다.
+        base_uri = page.evaluate("document.baseURI")
 
         # 추출용 content_html 은 인라인 전의 raw_html 기준으로 만든다 —
         # 인라인 후 DOM 에는 base64 데이터가 섞여 extract 가 느려진다.
@@ -805,7 +820,7 @@ def _capture_in_browser(
             # 데스크탑 컨텍스트/page 는 건드리지 않는다.
             _capture_mobile_screenshot(browser, url, out_dir, credential, insecure_tls)
         page_html, resource_urls = _inline_resources(
-            page, raw_html, resource_fallback
+            page, raw_html, resource_fallback, base_uri
         )
         (out_dir / "page.html").write_text(page_html, encoding="utf-8")
 
@@ -1010,7 +1025,10 @@ def _expose_sha256_binding(page) -> None:
 
 
 def _inline_resources(
-    page, raw_html: str, resource_fallback: ResourceFallback | None = None
+    page,
+    raw_html: str,
+    resource_fallback: ResourceFallback | None = None,
+    base_uri: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """<img src>, <link rel=stylesheet>, 폰트를 data URI로 치환한 단일 HTML 생성.
 
@@ -1024,6 +1042,7 @@ def _inline_resources(
         result: dict = page.evaluate(_INLINE_JS, {
             "timeoutMs": config.RESOURCE_FETCH_TIMEOUT_MS,
             "concurrency": config.RESOURCE_FETCH_CONCURRENCY,
+            "baseUrl": base_uri,
         })
         failed: list[dict] = result["failed"]
         resource_urls = {

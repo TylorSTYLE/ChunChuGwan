@@ -122,6 +122,82 @@ def test_capture_inlines_inline_style_background(tmp_path):
     assert "히어로" in page_html
 
 
+def test_capture_inline_style_bg_resolves_against_base_href(tmp_path):
+    """<base href> 가 문서 URL 과 다를 때도 인라인 style 배경이 base 기준으로 풀린다.
+
+    링크 재작성(_rewrite_links)이 <base> 를 제거한 뒤 인라인이 돌기 때문에, 제거
+    전에 떠 둔 base 로 풀지 않으면 상대 배경이 문서 URL 기준으로 잘못 절대화돼 404 로
+    깨진다. generic_link_rewriter 로 <base> 가 떨어지는 프로덕션 경로를 강제한다.
+    """
+    site = tmp_path / "site"
+    (site / "sub").mkdir(parents=True)
+    (site / "assets").mkdir()
+    # 페이지는 /sub/ 아래, <base> 는 /assets/ → 'bg.png' 의 정답은 /assets/bg.png.
+    # base 가 떨어진 채 document.baseURI(=/sub/page.html)로 풀면 /sub/bg.png(없음)로 깨진다.
+    (site / "sub" / "page.html").write_text(
+        "<!doctype html><html><head><meta charset='utf-8'><title>bg</title>"
+        "<base href='/assets/'></head>"
+        "<body><div style=\"background-image:url('bg.png')\">히어로</div>"
+        "<a href='other.html'>링크</a></body></html>",
+        encoding="utf-8",
+    )
+    Image.new("RGB", (4, 4), (0, 128, 0)).save(site / "assets" / "bg.png")
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        url = f"http://127.0.0.1:{server.server_address[1]}/sub/page.html"
+        # link_rewriter 가 앵커를 재작성하며 <base> 를 떼는 프로덕션 경로를 강제
+        capture.capture(url, out, link_rewriter=capture.generic_link_rewriter())
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    # base(/assets/) 기준으로 올바로 풀려 data URI 로 인라인됨 (상대 참조 잔존 없음)
+    assert "bg.png" not in page_html
+    assert "data:image/png" in page_html
+
+
+def test_capture_inlines_uppercase_url_inline_style_background(tmp_path):
+    """대문자 URL() 인라인 style 배경도 인라인된다 (선택자 대소문자 무시).
+
+    `[style*="url("]` 가 대소문자를 구분하면 'URL(' 요소가 후보에서 빠져 상대 배경이
+    그대로 남는다 — 정규식엔 /i 가 있어도 요소 자체가 안 걸려 무의미했다.
+    """
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "page.html").write_text(
+        "<!doctype html><html><head><meta charset='utf-8'><title>bg</title></head>"
+        "<body><div style=\"background-image:URL('bg.png')\">히어로</div></body></html>",
+        encoding="utf-8",
+    )
+    Image.new("RGB", (4, 4), (0, 0, 255)).save(site / "bg.png")
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        url = f"http://127.0.0.1:{server.server_address[1]}/page.html"
+        capture.capture(url, out)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    assert "bg.png" not in page_html
+    assert "data:image/png" in page_html
+
+
 def test_capture_no_mobile_screenshot_by_default(site_url, tmp_path):
     """mobile_screenshot 기본값(False)에선 모바일 스크린샷을 만들지 않는다."""
     out = tmp_path / "out"
