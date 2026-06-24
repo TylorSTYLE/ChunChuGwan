@@ -15,15 +15,22 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import sqlite3
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from . import config, crypto, db
+from . import config, crypto, db, documents, resources, storage
 
 # 핸드셰이크/상태 엔드포인트 경로 (B 가 A 에 붙는 경로 — 라우터 prefix 와 일치)
 STATUS_PATH = "/api/cluster/status"
+
+# 전송 envelope 에 인라인으로 담는 스냅샷 디렉토리 파일 (공유 CAS 가 아닌 스냅샷 고유 파일).
+# 큰 공유 자원·문서는 CAS 블롭으로 별도 협상해 "피어에 없는 것만" 전송한다.
+_INTEGRITY_CHUNK = 1024 * 1024
 
 
 class ClusterError(RuntimeError):
@@ -165,3 +172,335 @@ def peer_api_key(peer: sqlite3.Row) -> str:
     복호화 실패(키 부재·불일치)는 crypto 예외를 그대로 올린다(호출부가 error 상태로).
     """
     return crypto.decrypt(peer["api_key_enc"])
+
+
+class PeerBusy(ClusterError):
+    """피어가 바빠 수신을 잠시 거부했다 (429) — 백오프 후 다음 사이클에 재시도."""
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__(f"피어가 바쁩니다 (재시도 {retry_after}s)")
+        self.retry_after = retry_after
+
+
+class IntegrityError(ClusterError):
+    """수신 블롭의 sha256 이 CAS 이름과 불일치 — 손상·변조로 보고 거부한다."""
+
+
+# ── CAS 블롭 — 스냅샷 간 공유 자원(resource)·문서(document)는 콘텐츠 주소(sha256+ext) ──
+# 전송은 "피어에 없는 sha256 만" 협상해 보낸다. kind 로 두 CAS 스토어를 구분한다.
+
+
+def blob_path(kind: str, name: str) -> Path | None:
+    """(kind, CAS 이름) → 저장 경로. 형식 검증 실패면 None(traversal·잘못된 이름 방어)."""
+    if kind == "resource":
+        return resources.resource_path(name) if resources.is_valid_name(name) else None
+    if kind == "document":
+        return documents.cas_path(name) if documents.is_valid_cas_name(name) else None
+    return None
+
+
+def _blob_sha(name: str) -> str:
+    """CAS 이름(sha256+ext)에서 sha256 부분 추출."""
+    return name.split(".", 1)[0]
+
+
+def store_cas_blob(kind: str, name: str, payload: bytes) -> None:
+    """수신 CAS 블롭을 검증 후 저장 — sha256 불일치는 거부(무결성), 이미 있으면 멱등."""
+    path = blob_path(kind, name)
+    if path is None:
+        raise IntegrityError(f"잘못된 CAS 이름: {name!r}")
+    if hashlib.sha256(payload).hexdigest() != _blob_sha(name):
+        raise IntegrityError(f"CAS 블롭 sha256 불일치: {name!r}")
+    store = config.blob_store()
+    if not store.is_file(path):
+        store.write_atomic(path, payload)
+
+
+def read_cas_blob(kind: str, name: str) -> bytes | None:
+    """로컬 CAS 블롭 읽기 — 서빙용. 형식 불량·부재면 None."""
+    path = blob_path(kind, name)
+    if path is None:
+        return None
+    store = config.blob_store()
+    return store.read_bytes(path) if store.is_file(path) else None
+
+
+def _has_blob(kind: str, name: str) -> bool:
+    path = blob_path(kind, name)
+    return path is not None and config.blob_store().is_file(path)
+
+
+def is_busy(conn: sqlite3.Connection) -> int:
+    """수신 백프레셔 판정 — 바쁘면 Retry-After 초, 여유면 0.
+
+    이전·스토리지 마이그레이션(쓰기 중단)이거나 대기·진행 아카이빙 작업이 임계 이상이면
+    "서로 여유 있을 때"만 받도록 잠시 거부한다(보내는 쪽은 백오프).
+    """
+    if db.writes_paused(conn):
+        return config.CLUSTER_BUSY_RETRY_AFTER_SECONDS
+    if db.count_active_archive_jobs(conn) >= config.CLUSTER_BUSY_JOBS_THRESHOLD:
+        return config.CLUSTER_BUSY_RETRY_AFTER_SECONDS
+    return 0
+
+
+# ── 스냅샷 1건 직렬화/적재 (전송 원자 단위 — 코어 storage+db 경유, 원칙 1) ──
+
+
+def serialize_snapshot(conn: sqlite3.Connection, snapshot_id: int) -> dict | None:
+    """스냅샷 1건을 전송 envelope 로 직렬화 — 메타 + 인라인 스냅샷 파일 + CAS 참조.
+
+    공유 CAS 블롭(자원·문서)은 인라인하지 않고 sha256 참조만 담는다(수신측이 없는 것만
+    별도로 가져간다). provenance 는 이 노드(출처)의 UUID + 이 snapshots.id. 없으면 None.
+    """
+    row = conn.execute(
+        """
+        SELECT s.*, p.url AS page_url, p.domain, p.slug
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.id = ?
+        """,
+        (snapshot_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    snap_dir = storage.page_dir(row["domain"], row["slug"]) / row["dir_name"]
+    store = config.blob_store()
+    files = []
+    for f in storage.snapshot_files(snap_dir):
+        data = store.read_bytes(snap_dir / str(f["name"]))
+        files.append({"name": f["name"], "b64": base64.b64encode(data).decode("ascii")})
+    resource_refs = [
+        {"name": r["name"], "url": r["url"]}
+        for r in db.get_snapshot_resource_refs(conn, snapshot_id)
+    ]
+    document_refs = [
+        {"url": d["url"], "file": d["file"], "bytes": d["bytes"],
+         "sha256": d["sha256"], "content_type": d["content_type"]}
+        for d in db.get_snapshot_document_refs(conn, snapshot_id)
+    ]
+    return {
+        "protocol_version": config.CLUSTER_PROTOCOL_VERSION,
+        "origin_node_id": db.cluster_node_id(conn),
+        "origin_ref": str(snapshot_id),
+        "page": {"url": row["page_url"], "domain": row["domain"], "slug": row["slug"]},
+        "snapshot": {
+            "taken_at": row["taken_at"], "dir_name": row["dir_name"],
+            "content_hash": row["content_hash"], "final_url": row["final_url"],
+            "http_status": row["http_status"], "changed": row["changed"],
+            "note": row["note"], "title": row["title"],
+            "origin": row["origin"], "incomplete": row["incomplete"],
+            "authenticated": row["authenticated"],
+        },
+        "files": files,
+        "resources": resource_refs,
+        "documents": document_refs,
+    }
+
+
+def _envelope_blobs(envelope: dict) -> list[tuple[str, str]]:
+    """envelope 가 참조하는 CAS 블롭 (kind, name) 목록 — 자원 + 문서."""
+    out: list[tuple[str, str]] = []
+    for r in envelope.get("resources") or []:
+        out.append(("resource", r["name"]))
+    for d in envelope.get("documents") or []:
+        name = documents.cas_name(d["sha256"], d["file"])
+        if name:
+            out.append(("document", name))
+    return out
+
+
+def missing_blobs(envelope: dict) -> list[tuple[str, str]]:
+    """envelope 참조 중 로컬 CAS 에 없는 (kind, name) — 수신측이 이것만 가져온다."""
+    return [(k, n) for (k, n) in _envelope_blobs(envelope) if not _has_blob(k, n)]
+
+
+def import_snapshot(
+    conn: sqlite3.Connection, envelope: dict, *, peer_node_id: str
+) -> int | None:
+    """수신 envelope 를 새 스냅샷으로 적재 (코어 경유) — 새 snapshots.id, 중복이면 None.
+
+    중복(동일 출처 노드 + 원본 snapshots.id)은 처리·저장 모두 생략한다(로깅도 호출부에서
+    생략 — None 반환). 참조 CAS 블롭이 하나라도 없으면 부분 적재 대신 예외(호출부가 먼저
+    블롭을 받아둔다). 수신분의 보호는 사이트 기본값(1=보호)을 따라 재연합되지 않고,
+    origin_node_id 기록으로 되돌려보내기도 막힌다.
+    """
+    origin_ref = str(envelope.get("origin_ref") or "")
+    snap = envelope["snapshot"]
+    page = envelope["page"]
+    # 중복 수신 — 같은 출처의 같은 원본 스냅샷이면 스킵(로깅도 호출부에서 생략).
+    if db.find_snapshot_by_provenance(conn, peer_node_id, origin_ref) is not None:
+        return None
+    # 무결성 — 참조 블롭이 모두 로컬에 있어야 한다(부분 적재 금지).
+    miss = missing_blobs(envelope)
+    if miss:
+        raise IntegrityError(f"필요한 CAS 블롭이 없습니다: {miss[:3]}")
+
+    # 페이지 — URL 매칭(없으면 생성). 새 사이트는 보호 기본값(1)을 따른다.
+    existing = db.get_page(conn, page["url"])
+    if existing is None:
+        site_id = db.get_or_create_site(conn, storage.site_key(page["url"]))
+        cur = conn.execute(
+            "INSERT INTO pages (url, domain, slug, site_id, created_at) VALUES (?, ?, ?, ?, ?)",
+            (page["url"], page["domain"], page["slug"], site_id, db._utcnow()),
+        )
+        page_id = cur.lastrowid
+        domain, slug = page["domain"], page["slug"]
+    else:
+        page_id = existing["id"]
+        domain, slug = existing["domain"], existing["slug"]
+
+    # 같은 (page, dir_name) 중복 방지 (다른 경로로 이미 받았을 때)
+    dup = conn.execute(
+        "SELECT id FROM snapshots WHERE page_id = ? AND dir_name = ?",
+        (page_id, snap["dir_name"]),
+    ).fetchone()
+    if dup is not None:
+        return None
+
+    # 스냅샷 행 — provenance 기록(수신분 표식·되돌려보내기 방지). authenticated 는
+    # 출처값을 따르되 authenticated_by 는 NULL(로컬 사용자와 무관 — 관리자 전용 열람).
+    snap_id = db.insert_snapshot(
+        conn, page_id,
+        taken_at=snap["taken_at"], dir_name=snap["dir_name"],
+        content_hash=snap["content_hash"], final_url=snap["final_url"],
+        http_status=snap.get("http_status"),
+        changed=int(snap.get("changed", 1)), note=snap.get("note"),
+        title=snap.get("title"),
+        origin=snap.get("origin", "server"),
+        incomplete=int(snap.get("incomplete", 0)),
+        authenticated=int(snap.get("authenticated", 0)),
+        origin_node_id=peer_node_id, origin_ref=origin_ref,
+    )
+
+    # 스냅샷 디렉토리 파일 — 코어 저장 경로(blob_store)로 기록.
+    store = config.blob_store()
+    dst_dir = storage.page_dir(domain, slug) / snap["dir_name"]
+    for f in envelope.get("files") or []:
+        store.write_atomic(dst_dir / str(f["name"]), base64.b64decode(f["b64"]))
+    db.update_snapshot_bytes(conn, snap_id, storage.snapshot_dir_bytes(dst_dir))
+
+    # 자원·문서 참조 행 — CAS 블롭은 이미 위에서 존재가 보장됨.
+    refs = envelope.get("resources") or []
+    if refs:
+        db.insert_snapshot_resources(conn, snap_id, [{"name": r["name"], "url": r.get("url")} for r in refs])
+    docs = envelope.get("documents") or []
+    if docs:
+        db.insert_snapshot_documents(conn, snap_id, [{
+            "url": d.get("url") or "", "file": d["file"],
+            "bytes": int(d.get("bytes") or 0), "sha256": d["sha256"],
+            "content_type": d.get("content_type") or "application/octet-stream",
+        } for d in docs])
+    return snap_id
+
+
+def log_received(
+    conn: sqlite3.Connection, origin_node_id: str, envelope: dict, snap_id: int
+) -> None:
+    """수신 신규 아카이브를 archive_logs 에 기록 — source='cluster' + 출처 피어 id.
+
+    push 수신(A 측 라우트)·pull 수신(B 측 조정 루프) 양쪽에서 공용. 중복 수신은
+    호출 전에 걸러지므로 신규만 기록된다(중복 무기록)."""
+    peer = db.get_cluster_peer_by_node(conn, origin_node_id)
+    snap = envelope.get("snapshot") or {}
+    page = envelope.get("page") or {}
+    page_row = db.get_page(conn, page.get("url") or "")
+    db.insert_archive_log(
+        conn,
+        url=page.get("url") or "",
+        domain=(page.get("domain") or ""),
+        page_id=page_row["id"] if page_row else None,
+        snapshot_id=snap_id,
+        source="cluster",
+        status="new",
+        started_at=db._utcnow(),
+        content_hash=snap.get("content_hash"),
+        cluster_peer_id=peer["id"] if peer else None,
+    )
+
+
+# ── B 측 HTTP 클라이언트 (pull/push — 통신은 항상 B 가 개시) ──
+
+
+def _check_resp(resp: httpx.Response) -> httpx.Response:
+    """공통 응답 처리 — 401/403→폐기, 429→백프레셔, 그 외 비200→일시 오류."""
+    if resp.status_code in (401, 403):
+        raise PeerAuthRejected("피어가 키를 거부했습니다")
+    if resp.status_code == 429:
+        try:
+            retry = int(resp.headers.get("Retry-After", config.CLUSTER_BUSY_RETRY_AFTER_SECONDS))
+        except ValueError:
+            retry = config.CLUSTER_BUSY_RETRY_AFTER_SECONDS
+        raise PeerBusy(retry)
+    if resp.status_code != 200:
+        raise PeerUnavailable(f"피어 응답 오류 (HTTP {resp.status_code})")
+    return resp
+
+
+def pull_list(base_url: str, api_key: str, *, after: int, limit: int) -> list[dict]:
+    """받기 — 커서 이후 공유 가능한 피어 스냅샷 목록(단조 id)."""
+    try:
+        with _client() as c:
+            resp = c.get(base_url + "/api/cluster/snapshots",
+                         params={"after": after, "limit": limit},
+                         headers=_auth_headers(api_key))
+    except httpx.HTTPError as e:
+        raise PeerUnavailable(str(e)) from e
+    return _check_resp(resp).json().get("snapshots", [])
+
+
+def pull_envelope(base_url: str, api_key: str, snapshot_id: int) -> dict:
+    """받기 — 스냅샷 1건 envelope."""
+    try:
+        with _client() as c:
+            resp = c.get(f"{base_url}/api/cluster/snapshots/{snapshot_id}",
+                         headers=_auth_headers(api_key))
+    except httpx.HTTPError as e:
+        raise PeerUnavailable(str(e)) from e
+    return _check_resp(resp).json()
+
+
+def pull_blob(base_url: str, api_key: str, kind: str, name: str) -> bytes:
+    """받기 — 없는 CAS 블롭 1개."""
+    try:
+        with _client() as c:
+            resp = c.get(f"{base_url}/api/cluster/blobs/{kind}/{name}",
+                         headers=_auth_headers(api_key))
+    except httpx.HTTPError as e:
+        raise PeerUnavailable(str(e)) from e
+    return _check_resp(resp).content
+
+
+def push_negotiate(base_url: str, api_key: str, blobs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """보내기 — A 가 갖고 있지 않은 (kind, name) 목록을 받는다(없는 것만 업로드)."""
+    payload = [{"kind": k, "name": n} for (k, n) in blobs]
+    try:
+        with _client() as c:
+            resp = c.post(base_url + "/api/cluster/negotiate",
+                          json={"blobs": payload}, headers=_auth_headers(api_key))
+    except httpx.HTTPError as e:
+        raise PeerUnavailable(str(e)) from e
+    miss = _check_resp(resp).json().get("missing", [])
+    return [(m["kind"], m["name"]) for m in miss]
+
+
+def push_blob(base_url: str, api_key: str, kind: str, name: str, payload: bytes) -> None:
+    """보내기 — CAS 블롭 1개 업로드(A 가 검증·저장)."""
+    try:
+        with _client() as c:
+            resp = c.post(f"{base_url}/api/cluster/blobs/{kind}/{name}",
+                          content=payload,
+                          headers={**_auth_headers(api_key),
+                                   "Content-Type": "application/octet-stream"})
+    except httpx.HTTPError as e:
+        raise PeerUnavailable(str(e)) from e
+    _check_resp(resp)
+
+
+def push_snapshot(base_url: str, api_key: str, envelope: dict) -> str:
+    """보내기 — 스냅샷 envelope 적재 요청(A 가 import). 반환 status('new'|'duplicate')."""
+    try:
+        with _client() as c:
+            resp = c.post(base_url + "/api/cluster/snapshots",
+                          json=envelope, headers=_auth_headers(api_key))
+    except httpx.HTTPError as e:
+        raise PeerUnavailable(str(e)) from e
+    return _check_resp(resp).json().get("status", "new")

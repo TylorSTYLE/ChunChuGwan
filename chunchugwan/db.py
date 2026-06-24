@@ -1503,7 +1503,8 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
      "note", "resources_indexed", "css_externalized", "search_indexed", "bytes",
-     "title", "authenticated", "authenticated_by", "origin", "incomplete"}
+     "title", "authenticated", "authenticated_by", "origin", "incomplete",
+     "origin_node_id", "origin_ref"}
 )
 
 
@@ -5896,6 +5897,101 @@ def delete_cluster_peer(conn: sqlite3.Connection, peer_id: int) -> bool:
     (수신 아카이브의 provenance 는 snapshots 에 남으므로 데이터는 보존된다.)"""
     cur = conn.execute("DELETE FROM cluster_peers WHERE id = ?", (peer_id,))
     return cur.rowcount == 1
+
+
+# ---- 클러스터 전송 (스냅샷 델타 — 출처측 보호 강제·provenance) ----
+
+
+def list_shareable_snapshots_after(
+    conn: sqlite3.Connection, after_id: int, limit: int
+) -> list[sqlite3.Row]:
+    """송신 커서 이후의 공유 가능한 로컬 스냅샷을 단조(snapshots.id) 순으로.
+
+    출처측이 보호를 강제한다 — 보호 ON(해소: page>site>시스템 기본) 페이지는 제외하고,
+    **로컬 생성분만**(origin_node_id IS NULL) 보낸다(수신 아카이브 재연합 금지 = 되돌려
+    보내기/루프 방지의 강한 보장). 휴지통 항목도 제외. 델타만 조회해 전수 재스캔이 없다.
+    """
+    system_default = 1 if cluster_protect_default(conn) else 0
+    return conn.execute(
+        """
+        SELECT s.id, p.url AS page_url, p.domain, p.slug, s.dir_name,
+               s.content_hash, s.taken_at
+        FROM snapshots s
+        JOIN pages p ON p.id = s.page_id
+        LEFT JOIN sites st ON st.id = p.site_id
+        WHERE s.id > ?
+          AND s.origin_node_id IS NULL
+          AND p.trash_id IS NULL
+          AND COALESCE(p.cluster_protect, st.cluster_protect_default, ?) = 0
+        ORDER BY s.id
+        LIMIT ?
+        """,
+        (after_id, system_default, limit),
+    ).fetchall()
+
+
+def snapshot_shareable(conn: sqlite3.Connection, snapshot_id: int) -> bool:
+    """이 스냅샷을 클러스터로 내보낼 수 있는지 — 출처측 보호 강제(서빙 시 단건 재검증).
+
+    로컬 생성분(origin_node_id IS NULL) + 휴지통 아님 + 보호 OFF 여야 한다. 보호분/
+    수신분은 404 로 가려 존재를 드러내지 않는다(list 와 같은 기준)."""
+    system_default = 1 if cluster_protect_default(conn) else 0
+    row = conn.execute(
+        """
+        SELECT 1 FROM snapshots s
+        JOIN pages p ON p.id = s.page_id
+        LEFT JOIN sites st ON st.id = p.site_id
+        WHERE s.id = ?
+          AND s.origin_node_id IS NULL
+          AND p.trash_id IS NULL
+          AND COALESCE(p.cluster_protect, st.cluster_protect_default, ?) = 0
+        """,
+        (snapshot_id, system_default),
+    ).fetchone()
+    return row is not None
+
+
+def find_snapshot_by_provenance(
+    conn: sqlite3.Connection, origin_node_id: str, origin_ref: str
+) -> sqlite3.Row | None:
+    """출처(노드 UUID + 원본 snapshots.id)로 이미 수신한 스냅샷 조회 — 중복 수신 판정.
+
+    동일 출처면 처리·저장·로깅을 모두 생략한다(신규만 적재). 없으면 None.
+    """
+    return conn.execute(
+        "SELECT * FROM snapshots WHERE origin_node_id = ? AND origin_ref = ?",
+        (origin_node_id, origin_ref),
+    ).fetchone()
+
+
+def get_snapshot_resource_refs(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> list[sqlite3.Row]:
+    """스냅샷의 자원 참조(name·url) 목록 — 전송 envelope 직렬화용."""
+    return conn.execute(
+        "SELECT name, url FROM snapshot_resources WHERE snapshot_id = ? ORDER BY id",
+        (snapshot_id,),
+    ).fetchall()
+
+
+def get_snapshot_document_refs(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> list[sqlite3.Row]:
+    """단일 스냅샷의 문서 참조 전체 컬럼 목록 — 전송 envelope 직렬화용.
+    (GC 용 다중 스냅샷 dedup 조회는 list_snapshot_document_refs 와 별개.)"""
+    return conn.execute(
+        "SELECT url, file, bytes, sha256, content_type "
+        "FROM snapshot_documents WHERE snapshot_id = ? ORDER BY id",
+        (snapshot_id,),
+    ).fetchall()
+
+
+def count_active_archive_jobs(conn: sqlite3.Connection) -> int:
+    """진행 중·대기 단발 아카이빙 작업 수 — 클러스터 수신 백프레셔 판정용."""
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM archive_jobs "
+        "WHERE status IN ('pending', 'in_progress')"
+    ).fetchone()["n"]
 
 
 # ---- 사이트 로그인 자격증명 ----

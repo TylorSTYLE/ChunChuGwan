@@ -92,21 +92,117 @@ def reconcile_peer(peer_id: int, *, interval: int) -> None:
     can_receive = bool(peer["receive_enabled"]) and bool(key_perms.get("can_cluster_receive"))
     can_send = bool(peer["send_enabled"]) and bool(key_perms.get("can_cluster_send"))
 
-    # 2) 받기(pull) / 3) 보내기(push) — 전송 본체는 후속 단계에서 이 훅에 더한다.
+    # 2) 받기(pull) / 3) 보내기(push) — 허용 방향만. 전송 단위는 스냅샷 1건(원자).
+    # 전송 실패(네트워크·피어 오류)는 사이클을 깨지 않고 다음 사이클에 재시도한다
+    # (상태 점검은 이미 성공했으므로 active 유지 — 일시 전송 오류로 폐기 판정하지 않는다).
+    peer_node_id = peer["peer_node_id"]
     if can_receive:
-        _pull_delta(peer_id, peer["base_url"], api_key)
+        try:
+            _pull_delta(peer_id, peer["base_url"], api_key, peer_node_id)
+        except cluster.ClusterError as e:
+            logger.warning("클러스터 받기 중단(#%d): %s", peer_id, e)
     if can_send:
-        _push_delta(peer_id, peer["base_url"], api_key)
+        try:
+            _push_delta(peer_id, peer["base_url"], api_key)
+        except cluster.ClusterError as e:
+            logger.warning("클러스터 보내기 중단(#%d): %s", peer_id, e)
 
 
-def _pull_delta(peer_id: int, base_url: str, api_key: str) -> None:
-    """받기 델타 — 커서 이후 신규 스냅샷만 pull (전송 단계에서 구현)."""
-    return None
+def _pace() -> None:
+    """전송 건당 최소 간격 — 대상 서버에 양보(크롤 delay 와 같은 철학)."""
+    time.sleep(config.CLUSTER_SEND_MIN_INTERVAL_SECONDS)
+
+
+def _pull_delta(peer_id: int, base_url: str, api_key: str, peer_node_id: str) -> None:
+    """받기 델타 — 내 수신 커서 이후 피어의 신규 공유분만 pull (사이클당 배치 상한).
+
+    건당 원자: 블롭 협상→적재→커서 전진. 중단 시 진행 중 1건만 손실되고 커서는 성공한
+    데까지만 올라 다음 사이클에 이어진다(부분 적재 없음). 피어가 바쁘면(429) 이번 사이클 중단.
+    """
+    with db.connect() as conn:
+        cursor = db.get_cluster_peer(conn, peer_id)["receive_cursor"]
+    try:
+        items = cluster.pull_list(base_url, api_key, after=cursor,
+                                  limit=config.CLUSTER_SYNC_BATCH_MAX)
+    except cluster.PeerBusy:
+        return
+    for it in items:
+        snap_id = it["id"]
+        try:
+            envelope = cluster.pull_envelope(base_url, api_key, snap_id)
+            for kind, name in cluster.missing_blobs(envelope):
+                payload = cluster.pull_blob(base_url, api_key, kind, name)
+                cluster.store_cas_blob(kind, name, payload)
+            with db.connect() as conn:
+                new_id = cluster.import_snapshot(conn, envelope, peer_node_id=peer_node_id)
+                if new_id is not None:
+                    cluster.log_received(conn, peer_node_id, envelope, new_id)
+                db.advance_cluster_peer_cursor(conn, peer_id, direction="receive", cursor=snap_id)
+        except cluster.PeerBusy:
+            break  # 피어 백프레셔 — 다음 사이클에 재시도(커서 미전진)
+        except cluster.ClusterError as e:
+            # 진행 중 1건 실패 — 커서 미전진으로 다음 사이클 재시도(부분 적재 없음).
+            logger.warning("클러스터 받기 실패(#%d snap %s): %s", peer_id, snap_id, e)
+            break
+        _pace()
 
 
 def _push_delta(peer_id: int, base_url: str, api_key: str) -> None:
-    """보내기 델타 — 커서 이후 공유 가능(보호 OFF) 스냅샷만 push (전송 단계에서 구현)."""
-    return None
+    """보내기 델타 — 내 송신 커서 이후의 공유 가능(보호 OFF·로컬 생성) 스냅샷만 push.
+
+    출처측(=이 노드)이 보호를 전송 전 강제한다(list_shareable_snapshots_after). 건당
+    협상→없는 블롭만 업로드→envelope 적재 요청→커서 전진. 429·오류는 이번 사이클 중단.
+    """
+    with db.connect() as conn:
+        cursor = db.get_cluster_peer(conn, peer_id)["send_cursor"]
+        rows = db.list_shareable_snapshots_after(conn, cursor, config.CLUSTER_SYNC_BATCH_MAX)
+    for r in rows:
+        snap_id = r["id"]
+        try:
+            with db.connect() as conn:
+                envelope = cluster.serialize_snapshot(conn, snap_id)
+            if envelope is None:
+                _advance_send(peer_id, snap_id)  # 사라진 스냅샷 — 커서만 전진
+                continue
+            missing = cluster.push_negotiate(base_url, api_key,
+                                             cluster._envelope_blobs(envelope))
+            for kind, name in missing:
+                payload = cluster.read_cas_blob(kind, name)
+                if payload is None:
+                    raise cluster.ClusterError(f"로컬 CAS 블롭 없음: {name}")
+                cluster.push_blob(base_url, api_key, kind, name, payload)
+            status = cluster.push_snapshot(base_url, api_key, envelope)
+            with db.connect() as conn:
+                if status == "new":
+                    _log_sent(conn, peer_id, envelope)
+                db.advance_cluster_peer_cursor(conn, peer_id, direction="send", cursor=snap_id)
+        except cluster.PeerBusy:
+            break
+        except cluster.ClusterError as e:
+            logger.warning("클러스터 보내기 실패(#%d snap %s): %s", peer_id, snap_id, e)
+            break
+        _pace()
+
+
+def _advance_send(peer_id: int, cursor: int) -> None:
+    with db.connect() as conn:
+        db.advance_cluster_peer_cursor(conn, peer_id, direction="send", cursor=cursor)
+
+
+def _log_sent(conn, peer_id: int, envelope: dict) -> None:
+    """전송 신규를 audit_logs 에 기록 — 어떤 아카이브를 어느 피어로 보냈는지(append-only)."""
+    peer = db.get_cluster_peer(conn, peer_id)
+    page = envelope.get("page") or {}
+    url = page.get("url") or ""
+    name = (peer["display_name"] or peer["base_url"]) if peer else str(peer_id)
+    db.insert_audit_log(
+        conn,
+        created_at=db._utcnow(),
+        actor="cluster",
+        action="cluster_send",
+        target=url,
+        message=f"클러스터 전송: {url} → {name}",
+    )
 
 
 def _mark(peer_id: int, status: str, last_error: str | None) -> None:
