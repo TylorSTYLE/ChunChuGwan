@@ -683,6 +683,32 @@ export interface SystemOverview {
 		has_password: boolean;
 	};
 	smtp_tls_modes: string[];
+	ai_challenge_config: {
+		enabled: boolean;
+		base_url: string;
+		model: string;
+		has_api_key: boolean;
+		action_prompt: string;
+		verdict_prompt: string;
+		max_rounds: number;
+		verdict_delay_ms: number;
+		max_actions: number;
+		request_timeout: number;
+		success_recheck: boolean;
+		key_set: boolean;
+		default_action_prompt: string;
+		default_verdict_prompt: string;
+		limits: {
+			max_rounds_min: number;
+			max_rounds_max: number;
+			verdict_delay_ms_min: number;
+			verdict_delay_ms_max: number;
+			max_actions_min: number;
+			max_actions_max: number;
+			request_timeout_min: number;
+			request_timeout_max: number;
+		};
+	};
 	archive_root: string;
 	migration_mode: boolean;
 	migration_token_created_at: string | null;

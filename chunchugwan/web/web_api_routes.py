@@ -2368,6 +2368,9 @@ def system_overview(
         doc_limits = documents.limits(conn)
         smtp = mailer.resolve_config(conn)
         smtp_has_password = db.get_setting(conn, db.SMTP_PASSWORD_KEY) not in (None, "")
+        ai_challenge = db.ai_challenge_settings(conn)
+        ai_challenge_has_key = db.get_setting(
+            conn, db.AI_CHALLENGE_API_KEY_KEY) not in (None, "")
         migration_mode = db.migration_mode_enabled(conn)
         migration_token_created_at = db.get_setting(
             conn, db.MIGRATION_TOKEN_CREATED_AT_KEY
@@ -2440,6 +2443,34 @@ def system_overview(
             "has_password": smtp_has_password,
         },
         "smtp_tls_modes": list(mailer.SMTP_TLS_MODES),
+        # AI 자동 챌린지 해결(B) — api_key 평문은 절대 내보내지 않고 has_api_key 만.
+        # 프롬프트 기본값은 '기본값으로 되돌리기' 용으로 함께 내려준다.
+        "ai_challenge_config": {
+            "enabled": ai_challenge["enabled"],
+            "base_url": ai_challenge["base_url"],
+            "model": ai_challenge["model"],
+            "has_api_key": ai_challenge_has_key,
+            "action_prompt": ai_challenge["action_prompt"],
+            "verdict_prompt": ai_challenge["verdict_prompt"],
+            "max_rounds": ai_challenge["max_rounds"],
+            "verdict_delay_ms": ai_challenge["verdict_delay_ms"],
+            "max_actions": ai_challenge["max_actions"],
+            "request_timeout": ai_challenge["request_timeout"],
+            "success_recheck": ai_challenge["success_recheck"],
+            "key_set": crypto.is_configured(),
+            "default_action_prompt": config.DEFAULT_AI_ACTION_PROMPT,
+            "default_verdict_prompt": config.DEFAULT_AI_VERDICT_PROMPT,
+            "limits": {
+                "max_rounds_min": config.AI_CHALLENGE_MAX_ROUNDS_MIN,
+                "max_rounds_max": config.AI_CHALLENGE_MAX_ROUNDS_MAX,
+                "verdict_delay_ms_min": config.AI_CHALLENGE_VERDICT_DELAY_MS_MIN,
+                "verdict_delay_ms_max": config.AI_CHALLENGE_VERDICT_DELAY_MS_MAX,
+                "max_actions_min": config.AI_CHALLENGE_MAX_ACTIONS_MIN,
+                "max_actions_max": config.AI_CHALLENGE_MAX_ACTIONS_MAX,
+                "request_timeout_min": config.AI_CHALLENGE_REQUEST_TIMEOUT_MIN,
+                "request_timeout_max": config.AI_CHALLENGE_REQUEST_TIMEOUT_MAX,
+            },
+        },
         "archive_root": str(config.ARCHIVE_ROOT),
         # 저장 사용량(usage)은 sites/resources/documents 트리를 전부 스캔하는
         # 비싼 파생값이라 페이지 진입을 막지 않도록 GET /system/usage 로 분리해
@@ -2695,6 +2726,87 @@ def system_document_settings(
         db.set_setting(conn, db.DOCUMENT_MAX_MB_KEY, str(body.document_max_mb))
         db.set_setting(conn, db.DOCUMENT_FETCH_TIMEOUT_KEY, str(body.document_fetch_timeout))
     audit.log(request, "문서 아카이브 설정 변경")
+    return {"ok": True}
+
+
+class AiChallengeSettingsReq(BaseModel):
+    ai_challenge_enabled: bool = False
+    ai_challenge_base_url: str = ""
+    ai_challenge_model: str = ""
+    ai_challenge_api_key: str = ""
+    ai_challenge_clear_api_key: bool = False
+    ai_challenge_action_prompt: str = ""
+    ai_challenge_verdict_prompt: str = ""
+    ai_challenge_max_rounds: int
+    ai_challenge_verdict_delay_ms: int
+    ai_challenge_max_actions: int
+    ai_challenge_request_timeout: int
+    ai_challenge_success_recheck: bool = True
+
+
+@router.post("/system/ai-challenge-settings")
+def system_ai_challenge_settings(
+    request: Request, body: AiChallengeSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """AI 자동 챌린지 해결(B) 설정 — JSON 판.
+
+    api_key 는 대칭 암호화 암호문으로만 저장(원칙 6 예외 — 외부 LLM 서버에
+    replay). 빈 입력이면 기존 저장값 유지, clear_api_key 면 삭제. 프롬프트가
+    공백이면 기본값으로 되돌린다(설정 삭제 → 리졸버가 config DEFAULT 폴백).
+    """
+    _require_manage_system(user)
+    ranges = (
+        (body.ai_challenge_max_rounds, config.AI_CHALLENGE_MAX_ROUNDS_MIN,
+         config.AI_CHALLENGE_MAX_ROUNDS_MAX, "최대 라운드 수"),
+        (body.ai_challenge_verdict_delay_ms, config.AI_CHALLENGE_VERDICT_DELAY_MS_MIN,
+         config.AI_CHALLENGE_VERDICT_DELAY_MS_MAX, "판정 대기(ms)"),
+        (body.ai_challenge_max_actions, config.AI_CHALLENGE_MAX_ACTIONS_MIN,
+         config.AI_CHALLENGE_MAX_ACTIONS_MAX, "라운드당 액션 수 상한"),
+        (body.ai_challenge_request_timeout, config.AI_CHALLENGE_REQUEST_TIMEOUT_MIN,
+         config.AI_CHALLENGE_REQUEST_TIMEOUT_MAX, "요청 타임아웃(초)"),
+    )
+    for value, lo, hi, label in ranges:
+        if not (lo <= value <= hi):
+            raise HTTPException(400, f"{label}는 {lo} ~ {hi} 사이여야 합니다")
+    if body.ai_challenge_api_key and not crypto.is_configured():
+        raise HTTPException(
+            400, "WCCG_SECRET_KEY 가 설정되지 않아 API 키를 저장할 수 없습니다.")
+    with db.connect() as conn:
+        db.set_setting(conn, db.AI_CHALLENGE_ENABLED_KEY,
+                       "on" if body.ai_challenge_enabled else "off")
+        db.set_setting(conn, db.AI_CHALLENGE_BASE_URL_KEY,
+                       body.ai_challenge_base_url.strip())
+        db.set_setting(conn, db.AI_CHALLENGE_MODEL_KEY,
+                       body.ai_challenge_model.strip())
+        db.set_setting(conn, db.AI_CHALLENGE_MAX_ROUNDS_KEY,
+                       str(body.ai_challenge_max_rounds))
+        db.set_setting(conn, db.AI_CHALLENGE_VERDICT_DELAY_MS_KEY,
+                       str(body.ai_challenge_verdict_delay_ms))
+        db.set_setting(conn, db.AI_CHALLENGE_MAX_ACTIONS_KEY,
+                       str(body.ai_challenge_max_actions))
+        db.set_setting(conn, db.AI_CHALLENGE_REQUEST_TIMEOUT_KEY,
+                       str(body.ai_challenge_request_timeout))
+        db.set_setting(conn, db.AI_CHALLENGE_SUCCESS_RECHECK_KEY,
+                       "on" if body.ai_challenge_success_recheck else "off")
+        # 프롬프트: 공백이면 설정을 지워 기본값(config DEFAULT)으로 되돌린다.
+        if body.ai_challenge_action_prompt.strip():
+            db.set_setting(conn, db.AI_CHALLENGE_ACTION_PROMPT_KEY,
+                           body.ai_challenge_action_prompt)
+        else:
+            db.delete_setting(conn, db.AI_CHALLENGE_ACTION_PROMPT_KEY)
+        if body.ai_challenge_verdict_prompt.strip():
+            db.set_setting(conn, db.AI_CHALLENGE_VERDICT_PROMPT_KEY,
+                           body.ai_challenge_verdict_prompt)
+        else:
+            db.delete_setting(conn, db.AI_CHALLENGE_VERDICT_PROMPT_KEY)
+        # API 키: 값이 있으면 암호화 저장, clear 면 삭제, 빈 문자열이면 기존값 유지.
+        if body.ai_challenge_api_key:
+            db.set_setting(conn, db.AI_CHALLENGE_API_KEY_KEY,
+                           crypto.encrypt(body.ai_challenge_api_key))
+        elif body.ai_challenge_clear_api_key:
+            db.delete_setting(conn, db.AI_CHALLENGE_API_KEY_KEY)
+    audit.log(request, "AI 자동 챌린지 설정 변경")
     return {"ok": True}
 
 
