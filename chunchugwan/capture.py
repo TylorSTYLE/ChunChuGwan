@@ -102,6 +102,35 @@ async ({ timeoutMs, concurrency }) => {
     out.push(cssText.slice(last));
     return out.join("");
   };
+  // 인라인 style="...url(...)..." 의 이미지 참조 — <img>/<style>/<link> 어디에도
+  // 안 걸려 상대경로면 뷰어(/snapshot/{id}/file/)에서 깨진다. <img> 와 동일하게
+  // data URI 로 인라인한다 (실패분은 failed 로 — 컨텍스트/과거캡처 폴백이 받는다).
+  const STYLE_URL_RE = /url\\((['"]?)([^)'"]+?)\\1\\)/gi;
+  const inlineStyleUrls = async (styleText, baseUrl) => {
+    const matches = Array.from(styleText.matchAll(STYLE_URL_RE));
+    if (!matches.length) return styleText;
+    const repls = await Promise.all(matches.map(async (m) => {
+      const ref = m[2].trim();
+      if (!ref || ref.startsWith("data:") || ref.startsWith("#")) return m[0];
+      let abs = null;
+      try { abs = new URL(ref, baseUrl).href; } catch (e) {}
+      try {
+        if (!abs) throw new Error("URL 해석 실패");
+        return "url(" + (await toDataUrl(abs)) + ")";
+      } catch (e) {
+        failed.push({ kind: "bgstyle", url: abs, raw: m[0] });
+        return m[0];
+      }
+    }));
+    const out = [];
+    let last = 0;
+    matches.forEach((m, i) => {
+      out.push(styleText.slice(last, m.index), repls[i]);
+      last = m.index + m[0].length;
+    });
+    out.push(styleText.slice(last));
+    return out.join("");
+  };
   const tasks = [];
   // <style> 스냅샷은 작업 생성 시점에 뜬다 — 링크 치환으로 새로 생기는
   // <style> 은 이미 inlineFonts 를 거쳤으므로 다시 처리하지 않는다
@@ -138,6 +167,14 @@ async ({ timeoutMs, concurrency }) => {
       }
     });
   }
+  for (const el of Array.from(document.querySelectorAll('[style*="url("]'))) {
+    const styleText = el.getAttribute("style");
+    if (!styleText) continue;
+    tasks.push(async () => {
+      const replaced = await inlineStyleUrls(styleText, document.baseURI);
+      if (replaced !== styleText) el.setAttribute("style", replaced);
+    });
+  }
   const queue = tasks.slice();
   const worker = async () => {
     while (queue.length) await queue.shift()();
@@ -151,7 +188,8 @@ async ({ timeoutMs, concurrency }) => {
 
 # 폴백으로 받아온 자원을 DOM 에 반영. img 는 data URI 치환,
 # css 는 <style> 로 교체(url 은 Python 에서 절대화됨), font 는 인라인된
-# <style> 텍스트 안의 원본 url(...) 토큰을 data URI 로 치환.
+# <style> 텍스트 안의 원본 url(...) 토큰을 data URI 로 치환, bgstyle 은
+# 인라인 style="" 속성 안의 원본 url(...) 토큰을 data URI 로 치환.
 _APPLY_INLINE_JS = """
 (repls) => {
   for (const r of repls) {
@@ -174,6 +212,13 @@ _APPLY_INLINE_JS = """
       for (const style of Array.from(document.querySelectorAll("style"))) {
         if (style.textContent.includes(r.raw)) {
           style.textContent = style.textContent.split(r.raw).join("url(" + r.dataUrl + ")");
+        }
+      }
+    } else if (r.kind === "bgstyle") {
+      for (const el of Array.from(document.querySelectorAll("[style]"))) {
+        const s = el.getAttribute("style");
+        if (s && s.includes(r.raw)) {
+          el.setAttribute("style", s.split(r.raw).join("url(" + r.dataUrl + ")"));
         }
       }
     }

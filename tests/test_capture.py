@@ -85,6 +85,43 @@ def test_capture_artifacts_and_inlining(site_url, tmp_path):
     assert result.document_links == [f"{base}/report.pdf"]
 
 
+def test_capture_inlines_inline_style_background(tmp_path):
+    """인라인 style="background-image:url('상대경로')" 도 data URI 로 인라인한다.
+
+    <img>/<style>/<link> 어디에도 안 걸려 상대경로면 뷰어(/snapshot/{id}/file/)
+    에서 깨지던 회귀를 막는다. 페이지를 /sub/ 아래 두어 ../bg.png 의 상대 해석까지 검증.
+    """
+    site = tmp_path / "site"
+    (site / "sub").mkdir(parents=True)
+    (site / "sub" / "page.html").write_text(
+        "<!doctype html><html><head><meta charset='utf-8'><title>bg</title></head>"
+        "<body><div class='hero' "
+        "style=\"background-image:url('../bg.png')\">히어로</div></body></html>",
+        encoding="utf-8",
+    )
+    Image.new("RGB", (4, 4), (0, 128, 0)).save(site / "bg.png")
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        url = f"http://127.0.0.1:{server.server_address[1]}/sub/page.html"
+        capture.capture(url, out)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    # 상대 참조는 사라지고 인라인 style 안에 data URI 가 들어간다 (페이지의 유일한 이미지)
+    assert "bg.png" not in page_html
+    assert "data:image/png" in page_html
+    assert "히어로" in page_html
+
+
 def test_capture_no_mobile_screenshot_by_default(site_url, tmp_path):
     """mobile_screenshot 기본값(False)에선 모바일 스크린샷을 만들지 않는다."""
     out = tmp_path / "out"
@@ -301,6 +338,47 @@ def test_capture_cors_blocked_image_inlined_via_fallback(cross_origin_url, tmp_p
     assert "data:image/png;base64," in page_html
     # 폴백으로도 못 받는 자원(404)만 원본 URL 유지
     assert "missing.png" in page_html
+
+
+def test_capture_inlines_cross_origin_inline_style_bg_via_fallback(tmp_path):
+    """CORS 로 fetch() 막힌 인라인 style 배경도 context.request 폴백으로 인라인된다."""
+    asset = tmp_path / "xo-asset"
+    asset.mkdir()
+    Image.new("RGB", (4, 4), (0, 0, 255)).save(asset / "hero.png")
+    asset_server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(asset))
+    )
+    asset_thread = threading.Thread(target=asset_server.serve_forever, daemon=True)
+    asset_thread.start()
+    asset_base = f"http://127.0.0.1:{asset_server.server_address[1]}"
+
+    site = tmp_path / "xo-bg-site"
+    site.mkdir()
+    (site / "index.html").write_text(
+        "<!doctype html><html><head><meta charset='utf-8'><title>xo-bg</title></head>"
+        f"<body><div style=\"background-image:url('{asset_base}/hero.png')\">히어로</div>"
+        "</body></html>",
+        encoding="utf-8",
+    )
+    site_server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    site_thread = threading.Thread(target=site_server.serve_forever, daemon=True)
+    site_thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        url = f"http://127.0.0.1:{site_server.server_address[1]}/index.html"
+        capture.capture(url, out)
+    finally:
+        site_server.shutdown()
+        asset_server.shutdown()
+        site_thread.join(timeout=5)
+        asset_thread.join(timeout=5)
+
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    assert "hero.png" not in page_html
+    assert "data:image/png;base64," in page_html
 
 
 def test_capture_retries_with_http2_disabled(monkeypatch, tmp_path):
