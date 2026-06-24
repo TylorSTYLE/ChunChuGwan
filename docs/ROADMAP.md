@@ -130,6 +130,20 @@
       영향도 기반 자동 버저닝 정책(`.claude/rules/api-extension.md`). 서버측 테스트 갱신
       (개인 키 전용·시스템 키 401·무효 토큰 429), 확장 런타임은 언팩 로드 후 수동.
 
+- [x] **A17 클러스터(federation)**: 여러 춘추관 인스턴스를 연결해 아카이브를
+      **선택적으로** 주고받는다. (1) 기반 — 영속 노드 UUID(`settings`, 재시작·복원
+      후 동일), 시스템 API 키에 클러스터 보내기/받기 권한(`api_keys.can_cluster_*`),
+      `cluster_peers` 스키마(키 `crypto.encrypt` 저장·export 제외). (2) 연결·인증 —
+      `/api/cluster/*`(시스템 키 게이트, 매 요청 방향 권한 재검증, `cluster_ip`
+      인증보호), B 측 핸드셰이크 등록(자기연결·중복 거부)·피어별 주기 조정 루프
+      (권한 갱신→pull→push, 폐기=영구중단·5xx=백오프). (3) 전송·보호 — 스냅샷 1건
+      원자 단위 직렬화/적재(코어 경유, CAS sha256 협상으로 결손 블롭만 교환), 출처측
+      보호 강제(page>site>system, 기본 보호), provenance(`snapshots.origin_node_id`)로
+      되돌려보내기·중복 수신 차단, 커서 기반 델타(전수 재스캔 없음)·페이싱·429
+      백프레셔. (4) 로깅·확장 — 수신 `archive_logs(source='cluster')`·전송
+      `audit_logs(cluster_send)`, 확장·웹·REST 보호 토글. 화면 `/system/cluster`,
+      문서 `docs/CLUSTER.md`. 1:N 가정, 재연합(N:N)은 비범위.
+
 ## SvelteKit SPA 전환 (#13 — C2 빅뱅 컷오버 완료)
 
 - [x] **Phase A~C1 + 보강**: 기존 Jinja2 SSR 대시보드 전 화면을 SvelteKit SPA(`frontend/`,
