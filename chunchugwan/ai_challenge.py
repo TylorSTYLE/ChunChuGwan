@@ -203,7 +203,8 @@ class AIChallengeSession:
             if shot is None:
                 return page.content(), reason
             action_prompt = _render(cfg["action_prompt"], last_attempt=last_attempt, **ctx)
-            plan = _parse_json_object(self._call_llm(cfg, action_prompt, ctx, shot))
+            plan = _parse_json_object(
+                self._call_llm(cfg, action_prompt, ctx, shot, stage="action"))
             if plan is None:
                 logger.info("AI 챌린지 라운드 %d: 액션 계획 파싱 실패 — 다음 라운드", round_index)
                 last_attempt = "(직전 라운드 응답을 해석하지 못함)"
@@ -230,7 +231,8 @@ class AIChallengeSession:
                 cfg["verdict_prompt"], last_attempt=last_attempt,
                 actions_taken=actions_taken, **ctx,
             )
-            v = _parse_json_object(self._call_llm(cfg, verdict_prompt, ctx, shot2)) or {}
+            v = _parse_json_object(
+                self._call_llm(cfg, verdict_prompt, ctx, shot2, stage="verdict")) or {}
             verdict = v.get("verdict")
             if verdict not in ("success", "continue", "fail"):
                 verdict = "continue"  # 화이트리스트 밖·파싱 실패 → 보수적으로 계속
@@ -283,18 +285,26 @@ class AIChallengeSession:
         return base64.b64encode(data).decode("ascii")
 
     def _call_llm(self, cfg: dict, system_prompt: str, ctx: dict,
-                  shot_b64: str) -> str | None:
+                  shot_b64: str, stage: str = "action") -> str | None:
         """OpenAI 호환 /chat/completions 로 스크린샷+프롬프트를 보내 응답 텍스트.
 
         비2xx·타임아웃·네트워크 오류·예기치 못한 응답 형태는 모두 None 으로
         흡수한다(예외 전파 금지) — 해당 라운드만 실패로 처리되고 캡처 파이프라인은
         죽지 않는다. base_url 은 끝의 '/' 를 떼고 /chat/completions 를 붙인다.
+        LLM 과 주고받은 텍스트(전송 system·user 프롬프트, 수신 응답)는 시스템
+        로그(INFO)에 남긴다 — 스크린샷(image_url base64)은 제외한다(텍스트만).
         """
         endpoint = cfg["base_url"].rstrip("/") + "/chat/completions"
         user_text = (
             f"라운드 {ctx['round_index']}/{ctx['max_rounds']} · "
             f"뷰포트 {ctx['viewport_w']}×{ctx['viewport_h']} · "
             f"현재 URL: {ctx['url']} · 제목: {ctx['title']}"
+        )
+        # 전송 메시지(텍스트만 — 스크린샷 제외)를 시스템 로그에 남긴다.
+        logger.info(
+            "AI 챌린지 LLM 전송 (job %d · 라운드 %d/%d · %s)\n[system]\n%s\n[user]\n%s",
+            self.job_id, ctx["round_index"], ctx["max_rounds"], stage,
+            system_prompt, user_text,
         )
         payload = {
             "model": cfg["model"],
@@ -320,10 +330,16 @@ class AIChallengeSession:
             return None
         try:
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
         except (ValueError, KeyError, IndexError, TypeError) as e:
             logger.warning("AI 챌린지 LLM 응답 형태 예외: %s", e)
             return None
+        # 수신 응답(텍스트)을 시스템 로그에 남긴다.
+        logger.info(
+            "AI 챌린지 LLM 수신 (job %d · 라운드 %d/%d · %s): %s",
+            self.job_id, ctx["round_index"], ctx["max_rounds"], stage, content,
+        )
+        return content
 
     def _audit_recheck_mismatch(self, round_index: int, analysis: str) -> None:
         """교차확인 불일치 경고를 audit_logs 에 남긴다(웹 요청 밖이라 직접 기록)."""

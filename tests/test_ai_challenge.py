@@ -170,7 +170,7 @@ def temp_db(tmp_path, monkeypatch):
 def _stub_llm(session, responses):
     """세션의 _call_llm 을 큐 응답으로 대체 (action·verdict 교대 호출)."""
     it = iter(responses)
-    session._call_llm = lambda cfg, prompt, ctx, shot: next(it)
+    session._call_llm = lambda cfg, prompt, ctx, shot, stage="action": next(it)
 
 
 _ACTION = '{"analysis":"게이트 클릭","actions":[{"type":"click","x":10,"y":20}],"giveup":false}'
@@ -246,7 +246,7 @@ def test_solve_aborts_on_loopback(temp_db):
     sess = ai_challenge.AIChallengeSession(1)
     page = _MockPage(url="http://127.0.0.1:9000/admin")
     called = []
-    sess._call_llm = lambda *a: called.append(1) or _ACTION
+    sess._call_llm = lambda *a, **k: called.append(1) or _ACTION
     raw_html, reason = sess.solve(page, "사유")
     assert reason == "사유"      # 루프백 → 즉시 중단
     assert called == []          # LLM 호출 전에 끊긴다
@@ -288,3 +288,50 @@ def test_ai_session_for_complete_returns_session(temp_db, monkeypatch):
     sess = archive_worker._ai_session_for(_ITEM)
     assert isinstance(sess, ai_challenge.AIChallengeSession)
     assert sess.job_id == 5
+
+
+# ── LLM 송수신 시스템 로그 출력 (텍스트만) ───────────────────────────────────
+
+def test_call_llm_logs_request_and_response_text_only(temp_db, monkeypatch, caplog):
+    import logging as _logging
+    from chunchugwan import ai_challenge as aic
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"verdict":"success"}'}}]}
+
+    captured = {}
+
+    def fake_post(url, json, headers, timeout):
+        captured["payload"] = json
+        captured["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(aic.httpx, "post", fake_post)
+
+    sess = ai_challenge.AIChallengeSession(9)
+    cfg = {"base_url": "http://llm.test/v1", "model": "m", "api_key": "k",
+           "request_timeout": 180}
+    ctx = {"viewport_w": 1280, "viewport_h": 800, "url": URL, "title": "t",
+           "round_index": 1, "max_rounds": 3}
+    with caplog.at_level(_logging.INFO, logger="chunchugwan.ai_challenge"):
+        out = sess._call_llm(cfg, "SYS-PROMPT-MARKER", ctx, "BASE64SHOT", stage="action")
+
+    assert out == '{"verdict":"success"}'
+    msgs = "\n".join(r.getMessage() for r in caplog.records)
+    assert "AI 챌린지 LLM 전송" in msgs and "SYS-PROMPT-MARKER" in msgs   # 전송 텍스트
+    assert "AI 챌린지 LLM 수신" in msgs and '{"verdict":"success"}' in msgs  # 수신 텍스트
+    assert "BASE64SHOT" not in msgs   # 스크린샷(이미지 base64)은 로그에 없음 (텍스트만)
+    assert captured["timeout"] == 180  # 설정 타임아웃 그대로 전달
+    # 페이로드엔 이미지가 실리지만 로그엔 안 실린다
+    user_parts = captured["payload"]["messages"][1]["content"]
+    assert any(p.get("type") == "image_url" for p in user_parts)
+
+
+def test_request_timeout_default_is_180():
+    """3분 모델 로드 수용 — 기본 180초, 상한 300초."""
+    assert config.AI_CHALLENGE_REQUEST_TIMEOUT_DEFAULT == 180
+    assert config.AI_CHALLENGE_REQUEST_TIMEOUT_MAX == 300

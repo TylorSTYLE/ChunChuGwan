@@ -126,7 +126,11 @@ iframe 에서 클릭 시 라이브로 새지 않고 아카이브된 스냅샷으
   폴백)이고 대시보드 시스템 설정에서 관리한다. LLM 출력은 신뢰 불가 입력이라
   `ai_challenge._normalize` 가 타입 화이트리스트·좌표 클램프·키명 화이트리스트·라운드당
   액션 상한으로 강제하고, 원칙 7 의 사설/루프백 가드를 매 라운드 적용한다. 사람·AI
-  입력 재생은 공용 `input_replay.replay` 를 함께 쓴다.
+  입력 재생은 공용 `input_replay.replay` 를 함께 쓴다. LLM 과 주고받은 텍스트(전송
+  system·user 프롬프트, 수신 응답)는 시스템 로그(`/system/logs`, INFO)에 남긴다 —
+  스크린샷(image_url base64)은 제외(텍스트만). 요청 타임아웃은 기본 180초(로컬
+  무거운 모델의 모델 로드+연산 수용), 상한 300초이며 httpx 단일 timeout 이라
+  connect/read/write 에 모두 적용된다.
 - `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1개월, 다음 실행 시각,
   1일 단위 주기는 `run_at_time` HH:MM 으로 실행 시각 지정 — 서버 로컬 시간)
 - `crawls` / `crawl_pages` — 사이트 전체 아카이브의 실행 회차. 크롤(범위
