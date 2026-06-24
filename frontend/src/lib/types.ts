@@ -635,9 +635,6 @@ export interface SystemOverview {
 	};
 	smtp_tls_modes: string[];
 	archive_root: string;
-	usage: Record<string, number>;
-	optimize_pending: number;
-	search: Record<string, unknown>;
 	migration_mode: boolean;
 	migration_token_created_at: string | null;
 	public_url: string | null;

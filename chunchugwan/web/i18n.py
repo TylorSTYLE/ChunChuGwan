@@ -1724,6 +1724,7 @@ _EN.update({
     "인증 앱(Google Authenticator 등)으로 QR 을 스캔하거나 키를 입력한 뒤, 표시되는 코드를 입력하세요.": "Scan the QR with an authenticator app (e.g. Google Authenticator) or enter the key, then type the code it shows.",
     "재시도 대기(초, 쉼표)": "Retry backoff (seconds, comma-separated)",
     "저장 용량": "Storage size",
+    "저장 용량 계산 중…": "Calculating storage size…",
     "저장했습니다.": "Saved.",
     "전체 도메인": "All domains",
     "전체 레벨": "All levels",

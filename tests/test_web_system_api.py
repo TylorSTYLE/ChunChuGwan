@@ -78,6 +78,23 @@ def test_system_overview(tmp_db):
     assert body["smtp_config"]["has_password"] is False
     assert "migration_mode" in body
     assert body["version"]
+    # 저장 사용량은 GET /system/usage 로 분리됐고, 프론트가 안 읽던 비싼 필드는 제거됨
+    # (페이지 진입을 막던 sites/ 전체 스캔 — 개요 응답에서 빠져야 한다).
+    assert "usage" not in body
+    assert "optimize_pending" not in body
+    assert "search" not in body
+
+
+def test_system_usage(tmp_db):
+    body = admin_client().get("/api/web/system/usage").json()
+    assert set(body["usage"]) >= {"db", "sites", "resources", "documents"}
+    assert all(isinstance(v, int) for v in body["usage"].values())
+
+
+def test_system_usage_requires_manage_system(tmp_db):
+    assert client_for().get("/api/web/system/usage").status_code == 401
+    _, arch = make_user(email="arch@test.co", role="archiver")
+    assert client_for(arch).get("/api/web/system/usage").status_code == 403
 
 
 # ---- 가입 설정 ----
