@@ -1,6 +1,6 @@
 [project]
 name = "chunchugwan"
-version = "0.10.0"
+version = "0.11.0"
 description = "개인 웹 아카이빙 시스템 — 스냅샷 히스토리와 diff 지원"
 license = "MIT"
 license-files = ["LICENSE"]

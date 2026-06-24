@@ -13,6 +13,75 @@
       }
     ]
   },
+  "0.11.0": {
+    "items": [
+      {
+        "pr": 234,
+        "text": "fix: S3 모드 시스템 사용량·캡처 스테이징·문서 CAS 회귀 3건",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/234"
+      },
+      {
+        "pr": 236,
+        "text": "perf: S3 모드 읽기 경로 N+1 라운드트립 제거 (시스템 504·타임라인 75초)",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/236"
+      },
+      {
+        "pr": 237,
+        "text": "fix: S3 모드 캡처가 HeadObject 400 방언 제공자에서 전부 실패하던 회귀",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/237"
+      },
+      {
+        "pr": 238,
+        "text": "feat: 페이지/사이트 메모·스냅샷 재아카이빙 버튼·화면 전환 로딩",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/238"
+      },
+      {
+        "pr": 239,
+        "text": "perf: system/general 로딩 차단 제거 — 미사용 비싼 스캔 삭제 + usage 지연 로드",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/239"
+      },
+      {
+        "pr": 240,
+        "text": "fix: 문서 다운로드를 브라우저 네트워크 스택 우선으로 — WAF TLS reset 우회",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/240"
+      },
+      {
+        "pr": 241,
+        "text": "feat: 클러스터(federation) — 인스턴스 간 아카이브 선택적 교환",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/241"
+      },
+      {
+        "pr": 242,
+        "text": "fix: 렌더링 페이지 내부 링크 깨짐 수정 + 아카이브 링크 교정 기능",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/242"
+      },
+      {
+        "pr": 243,
+        "text": "feat: AI 자동 챌린지 해결(B 단계) — 비전 LLM 으로 양성 게이트 통과",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/243"
+      },
+      {
+        "pr": 244,
+        "text": "feat: AI 챌린지 — LLM 송수신 텍스트 시스템 로그 출력 + 타임아웃 기본 180초",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/244"
+      },
+      {
+        "pr": 245,
+        "text": "feat: 캡처 시 쿠키 동의(CMP) 오버레이 제거 — 렌더 가림 해소",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/245"
+      },
+      {
+        "pr": 246,
+        "text": "fix: 인라인 style 배경 이미지도 캡처 시 인라인 — 뷰어 깨짐 방지",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/246"
+      },
+      {
+        "pr": 247,
+        "text": "fix: 인라인 자원 baseURI를 <base> 제거 전 스냅샷 + 대문자 URL()·중복 fetch 보정",
+        "url": "https://github.com/TylorSTYLE/ChunChuGwan/pull/247"
+      }
+    ]
+  },
   "0.6.1": {
     "items": [
       {
