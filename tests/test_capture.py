@@ -571,3 +571,45 @@ def test_generic_link_rewriter_maps_http_links_to_goto():
     assert mapping["http://example.com/b"].startswith("/goto?url=")
     assert "mailto:x@y.z" not in mapping       # 비웹 스킴은 재작성 안 함
     assert "javascript:void(0)" not in mapping
+
+
+_CONSENT_HTML = (
+    "<!doctype html><html><head><meta charset='utf-8'><title>consent</title></head>"
+    "<body style='overflow:hidden'>"
+    "<div id='onetrust-consent-sdk'>"
+    "<div id='onetrust-banner-sdk'>쿠키 동의 배너 문구</div>"
+    "<div class='onetrust-pc-dark-filter'></div></div>"
+    "<article>본문 콘텐츠입니다.</article>"
+    "</body></html>"
+)
+
+
+def test_capture_removes_consent_overlay_from_page_html(tmp_path):
+    """쿠키 동의(CMP) 오버레이는 page.html(보기용)에서 제거되고 raw.html 엔 남는다."""
+    site = tmp_path / "csite"
+    site.mkdir()
+    (site / "index.html").write_text(_CONSENT_HTML, encoding="utf-8")
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        url = f"http://127.0.0.1:{server.server_address[1]}/index.html"
+        capture.capture(url, out)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    raw = (out / "raw.html").read_text(encoding="utf-8")
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    # raw.html(원본 소스)에는 동의 배너가 그대로 — 충실한 기록
+    assert "onetrust-consent-sdk" in raw and "쿠키 동의 배너 문구" in raw
+    # page.html(보기용)에서는 CMP 오버레이가 제거되고 본문은 남는다
+    assert "onetrust-consent-sdk" not in page_html
+    assert "쿠키 동의 배너 문구" not in page_html
+    assert "본문 콘텐츠입니다." in page_html
+    # body 인라인 스크롤 잠금(overflow:hidden) 해제
+    assert "overflow:hidden" not in page_html.replace(" ", "")

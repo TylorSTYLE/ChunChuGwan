@@ -23,7 +23,10 @@ from pathlib import Path
 from typing import Callable, Sequence
 from urllib.parse import quote, urldefrag, urljoin, urlsplit
 
-from . import browser_engine, config, documents, netcheck, storage, trackers
+from . import (
+    browser_engine, config, consent_overlays, documents, netcheck, storage,
+    trackers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +233,26 @@ _REMOVE_FROM_LIVE_DOM_JS = """
     try {
       document.querySelectorAll(sel).forEach(el => { el.remove(); removed += 1; });
     } catch (e) { /* 잘못된 셀렉터 무시 */ }
+  }
+  return removed;
+}
+"""
+
+# live DOM에서 쿠키 동의(CMP) 오버레이를 제거하고, 그것이 걸어둔 스크롤 잠금
+# (html/body 의 인라인 overflow:hidden)을 푼다 — 무언가 실제로 제거했을 때만
+# 잠금을 풀어 정상 페이지의 overflow 를 건드리지 않는다.
+_REMOVE_CONSENT_JS = """
+(selectors) => {
+  let removed = 0;
+  for (const sel of selectors) {
+    try {
+      document.querySelectorAll(sel).forEach(el => { el.remove(); removed += 1; });
+    } catch (e) { /* 잘못된 셀렉터 무시 */ }
+  }
+  if (removed > 0) {
+    for (const el of [document.documentElement, document.body]) {
+      if (el && el.style && el.style.overflow === 'hidden') el.style.overflow = '';
+    }
   }
   return removed;
 }
@@ -720,6 +743,11 @@ def _capture_in_browser(
         if n_ext + n_inline:
             logger.info("추적기 제거 (page.html): 외부 %d · 인라인/noscript %d: %s",
                         n_ext, n_inline, page.url)
+
+        n_consent = _remove_consent_overlays(page)
+        if n_consent:
+            logger.info("쿠키 동의 오버레이 제거 (page.html): %d개: %s",
+                        n_consent, page.url)
 
         if link_rewriter is not None:
             _rewrite_links(page, link_rewriter, page_links)
@@ -1302,6 +1330,21 @@ def _await_challenge_clear(page, raw_html: str, reason: str) -> tuple[str, str |
             return raw_html, None
     logger.warning("챌린지 대기 시간 초과 — 차단으로 처리: %s", page.url)
     return raw_html, reason
+
+
+def _remove_consent_overlays(page) -> int:
+    """page.html 저장 전 live DOM 에서 쿠키 동의(CMP) 오버레이 제거.
+
+    스냅샷 렌더는 iframe sandbox 라 스크립트가 안 돌아 배너를 닫을 수 없어 본문을
+    가린다 — 알려진 CMP 컨테이너(consent_overlays.SELECTORS)를 미리 제거하고
+    스크롤 잠금을 푼다. raw.html·content_html(해시/diff)에는 영향 없다. 실패해도
+    캡처는 계속된다. 제거한 노드 수 반환.
+    """
+    try:
+        return page.evaluate(_REMOVE_CONSENT_JS, list(consent_overlays.SELECTORS))
+    except Exception as e:
+        logger.warning("쿠키 동의 오버레이 제거 실패: %s", e)
+        return 0
 
 
 def _remove_trackers(page) -> tuple[int, int]:
