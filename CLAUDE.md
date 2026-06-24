@@ -15,7 +15,7 @@
 | `chunchugwan/storage.py`·`resources.py`·`documents.py`·`deletion.py`·`optimize.py`·`backup.py` | `.claude/rules/storage.md` — 저장 구조·CAS·문서 스냅샷·compact |
 | `chunchugwan/web/**`·`frontend/**`·`differ.py` | `.claude/rules/dashboard.md` — 대시보드 디자인·SvelteKit SPA·렌더링 보안(원칙 5)·i18n·diff |
 | `chunchugwan/auth.py`·`oidc.py`·`credentials.py`·`crypto.py`·`mailer.py`·`web/auth_routes.py`·`web/permissions.py` | `.claude/rules/authentication.md` — 인증 데이터 규칙(원칙 6)·역할/권한·자격증명·SMTP |
-| `chunchugwan/capture.py`·`pipeline.py`·`crawler.py`·`extract.py`·`scheduler.py`·`archive_worker.py`·`worker.py`·`certs.py`·`netcheck.py`·`browser_engine.py`·`trackers.py`·`live_challenge.py`·`ai_challenge.py`·`input_replay.py` | `.claude/rules/capture-crawl.md` — 캡처·크롤·스케줄·네트워크 게이트(원칙 7)·인증서·라이브·AI 챌린지 |
+| `chunchugwan/capture.py`·`pipeline.py`·`crawler.py`·`extract.py`·`scheduler.py`·`archive_worker.py`·`worker.py`·`certs.py`·`netcheck.py`·`browser_engine.py`·`trackers.py`·`consent_overlays.py`·`live_challenge.py`·`ai_challenge.py`·`input_replay.py` | `.claude/rules/capture-crawl.md` — 캡처·크롤·스케줄·네트워크 게이트(원칙 7)·인증서·라이브·AI 챌린지·렌더 노이즈 제거 |
 | `chunchugwan/searchindex.py`·`doctext.py` | `.claude/rules/search.md` — 전문 검색(FTS5 trigram)·문서 본문 추출 |
 | `chunchugwan/web/api_routes.py`·`ingest.py`·`extension/**` | `.claude/rules/api-extension.md` — REST API·API 키·확장 클라이언트 캡처 |
 | `tests/**` | `.claude/rules/testing.md` — 테스트 컨벤션 |

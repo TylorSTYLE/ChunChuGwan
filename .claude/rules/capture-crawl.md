@@ -12,6 +12,7 @@ paths:
   - "chunchugwan/netcheck.py"
   - "chunchugwan/browser_engine.py"
   - "chunchugwan/trackers.py"
+  - "chunchugwan/consent_overlays.py"
   - "chunchugwan/live_challenge.py"
   - "chunchugwan/ai_challenge.py"
   - "chunchugwan/input_replay.py"
@@ -75,6 +76,20 @@ iframe 에서 클릭 시 라이브로 새지 않고 아카이브된 스냅샷으
 링크 교정"(`chunchugwan/linkrepair.py`)이 page.html 앵커를 백필 재작성한다 —
 `wccg search reindex` 와 같은 백필 패턴, page.html 을 다시 쓰는 compact 류 내용
 보존 변환(원본은 raw.html.gz 보존).
+
+## page.html 렌더 노이즈 제거 (raw.html 불변)
+
+캡처는 page.html 저장 전 **live DOM** 에서 렌더 노이즈를 제거한다 — raw.html(원본
+DOM 소스)·content_html(해시·diff)은 건드리지 않아 원칙 3·4 에 영향 없다. 둘:
+- **추적기**(`trackers.py`·`capture._remove_trackers`): GA/GTM·픽셀 등 외부 스크립트와
+  인라인/noscript 추적 패턴.
+- **쿠키 동의(CMP) 오버레이**(`consent_overlays.py`·`capture._remove_consent_overlays`):
+  OneTrust·Cookiebot·Didomi 등 알려진 CMP 전용 컨테이너(루트 1개로 배너+다크
+  백드롭+설정모달 제거)와 스크롤 잠금(html/body 인라인 `overflow:hidden`, 제거가
+  실제 일어났을 때만 해제). 스냅샷 렌더는 iframe sandbox 라 스크립트가 안 돌아
+  '동의'를 눌러 닫을 수 없으므로 본문이 가려지는 것을 캡처 시점에 막는다.
+  도메인 룰 `remove_selectors` 는 추출(content_html) 전용이라 렌더에는 영향이
+  없다 — 렌더에서 가리는 요소는 이 전역 제거가 담당한다.
 
 ## 관련 DB 테이블
 
