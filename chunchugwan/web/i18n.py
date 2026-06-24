@@ -1699,6 +1699,28 @@ _EN.update({
     "메일(SMTP)": "Mail (SMTP)",
     "명": "",
     "모바일 스크린샷도 저장": "Also save mobile screenshot",
+    "AI 자동 챌린지 해결": "AI auto challenge solver",
+    "동의·연령 확인·\"계속하려면 클릭\" 같은 양성 게이트를 비전 LLM 이 스크린샷을 보고 마우스·키보드 입력으로 대신 통과시킵니다. 못 풀면 사람 보조(라이브)로 넘어갑니다. OpenAI 호환 API 를 직접 호출합니다.":
+        "A vision LLM reads a screenshot and passes benign gates (consent, age "
+        "confirmation, \"click to continue\") on your behalf with mouse/keyboard "
+        "input. If it cannot, it falls back to human-assisted (live) solving. "
+        "Calls an OpenAI-compatible API directly.",
+    "WCCG_SECRET_KEY 가 설정되지 않아 API 키를 저장할 수 없습니다. 환경변수를 설정하세요.":
+        "WCCG_SECRET_KEY is not set, so the API key cannot be saved. Set the "
+        "environment variable.",
+    "API 주소(base_url)": "API base URL",
+    "모델": "Model",
+    "설정됨": "Set",
+    "저장된 API 키 삭제": "Delete saved API key",
+    "최대 라운드 수": "Max rounds",
+    "판정 대기(ms)": "Verdict wait (ms)",
+    "라운드당 액션 수 상한": "Max actions per round",
+    "요청 타임아웃(초)": "Request timeout (s)",
+    "통과 판정 교차확인(마커 잔존 시 계속)":
+        "Cross-check pass verdict (continue if markers remain)",
+    "액션 프롬프트": "Action prompt",
+    "판정 프롬프트": "Verdict prompt",
+    "기본값으로 되돌리기": "Reset to default",
     "문서 그룹": "Document groups",
     "문서 아카이브 한도": "Document archive limits",
     "문서가 없습니다.": "No documents.",

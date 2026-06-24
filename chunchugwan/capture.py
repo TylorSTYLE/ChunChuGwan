@@ -523,6 +523,7 @@ def capture(
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
     live_session: "object | None" = None,
+    ai_session: "object | None" = None,
     mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
@@ -544,7 +545,7 @@ def capture(
         return _capture_once(url, out_dir, remove_selectors, link_rewriter,
                              session=session, resource_fallback=resource_fallback,
                              insecure_tls=insecure_tls, credential=credential,
-                             live_session=live_session,
+                             live_session=live_session, ai_session=ai_session,
                              mobile_screenshot=mobile_screenshot)
     except CaptureError as e:
         if "ERR_HTTP2" not in str(e):
@@ -555,7 +556,8 @@ def capture(
             browser_args=("--disable-http2",),
             resource_fallback=resource_fallback,
             insecure_tls=insecure_tls, credential=credential,
-            live_session=live_session, mobile_screenshot=mobile_screenshot,
+            live_session=live_session, ai_session=ai_session,
+            mobile_screenshot=mobile_screenshot,
         )
 
 
@@ -570,6 +572,7 @@ def _capture_once(
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
     live_session: "object | None" = None,
+    ai_session: "object | None" = None,
     mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
@@ -580,7 +583,7 @@ def _capture_once(
             return _capture_in_browser(
                 session.browser(), url, out_dir, remove_selectors, link_rewriter,
                 resource_fallback, insecure_tls, credential, live_session,
-                mobile_screenshot,
+                ai_session, mobile_screenshot,
             )
         with sync_playwright() as p:
             browser = _launch(p, browser_args)
@@ -588,7 +591,7 @@ def _capture_once(
                 return _capture_in_browser(
                     browser, url, out_dir, remove_selectors, link_rewriter,
                     resource_fallback, insecure_tls, credential, live_session,
-                    mobile_screenshot,
+                    ai_session, mobile_screenshot,
                 )
             finally:
                 browser.close()
@@ -610,6 +613,7 @@ def _capture_in_browser(
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
     live_session: "object | None" = None,
+    ai_session: "object | None" = None,
     mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다.
@@ -686,6 +690,11 @@ def _capture_in_browser(
             # 스텔스 캡처면 비상호작용 챌린지가 자동 통과하도록 잠시 기다린다.
             # 풀리면 갱신된 raw_html 로 진행, 끝내 안 풀리면 차단으로 실패.
             raw_html, reason = _await_challenge_clear(page, raw_html, reason)
+        if reason and ai_session is not None:
+            # 자동으로 안 풀린 양성 게이트(동의·연령 확인 등) — 비전 LLM 으로 입력을
+            # 대신 수행해 통과를 시도한다(B). 못 풀면 reason 이 유지돼 아래 사람
+            # 보조(C)로 캐스케이드한다. 세션은 설정 완비 + enabled 일 때만 주입된다.
+            raw_html, reason = ai_session.solve(page, reason)
         if reason and live_session is not None and config.LIVE_CHALLENGE:
             # 자동으로 안 풀린 인터랙티브 챌린지 — 최후 수단으로 사람이 대시보드
             # 에서 직접 풀게 한다 (page 가 살아있는 이 지점에서 그대로 이어간다).

@@ -310,7 +310,7 @@ def test_capture_retries_with_http2_disabled(monkeypatch, tmp_path):
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
                   browser_args=(), session=None, resource_fallback=None,
                   insecure_tls=False, credential=None, live_session=None,
-                  mobile_screenshot=False):
+                  ai_session=None, mobile_screenshot=False):
         calls.append(browser_args)
         if not browser_args:
             raise capture.CaptureError(
@@ -330,7 +330,7 @@ def test_capture_does_not_retry_other_errors(monkeypatch, tmp_path):
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
                   browser_args=(), session=None, resource_fallback=None,
                   insecure_tls=False, credential=None, live_session=None,
-                  mobile_screenshot=False):
+                  ai_session=None, mobile_screenshot=False):
         calls.append(browser_args)
         raise capture.CaptureError(f"{url} 캡처 실패: net::ERR_NAME_NOT_RESOLVED")
 

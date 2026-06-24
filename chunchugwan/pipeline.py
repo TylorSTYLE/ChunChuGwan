@@ -120,6 +120,7 @@ def archive_url(
     network_tag_id: str | None = None,
     credential_id: int | None = None,
     live_session: object | None = None,
+    ai_session: object | None = None,
     job_id: int | None = None,
 ) -> ArchiveOutcome:
     """URL 아카이빙 전체 흐름.
@@ -141,7 +142,8 @@ def archive_url(
     run = _RunLog(url, source, requested_by, job_id)
     try:
         outcome = _archive_url(url, force, run, link_rewriter, browser_session,
-                               network_tag_id, credential_id, live_session)
+                               network_tag_id, credential_id, live_session,
+                               ai_session)
     except Exception as e:
         _log_failure(run, e)
         raise
@@ -269,6 +271,7 @@ def _archive_url(
     network_tag_id: str | None = None,
     credential_id: int | None = None,
     live_session: object | None = None,
+    ai_session: object | None = None,
 ) -> ArchiveOutcome:
     norm = storage.normalize_url(url)
     domain = urlsplit(norm).hostname or ""
@@ -361,6 +364,8 @@ def _archive_url(
         capture_kwargs["credential"] = credential
     if live_session is not None:
         capture_kwargs["live_session"] = live_session
+    if ai_session is not None:
+        capture_kwargs["ai_session"] = ai_session
     insecure_tls = False
     is_download = False  # 탐색이 파일 다운로드로 전환 — 문서 아카이빙으로 분기
     download_err: capture.CaptureDownloadError | None = None  # 브라우저가 받은 파일 운반

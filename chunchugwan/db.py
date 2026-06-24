@@ -5183,6 +5183,23 @@ SMTP_PASSWORD_KEY = "smtp_password"  # crypto.encrypt 암호문 (평문·해시 
 SMTP_FROM_KEY = "smtp_from"
 SMTP_TLS_KEY = "smtp_tls"  # 'starttls' | 'ssl' | 'off'
 
+# AI 자동 챌린지 해결(B 단계 — ai_challenge.py) 설정. 자동 통과 대기로도 안 풀린
+# 양성 인터스티셜을 비전 LLM 으로 통과시킨다. 값 해석·클램프·복호화는
+# ai_challenge_settings 리졸버가 맡는다. api_key 는 대칭 암호화한 암호문만 저장
+# 한다(CLAUDE.md 원칙 6 예외 — 외부 LLM 서버에 replay 해야 하므로 복원 가능,
+# crypto.encrypt). 프롬프트 미설정 시 config 의 DEFAULT 상수로 폴백한다.
+AI_CHALLENGE_ENABLED_KEY = "ai_challenge_enabled"            # 'on' | 'off' (기본 off)
+AI_CHALLENGE_BASE_URL_KEY = "ai_challenge_base_url"          # OpenAI 호환 base_url
+AI_CHALLENGE_MODEL_KEY = "ai_challenge_model"                # 비전 모델명
+AI_CHALLENGE_API_KEY_KEY = "ai_challenge_api_key"            # crypto.encrypt 암호문
+AI_CHALLENGE_ACTION_PROMPT_KEY = "ai_challenge_action_prompt"    # 액션 단계 프롬프트
+AI_CHALLENGE_VERDICT_PROMPT_KEY = "ai_challenge_verdict_prompt"  # 판정 단계 프롬프트
+AI_CHALLENGE_MAX_ROUNDS_KEY = "ai_challenge_max_rounds"
+AI_CHALLENGE_VERDICT_DELAY_MS_KEY = "ai_challenge_verdict_delay_ms"
+AI_CHALLENGE_SUCCESS_RECHECK_KEY = "ai_challenge_success_recheck"  # 'on' | 'off'
+AI_CHALLENGE_MAX_ACTIONS_KEY = "ai_challenge_max_actions"
+AI_CHALLENGE_REQUEST_TIMEOUT_KEY = "ai_challenge_request_timeout"
+
 # 춘추관 간 데이터 이전(마이그레이션). 소스(보내는 쪽)가 이전 모드를 켜면
 # 인증 토큰을 발급하고, 그 동안 모든 스크래핑·스케줄·크롤이 중단된다.
 # 받는 쪽은 토큰으로 소스의 /api/migration/* 에서 전체 데이터를 Pull 한다.
@@ -5531,6 +5548,57 @@ def auth_throttle_settings(conn: sqlite3.Connection) -> dict[str, int]:
         "email_resend_limit": _clamped_int_setting(
             conn, AUTH_EMAIL_RESEND_LIMIT_KEY,
             config.AUTH_EMAIL_RESEND_LIMIT_DEFAULT, lo, hi),
+    }
+
+
+def ai_challenge_settings(conn: sqlite3.Connection) -> dict:
+    """AI 자동 챌린지 해결 설정 (미설정·오염 시 config 기본값/클램프).
+
+    api_key 는 대칭 암호문을 복호화해 평문으로 반환한다(키 미설정·복호화 실패면
+    빈 문자열 — graceful). 프롬프트는 미설정이면 config DEFAULT 상수로 폴백한다.
+    """
+    from . import crypto  # 지연 임포트 — db 의 모듈 로드 의존성을 늘리지 않는다
+
+    enc_key = get_setting(conn, AI_CHALLENGE_API_KEY_KEY)
+    api_key = ""
+    if enc_key:
+        try:
+            api_key = crypto.decrypt(enc_key)
+        except (crypto.SecretKeyMissing, crypto.SecretDecryptError):
+            api_key = ""  # 키 부재·불일치 — 인증 없이 진행(완비 게이트가 걸러냄)
+    recheck = get_setting(conn, AI_CHALLENGE_SUCCESS_RECHECK_KEY)
+    return {
+        "enabled": get_setting(conn, AI_CHALLENGE_ENABLED_KEY) == "on",
+        "base_url": (get_setting(conn, AI_CHALLENGE_BASE_URL_KEY) or "").strip(),
+        "model": (get_setting(conn, AI_CHALLENGE_MODEL_KEY) or "").strip(),
+        "api_key": api_key,
+        "action_prompt": get_setting(conn, AI_CHALLENGE_ACTION_PROMPT_KEY)
+        or config.DEFAULT_AI_ACTION_PROMPT,
+        "verdict_prompt": get_setting(conn, AI_CHALLENGE_VERDICT_PROMPT_KEY)
+        or config.DEFAULT_AI_VERDICT_PROMPT,
+        "max_rounds": _clamped_int_setting(
+            conn, AI_CHALLENGE_MAX_ROUNDS_KEY,
+            config.AI_CHALLENGE_MAX_ROUNDS_DEFAULT,
+            config.AI_CHALLENGE_MAX_ROUNDS_MIN, config.AI_CHALLENGE_MAX_ROUNDS_MAX),
+        "verdict_delay_ms": _clamped_int_setting(
+            conn, AI_CHALLENGE_VERDICT_DELAY_MS_KEY,
+            config.AI_CHALLENGE_VERDICT_DELAY_MS_DEFAULT,
+            config.AI_CHALLENGE_VERDICT_DELAY_MS_MIN,
+            config.AI_CHALLENGE_VERDICT_DELAY_MS_MAX),
+        "max_actions": _clamped_int_setting(
+            conn, AI_CHALLENGE_MAX_ACTIONS_KEY,
+            config.AI_CHALLENGE_MAX_ACTIONS_DEFAULT,
+            config.AI_CHALLENGE_MAX_ACTIONS_MIN, config.AI_CHALLENGE_MAX_ACTIONS_MAX),
+        "request_timeout": _clamped_int_setting(
+            conn, AI_CHALLENGE_REQUEST_TIMEOUT_KEY,
+            config.AI_CHALLENGE_REQUEST_TIMEOUT_DEFAULT,
+            config.AI_CHALLENGE_REQUEST_TIMEOUT_MIN,
+            config.AI_CHALLENGE_REQUEST_TIMEOUT_MAX),
+        # 미설정 시 config 기본값(기본 on) — 명시적으로 'off' 일 때만 끈다.
+        "success_recheck": (
+            config.AI_CHALLENGE_SUCCESS_RECHECK_DEFAULT if recheck is None
+            else recheck == "on"
+        ),
     }
 
 

@@ -13,6 +13,8 @@ paths:
   - "chunchugwan/browser_engine.py"
   - "chunchugwan/trackers.py"
   - "chunchugwan/live_challenge.py"
+  - "chunchugwan/ai_challenge.py"
+  - "chunchugwan/input_replay.py"
   - "docs/CRAWLING.md"
 ---
 
@@ -112,6 +114,19 @@ iframe 에서 클릭 시 라이브로 새지 않고 아카이브된 스냅샷으
   평판으로는 사람이 눌러도 통과가 보장되지 않는 최후 수단
 - `live_commands` — 라이브 챌린지 세션의 사람 입력 명령 큐 (대시보드 INSERT →
   worker 가 seq 순으로 page.mouse/keyboard 재생, 타이밍·드래그 재현)
+
+  챌린지 해결은 `_capture_in_browser` 안에서 **A→B→C 캐스케이드**다: A(`_await_
+  challenge_clear` — 비상호작용 자동 통과 대기) → **B(`ai_challenge.AIChallengeSession`
+  — 비전 LLM 이 스크린샷을 보고 마우스/키보드로 양성 게이트를 대신 통과)** →
+  C(`live_challenge` — 사람). B 는 `ai_session is not None` 일 때만 돌고(설정
+  enabled + base_url/model/api_key 완비 시 `archive_worker._ai_session_for` 가 주입),
+  통과 못 하면 reason 을 유지해 C 로 넘긴다(B 비활성이면 흐름은 기존과 동일). B 의
+  설정은 전부 `settings`(`db.ai_challenge_settings` 리졸버, `AI_CHALLENGE_*` 키 —
+  api_key 는 crypto 암호문, 프롬프트 2종은 편집 가능·미설정 시 `config.DEFAULT_AI_*`
+  폴백)이고 대시보드 시스템 설정에서 관리한다. LLM 출력은 신뢰 불가 입력이라
+  `ai_challenge._normalize` 가 타입 화이트리스트·좌표 클램프·키명 화이트리스트·라운드당
+  액션 상한으로 강제하고, 원칙 7 의 사설/루프백 가드를 매 라운드 적용한다. 사람·AI
+  입력 재생은 공용 `input_replay.replay` 를 함께 쓴다.
 - `schedules` — 페이지별 주기적 재아카이빙 (주기 1시간~1개월, 다음 실행 시각,
   1일 단위 주기는 `run_at_time` HH:MM 으로 실행 시각 지정 — 서버 로컬 시간)
 - `crawls` / `crawl_pages` — 사이트 전체 아카이브의 실행 회차. 크롤(범위

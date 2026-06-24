@@ -16,6 +16,7 @@
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 
 	let { data }: { data: { sys: SystemOverview } } = $props();
 	const s = $derived(data.sys);
@@ -85,6 +86,20 @@
 	let smtpTls = $state('starttls');
 	let smtpPassword = $state('');
 	let smtpClearPw = $state(false);
+
+	// AI 자동 챌린지 해결(B)
+	let aiEnabled = $state(false);
+	let aiBaseUrl = $state('');
+	let aiModel = $state('');
+	let aiApiKey = $state('');
+	let aiClearKey = $state(false);
+	let aiActionPrompt = $state('');
+	let aiVerdictPrompt = $state('');
+	let aiMaxRounds = $state(3);
+	let aiVerdictDelay = $state(1500);
+	let aiMaxActions = $state(10);
+	let aiRequestTimeout = $state(30);
+	let aiSuccessRecheck = $state(true);
 
 	// 백업·복원·가져오기
 	let importMode = $state('merge');
@@ -177,6 +192,17 @@
 		smtpUser = s.smtp_config.user;
 		smtpFrom = s.smtp_config.sender;
 		smtpTls = s.smtp_config.tls;
+		const ai = s.ai_challenge_config;
+		aiEnabled = ai.enabled;
+		aiBaseUrl = ai.base_url;
+		aiModel = ai.model;
+		aiActionPrompt = ai.action_prompt;
+		aiVerdictPrompt = ai.verdict_prompt;
+		aiMaxRounds = ai.max_rounds;
+		aiVerdictDelay = ai.verdict_delay_ms;
+		aiMaxActions = ai.max_actions;
+		aiRequestTimeout = ai.request_timeout;
+		aiSuccessRecheck = ai.success_recheck;
 	});
 
 	async function save(path: string, body?: Record<string, unknown>): Promise<boolean> {
@@ -224,6 +250,35 @@
 			smtpPassword = '';
 			smtpClearPw = false;
 		}
+	}
+
+	async function saveAiChallenge() {
+		const ok = await save('/system/ai-challenge-settings', {
+			ai_challenge_enabled: aiEnabled,
+			ai_challenge_base_url: aiBaseUrl,
+			ai_challenge_model: aiModel,
+			ai_challenge_api_key: aiApiKey,
+			ai_challenge_clear_api_key: aiClearKey,
+			ai_challenge_action_prompt: aiActionPrompt,
+			ai_challenge_verdict_prompt: aiVerdictPrompt,
+			ai_challenge_max_rounds: aiMaxRounds,
+			ai_challenge_verdict_delay_ms: aiVerdictDelay,
+			ai_challenge_max_actions: aiMaxActions,
+			ai_challenge_request_timeout: aiRequestTimeout,
+			ai_challenge_success_recheck: aiSuccessRecheck
+		});
+		if (ok) {
+			aiApiKey = '';
+			aiClearKey = false;
+		}
+	}
+
+	function resetAiActionPrompt() {
+		aiActionPrompt = s.ai_challenge_config.default_action_prompt;
+	}
+
+	function resetAiVerdictPrompt() {
+		aiVerdictPrompt = s.ai_challenge_config.default_verdict_prompt;
 	}
 
 	async function testSmtp() {
@@ -847,6 +902,38 @@
 </fieldset>
 
 <fieldset class="sec">
+	<legend>{t('AI 자동 챌린지 해결')}</legend>
+	<p class="desc">{t('동의·연령 확인·"계속하려면 클릭" 같은 양성 게이트를 비전 LLM 이 스크린샷을 보고 마우스·키보드 입력으로 대신 통과시킵니다. 못 풀면 사람 보조(라이브)로 넘어갑니다. OpenAI 호환 API 를 직접 호출합니다.')}</p>
+	{#if !s.ai_challenge_config.key_set}
+		<AlertBox warn={t('WCCG_SECRET_KEY 가 설정되지 않아 API 키를 저장할 수 없습니다. 환경변수를 설정하세요.')} />
+	{/if}
+	<label class="ck"><input type="checkbox" bind:checked={aiEnabled} /> {t('사용')}</label>
+	<label>{t('API 주소(base_url)')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={aiBaseUrl} placeholder="https://api.openai.com/v1" /></label>
+	<label>{t('모델')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={aiModel} placeholder="gpt-4o" /></label>
+	<label>{t('API 키')}
+		<Input type="password" bind:value={aiApiKey}
+			placeholder={s.ai_challenge_config.has_api_key ? t('설정됨') : ''} />
+	</label>
+	{#if s.ai_challenge_config.has_api_key}
+		<label class="ck"><input type="checkbox" bind:checked={aiClearKey} /> {t('저장된 API 키 삭제')}</label>
+	{/if}
+	<label>{t('최대 라운드 수')} <Input type="number" bind:value={aiMaxRounds} min={s.ai_challenge_config.limits.max_rounds_min} max={s.ai_challenge_config.limits.max_rounds_max} /></label>
+	<label>{t('판정 대기(ms)')} <Input type="number" bind:value={aiVerdictDelay} min={s.ai_challenge_config.limits.verdict_delay_ms_min} max={s.ai_challenge_config.limits.verdict_delay_ms_max} /></label>
+	<label>{t('라운드당 액션 수 상한')} <Input type="number" bind:value={aiMaxActions} min={s.ai_challenge_config.limits.max_actions_min} max={s.ai_challenge_config.limits.max_actions_max} /></label>
+	<label>{t('요청 타임아웃(초)')} <Input type="number" bind:value={aiRequestTimeout} min={s.ai_challenge_config.limits.request_timeout_min} max={s.ai_challenge_config.limits.request_timeout_max} /></label>
+	<label class="ck"><input type="checkbox" bind:checked={aiSuccessRecheck} /> {t('통과 판정 교차확인(마커 잔존 시 계속)')}</label>
+	<label class="full">{t('액션 프롬프트')}
+		<Textarea bind:value={aiActionPrompt} rows={8} class="font-mono text-xs" />
+	</label>
+	<Button variant="outline" size="sm" class="self-start" onclick={resetAiActionPrompt}>{t('기본값으로 되돌리기')}</Button>
+	<label class="full">{t('판정 프롬프트')}
+		<Textarea bind:value={aiVerdictPrompt} rows={6} class="font-mono text-xs" />
+	</label>
+	<Button variant="outline" size="sm" class="self-start" onclick={resetAiVerdictPrompt}>{t('기본값으로 되돌리기')}</Button>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={saveAiChallenge}>{t('저장')}</Button>
+</fieldset>
+
+<fieldset class="sec">
 	<legend>{t('휴지통')}</legend>
 	<p class="desc">{t('아카이브 삭제 시 즉시 지우지 않고 휴지통에 보관했다가 기간 경과 시 자동 삭제합니다. 끄면 삭제가 즉시 영구 삭제됩니다.')}</p>
 	<label class="ck"><input type="checkbox" bind:checked={trashEnabled} /> {t('휴지통 사용')}</label>
@@ -1133,6 +1220,11 @@
 		gap: 8px;
 	}
 	.sec label.ck {
+		justify-content: flex-start;
+	}
+	.sec label.full {
+		flex-direction: column;
+		align-items: stretch;
 		justify-content: flex-start;
 	}
 	.sec label select {
