@@ -13,7 +13,7 @@ paths:
 
 | 테이블 | 상세 |
 |---|---|
-| `sites`·`pages`·`snapshots`·`checks`·`settings`·`archive_logs`·`system_logs`·`audit_logs`·`trash_entries` | 이 파일 |
+| `sites`·`pages`·`snapshots`·`checks`·`settings`·`archive_logs`·`system_logs`·`audit_logs`·`trash_entries`·`notes` | 이 파일 |
 | `snapshot_resources`·`snapshot_documents` | `.claude/rules/storage.md` |
 | `snapshot_fts` | `.claude/rules/search.md` |
 | `network_tags`·`site_certificates`·`archive_jobs`·`live_commands`·`schedules`·`crawls`/`crawl_pages`·`crawl_schedules` | `.claude/rules/capture-crawl.md` |
@@ -50,7 +50,11 @@ paths:
   `.claude/rules/capture-crawl.md`·`.claude/rules/api-extension.md`)
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관.
   `search_indexed` 는 텍스트 검색 인덱스(snapshot_fts) 반영 여부 — 0 이면
-  `wccg search reindex` 백필 대상 (resources_indexed 와 같은 패턴). `origin`
+  `wccg search reindex` 백필 대상 (resources_indexed 와 같은 패턴). `links_rewritten`
+  은 page.html 앵커가 리졸버(`/goto`·`/crawl/{id}/goto`)로 재작성됐는지 — 0 이면
+  `wccg links repair`/시스템 설정 "아카이브 링크 교정" 백필 대상(크롤 이전 단일 페이지
+  스냅샷). 신규 캡처는 1로 저장, 교정은 page.html 을 다시 쓰는 compact 류 내용 보존
+  변환(원본은 raw.html.gz 보존 — `chunchugwan/linkrepair.py`). `origin`
   은 캡처 출처 `server`(기본) | `extension`(브라우저 클라이언트 캡처), `incomplete`
   은 일부 자원·프레임·스크린샷 수집이 실패한 불완전 캡처 표식 — 둘 다 뷰어·
   타임라인 뱃지("브라우저 캡처"·"불완전")로 표시되고, 한쪽이라도 extension 이면
@@ -78,6 +82,17 @@ paths:
   `/log/audit`(`view_audit_logs` 권한, 기본 admin)이 액션·요청자·기간 필터로 보여준다.
   `system_log` 핸들러가 audit 로거를 제외하므로 시스템 로그와 분리된다.
   `db.list/count/insert/list_audit_actors/prune_audit_logs`
+- `notes` — 페이지·사이트 메모 (항목별 누적, 개별 삭제). `kind`(page|site)·
+  `target_id`(pages.id 또는 sites.id — 상관 키, FK 아님: 단일 FK 로 두 테이블을
+  못 가리키고 prune·삭제가 막히지 않게)·`content`·`author_user_id`(작성자, 상관 키)·
+  `author_label`(작성 시점 display_name 또는 email 사본)·`created_at`. 페이지 화면
+  (타임라인)·사이트 상세 상단에 오래된 순으로 표시한다. 쓰기는 db.add_note/
+  delete_note(get/list_notes 조회). 권한은 세분 권한 memo_view/memo_create/
+  memo_delete(`.claude/rules/authentication.md`)가 게이트하고, 웹은
+  `/pages|sites/{id}/notes`(POST)·`/notes/{id}`(DELETE), 확장은 `/api/v1/notes`
+  (POST, 캡처와 독립)로 쓴다. 페이지·사이트 영구삭제(delete_page·prune_site_if_empty·
+  prune_empty_sites) 시 상관 키라 자동으로 안 지워지므로 함께 정리한다. export 제외 불필요
+  (아카이브 데이터의 일부)
 - `settings` — 대시보드에서 변경하는 key-value 런타임 설정. 가입 설정
   (`signup_enabled` on/off 기본 on — off 면 `/signup` 차단 + 로그인 화면
   가입 링크 숨김(초대 가입은 허용), `signup_default_role`)과 이메일 본인 인증

@@ -18,7 +18,7 @@ from fastapi import UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from .. import searchindex
+from .. import linkrepair, searchindex
 
 logger = logging.getLogger(__name__)
 
@@ -86,5 +86,44 @@ def _reindex_worker() -> None:
         with _reindex_lock:
             _reindex_state["running"] = False
             _reindex_state["finished_at"] = datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            )
+
+
+# 아카이브 링크 교정 진행 상태 — 재색인과 같은 인메모리 패턴.
+# 백그라운드 스레드가 갱신하고, 시스템 화면이 /api/web/system/links/repair/status 폴링.
+_linkrepair_lock = threading.Lock()
+_linkrepair_state: dict = {
+    "running": False, "done": 0, "total": 0,
+    "result": None, "error": None, "finished_at": None,
+}
+
+
+def linkrepair_status() -> dict:
+    """아카이브 링크 교정 진행 상태의 사본 (폴링/초기 렌더용)."""
+    with _linkrepair_lock:
+        return dict(_linkrepair_state)
+
+
+def _linkrepair_worker() -> None:
+    """백그라운드 링크 교정 — 진행률을 인메모리 상태에 갱신."""
+    def _progress(done: int, total: int) -> None:
+        with _linkrepair_lock:
+            _linkrepair_state["done"] = done
+            _linkrepair_state["total"] = total
+
+    try:
+        count = linkrepair.backfill_all(progress=_progress)
+        with _linkrepair_lock:
+            _linkrepair_state["result"] = count
+            _linkrepair_state["error"] = None
+    except Exception as e:  # noqa: BLE001 — 실패해도 상태만 기록, 스레드는 정상 종료
+        logger.exception("아카이브 링크 교정 실패")
+        with _linkrepair_lock:
+            _linkrepair_state["error"] = str(e)
+    finally:
+        with _linkrepair_lock:
+            _linkrepair_state["running"] = False
+            _linkrepair_state["finished_at"] = datetime.now(timezone.utc).isoformat(
                 timespec="seconds"
             )

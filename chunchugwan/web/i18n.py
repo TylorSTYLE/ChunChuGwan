@@ -346,8 +346,14 @@ _EN: dict[str, str] = {
     "아카이빙 중": "Archiving",
     "사람 확인 대기": "Awaiting human check",
     "재아카이빙": "Re-archive",
+    "재아카이빙을 등록했습니다.": "Re-archiving has been queued.",
     "스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
         "This deletes the entire archive including {n} snapshot(s). It cannot be undone.",
+    # ---- 메모 (페이지·사이트) ----
+    "메모": "Notes",
+    "메모 등록": "Add note",
+    "메모를 입력하세요": "Enter a note",
+    "이 메모를 삭제할까요?": "Delete this note?",
     # ---- 현황 (dashboard) ----
     "아카이브 페이지": "Archived pages",
     "전체 스냅샷": "Total snapshots",
@@ -872,6 +878,49 @@ _EN: dict[str, str] = {
         "Revoke the key '{name}'? External software using this key loses access "
         "immediately.",
     "폐기": "Revoke",
+    "클러스터 보내기": "Cluster send",
+    "클러스터 받기": "Cluster receive",
+    # ---- 클러스터(federation) 화면 (system/cluster) ----
+    "클러스터": "Cluster",
+    "여러 춘추관 인스턴스를 연결해 아카이브를 선택적으로 주고받습니다. 연결은 항상 이쪽에서 개시합니다(보내기=push, 받기=pull).":
+        "Connect multiple ChunChuGwan instances to exchange archives selectively. "
+        "This node always initiates (send = push, receive = pull).",
+    "WCCG_SECRET_KEY 가 설정되지 않아 피어 키를 안전하게 저장할 수 없습니다. 환경변수를 설정한 뒤 피어를 등록하세요.":
+        "WCCG_SECRET_KEY is not set, so peer keys cannot be stored securely. "
+        "Set the environment variable before adding a peer.",
+    "이 노드": "This node",
+    "노드 식별자 (UUID)": "Node ID (UUID)",
+    "표시 이름": "Display name",
+    "예: 집 NAS": "e.g. Home NAS",
+    "표시 전용입니다 — 피어 식별·신뢰는 항상 UUID 로 합니다.":
+        "Display only — peers are identified and trusted by UUID.",
+    "동기화 설정": "Sync settings",
+    "조정 주기 (초)": "Reconcile interval (sec)",
+    "{min}~{max}초": "{min}–{max} sec",
+    "기본 보호 (다른 클러스터로 보내지 않음)": "Protect by default (do not send to other clusters)",
+    "사이트·아카이브에 보호 설정이 없을 때 적용되는 시스템 기본값입니다.":
+        "System default applied when a site or archive has no protection set.",
+    "피어 연결 추가": "Add a peer",
+    "피어 주소": "Peer address",
+    "피어 발급 시스템 키": "System key issued by the peer",
+    "보내기 (이 피어로 push)": "Send (push to this peer)",
+    "받기 (이 피어에서 pull)": "Receive (pull from this peer)",
+    "연결": "Connect",
+    "피어": "Peer",
+    "방향": "Direction",
+    "마지막 동기화": "Last sync",
+    "(이름 없음)": "(no name)",
+    "보내기": "Send",
+    "받기": "Receive",
+    "연결된 피어가 없습니다.": "No peers connected.",
+    "이 피어 연결을 해제할까요? 받은 아카이브는 보존됩니다.":
+        "Disconnect this peer? Received archives are preserved.",
+    "연결됨": "Connected",
+    "일시 오류": "Temporary error",
+    "폐기됨": "Revoked",
+    "다른 클러스터로 공유 허용": "Allow sharing to other clusters",
+    "기본은 보호(전송 안 함)입니다. 켜면 연결된 클러스터로 이 아카이브를 보낼 수 있습니다.":
+        "Protected by default (not sent). Turn on to send this archive to connected clusters.",
     "발급된 키가 없습니다.": "No keys issued yet.",
     "새 키 발급": "Issue a new key",
     "키 이름 (예: rss-bot)": "Key name (e.g. rss-bot)",
@@ -1650,6 +1699,28 @@ _EN.update({
     "메일(SMTP)": "Mail (SMTP)",
     "명": "",
     "모바일 스크린샷도 저장": "Also save mobile screenshot",
+    "AI 자동 챌린지 해결": "AI auto challenge solver",
+    "동의·연령 확인·\"계속하려면 클릭\" 같은 양성 게이트를 비전 LLM 이 스크린샷을 보고 마우스·키보드 입력으로 대신 통과시킵니다. 못 풀면 사람 보조(라이브)로 넘어갑니다. OpenAI 호환 API 를 직접 호출합니다.":
+        "A vision LLM reads a screenshot and passes benign gates (consent, age "
+        "confirmation, \"click to continue\") on your behalf with mouse/keyboard "
+        "input. If it cannot, it falls back to human-assisted (live) solving. "
+        "Calls an OpenAI-compatible API directly.",
+    "WCCG_SECRET_KEY 가 설정되지 않아 API 키를 저장할 수 없습니다. 환경변수를 설정하세요.":
+        "WCCG_SECRET_KEY is not set, so the API key cannot be saved. Set the "
+        "environment variable.",
+    "API 주소(base_url)": "API base URL",
+    "모델": "Model",
+    "설정됨": "Set",
+    "저장된 API 키 삭제": "Delete saved API key",
+    "최대 라운드 수": "Max rounds",
+    "판정 대기(ms)": "Verdict wait (ms)",
+    "라운드당 액션 수 상한": "Max actions per round",
+    "요청 타임아웃(초)": "Request timeout (s)",
+    "통과 판정 교차확인(마커 잔존 시 계속)":
+        "Cross-check pass verdict (continue if markers remain)",
+    "액션 프롬프트": "Action prompt",
+    "판정 프롬프트": "Verdict prompt",
+    "기본값으로 되돌리기": "Reset to default",
     "문서 그룹": "Document groups",
     "문서 아카이브 한도": "Document archive limits",
     "문서가 없습니다.": "No documents.",
@@ -1683,6 +1754,13 @@ _EN.update({
     "유지보수": "Maintenance",
     "저장공간·검색": "Storage & search",
     "검색 인덱스 전체 재색인": "Reindex search (full)",
+    "아카이브 링크 교정": "Repair archive links",
+    "구형 스냅샷의 깨진 내부 링크를 아카이브 리졸버로 바로잡습니다 (내용은 그대로).":
+        "Fix broken internal links in older snapshots via the archive resolver (content unchanged).",
+    "링크 교정 중": "Repairing links",
+    "미교정 스냅샷": "Unrepaired snapshots",
+    "링크 교정 실패": "Link repair failed",
+    "링크 교정을 완료했습니다.": "Link repair complete.",
     "데이터 이전은 이어서 추가됩니다.": "Data migration is coming next.",
     "데이터 이전": "Data migration",
     "이전 모드 켜짐": "Migration mode on",
@@ -1724,6 +1802,7 @@ _EN.update({
     "인증 앱(Google Authenticator 등)으로 QR 을 스캔하거나 키를 입력한 뒤, 표시되는 코드를 입력하세요.": "Scan the QR with an authenticator app (e.g. Google Authenticator) or enter the key, then type the code it shows.",
     "재시도 대기(초, 쉼표)": "Retry backoff (seconds, comma-separated)",
     "저장 용량": "Storage size",
+    "저장 용량 계산 중…": "Calculating storage size…",
     "저장했습니다.": "Saved.",
     "전체 도메인": "All domains",
     "전체 레벨": "All levels",

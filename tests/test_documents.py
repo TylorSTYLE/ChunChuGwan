@@ -280,6 +280,75 @@ def test_download_direct_zip(doc_server, tmp_path):
     assert entry["content_type"] == "application/zip"
 
 
+# ---- entry_from_local_file (브라우저가 이미 받은 파일 → manifest, 네트워크 없음) ----
+
+def test_entry_from_local_file_uses_suggested_filename(tmp_path):
+    files = tmp_path / "files"
+    files.mkdir()
+    raw = files / "download-abc123"  # 확장자 없는 임시 이름 (브라우저 저장명)
+    raw.write_bytes(_PDF_BYTES)
+    entry = documents.entry_from_local_file(
+        "https://x.test/_lib/download.asp?downfile=report.pdf&path=board",
+        "https://x.test/_lib/download.asp?downfile=report.pdf&path=board",
+        raw, suggested_filename="신주배정공고.pdf",
+    )
+    assert str(entry["file"]).startswith("신주배정공고-")
+    assert str(entry["file"]).endswith(".pdf")
+    assert entry["bytes"] == len(_PDF_BYTES)
+    assert entry["sha256"] == hashlib.sha256(_PDF_BYTES).hexdigest()
+    assert entry["content_type"] == "application/pdf"  # PDF 매직 스니핑
+    # 파일이 최종 파일명으로 같은 디렉토리에 옮겨진다 (ingest_into_cas 가 찾는 위치)
+    assert (files / str(entry["file"])).read_bytes() == _PDF_BYTES
+    assert not raw.exists()
+
+
+def test_entry_from_local_file_falls_back_to_url_when_suggested_bad(tmp_path):
+    raw = tmp_path / "blob"
+    raw.write_bytes(_PDF_BYTES)
+    # 제안명 확장자가 비화이트리스트(.exe) → URL 경로 확장자(.pdf)로 폴백
+    entry = documents.entry_from_local_file(
+        "https://x.test/files/공시.pdf", "https://x.test/files/공시.pdf",
+        raw, suggested_filename="malware.exe",
+    )
+    assert str(entry["file"]).endswith(".pdf")
+
+
+def test_entry_from_local_file_undecidable_raises(tmp_path):
+    raw = tmp_path / "blob"
+    raw.write_bytes(b"MZ-not-a-document")
+    with pytest.raises(ValueError, match="화이트리스트"):
+        documents.entry_from_local_file(
+            "https://x.test/download?id=1", "https://x.test/download?id=1",
+            raw, suggested_filename="thing.bin",
+        )
+
+
+def test_entry_from_local_file_size_limit_raises(tmp_path):
+    raw = tmp_path / "download-x"
+    raw.write_bytes(b"%PDF-" + b"x" * 5000)
+    limits = documents.DocumentLimits(max_count=20, max_bytes=1024, timeout_seconds=30)
+    with pytest.raises(ValueError, match="크기 한도"):
+        documents.entry_from_local_file(
+            "https://x.test/a.pdf", "https://x.test/a.pdf", raw,
+            suggested_filename="a.pdf", limits=limits,
+        )
+
+
+def test_sniff_content_type_pdf_magic_over_extension(tmp_path):
+    p = tmp_path / "f.zip"  # 확장자는 zip 이지만 내용은 PDF
+    p.write_bytes(_PDF_BYTES)
+    assert documents.sniff_content_type(p, "f.zip") == "application/pdf"
+
+
+def test_sniff_content_type_extension_fallback(tmp_path):
+    p = tmp_path / "f.docx"
+    p.write_bytes(b"PK\x03\x04stuff")
+    ct = documents.sniff_content_type(p, "f.docx")
+    assert ct == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+
 # ---- 파이프라인 통합 (캡처는 가짜, 문서 다운로드는 로컬 서버) ----
 
 def test_pipeline_archives_linked_documents(doc_server, tmp_path, monkeypatch):
@@ -310,6 +379,12 @@ def test_pipeline_archives_linked_documents(doc_server, tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(pipeline.capture, "capture", fake_capture)
+    # 브라우저 경로는 없는 환경으로 두고 httpx 폴백(로컬 서버)을 검증한다 —
+    # 전부 실패로 돌려주면 pipeline 이 httpx download_documents 로 폴백한다.
+    monkeypatch.setattr(
+        pipeline.capture, "fetch_documents_via_browser",
+        lambda session, links, dest, **kw: ([], list(links)),
+    )
     outcome = pipeline.archive_url("https://example.com/post")
     assert outcome.status == "new"
     assert outcome.documents == 1  # 실패한 링크는 세지 않는다
@@ -395,6 +470,103 @@ def test_pipeline_archives_direct_download_url(doc_server, tmp_path, monkeypatch
     second = pipeline.archive_url(url)
     assert second.status == "unchanged"
     assert second.snapshot_id == outcome.snapshot_id
+
+
+def test_pipeline_direct_download_uses_browser_file_no_httpx(tmp_path, monkeypatch):
+    """브라우저가 받은 파일(download_path)이 있으면 httpx 재요청 없이 그 파일을 쓴다.
+
+    WAF TLS reset 회귀 방지 — download_direct(httpx)가 호출되면 테스트 실패.
+    """
+    from chunchugwan import capture, certs, netcheck, pipeline, storage
+
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "RULES_PATH", tmp_path / "rules.json")
+    monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
+    monkeypatch.setattr(netcheck, "classify_host", lambda host: netcheck.PUBLIC)
+    monkeypatch.setattr(certs, "fetch_certificate_info", lambda *a, **k: None)
+
+    url = "https://www.acetech.co.kr/_lib/download.asp?downfile=공고.pdf&path=board"
+
+    def fake_capture(url, out_dir, **kwargs):
+        # 브라우저가 WAF 를 통과해 받은 파일을 out_dir/files 에 저장한 상태를 모사
+        files = out_dir / "files"
+        files.mkdir(parents=True, exist_ok=True)
+        saved = files / "download-deadbeef"
+        saved.write_bytes(_PDF_BYTES)
+        raise capture.CaptureDownloadError(
+            f"{url} 은 파일 다운로드 URL",
+            download_path=saved, suggested_filename="신주배정공고.pdf",
+            final_url=url,
+        )
+
+    def boom(*a, **k):  # httpx 직접 다운로드는 호출되면 안 된다
+        raise AssertionError("download_direct(httpx) 가 호출됨 — 브라우저 파일을 써야 함")
+
+    monkeypatch.setattr(pipeline.capture, "capture", fake_capture)
+    monkeypatch.setattr(pipeline.documents, "download_direct", boom)
+
+    outcome = pipeline.archive_url(url)
+    assert outcome.status == "new"
+    assert outcome.documents == 1
+    meta = storage.read_meta(outcome.snapshot_dir)
+    entry = meta.documents[0]
+    assert str(entry["file"]).startswith("신주배정공고-")
+    assert entry["sha256"] == hashlib.sha256(_PDF_BYTES).hexdigest()
+    name = documents.cas_name(str(entry["sha256"]), str(entry["file"]))
+    assert documents.cas_path(name).read_bytes() == _PDF_BYTES
+
+
+def test_pipeline_linked_documents_prefer_browser(doc_server, tmp_path, monkeypatch):
+    """링크 문서는 브라우저 fetch 성공분을 쓰고 httpx 폴백은 실패분에만 쓴다."""
+    from chunchugwan import capture, pipeline, storage
+
+    monkeypatch.setattr(config, "ARCHIVE_ROOT", tmp_path)
+    monkeypatch.setattr(config, "SITES_DIR", tmp_path / "sites")
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "index.db")
+    monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(config, "RULES_PATH", tmp_path / "rules.json")
+    monkeypatch.setattr(config, "RESOURCES_DIR", tmp_path / "resources")
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", tmp_path / "documents")
+
+    doc_url = f"{doc_server}/ok.pdf"
+    html = "<html><body><p>본문</p></body></html>"
+
+    def fake_capture(url, out_dir, **kwargs):
+        (out_dir / "raw.html").write_text(html, encoding="utf-8")
+        (out_dir / "page.html").write_text(html, encoding="utf-8")
+        return capture.CaptureResult(
+            final_url=url, http_status=200, title="제목",
+            raw_html=html, content_html=html, document_links=[doc_url],
+        )
+
+    # 브라우저 fetch 가 성공해 파일을 dest 에 쓰고 manifest 를 돌려준다 (httpx 미사용)
+    def fake_browser_fetch(session, links, dest, **kw):
+        dest.mkdir(parents=True, exist_ok=True)
+        name = documents.document_filename(doc_url)
+        (dest / name).write_bytes(_PDF_BYTES)
+        return ([{
+            "url": doc_url, "file": name, "bytes": len(_PDF_BYTES),
+            "sha256": hashlib.sha256(_PDF_BYTES).hexdigest(),
+            "content_type": "application/pdf",
+        }], [])
+
+    def boom(*a, **k):
+        raise AssertionError("download_documents(httpx) 가 호출됨 — 브라우저 성공분을 써야 함")
+
+    monkeypatch.setattr(pipeline.capture, "capture", fake_capture)
+    monkeypatch.setattr(pipeline.capture, "fetch_documents_via_browser", fake_browser_fetch)
+    monkeypatch.setattr(pipeline.documents, "download_documents", boom)
+
+    outcome = pipeline.archive_url("https://example.com/post")
+    assert outcome.status == "new" and outcome.documents == 1
+    meta = storage.read_meta(outcome.snapshot_dir)
+    assert meta.documents[0]["url"] == doc_url
+    name = documents.cas_name(str(meta.documents[0]["sha256"]), str(meta.documents[0]["file"]))
+    assert documents.cas_path(name).read_bytes() == _PDF_BYTES
 
 
 # ---- 문서 CAS ----

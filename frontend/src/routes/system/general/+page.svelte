@@ -16,13 +16,21 @@
 	import Spinner from '$lib/components/Spinner.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 
 	let { data }: { data: { sys: SystemOverview } } = $props();
 	const s = $derived(data.sys);
 
+	// 저장 사용량 분해 — sites/resources/documents 전체 스캔이라 페이지 진입을
+	// 막지 않도록 /system/usage 로 분리해 마운트 후 비동기로 받는다(도착 전 null).
+	let diskUsage = $state<Record<string, number> | null>(null);
+
 	// 저장 용량 미터 차트 — 각 영역이 전체에서 차지하는 비율
 	const usageTotal = $derived(
-		(s.usage.db + s.usage.sites + s.usage.resources + s.usage.documents) || 1
+		((diskUsage?.db ?? 0) +
+			(diskUsage?.sites ?? 0) +
+			(diskUsage?.resources ?? 0) +
+			(diskUsage?.documents ?? 0)) || 1
 	);
 	function pct(n: number): string {
 		return `${Math.round((n / usageTotal) * 100)}%`;
@@ -79,6 +87,20 @@
 	let smtpPassword = $state('');
 	let smtpClearPw = $state(false);
 
+	// AI 자동 챌린지 해결(B)
+	let aiEnabled = $state(false);
+	let aiBaseUrl = $state('');
+	let aiModel = $state('');
+	let aiApiKey = $state('');
+	let aiClearKey = $state(false);
+	let aiActionPrompt = $state('');
+	let aiVerdictPrompt = $state('');
+	let aiMaxRounds = $state(3);
+	let aiVerdictDelay = $state(1500);
+	let aiMaxActions = $state(10);
+	let aiRequestTimeout = $state(30);
+	let aiSuccessRecheck = $state(true);
+
 	// 백업·복원·가져오기
 	let importMode = $state('merge');
 
@@ -86,6 +108,12 @@
 	let reindexRunning = $state(false);
 	let reindexDone = $state(0);
 	let reindexTotal = $state(0);
+
+	// 유지보수 — 아카이브 링크 교정 진행
+	let linkRepairRunning = $state(false);
+	let linkRepairDone = $state(0);
+	let linkRepairTotal = $state(0);
+	let linkRepairPending = $state(0);
 
 	// 데이터 이전(마이그레이션) — 발급 토큰은 1회만 표시
 	let migrationToken = $state('');
@@ -123,7 +151,7 @@
 	const recoveryPending = $derived((recovery?.restricted_count ?? 0) > 0);
 
 	// 저장 사용량 — S3 모드에서 로컬/Object Storage 분리. GET 은 캐시만(S3 미호출),
-	// [업데이트] 만 명시 스캔. 로컬 모드는 기존 미터(s.usage) 그대로.
+	// [업데이트] 만 명시 스캔. 로컬 분해는 diskUsage(/system/usage) 로 폴백.
 	const isS3 = $derived(s.storage_backend === 's3');
 	let usage = $state<StorageUsage | null>(null);
 	$effect(() => {
@@ -164,6 +192,17 @@
 		smtpUser = s.smtp_config.user;
 		smtpFrom = s.smtp_config.sender;
 		smtpTls = s.smtp_config.tls;
+		const ai = s.ai_challenge_config;
+		aiEnabled = ai.enabled;
+		aiBaseUrl = ai.base_url;
+		aiModel = ai.model;
+		aiActionPrompt = ai.action_prompt;
+		aiVerdictPrompt = ai.verdict_prompt;
+		aiMaxRounds = ai.max_rounds;
+		aiVerdictDelay = ai.verdict_delay_ms;
+		aiMaxActions = ai.max_actions;
+		aiRequestTimeout = ai.request_timeout;
+		aiSuccessRecheck = ai.success_recheck;
 	});
 
 	async function save(path: string, body?: Record<string, unknown>): Promise<boolean> {
@@ -211,6 +250,35 @@
 			smtpPassword = '';
 			smtpClearPw = false;
 		}
+	}
+
+	async function saveAiChallenge() {
+		const ok = await save('/system/ai-challenge-settings', {
+			ai_challenge_enabled: aiEnabled,
+			ai_challenge_base_url: aiBaseUrl,
+			ai_challenge_model: aiModel,
+			ai_challenge_api_key: aiApiKey,
+			ai_challenge_clear_api_key: aiClearKey,
+			ai_challenge_action_prompt: aiActionPrompt,
+			ai_challenge_verdict_prompt: aiVerdictPrompt,
+			ai_challenge_max_rounds: aiMaxRounds,
+			ai_challenge_verdict_delay_ms: aiVerdictDelay,
+			ai_challenge_max_actions: aiMaxActions,
+			ai_challenge_request_timeout: aiRequestTimeout,
+			ai_challenge_success_recheck: aiSuccessRecheck
+		});
+		if (ok) {
+			aiApiKey = '';
+			aiClearKey = false;
+		}
+	}
+
+	function resetAiActionPrompt() {
+		aiActionPrompt = s.ai_challenge_config.default_action_prompt;
+	}
+
+	function resetAiVerdictPrompt() {
+		aiVerdictPrompt = s.ai_challenge_config.default_verdict_prompt;
 	}
 
 	async function testSmtp() {
@@ -304,6 +372,47 @@
 			reindexDone = 0;
 			reindexTotal = 0;
 			pollReindex();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function pollLinkRepair() {
+		try {
+			const s = await api<{
+				running: boolean;
+				done: number;
+				total: number;
+				pending: number;
+				error: string | null;
+			}>('/system/links/repair/status');
+			linkRepairDone = s.done;
+			linkRepairTotal = s.total;
+			linkRepairPending = s.pending;
+			if (s.running) {
+				setTimeout(pollLinkRepair, 1000);
+			} else {
+				linkRepairRunning = false;
+				notice = s.error
+					? `${t('링크 교정 실패')}: ${s.error}`
+					: t('링크 교정을 완료했습니다.');
+				await invalidateAll();
+			}
+		} catch (err) {
+			linkRepairRunning = false;
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function startLinkRepair() {
+		error = '';
+		notice = '';
+		try {
+			await api('/system/links/repair', { method: 'POST' });
+			linkRepairRunning = true;
+			linkRepairDone = 0;
+			linkRepairTotal = 0;
+			pollLinkRepair();
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
 		}
@@ -462,6 +571,15 @@
 		}
 	}
 
+	async function loadDiskUsage() {
+		try {
+			const r = await api<{ usage: Record<string, number> }>('/system/usage');
+			diskUsage = r.usage;
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
 	async function loadUsage() {
 		try {
 			usage = await api<StorageUsage>('/system/storage/usage');
@@ -487,10 +605,32 @@
 		}
 	}
 
+	async function loadLinkRepair() {
+		try {
+			const s = await api<{
+				running: boolean;
+				done: number;
+				total: number;
+				pending: number;
+			}>('/system/links/repair/status');
+			linkRepairPending = s.pending;
+			if (s.running) {
+				linkRepairRunning = true;
+				linkRepairDone = s.done;
+				linkRepairTotal = s.total;
+				pollLinkRepair(); // 진행 중이면 폴링 재개(화면 재진입 대응)
+			}
+		} catch {
+			/* 상태 조회 실패는 무시 — 버튼은 그대로 쓸 수 있다 */
+		}
+	}
+
 	onMount(() => {
 		loadStorage(); // 진행 중이면 폴링을 재개한다(화면 재진입 대응)
+		loadLinkRepair();
 		loadDbBackup();
 		loadRecovery();
+		loadDiskUsage(); // 저장 용량 미터(분리된 비싼 스캔) — 양 모드 모두
 		if (isS3) loadUsage();
 		// 화면을 떠나면 폴링 루프를 정리한다(고아 setTimeout 누적 방지).
 		return () => {
@@ -543,29 +683,33 @@
 	<div class="meter-box">
 		<div class="meter-head">
 			<span>{t('저장 용량')}</span>
-			<span class="mono muted">{filesize(usageTotal)}</span>
+			<span class="mono muted">{diskUsage ? filesize(usageTotal) : ''}</span>
 		</div>
-		<div class="meter">
-			<span class="seg seg-db" style="width:{pct(s.usage.db)}" title="DB {filesize(s.usage.db)}"></span>
-			<span class="seg seg-sites" style="width:{pct(s.usage.sites)}" title="{t('사이트')} {filesize(s.usage.sites)}"></span>
-			<span class="seg seg-res" style="width:{pct(s.usage.resources)}" title="{t('공유 자원')} {filesize(s.usage.resources)}"></span>
-			<span class="seg seg-docs" style="width:{pct(s.usage.documents)}" title="{t('문서')} {filesize(s.usage.documents)}"></span>
-		</div>
-		<ul class="legend-list mono">
-			<li><span class="dot seg-db"></span>DB {filesize(s.usage.db)}</li>
-			<li><span class="dot seg-sites"></span>{t('사이트')} {filesize(s.usage.sites)}</li>
-			<li><span class="dot seg-res"></span>{t('공유 자원')} {filesize(s.usage.resources)}</li>
-			<li><span class="dot seg-docs"></span>{t('문서')} {filesize(s.usage.documents)}</li>
-		</ul>
+		{#if diskUsage}
+			<div class="meter">
+				<span class="seg seg-db" style="width:{pct(diskUsage.db)}" title="DB {filesize(diskUsage.db)}"></span>
+				<span class="seg seg-sites" style="width:{pct(diskUsage.sites)}" title="{t('사이트')} {filesize(diskUsage.sites)}"></span>
+				<span class="seg seg-res" style="width:{pct(diskUsage.resources)}" title="{t('공유 자원')} {filesize(diskUsage.resources)}"></span>
+				<span class="seg seg-docs" style="width:{pct(diskUsage.documents)}" title="{t('문서')} {filesize(diskUsage.documents)}"></span>
+			</div>
+			<ul class="legend-list mono">
+				<li><span class="dot seg-db"></span>DB {filesize(diskUsage.db)}</li>
+				<li><span class="dot seg-sites"></span>{t('사이트')} {filesize(diskUsage.sites)}</li>
+				<li><span class="dot seg-res"></span>{t('공유 자원')} {filesize(diskUsage.resources)}</li>
+				<li><span class="dot seg-docs"></span>{t('문서')} {filesize(diskUsage.documents)}</li>
+			</ul>
+		{:else}
+			<p class="desc"><Spinner />{t('저장 용량 계산 중…')}</p>
+		{/if}
 	</div>
 {:else}
 	<!-- S3 모드 — 로컬 사용량과 Object Storage 사용량을 분리 -->
 	<div class="meter-box">
 		<div class="meter-head"><span>{t('로컬 사용량')}</span></div>
 		<ul class="legend-list mono">
-			<li><span class="dot seg-db"></span>DB {filesize(usage?.local?.db ?? s.usage.db ?? 0)}</li>
-			<li><span class="dot seg-sites"></span>{t('캐시')} {filesize(usage?.local?.cache ?? s.usage.cache ?? 0)}</li>
-			<li><span class="dot seg-res"></span>{t('read-through 캐시')} {filesize(usage?.local?.blobcache ?? s.usage.blobcache ?? 0)}</li>
+			<li><span class="dot seg-db"></span>DB {filesize(usage?.local?.db ?? diskUsage?.db ?? 0)}</li>
+			<li><span class="dot seg-sites"></span>{t('캐시')} {filesize(usage?.local?.cache ?? diskUsage?.cache ?? 0)}</li>
+			<li><span class="dot seg-res"></span>{t('read-through 캐시')} {filesize(usage?.local?.blobcache ?? diskUsage?.blobcache ?? 0)}</li>
 		</ul>
 	</div>
 	<div class="meter-box">
@@ -606,6 +750,16 @@
 			{#if reindexRunning}<Spinner />{/if}{t('검색 인덱스 전체 재색인')}
 		</Button>
 		{#if reindexRunning}<span class="muted">{t('재색인 중')} {reindexDone}/{reindexTotal}</span>{/if}
+	</div>
+</fieldset>
+<fieldset class="sec">
+	<legend>{t('아카이브 링크 교정')}</legend>
+	<p class="desc">{t('구형 스냅샷의 깨진 내부 링크를 아카이브 리졸버로 바로잡습니다 (내용은 그대로).')}</p>
+	<div class="btn-row">
+		<Button variant="outline" size="sm" disabled={busy || linkRepairRunning || storageRunning} onclick={startLinkRepair} aria-busy={linkRepairRunning}>
+			{#if linkRepairRunning}<Spinner />{/if}{t('아카이브 링크 교정')}
+		</Button>
+		{#if linkRepairRunning}<span class="muted">{t('링크 교정 중')} {linkRepairDone}/{linkRepairTotal}</span>{:else if linkRepairPending}<span class="muted">{t('미교정 스냅샷')} {linkRepairPending}{t('개')}</span>{/if}
 	</div>
 </fieldset>
 <fieldset class="sec">
@@ -745,6 +899,38 @@
 	<p class="desc">{t('스냅샷을 찍을 때의 추가 캡처 동작입니다.')}</p>
 	<label class="ck"><input type="checkbox" bind:checked={mobileShot} /> {t('모바일 스크린샷도 저장')}</label>
 	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => save('/system/capture-settings', { mobile_screenshot_enabled: mobileShot })}>{t('저장')}</Button>
+</fieldset>
+
+<fieldset class="sec">
+	<legend>{t('AI 자동 챌린지 해결')}</legend>
+	<p class="desc">{t('동의·연령 확인·"계속하려면 클릭" 같은 양성 게이트를 비전 LLM 이 스크린샷을 보고 마우스·키보드 입력으로 대신 통과시킵니다. 못 풀면 사람 보조(라이브)로 넘어갑니다. OpenAI 호환 API 를 직접 호출합니다.')}</p>
+	{#if !s.ai_challenge_config.key_set}
+		<AlertBox warn={t('WCCG_SECRET_KEY 가 설정되지 않아 API 키를 저장할 수 없습니다. 환경변수를 설정하세요.')} />
+	{/if}
+	<label class="ck"><input type="checkbox" bind:checked={aiEnabled} /> {t('사용')}</label>
+	<label>{t('API 주소(base_url)')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={aiBaseUrl} placeholder="https://api.openai.com/v1" /></label>
+	<label>{t('모델')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={aiModel} placeholder="gpt-4o" /></label>
+	<label>{t('API 키')}
+		<Input type="password" bind:value={aiApiKey}
+			placeholder={s.ai_challenge_config.has_api_key ? t('설정됨') : ''} />
+	</label>
+	{#if s.ai_challenge_config.has_api_key}
+		<label class="ck"><input type="checkbox" bind:checked={aiClearKey} /> {t('저장된 API 키 삭제')}</label>
+	{/if}
+	<label>{t('최대 라운드 수')} <Input type="number" bind:value={aiMaxRounds} min={s.ai_challenge_config.limits.max_rounds_min} max={s.ai_challenge_config.limits.max_rounds_max} /></label>
+	<label>{t('판정 대기(ms)')} <Input type="number" bind:value={aiVerdictDelay} min={s.ai_challenge_config.limits.verdict_delay_ms_min} max={s.ai_challenge_config.limits.verdict_delay_ms_max} /></label>
+	<label>{t('라운드당 액션 수 상한')} <Input type="number" bind:value={aiMaxActions} min={s.ai_challenge_config.limits.max_actions_min} max={s.ai_challenge_config.limits.max_actions_max} /></label>
+	<label>{t('요청 타임아웃(초)')} <Input type="number" bind:value={aiRequestTimeout} min={s.ai_challenge_config.limits.request_timeout_min} max={s.ai_challenge_config.limits.request_timeout_max} /></label>
+	<label class="ck"><input type="checkbox" bind:checked={aiSuccessRecheck} /> {t('통과 판정 교차확인(마커 잔존 시 계속)')}</label>
+	<label class="full">{t('액션 프롬프트')}
+		<Textarea bind:value={aiActionPrompt} rows={8} class="font-mono text-xs" />
+	</label>
+	<Button variant="outline" size="sm" class="self-start" onclick={resetAiActionPrompt}>{t('기본값으로 되돌리기')}</Button>
+	<label class="full">{t('판정 프롬프트')}
+		<Textarea bind:value={aiVerdictPrompt} rows={6} class="font-mono text-xs" />
+	</label>
+	<Button variant="outline" size="sm" class="self-start" onclick={resetAiVerdictPrompt}>{t('기본값으로 되돌리기')}</Button>
+	<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={saveAiChallenge}>{t('저장')}</Button>
 </fieldset>
 
 <fieldset class="sec">
@@ -1034,6 +1220,11 @@
 		gap: 8px;
 	}
 	.sec label.ck {
+		justify-content: flex-start;
+	}
+	.sec label.full {
+		flex-direction: column;
+		align-items: stretch;
 		justify-content: flex-start;
 	}
 	.sec label select {

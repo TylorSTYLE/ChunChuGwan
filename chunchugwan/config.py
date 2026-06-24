@@ -112,6 +112,65 @@ LIVE_POLL_INTERVAL_MS = 300     # 입력 명령 폴링 간격 (화면→worker)
 LIVE_VIEWPORT_W = 1280          # 라이브 세션 뷰포트 (좌표 매핑 단순화용 고정)
 LIVE_VIEWPORT_H = 800
 
+# ---- AI 자동 챌린지 해결 (B 단계 — ai_challenge.py) ----
+# 자동 통과 대기(A)로도 안 풀린 '양성 인터스티셜'(동의·연령 확인·"계속하려면
+# 클릭")을, 비전 분석 가능한 OpenAI 호환 LLM 으로 스크린샷을 판독해 마우스/키보드
+# 입력을 대신 수행함으로써 통과시킨다. 못 풀면 사람 개입(C, live_challenge)으로
+# 캐스케이드한다. 모든 운영값은 시스템 설정(settings)에서 관리하며(db.ai_challenge_settings),
+# 여기 상수는 미설정·오염 시의 기본값과 클램프 범위다. 기본 비활성(opt-in).
+AI_CHALLENGE_ENABLED_DEFAULT = False
+AI_CHALLENGE_MAX_ROUNDS_DEFAULT = 3
+AI_CHALLENGE_MAX_ROUNDS_MIN = 1
+AI_CHALLENGE_MAX_ROUNDS_MAX = 10
+AI_CHALLENGE_VERDICT_DELAY_MS_DEFAULT = 1500
+AI_CHALLENGE_VERDICT_DELAY_MS_MIN = 0
+AI_CHALLENGE_VERDICT_DELAY_MS_MAX = 15000
+AI_CHALLENGE_MAX_ACTIONS_DEFAULT = 10
+AI_CHALLENGE_MAX_ACTIONS_MIN = 1
+AI_CHALLENGE_MAX_ACTIONS_MAX = 30
+# 로컬 무거운 모델은 첫 모델 로드+연산에 최대 수 분이 걸릴 수 있어 read 타임아웃을
+# 넉넉히 둔다 (httpx 단일 timeout 이라 connect/read/write 에 모두 적용). 기본 180초
+# (3분 모델 로드 수용), 상한 300초.
+AI_CHALLENGE_REQUEST_TIMEOUT_DEFAULT = 180
+AI_CHALLENGE_REQUEST_TIMEOUT_MIN = 5
+AI_CHALLENGE_REQUEST_TIMEOUT_MAX = 300
+AI_CHALLENGE_SUCCESS_RECHECK_DEFAULT = True
+
+# 편집 가능한 프롬프트 템플릿 — 출력 규약·뷰포트 설명·JSON 스키마까지 전부
+# 관리자가 시스템 설정에서 편집할 수 있다. 미설정이면 아래 기본값으로 시드한다.
+# 치환 토큰(ai_challenge 가 .replace 로 채움 — JSON 예시의 중괄호와 섞여 있어
+# str.format 은 쓰지 않는다): {viewport_w} {viewport_h} {url} {title}
+# {round_index} {max_rounds} {last_attempt} (판정 프롬프트는 추가로 {actions_taken}).
+DEFAULT_AI_ACTION_PROMPT = (
+    "당신은 웹 아카이빙 캡처 도중 나타난 '사람 확인' 게이트(동의 / 연령 확인 / "
+    "\"계속하려면 클릭\" 같은 양성 인터스티셜)를 사람 대신 통과시키는 보조자다. "
+    "첨부된 스크린샷을 보고 통과에 필요한 입력 동작을 결정하라.\n"
+    "좌표계: 좌상단 (0,0), 정수 픽셀. 뷰포트는 {viewport_w}×{viewport_h}. 모든 "
+    "좌표는 이 범위 안이어야 한다.\n"
+    "현재 페이지: {url} · 제목: {title} · 라운드 {round_index}/{max_rounds}\n"
+    "직전 시도 결과: {last_attempt}\n"
+    "가능한 동작은 다음뿐이다(type·key 는 모두 키보드 입력): click(좌클릭 x,y) / "
+    "type(텍스트 입력 text) / key(특수키 1회 — Enter, Tab, Escape 등 Playwright "
+    "키명) / drag(좌클릭 드래그 from{x,y}→to{x,y}).\n"
+    "오직 아래 JSON 객체 하나만 출력하라. 마크다운 펜스나 설명 문장을 절대 "
+    "덧붙이지 마라.\n"
+    "{\"analysis\":\"무엇이 보이고 어떻게 통과시킬지\",\"actions\":"
+    "[{\"type\":\"click\",\"x\":0,\"y\":0,\"delay_ms\":0}],\"giveup\":false,"
+    "\"reason\":null}\n"
+    "입력이 필요 없거나 어떤 동작으로도 통과시킬 수 없다고 판단하면 actions 를 "
+    "빈 배열로 두고 giveup 을 true, reason 에 사유를 적어라."
+)
+DEFAULT_AI_VERDICT_PROMPT = (
+    "당신은 방금 수행된 입력 동작이 '사람 확인' 게이트를 실제로 통과시켰는지 "
+    "판정한다. 아래 스크린샷은 동작 수행 후 잠시 대기한 뒤의 화면이다.\n"
+    "현재 페이지: {url} · 제목: {title} · 라운드 {round_index}/{max_rounds}\n"
+    "방금 수행한 동작: {actions_taken}\n"
+    "게이트가 사라지고 본래 콘텐츠가 보이면 success, 아직 게이트가 남아 추가 "
+    "입력으로 통과 가능해 보이면 continue, 통과 불가(사람 개입 필요)면 fail.\n"
+    "오직 아래 JSON 객체 하나만 출력하라. 마크다운 펜스나 설명을 덧붙이지 마라.\n"
+    "{\"analysis\":\"화면 상태 판단\",\"verdict\":\"success\",\"reason\":null}"
+)
+
 # ---- 모바일 해상도 스크린샷 (capture.py) ----
 # 데스크탑 스크린샷과 별도로, 같은 URL 을 안드로이드 크롬으로 위장한 모바일
 # 컨텍스트(모바일 UA·뷰포트·터치)로 한 번 더 열어 전체 페이지 스크린샷을 찍는다.
@@ -263,6 +322,20 @@ EMAIL_VERIFICATION_CODE_LENGTH = 6         # 숫자 코드 자릿수
 TRASH_RETENTION_DAYS_DEFAULT = 30
 TRASH_RETENTION_DAYS_MIN = 0               # 0 = 자동 purge 끔
 TRASH_RETENTION_DAYS_MAX = 365
+
+# 클러스터(federation) 조정 루프 — 피어별 주기 조정 사이클 간격(초, 시스템 설정으로 변경).
+# 한 사이클에서 권한 갱신 → pull 델타 → push 델타를 처리한다. 너무 짧으면 피어에
+# 부담이므로 하한을 둔다. 페이싱(건당 간격·배치 상한)은 별도 상수.
+CLUSTER_SYNC_INTERVAL_SECONDS_DEFAULT = 300   # 5분
+CLUSTER_SYNC_INTERVAL_SECONDS_MIN = 60        # 1분
+CLUSTER_SYNC_INTERVAL_SECONDS_MAX = 86400     # 1일
+CLUSTER_SYNC_BATCH_MAX = 20                   # 사이클·방향당 처리 스냅샷 상한(델타 배치)
+CLUSTER_SEND_MIN_INTERVAL_SECONDS = 2         # 전송 건당 최소 간격(대상 부담 방지)
+CLUSTER_HTTP_TIMEOUT_SECONDS = 30             # 피어 HTTP 호출 타임아웃
+CLUSTER_PROTOCOL_VERSION = 1                  # 핸드셰이크 프로토콜 버전(호환성 거부 기준)
+CLUSTER_BUSY_JOBS_THRESHOLD = 5               # 대기·진행 아카이빙 작업이 이 이상이면 수신 백프레셔(429)
+CLUSTER_BUSY_RETRY_AFTER_SECONDS = 60         # 백프레셔 시 Retry-After 안내(초)
+CLUSTER_BLOB_MAX_BYTES = 200 * 1024 * 1024    # 단일 CAS 블롭 업로드 상한(수신측 방어)
 
 # 인증 무차별 대입 방어(rate limit) 기본값 — 시스템 설정(settings)으로 오버라이드한다
 # (db.auth_throttle_settings 가 [MIN, MAX] 로 클램핑). 고정 윈도우 카운터 방식.

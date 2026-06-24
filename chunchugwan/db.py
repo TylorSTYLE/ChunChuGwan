@@ -114,6 +114,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
                                                   --   0 이면 저장공간 최적화의 추출 대상
     search_indexed INTEGER NOT NULL DEFAULT 0,    -- 텍스트 검색 인덱스(snapshot_fts) 반영 여부.
                                                   --   0 이면 'wccg search reindex' 백필 대상
+    links_rewritten INTEGER NOT NULL DEFAULT 0,   -- page.html 앵커가 /goto·/crawl/{id}/goto
+                                                  --   리졸버로 재작성됐는지. 0 이면 'wccg links
+                                                  --   repair' 백필 대상(구형 단일 페이지 스냅샷)
     bytes         INTEGER NOT NULL DEFAULT 0,     -- 스냅샷 디렉토리 파일 용량 합(비정규화).
                                                   --   캡처/compact 시 1회 기록, 용량 집계가
                                                   --   파일시스템 stat 대신 SUM(bytes) 를 쓴다
@@ -288,6 +291,20 @@ CREATE TABLE IF NOT EXISTS trash_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_trash_entries_deleted ON trash_entries(deleted_at);
 
+CREATE TABLE IF NOT EXISTS notes (
+    id             INTEGER PRIMARY KEY,
+    kind           TEXT NOT NULL,                 -- 'page' | 'site'
+    -- target_id 는 kind 에 따라 pages.id 또는 sites.id 를 가리키는 상관 키(FK 아님 —
+    -- 단일 FK 로 두 테이블을 못 가리키고, 페이지/사이트 prune·삭제가 막히지 않게).
+    -- author_user_id 도 표시·필터용 상관 키(trash_entries.deleted_by 와 같은 이유).
+    target_id      INTEGER NOT NULL,
+    content        TEXT NOT NULL,                 -- 메모 본문
+    author_user_id INTEGER,                       -- 작성 사용자 id (표시·필터용)
+    author_label   TEXT NOT NULL,                 -- 작성 시점 display_name 또는 email 사본
+    created_at     TEXT NOT NULL                  -- ISO 8601 UTC
+);
+CREATE INDEX IF NOT EXISTS idx_notes_target ON notes(kind, target_id, created_at);
+
 CREATE TABLE IF NOT EXISTS archive_logs (
     id           INTEGER PRIMARY KEY,
     url          TEXT NOT NULL,          -- 정규화 URL (정규화 실패 시 입력 원본)
@@ -454,6 +471,22 @@ CREATE TABLE IF NOT EXISTS auth_throttle (
     count        INTEGER NOT NULL,       -- 윈도우 내 시도 횟수
     PRIMARY KEY (bucket, key)
 );
+
+CREATE TABLE IF NOT EXISTS cluster_peers (
+    id              INTEGER PRIMARY KEY,
+    peer_node_id    TEXT NOT NULL UNIQUE,   -- 피어 노드의 영속 UUID (핸드셰이크로 획득 — 식별/매칭 근거)
+    display_name    TEXT NOT NULL DEFAULT '',  -- 표시용 이름 캐시 (신뢰/식별 근거 아님)
+    base_url        TEXT NOT NULL,          -- 피어(A)의 주소 (정규화·검증, netcheck 캡처 게이트 예외)
+    api_key_enc     TEXT NOT NULL,          -- A 발급 시스템 키 (crypto.encrypt 대칭암호 — 평문 금지, export 제외)
+    send_enabled    INTEGER NOT NULL DEFAULT 0,  -- 이 피어로 보내기(push) 연결 켜짐
+    receive_enabled INTEGER NOT NULL DEFAULT 0,  -- 이 피어로부터 받기(pull) 연결 켜짐
+    status          TEXT NOT NULL DEFAULT 'pending',  -- pending|active|degraded|revoked|error
+    last_error      TEXT,                   -- 마지막 사이클 오류 요약 (degraded/error 시)
+    send_cursor     INTEGER NOT NULL DEFAULT 0,  -- 마지막으로 push 한 내 snapshots.id (단조)
+    receive_cursor  INTEGER NOT NULL DEFAULT 0,  -- 마지막으로 pull 한 피어 snapshots.id (단조)
+    last_synced_at  TEXT,                   -- 마지막 조정 사이클 완료 시각 (ISO 8601 UTC)
+    created_at      TEXT NOT NULL           -- ISO 8601 UTC
+);
 """
 
 
@@ -542,6 +575,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN search_indexed INTEGER NOT NULL DEFAULT 0"
         )
+    # page.html 앵커 재작성 여부 — 0 인 스냅샷은 'wccg links repair'/시스템 링크 교정
+    # 백필 대상(크롤 이전 단일 페이지 스냅샷). 마이그레이션은 컬럼만 추가하고 실제
+    # 교정은 명시 트리거로 채운다 (search_indexed 와 같은 이유 — connect 마다 page.html
+    #  수천 개를 읽지 않게).
+    if cols and "links_rewritten" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN links_rewritten INTEGER NOT NULL DEFAULT 0"
+        )
     # 로그인 자격증명으로 캡처된(로그인 뒤 콘텐츠) 스냅샷 표식 — 소유자/관리자만
     # 열람. authenticated_by 는 캡처에 쓰인 자격증명의 등록자(없으면 NULL=admin 전용).
     if cols and "authenticated" not in cols:
@@ -627,6 +668,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
             ("live_viewport_h", "INTEGER"),
             # 요청한 사용자 — 작업이 로그가 될 때 archive_logs.requested_by 로 이어진다
             ("requested_by", "INTEGER REFERENCES users(id)"),
+            # 클러스터 보호 선택 — NULL=미지정(사이트 기본 상속), 1=보호, 0=공유 허용.
+            # 워커가 캡처 후 page.cluster_protect 에 적용한다(메타 후처리, 캡처 로직 불변).
+            ("protect", "INTEGER"),
+            # 새 사이트 생성 시 적용할 사이트 보호 기본값 — NULL=미지정. 워커가 이 작업으로
+            # 사이트가 처음 생긴 경우(소속 페이지 1개)에만 적용한다.
+            ("site_protect_default", "INTEGER"),
         ):
             if col not in cols:
                 conn.execute(f"ALTER TABLE archive_jobs ADD COLUMN {col} {ddl}")
@@ -659,6 +706,42 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE crawls ADD COLUMN requested_by INTEGER REFERENCES users(id)"
         )
+    # 클러스터(federation) 권한 — 시스템 API 키에 방향별 클러스터 권한을 더한다
+    # (can_view/can_archive 와 같은 패턴). 기존 키는 클러스터 비허용(0)이 정확한 의미.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(api_keys)")}
+    for col in ("can_cluster_send", "can_cluster_receive"):
+        if cols and col not in cols:
+            conn.execute(
+                f"ALTER TABLE api_keys ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"
+            )
+    # 사이트 보호 기본값 — 이 사이트로 생성되는 아카이브의 클러스터 전송 보호 기본 상태.
+    # 1=보내기 불가(보호 ON, 안전 기본값). 기존 사이트는 보호 ON 으로 시작한다.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sites)")}
+    if cols and "cluster_protect_default" not in cols:
+        conn.execute(
+            "ALTER TABLE sites ADD COLUMN cluster_protect_default INTEGER NOT NULL DEFAULT 1"
+        )
+    # 페이지(아카이브) 보호 플래그 — NULL=사이트 기본값 상속, 1=보호(미전송), 0=전송 허용.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(pages)")}
+    if cols and "cluster_protect" not in cols:
+        conn.execute("ALTER TABLE pages ADD COLUMN cluster_protect INTEGER")
+    # 스냅샷 출처(provenance)·루프 방지 — origin_node_id=받아온 피어 UUID(NULL=로컬 캡처),
+    # origin_ref=출처 노드의 원본 snapshots.id(문자열). 중복 수신 판정·되돌려보내기 방지에 쓴다.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(snapshots)")}
+    if cols and "origin_node_id" not in cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN origin_node_id TEXT")
+    if cols and "origin_ref" not in cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN origin_ref TEXT")
+    # 중복 수신 판정(출처 노드 + 원본 스냅샷 id)·송신 선택 제외(되돌려보내기 방지)용 인덱스
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_snapshots_origin "
+        "ON snapshots(origin_node_id, origin_ref)"
+    )
+    # 아카이브 로그의 클러스터 출처 피어 — source='cluster' 인 수신 로그가 어느 피어에서
+    # 받았는지 기록(상관 키, FK 아님 — 피어 삭제가 막히지 않게). 그 외 출처는 NULL.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(archive_logs)")}
+    if cols and "cluster_peer_id" not in cols:
+        conn.execute("ALTER TABLE archive_logs ADD COLUMN cluster_peer_id INTEGER")
     # 핫패스·삭제·정리 경로의 인덱스 묶음 (멱등). crawl_pages·archive_logs 는
     # 데이터 증가에 가장 크게 자라는 테이블이라, 인덱스가 없으면 아카이빙마다
     # 전체 스캔하거나 삭제·로그 화면이 행 수에 비례해 느려진다. 대상 컬럼은
@@ -688,6 +771,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _migrate_api_key_permission(conn)
     _migrate_log_view_permissions(conn)
     _migrate_trash_permission(conn)
+    _migrate_memo_permissions(conn)
     _backfill_sites(conn)
 
 
@@ -707,9 +791,11 @@ def _seed_permission_groups(conn: sqlite3.Connection) -> None:
     for name, label, perms, order in (
         ("admin", "관리자", list(PERMISSIONS), 10),
         ("archive_manager", "아카이브 관리",
-         ["view", "archive", "delete", "use_api_keys"], 15),
-        ("archiver", "아카이브", ["view", "archive", "use_api_keys"], 20),
-        ("viewer", "보기 전용", ["view"], 30),
+         ["view", "archive", "delete", "use_api_keys",
+          "memo_view", "memo_create", "memo_delete"], 15),
+        ("archiver", "아카이브",
+         ["view", "archive", "use_api_keys", "memo_view", "memo_create"], 20),
+        ("viewer", "보기 전용", ["view", "memo_view"], 30),
     ):
         conn.execute(
             "INSERT OR IGNORE INTO permission_groups "
@@ -795,6 +881,42 @@ def _migrate_trash_permission(conn: sqlite3.Connection) -> None:
             "UPDATE permission_groups SET permissions = ? WHERE name = 'admin'",
             (json.dumps(perms),),
         )
+        _bump_permission_groups_version(conn)
+
+
+def _migrate_memo_permissions(conn: sqlite3.Connection) -> None:
+    """기존 빌트인 그룹에 메모 권한(memo_view/create/delete)을 보강 — 멱등.
+
+    메모 권한 3종은 신규 추가 권한이라 기존 설치의 그룹 permissions JSON 에는
+    없다. 그룹별 기본 부여 범위가 달라(보기=4그룹·등록=3그룹·삭제=2그룹)
+    그룹마다 부여할 권한을 명시한다. admin 은 list(PERMISSIONS) 로 이미 전부
+    가지므로 _migrate_log_view_permissions 가 추가 보강하지만, 여기서도 누락분만
+    멱등 보강해 둔다. 신규 설치는 _seed_permission_groups 가 이미 넣어 no-op.
+    """
+    changed = False
+    for name, grant in (
+        ("admin", ("memo_view", "memo_create", "memo_delete")),
+        ("archive_manager", ("memo_view", "memo_create", "memo_delete")),
+        ("archiver", ("memo_view", "memo_create")),
+        ("viewer", ("memo_view",)),
+    ):
+        row = conn.execute(
+            "SELECT permissions FROM permission_groups "
+            "WHERE name = ? AND is_builtin = 1",
+            (name,),
+        ).fetchone()
+        if row is None:
+            continue
+        perms = _parse_permission_list(row["permissions"])
+        added = [p for p in grant if p not in perms]
+        if added:
+            perms.extend(added)
+            conn.execute(
+                "UPDATE permission_groups SET permissions = ? WHERE name = ?",
+                (json.dumps(perms), name),
+            )
+            changed = True
+    if changed:
         _bump_permission_groups_version(conn)
 
 
@@ -987,6 +1109,55 @@ def list_checks(conn: sqlite3.Connection, page_id: int, limit: int = 20) -> list
     ).fetchall()
 
 
+# ---- 메모 (페이지·사이트 단위 자유 메모, 항목별 누적) ----
+# kind='page'|'site', target_id 는 pages.id 또는 sites.id. 작성자/시각이 행마다
+# 남고 개별 삭제된다. 권한은 web.permissions.can_memo_* (memo_view/create/delete).
+
+NOTE_KINDS = ("page", "site")
+
+
+def list_notes(
+    conn: sqlite3.Connection, kind: str, target_id: int
+) -> list[sqlite3.Row]:
+    """대상(페이지/사이트)의 메모 목록 — 오래된 순(누적 표시용)."""
+    return conn.execute(
+        "SELECT * FROM notes WHERE kind = ? AND target_id = ? "
+        "ORDER BY created_at, id",
+        (kind, target_id),
+    ).fetchall()
+
+
+def add_note(
+    conn: sqlite3.Connection,
+    kind: str,
+    target_id: int,
+    content: str,
+    *,
+    author_user_id: int | None,
+    author_label: str,
+) -> int:
+    """메모 1건 추가하고 id 반환. content 는 호출자가 strip/검증한다."""
+    cur = conn.execute(
+        "INSERT INTO notes (kind, target_id, content, author_user_id, "
+        "author_label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (kind, target_id, content, author_user_id, author_label, _utcnow()),
+    )
+    return cur.lastrowid
+
+
+def get_note(conn: sqlite3.Connection, note_id: int) -> sqlite3.Row | None:
+    """메모 단건 조회."""
+    return conn.execute(
+        "SELECT * FROM notes WHERE id = ?", (note_id,)
+    ).fetchone()
+
+
+def delete_note(conn: sqlite3.Connection, note_id: int) -> bool:
+    """메모 1건 삭제. 삭제됐으면 True."""
+    cur = conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+    return cur.rowcount > 0
+
+
 # ---- 사이트 (서브도메인 단위 그룹) ----
 # 모든 페이지·크롤·크롤 스케줄은 사이트에 속한다. 키는 storage.site_key —
 # www 와 apex 는 같은 사이트, 다른 서브도메인·포트는 다른 사이트.
@@ -1020,6 +1191,76 @@ def get_site_by_key(conn: sqlite3.Connection, site_key: str) -> sqlite3.Row | No
     ).fetchone()
 
 
+def set_site_cluster_protect_default(
+    conn: sqlite3.Connection, site_id: int, protected: bool
+) -> None:
+    """사이트의 클러스터 보호 기본값 설정 (1=보내기 불가/보호, 0=전송 허용).
+    이 사이트로 생성되는 아카이브(page.cluster_protect IS NULL)의 보호 기본 상태."""
+    conn.execute(
+        "UPDATE sites SET cluster_protect_default = ? WHERE id = ?",
+        (int(protected), site_id),
+    )
+
+
+def set_page_cluster_protect(
+    conn: sqlite3.Connection, page_id: int, protect: bool | None
+) -> None:
+    """페이지(아카이브)의 보호 플래그 설정. None=사이트 기본값 상속, True=보호(미전송)."""
+    conn.execute(
+        "UPDATE pages SET cluster_protect = ? WHERE id = ?",
+        (None if protect is None else int(protect), page_id),
+    )
+
+
+def apply_archive_protect(
+    conn: sqlite3.Connection,
+    page_id: int,
+    *,
+    protect: bool | None,
+    site_protect_default: bool | None,
+) -> None:
+    """캡처 후 클러스터 보호 메타 적용 (워커 후처리) — 캡처 로직과 분리된 메타 갱신.
+
+    protect 가 있으면 page.cluster_protect 에 적용한다. site_protect_default 가 있고
+    이 작업으로 사이트가 처음 생긴 경우(소속 페이지 1개)에만 사이트 기본값을 적용한다
+    (기존 사이트의 설정을 매 아카이빙마다 덮어쓰지 않는다). None 인 항목은 건드리지 않는다.
+    """
+    if protect is not None:
+        set_page_cluster_protect(conn, page_id, bool(protect))
+    if site_protect_default is not None:
+        row = conn.execute(
+            "SELECT site_id FROM pages WHERE id = ?", (page_id,)
+        ).fetchone()
+        site_id = row["site_id"] if row else None
+        if site_id is not None:
+            n = conn.execute(
+                "SELECT COUNT(*) AS c FROM pages WHERE site_id = ?", (site_id,)
+            ).fetchone()["c"]
+            if n <= 1:
+                set_site_cluster_protect_default(conn, site_id, bool(site_protect_default))
+
+
+def resolve_page_cluster_protected(conn: sqlite3.Connection, page_id: int) -> bool:
+    """페이지의 실효 보호 상태 — 해소 순서: page 명시값 > site 기본값 > 시스템 기본.
+    True 면 다른 클러스터로 전송하지 않는다(출처측이 강제)."""
+    row = conn.execute(
+        """
+        SELECT p.cluster_protect AS page_protect,
+               s.cluster_protect_default AS site_default
+        FROM pages p LEFT JOIN sites s ON s.id = p.site_id
+        WHERE p.id = ?
+        """,
+        (page_id,),
+    ).fetchone()
+    if row is None:
+        return cluster_protect_default(conn)
+    if row["page_protect"] is not None:
+        return bool(row["page_protect"])
+    if row["site_default"] is not None:
+        return bool(row["site_default"])
+    return cluster_protect_default(conn)
+
+
 def _site_is_empty(conn: sqlite3.Connection, site_id: int) -> bool:
     """사이트에 소속 행(페이지·크롤·크롤 스케줄)이 하나도 없는지."""
     row = conn.execute(
@@ -1045,6 +1286,9 @@ def prune_site_if_empty(conn: sqlite3.Connection, site_id: int | None) -> bool:
         return False
     conn.execute("DELETE FROM site_credentials WHERE site_id = ?", (site_id,))
     conn.execute("DELETE FROM site_certificates WHERE site_id = ?", (site_id,))
+    conn.execute(
+        "DELETE FROM notes WHERE kind = 'site' AND target_id = ?", (site_id,)
+    )
     cur = conn.execute("DELETE FROM sites WHERE id = ?", (site_id,))
     return cur.rowcount == 1
 
@@ -1062,6 +1306,10 @@ def prune_empty_sites(conn: sqlite3.Connection) -> int:
     )
     conn.execute(
         "DELETE FROM site_certificates WHERE site_id IN "
+        f"(SELECT id FROM sites WHERE {empty_filter})"
+    )
+    conn.execute(
+        "DELETE FROM notes WHERE kind = 'site' AND target_id IN "
         f"(SELECT id FROM sites WHERE {empty_filter})"
     )
     cur = conn.execute(f"DELETE FROM sites WHERE {empty_filter}")
@@ -1299,8 +1547,10 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed", "css_externalized", "search_indexed", "bytes",
-     "title", "authenticated", "authenticated_by", "origin", "incomplete"}
+     "note", "resources_indexed", "css_externalized", "search_indexed",
+     "links_rewritten", "bytes",
+     "title", "authenticated", "authenticated_by", "origin", "incomplete",
+     "origin_node_id", "origin_ref"}
 )
 
 
@@ -1477,6 +1727,10 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
     conn.execute("DELETE FROM checks WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM schedules WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM snapshots WHERE page_id = ?", (page_id,))
+    # 페이지 메모 정리 — target_id 가 상관 키(FK 아님)라 자동 삭제되지 않는다.
+    conn.execute(
+        "DELETE FROM notes WHERE kind = 'page' AND target_id = ?", (page_id,)
+    )
     conn.execute("DELETE FROM pages WHERE id = ?", (page_id,))
     prune_site_if_empty(conn, page["site_id"])
     return True
@@ -1494,7 +1748,7 @@ _ARCHIVE_LOG_COLUMNS = frozenset(
     {
         "url", "domain", "page_id", "snapshot_id", "source", "requested_by",
         "status", "started_at", "duration_ms", "http_status", "content_hash",
-        "error", "steps", "job_id",
+        "error", "steps", "job_id", "cluster_peer_id",
     }
 )
 
@@ -1746,12 +2000,13 @@ def prune_system_logs(conn: sqlite3.Connection, keep: int) -> int:
 
 # 감사 액션 종류 — 화면 필터의 단위. archive(아카이빙)·view(아카이브 열람)·
 # download(문서 다운로드)·admin(설정·권한·자격증명 등 관리 작업).
-AUDIT_ACTIONS = ("archive", "view", "download", "admin")
+AUDIT_ACTIONS = ("archive", "view", "download", "admin", "cluster_send")
 AUDIT_ACTION_LABELS = {
     "archive": "아카이빙",
     "view": "열람",
     "download": "문서 다운로드",
     "admin": "관리 작업",
+    "cluster_send": "클러스터 전송",
 }
 
 
@@ -2113,6 +2368,39 @@ def mark_snapshot_css_externalized(
     """스냅샷의 인라인 <style> 추출 완료 표시 — 이후 추출 대상에서 제외된다."""
     conn.execute(
         "UPDATE snapshots SET css_externalized = 1 WHERE id = ?", (snapshot_id,)
+    )
+
+
+def count_links_pending_snapshots(conn: sqlite3.Connection) -> int:
+    """앵커 재작성이 아직 안 된 스냅샷 수 — 링크 교정 백필 대상."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots WHERE links_rewritten = 0"
+    ).fetchone()["c"]
+
+
+def list_links_pending_snapshots(
+    conn: sqlite3.Connection, limit: int | None = None
+) -> list[sqlite3.Row]:
+    """앵커 재작성 백필 대상 스냅샷 (+ 디렉토리 위치·final_url) — 링크 교정용.
+
+    final_url 은 상대 href 절대화 기준으로 함께 내려준다.
+    """
+    sql = """
+        SELECT s.id, p.domain, p.slug, s.dir_name, s.final_url
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.links_rewritten = 0 ORDER BY s.id
+    """
+    if limit is not None:
+        return conn.execute(sql + " LIMIT ?", (limit,)).fetchall()
+    return conn.execute(sql).fetchall()
+
+
+def mark_snapshot_links_rewritten(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> None:
+    """스냅샷의 앵커 재작성 완료 표시 — 이후 링크 교정 대상에서 제외된다."""
+    conn.execute(
+        "UPDATE snapshots SET links_rewritten = 1 WHERE id = ?", (snapshot_id,)
     )
 
 
@@ -2931,6 +3219,8 @@ def enqueue_archive_job(
     credential_id: int | None = None,
     interval_seconds: int | None = None,
     run_at: str | None = None,
+    protect: bool | None = None,
+    site_protect_default: bool | None = None,
 ) -> bool:
     """단발 아카이빙 작업을 큐에 추가. 같은 URL 의 활성 작업이 이미 있으면 무시(False).
 
@@ -2951,11 +3241,15 @@ def enqueue_archive_job(
         """
         INSERT OR IGNORE INTO archive_jobs
             (url, force, source, requested_by, network_tag_id, credential_id,
-             interval_seconds, run_at, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+             interval_seconds, run_at, protect, site_protect_default,
+             status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
         """,
         (url, 1 if force else 0, source, requested_by, network_tag_id,
-         credential_id, interval_seconds, run_at, _utcnow()),
+         credential_id, interval_seconds, run_at,
+         None if protect is None else int(protect),
+         None if site_protect_default is None else int(site_protect_default),
+         _utcnow()),
     )
     return cur.rowcount == 1
 
@@ -4041,6 +4335,9 @@ PERMISSIONS = (
     "view_system_logs",        # 시스템 로그(/log/system) 열람 — 기본 admin 만
     "view_archive_logs",       # 아카이브 로그(/log/archive) 열람 — 기본 admin 만
     "manage_trash",            # 휴지통 열람·복원·영구삭제 — 기본 admin 만
+    "memo_view",               # 페이지·사이트 메모 보기 — 기본 admin·archive_manager·archiver·viewer
+    "memo_create",             # 페이지·사이트 메모 등록 — 기본 admin·archive_manager·archiver
+    "memo_delete",             # 페이지·사이트 메모 삭제 — 기본 admin·archive_manager
 )
 PERMISSION_LABELS = {
     "view": "보기·검색",
@@ -4055,18 +4352,29 @@ PERMISSION_LABELS = {
     "view_system_logs": "시스템 로그 보기",
     "view_archive_logs": "아카이브 로그 보기",
     "manage_trash": "휴지통 관리",
+    "memo_view": "메모 보기",
+    "memo_create": "메모 등록",
+    "memo_delete": "메모 삭제",
 }
 # 로그 열람 3종 — 신규 추가 권한. 빌트인 중 admin 에만 기본 부여하고(관리자 권한
 # 그룹만 기본값), 기존 설치는 _migrate_log_view_permissions 가 보강한다.
 LOG_VIEW_PERMISSIONS = ("view_audit_logs", "view_system_logs", "view_archive_logs")
+# 메모 권한 — 신규 추가 권한. 빌트인 기본값(아래)과 기존 설치 보강
+# (_migrate_memo_permissions)에서 그룹별로 부여 범위가 다르다.
+MEMO_PERMISSIONS = ("memo_view", "memo_create", "memo_delete")
 # 빌트인 역할의 기본 프리셋 — permission_groups 시드의 소스이자, 캐시가 아직
 # 워밍되지 않은 프로세스의 conn 없는 fallback. 런타임 편집·커스텀 그룹은 DB
 # permission_groups 가 정본이며 role_presets(conn) 가 버전 비교로 최신화한다.
 _BUILTIN_PRESETS: dict[str, frozenset[str]] = {
     "admin": frozenset(PERMISSIONS),
-    "archive_manager": frozenset({"view", "archive", "delete", "use_api_keys"}),
-    "archiver": frozenset({"view", "archive", "use_api_keys"}),
-    "viewer": frozenset({"view"}),
+    "archive_manager": frozenset(
+        {"view", "archive", "delete", "use_api_keys",
+         "memo_view", "memo_create", "memo_delete"}
+    ),
+    "archiver": frozenset(
+        {"view", "archive", "use_api_keys", "memo_view", "memo_create"}
+    ),
+    "viewer": frozenset({"view", "memo_view"}),
 }
 PERMISSION_GROUPS_VERSION_KEY = "permission_groups_version"
 
@@ -4875,6 +5183,23 @@ SMTP_PASSWORD_KEY = "smtp_password"  # crypto.encrypt 암호문 (평문·해시 
 SMTP_FROM_KEY = "smtp_from"
 SMTP_TLS_KEY = "smtp_tls"  # 'starttls' | 'ssl' | 'off'
 
+# AI 자동 챌린지 해결(B 단계 — ai_challenge.py) 설정. 자동 통과 대기로도 안 풀린
+# 양성 인터스티셜을 비전 LLM 으로 통과시킨다. 값 해석·클램프·복호화는
+# ai_challenge_settings 리졸버가 맡는다. api_key 는 대칭 암호화한 암호문만 저장
+# 한다(CLAUDE.md 원칙 6 예외 — 외부 LLM 서버에 replay 해야 하므로 복원 가능,
+# crypto.encrypt). 프롬프트 미설정 시 config 의 DEFAULT 상수로 폴백한다.
+AI_CHALLENGE_ENABLED_KEY = "ai_challenge_enabled"            # 'on' | 'off' (기본 off)
+AI_CHALLENGE_BASE_URL_KEY = "ai_challenge_base_url"          # OpenAI 호환 base_url
+AI_CHALLENGE_MODEL_KEY = "ai_challenge_model"                # 비전 모델명
+AI_CHALLENGE_API_KEY_KEY = "ai_challenge_api_key"            # crypto.encrypt 암호문
+AI_CHALLENGE_ACTION_PROMPT_KEY = "ai_challenge_action_prompt"    # 액션 단계 프롬프트
+AI_CHALLENGE_VERDICT_PROMPT_KEY = "ai_challenge_verdict_prompt"  # 판정 단계 프롬프트
+AI_CHALLENGE_MAX_ROUNDS_KEY = "ai_challenge_max_rounds"
+AI_CHALLENGE_VERDICT_DELAY_MS_KEY = "ai_challenge_verdict_delay_ms"
+AI_CHALLENGE_SUCCESS_RECHECK_KEY = "ai_challenge_success_recheck"  # 'on' | 'off'
+AI_CHALLENGE_MAX_ACTIONS_KEY = "ai_challenge_max_actions"
+AI_CHALLENGE_REQUEST_TIMEOUT_KEY = "ai_challenge_request_timeout"
+
 # 춘추관 간 데이터 이전(마이그레이션). 소스(보내는 쪽)가 이전 모드를 켜면
 # 인증 토큰을 발급하고, 그 동안 모든 스크래핑·스케줄·크롤이 중단된다.
 # 받는 쪽은 토큰으로 소스의 /api/migration/* 에서 전체 데이터를 Pull 한다.
@@ -5226,6 +5551,57 @@ def auth_throttle_settings(conn: sqlite3.Connection) -> dict[str, int]:
     }
 
 
+def ai_challenge_settings(conn: sqlite3.Connection) -> dict:
+    """AI 자동 챌린지 해결 설정 (미설정·오염 시 config 기본값/클램프).
+
+    api_key 는 대칭 암호문을 복호화해 평문으로 반환한다(키 미설정·복호화 실패면
+    빈 문자열 — graceful). 프롬프트는 미설정이면 config DEFAULT 상수로 폴백한다.
+    """
+    from . import crypto  # 지연 임포트 — db 의 모듈 로드 의존성을 늘리지 않는다
+
+    enc_key = get_setting(conn, AI_CHALLENGE_API_KEY_KEY)
+    api_key = ""
+    if enc_key:
+        try:
+            api_key = crypto.decrypt(enc_key)
+        except (crypto.SecretKeyMissing, crypto.SecretDecryptError):
+            api_key = ""  # 키 부재·불일치 — 인증 없이 진행(완비 게이트가 걸러냄)
+    recheck = get_setting(conn, AI_CHALLENGE_SUCCESS_RECHECK_KEY)
+    return {
+        "enabled": get_setting(conn, AI_CHALLENGE_ENABLED_KEY) == "on",
+        "base_url": (get_setting(conn, AI_CHALLENGE_BASE_URL_KEY) or "").strip(),
+        "model": (get_setting(conn, AI_CHALLENGE_MODEL_KEY) or "").strip(),
+        "api_key": api_key,
+        "action_prompt": get_setting(conn, AI_CHALLENGE_ACTION_PROMPT_KEY)
+        or config.DEFAULT_AI_ACTION_PROMPT,
+        "verdict_prompt": get_setting(conn, AI_CHALLENGE_VERDICT_PROMPT_KEY)
+        or config.DEFAULT_AI_VERDICT_PROMPT,
+        "max_rounds": _clamped_int_setting(
+            conn, AI_CHALLENGE_MAX_ROUNDS_KEY,
+            config.AI_CHALLENGE_MAX_ROUNDS_DEFAULT,
+            config.AI_CHALLENGE_MAX_ROUNDS_MIN, config.AI_CHALLENGE_MAX_ROUNDS_MAX),
+        "verdict_delay_ms": _clamped_int_setting(
+            conn, AI_CHALLENGE_VERDICT_DELAY_MS_KEY,
+            config.AI_CHALLENGE_VERDICT_DELAY_MS_DEFAULT,
+            config.AI_CHALLENGE_VERDICT_DELAY_MS_MIN,
+            config.AI_CHALLENGE_VERDICT_DELAY_MS_MAX),
+        "max_actions": _clamped_int_setting(
+            conn, AI_CHALLENGE_MAX_ACTIONS_KEY,
+            config.AI_CHALLENGE_MAX_ACTIONS_DEFAULT,
+            config.AI_CHALLENGE_MAX_ACTIONS_MIN, config.AI_CHALLENGE_MAX_ACTIONS_MAX),
+        "request_timeout": _clamped_int_setting(
+            conn, AI_CHALLENGE_REQUEST_TIMEOUT_KEY,
+            config.AI_CHALLENGE_REQUEST_TIMEOUT_DEFAULT,
+            config.AI_CHALLENGE_REQUEST_TIMEOUT_MIN,
+            config.AI_CHALLENGE_REQUEST_TIMEOUT_MAX),
+        # 미설정 시 config 기본값(기본 on) — 명시적으로 'off' 일 때만 끈다.
+        "success_recheck": (
+            config.AI_CHALLENGE_SUCCESS_RECHECK_DEFAULT if recheck is None
+            else recheck == "on"
+        ),
+    }
+
+
 def throttle_hit(
     conn: sqlite3.Connection, bucket: str, key: str, limit: int, window_seconds: int
 ) -> tuple[bool, int]:
@@ -5376,6 +5752,55 @@ def ext_credential_ttl_hours(conn: sqlite3.Connection) -> int:
     )
 
 
+# ---- 클러스터(federation) ----
+
+CLUSTER_NODE_ID_KEY = "cluster_node_id"            # 영속 노드 UUID (재시작·복원 후에도 동일)
+CLUSTER_DISPLAY_NAME_KEY = "cluster_display_name"  # 표시용 이름 (수정 가능 — 신뢰 근거 아님)
+CLUSTER_PROTECT_DEFAULT_KEY = "cluster_protect_default"  # 'on'(보호) | 'off' (기본 on=보호)
+CLUSTER_SYNC_INTERVAL_KEY = "cluster_sync_interval_seconds"
+
+
+def cluster_node_id(conn: sqlite3.Connection) -> str:
+    """이 노드의 영속 UUID — 없으면 1회 생성·저장(get-or-create).
+
+    설치 시 1개를 settings 에 만들어 재시작·백업/복원 후에도 동일하게 쓴다
+    (복원 시 신규 생성 금지 — 복원된 settings 값이 그대로 유지된다). 피어 매칭은
+    항상 이 UUID 로 한다(디스플레이 이름은 표시용일 뿐 식별 근거가 아니다).
+    """
+    existing = get_setting(conn, CLUSTER_NODE_ID_KEY)
+    if existing:
+        return existing
+    node_id = str(uuid.uuid4())
+    set_setting(conn, CLUSTER_NODE_ID_KEY, node_id)
+    return node_id
+
+
+def cluster_display_name(conn: sqlite3.Connection) -> str:
+    """이 노드의 표시용 이름 (미설정이면 빈 문자열). 표시 전용 — 식별/신뢰 근거 아님."""
+    return get_setting(conn, CLUSTER_DISPLAY_NAME_KEY) or ""
+
+
+def set_cluster_display_name(conn: sqlite3.Connection, name: str) -> None:
+    """이 노드의 표시용 이름 설정."""
+    set_setting(conn, CLUSTER_DISPLAY_NAME_KEY, name.strip())
+
+
+def cluster_protect_default(conn: sqlite3.Connection) -> bool:
+    """시스템 기본 보호 상태 (기본 on=보호). 보호 해소의 최종 폴백:
+    page 명시값 > site 기본값 > 이 시스템 기본값. True 면 미전송."""
+    return get_setting(conn, CLUSTER_PROTECT_DEFAULT_KEY) != "off"
+
+
+def cluster_sync_interval_seconds(conn: sqlite3.Connection) -> int:
+    """피어별 조정 사이클 간격(초) — 없거나 오염·범위 밖이면 config 기본값으로 클램핑."""
+    return _clamped_int_setting(
+        conn, CLUSTER_SYNC_INTERVAL_KEY,
+        config.CLUSTER_SYNC_INTERVAL_SECONDS_DEFAULT,
+        config.CLUSTER_SYNC_INTERVAL_SECONDS_MIN,
+        config.CLUSTER_SYNC_INTERVAL_SECONDS_MAX,
+    )
+
+
 # ---- API 키 ----
 
 
@@ -5390,22 +5815,28 @@ def create_api_key(
     created_by: int | None,
     ttl_seconds: int | None,
     owner_user_id: int | None = None,
+    can_cluster_send: bool = False,
+    can_cluster_receive: bool = False,
 ) -> int:
     """API 키 row 생성 후 id 반환. ttl_seconds=None 이면 영구 키.
 
     owner_user_id=None 이면 관리자 발급 시스템 키, 값이 있으면 그 사용자에게
     귀속된 확장 토큰(권한은 _api_auth 가 소유자 현재 역할로 매 요청 재평가).
+    can_cluster_send/receive 는 시스템 키 전용 클러스터 권한(키 소유자=B 기준):
+    send=B 가 이 키로 push 가능, receive=B 가 이 키로 pull 가능.
     """
     expires_at = _later(ttl_seconds) if ttl_seconds is not None else None
     cur = conn.execute(
         """
         INSERT INTO api_keys
             (name, token_hash, prefix, can_view, can_archive,
-             created_by, created_at, expires_at, owner_user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_by, created_at, expires_at, owner_user_id,
+             can_cluster_send, can_cluster_receive)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (name, token_hash, prefix, int(can_view), int(can_archive),
-         created_by, _utcnow(), expires_at, owner_user_id),
+         created_by, _utcnow(), expires_at, owner_user_id,
+         int(can_cluster_send), int(can_cluster_receive)),
     )
     return cur.lastrowid
 
@@ -5498,6 +5929,222 @@ def delete_api_key(conn: sqlite3.Connection, key_id: int) -> bool:
     """API 키 폐기 — 즉시 무효화된다. 없으면 False."""
     cur = conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
     return cur.rowcount == 1
+
+
+# ---- 클러스터 피어 (B 측 연결 — federation) ----
+# B 가 A 의 주소·A 발급 시스템 키·방향을 등록한다. api_key_enc 는 crypto.encrypt
+# 암호문만 저장(평문 금지 — CLAUDE.md 원칙 6 예외, export 제외). 통신은 항상 B 가
+# 개시한다(push/pull). 피어 매칭은 peer_node_id(UUID)로만 한다.
+
+
+def create_cluster_peer(
+    conn: sqlite3.Connection,
+    *,
+    peer_node_id: str,
+    display_name: str,
+    base_url: str,
+    api_key_enc: str,
+    send_enabled: bool,
+    receive_enabled: bool,
+) -> int:
+    """클러스터 피어 등록 후 id 반환. 핸드셰이크로 얻은 peer_node_id 가 UNIQUE —
+    같은 피어 중복 연결은 호출 전에 get_cluster_peer_by_node 로 거른다."""
+    cur = conn.execute(
+        """
+        INSERT INTO cluster_peers
+            (peer_node_id, display_name, base_url, api_key_enc,
+             send_enabled, receive_enabled, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
+        """,
+        (peer_node_id, display_name, base_url, api_key_enc,
+         int(send_enabled), int(receive_enabled), _utcnow()),
+    )
+    return cur.lastrowid
+
+
+def get_cluster_peer(conn: sqlite3.Connection, peer_id: int) -> sqlite3.Row | None:
+    """피어 단건 조회 (id). 없으면 None."""
+    return conn.execute(
+        "SELECT * FROM cluster_peers WHERE id = ?", (peer_id,)
+    ).fetchone()
+
+
+def get_cluster_peer_by_node(
+    conn: sqlite3.Connection, peer_node_id: str
+) -> sqlite3.Row | None:
+    """피어 단건 조회 (UUID) — 중복 연결 가드·송신 제외 판정용. 없으면 None."""
+    return conn.execute(
+        "SELECT * FROM cluster_peers WHERE peer_node_id = ?", (peer_node_id,)
+    ).fetchone()
+
+
+def list_cluster_peers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """전체 피어 목록 (등록 순) — 관리 화면·조정 루프용."""
+    return conn.execute(
+        "SELECT * FROM cluster_peers ORDER BY created_at, id"
+    ).fetchall()
+
+
+def update_cluster_peer_directions(
+    conn: sqlite3.Connection,
+    peer_id: int,
+    *,
+    send_enabled: bool,
+    receive_enabled: bool,
+) -> None:
+    """피어의 방향 토글(보내기/받기) 갱신 — 관리 화면용."""
+    conn.execute(
+        "UPDATE cluster_peers SET send_enabled = ?, receive_enabled = ? WHERE id = ?",
+        (int(send_enabled), int(receive_enabled), peer_id),
+    )
+
+
+def set_cluster_peer_status(
+    conn: sqlite3.Connection,
+    peer_id: int,
+    status: str,
+    *,
+    last_error: str | None = None,
+) -> None:
+    """피어 상태(pending|active|degraded|revoked|error)·마지막 오류 갱신 — 조정 루프용."""
+    conn.execute(
+        "UPDATE cluster_peers SET status = ?, last_error = ? WHERE id = ?",
+        (status, last_error, peer_id),
+    )
+
+
+def update_cluster_peer_meta(
+    conn: sqlite3.Connection,
+    peer_id: int,
+    *,
+    display_name: str,
+) -> None:
+    """피어 디스플레이 이름 캐시 갱신 — 핸드셰이크로 받은 최신값 반영."""
+    conn.execute(
+        "UPDATE cluster_peers SET display_name = ? WHERE id = ?",
+        (display_name, peer_id),
+    )
+
+
+def advance_cluster_peer_cursor(
+    conn: sqlite3.Connection,
+    peer_id: int,
+    *,
+    direction: str,
+    cursor: int,
+) -> None:
+    """피어의 방향별 마지막 커서 전진 (전송/수신 1건 성공 시마다). direction='send'|'receive'.
+
+    역행 방지로 max 를 취한다(중복 사이클·재개에서 후퇴 금지). 성공한 건까지만
+    커서를 올려, 중단 시 진행 중 1건만 다음 사이클에 재시도된다(부분 적재 없음)."""
+    col = "send_cursor" if direction == "send" else "receive_cursor"
+    conn.execute(
+        f"UPDATE cluster_peers SET {col} = MAX({col}, ?), last_synced_at = ? "
+        "WHERE id = ?",
+        (cursor, _utcnow(), peer_id),
+    )
+
+
+def delete_cluster_peer(conn: sqlite3.Connection, peer_id: int) -> bool:
+    """피어 연결 해제 — 즉시 동기화 중단. 없으면 False.
+    (수신 아카이브의 provenance 는 snapshots 에 남으므로 데이터는 보존된다.)"""
+    cur = conn.execute("DELETE FROM cluster_peers WHERE id = ?", (peer_id,))
+    return cur.rowcount == 1
+
+
+# ---- 클러스터 전송 (스냅샷 델타 — 출처측 보호 강제·provenance) ----
+
+
+def list_shareable_snapshots_after(
+    conn: sqlite3.Connection, after_id: int, limit: int
+) -> list[sqlite3.Row]:
+    """송신 커서 이후의 공유 가능한 로컬 스냅샷을 단조(snapshots.id) 순으로.
+
+    출처측이 보호를 강제한다 — 보호 ON(해소: page>site>시스템 기본) 페이지는 제외하고,
+    **로컬 생성분만**(origin_node_id IS NULL) 보낸다(수신 아카이브 재연합 금지 = 되돌려
+    보내기/루프 방지의 강한 보장). 휴지통 항목도 제외. 델타만 조회해 전수 재스캔이 없다.
+    """
+    system_default = 1 if cluster_protect_default(conn) else 0
+    return conn.execute(
+        """
+        SELECT s.id, p.url AS page_url, p.domain, p.slug, s.dir_name,
+               s.content_hash, s.taken_at
+        FROM snapshots s
+        JOIN pages p ON p.id = s.page_id
+        LEFT JOIN sites st ON st.id = p.site_id
+        WHERE s.id > ?
+          AND s.origin_node_id IS NULL
+          AND p.trash_id IS NULL
+          AND COALESCE(p.cluster_protect, st.cluster_protect_default, ?) = 0
+        ORDER BY s.id
+        LIMIT ?
+        """,
+        (after_id, system_default, limit),
+    ).fetchall()
+
+
+def snapshot_shareable(conn: sqlite3.Connection, snapshot_id: int) -> bool:
+    """이 스냅샷을 클러스터로 내보낼 수 있는지 — 출처측 보호 강제(서빙 시 단건 재검증).
+
+    로컬 생성분(origin_node_id IS NULL) + 휴지통 아님 + 보호 OFF 여야 한다. 보호분/
+    수신분은 404 로 가려 존재를 드러내지 않는다(list 와 같은 기준)."""
+    system_default = 1 if cluster_protect_default(conn) else 0
+    row = conn.execute(
+        """
+        SELECT 1 FROM snapshots s
+        JOIN pages p ON p.id = s.page_id
+        LEFT JOIN sites st ON st.id = p.site_id
+        WHERE s.id = ?
+          AND s.origin_node_id IS NULL
+          AND p.trash_id IS NULL
+          AND COALESCE(p.cluster_protect, st.cluster_protect_default, ?) = 0
+        """,
+        (snapshot_id, system_default),
+    ).fetchone()
+    return row is not None
+
+
+def find_snapshot_by_provenance(
+    conn: sqlite3.Connection, origin_node_id: str, origin_ref: str
+) -> sqlite3.Row | None:
+    """출처(노드 UUID + 원본 snapshots.id)로 이미 수신한 스냅샷 조회 — 중복 수신 판정.
+
+    동일 출처면 처리·저장·로깅을 모두 생략한다(신규만 적재). 없으면 None.
+    """
+    return conn.execute(
+        "SELECT * FROM snapshots WHERE origin_node_id = ? AND origin_ref = ?",
+        (origin_node_id, origin_ref),
+    ).fetchone()
+
+
+def get_snapshot_resource_refs(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> list[sqlite3.Row]:
+    """스냅샷의 자원 참조(name·url) 목록 — 전송 envelope 직렬화용."""
+    return conn.execute(
+        "SELECT name, url FROM snapshot_resources WHERE snapshot_id = ? ORDER BY id",
+        (snapshot_id,),
+    ).fetchall()
+
+
+def get_snapshot_document_refs(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> list[sqlite3.Row]:
+    """단일 스냅샷의 문서 참조 전체 컬럼 목록 — 전송 envelope 직렬화용.
+    (GC 용 다중 스냅샷 dedup 조회는 list_snapshot_document_refs 와 별개.)"""
+    return conn.execute(
+        "SELECT url, file, bytes, sha256, content_type "
+        "FROM snapshot_documents WHERE snapshot_id = ? ORDER BY id",
+        (snapshot_id,),
+    ).fetchall()
+
+
+def count_active_archive_jobs(conn: sqlite3.Connection) -> int:
+    """진행 중·대기 단발 아카이빙 작업 수 — 클러스터 수신 백프레셔 판정용."""
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM archive_jobs "
+        "WHERE status IN ('pending', 'in_progress')"
+    ).fetchone()["n"]
 
 
 # ---- 사이트 로그인 자격증명 ----

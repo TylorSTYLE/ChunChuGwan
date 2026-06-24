@@ -120,6 +120,10 @@
     <h3 data-i18n="tab_archive"></h3>
     <p class="muted" data-i18n="archive_intro"></p>
 
+    <!-- 페이지 메모 (선택) — 캡처/아카이브 성공 후 이 URL 의 페이지 메모로 등록된다. -->
+    <label class="memo-label" data-i18n="memo_label" for="capture-memo"></label>
+    <textarea id="capture-memo" rows="2" data-i18n-ph="memo_ph"></textarea>
+
     <!-- 브라우저 캡처 (서버 무요청 — 지금 보고 있는 화면을 그대로) -->
     <button class="btn primary" id="capture-browser" data-i18n="capture_btn"></button>
     <p class="muted" data-i18n="capture_hint"></p>
@@ -143,6 +147,7 @@
       <button class="btn" id="archive-site" data-i18n="archive_site_btn"></button>
     </div>
     <label class="consent"><input type="checkbox" id="force"><span data-i18n="archive_force"></span></label>
+    <label class="consent"><input type="checkbox" id="protect-share"><span data-i18n="archive_protect_share"></span></label>
     <label class="consent"><input type="checkbox" id="with-login"><span data-i18n="archive_with_login"></span></label>
     <div id="login-info" style="display:none">
       <p class="muted" id="login-cookie-count"></p>

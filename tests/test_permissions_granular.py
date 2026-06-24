@@ -50,14 +50,16 @@ def _uid(email: str) -> int:
 
 
 def test_presets_reproduce_role_behaviour(tmp_db):
-    assert db.effective_permissions("viewer") == frozenset({"view"})
-    # 신규 설치 archiver = 보기·아카이빙·개인 API Key (삭제 없음)
+    # viewer = 보기 + 메모 보기
+    assert db.effective_permissions("viewer") == frozenset({"view", "memo_view"})
+    # 신규 설치 archiver = 보기·아카이빙·개인 API Key·메모 보기/등록 (삭제 없음)
     assert db.effective_permissions("archiver") == frozenset(
-        {"view", "archive", "use_api_keys"}
+        {"view", "archive", "use_api_keys", "memo_view", "memo_create"}
     )
-    # 아카이브 관리 = +삭제
+    # 아카이브 관리 = +삭제 +메모 삭제
     assert db.effective_permissions("archive_manager") == frozenset(
-        {"view", "archive", "delete", "use_api_keys"}
+        {"view", "archive", "delete", "use_api_keys",
+         "memo_view", "memo_create", "memo_delete"}
     )
     assert db.effective_permissions("admin") == frozenset(db.PERMISSIONS)
     for inactive in ("pending", "blocked", "withdrawn"):
@@ -68,10 +70,13 @@ def test_overrides_add_and_remove(tmp_db):
     # archive_manager 에서 삭제만 제거
     assert db.effective_permissions(
         "archive_manager", '{"delete": false}'
-    ) == frozenset({"view", "archive", "use_api_keys"})
+    ) == frozenset(
+        {"view", "archive", "use_api_keys",
+         "memo_view", "memo_create", "memo_delete"}
+    )
     # viewer 에게 아카이브 추가
     assert db.effective_permissions("viewer", '{"archive": true}') == frozenset(
-        {"view", "archive"}
+        {"view", "memo_view", "archive"}
     )
 
 

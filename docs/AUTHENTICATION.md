@@ -57,17 +57,19 @@
 
 | 역할 | 설명(=권한 프리셋, 신규 설치 기본값) |
 |---|---|
-| `admin` (관리자) | 전체 권한 (아래 권한 모두 — `manage_trash` 포함) |
-| `archive_manager` (아카이브 관리) | `view` + `archive` + `delete` + `use_api_keys` |
-| `archiver` (아카이브) | `view` + `archive` + `use_api_keys` (삭제 없음) |
-| `viewer` (보기 전용) | `view` (열람·검색·로그) — 아카이빙 버튼이 숨겨지고 API 도 403 |
+| `admin` (관리자) | 전체 권한 (아래 권한 모두 — `manage_trash`·메모 3종 포함) |
+| `archive_manager` (아카이브 관리) | `view` + `archive` + `delete` + `use_api_keys` + 메모 보기·등록·삭제 |
+| `archiver` (아카이브) | `view` + `archive` + `use_api_keys` + 메모 보기·등록 (삭제 없음) |
+| `viewer` (보기 전용) | `view` + `memo_view` (열람·검색·로그·메모 보기) — 아카이빙 버튼이 숨겨지고 API 도 403 |
 | `pending` (권한없음) | 가입 승인 대기 — 로그인은 되지만 안내 페이지(`/pending`) 외 접근 불가 |
 | `blocked` (차단됨) | 로그인 거부, 기존 세션도 즉시 차단 |
 
 > 기존 설치(업그레이드)에서는 `archiver` 가 기존 `delete` 권한을 그대로
 > 유지하며(신규 설치만 삭제 제외), `use_api_keys` 는 `admin`·`archiver` 에
 > 자동 보강된다. 삭제 없이 아카이빙만 시키려면 `archive_manager` 가 아닌
-> `archiver` 로 두거나 사용자별 오버라이드로 `delete` 를 떼면 된다.
+> `archiver` 로 두거나 사용자별 오버라이드로 `delete` 를 떼면 된다. 메모 권한
+> 3종(`memo_view`/`memo_create`/`memo_delete`)도 신규 권한이라 기존 설치에는
+> 그룹별 기본 범위(위 표)대로 멱등 보강된다.
 
 세분 권한(`db.PERMISSIONS`)의 주요 항목은 다음과 같다.
 
@@ -82,6 +84,9 @@
 | `manage_users` | 사용자·초대·시스템 API 키 관리 |
 | `view_authenticated_all` | 다른 사용자가 로그인 캡처한 인증 스냅샷 열람 |
 | `use_api_keys` | 개인 API Key(확장 토큰) 발급·사용 — 크롬 확장 캡처도 이 권한 |
+| `memo_view` | 페이지·사이트 메모 보기 — 기본 admin·archive_manager·archiver·viewer |
+| `memo_create` | 페이지·사이트 메모 등록 — 기본 admin·archive_manager·archiver |
+| `memo_delete` | 페이지·사이트 메모 삭제 — 기본 admin·archive_manager |
 
 **삭제 vs 휴지통 관리.** 페이지·사이트 삭제는 기본적으로 즉시 영구삭제가 아니라
 **휴지통(소프트 삭제)**으로 가며, 이 "삭제(= 휴지통으로 보내기)"는 종전처럼
@@ -107,6 +112,16 @@
 CLI(`wccg ...`)는 로컬 신뢰 실행이라 이 권한 체계의 대상이 아니며, 단발
 아카이빙 큐·스케줄·크롤은 **등록(enqueue) 시점**에만 권한을 검사한다 (이미
 큐에 든 작업은 실행 시점에 재검사하지 않는다).
+
+**클러스터 시스템 키(federation).** 시스템 API 키(`/system/api-keys`, owner=NULL,
+`manage_users`)에는 보기·아카이브 외에 **클러스터 보내기/받기** 권한을 줄 수 있다
+(개인 API Key·`/api/v1` 과는 분리된 `/api/cluster/*` 채널 전용). 키 소유자(연결을
+거는 쪽 B) 기준으로, `클러스터 보내기`=B 가 이 키로 push 가능, `클러스터 받기`=B 가
+이 키로 pull 가능을 뜻한다. 키 원문은 발급 시 1회 표시·DB 엔 SHA-256 만 저장하며
+(폐기=행 삭제=즉시 무효), 매 요청 서버측에서 키 유효성·방향 권한을 재검증한다.
+연결을 등록하는 쪽(B)은 이 키를 평문이 아니라 `WCCG_SECRET_KEY` 로 **대칭 암호화**해
+저장한다(사이트 로그인 자격증명과 같은 원칙 6 예외, `export` 제외). 상세는
+[CLUSTER.md](CLUSTER.md).
 
 신규 가입(`/signup`)과 SSO 자동 생성 계정의 초기 권한은 시스템 메뉴의
 **가입 설정**에서 정한다 (관리자를 뺀 권한 그룹 + 권한없음 중 선택, 기본

@@ -71,10 +71,13 @@ def test_builtin_presets_seed_defaults(tmp_db):
     """
     with db.connect() as conn:
         presets = db.role_presets(conn)
-    assert presets["viewer"] == frozenset({"view"})
-    assert presets["archiver"] == frozenset({"view", "archive", "use_api_keys"})
+    assert presets["viewer"] == frozenset({"view", "memo_view"})
+    assert presets["archiver"] == frozenset(
+        {"view", "archive", "use_api_keys", "memo_view", "memo_create"}
+    )
     assert presets["archive_manager"] == frozenset(
-        {"view", "archive", "delete", "use_api_keys"}
+        {"view", "archive", "delete", "use_api_keys",
+         "memo_view", "memo_create", "memo_delete"}
     )
     assert presets["admin"] == frozenset(db.PERMISSIONS)
 
@@ -107,10 +110,42 @@ def test_migrate_adds_use_api_keys_to_existing_builtins(tmp_db):
         {"view", "archive", "delete", "use_api_keys"}
     )
     assert presets["admin"] == frozenset(db.PERMISSIONS)  # use_api_keys 포함
+    # archive_manager 는 새로 시드돼 메모 권한까지 포함
     assert presets["archive_manager"] == frozenset(
-        {"view", "archive", "delete", "use_api_keys"}
+        {"view", "archive", "delete", "use_api_keys",
+         "memo_view", "memo_create", "memo_delete"}
     )
-    assert presets["viewer"] == frozenset({"view"})  # 보강 대상 아님
+    assert presets["viewer"] == frozenset({"view", "memo_view"})  # use_api_keys 보강 대상 아님
+
+
+def test_migrate_adds_memo_permissions_to_existing_builtins(tmp_db):
+    """기존 설치 보강 — 메모 권한이 그룹별 범위대로 추가된다 (멱등).
+
+    memo_view/create/delete 는 신규 권한이라 레거시 그룹 JSON 에 없다.
+    archive_manager=3종, archiver=보기+등록, viewer=보기, admin=3종을 보강하고,
+    재실행해도 변하지 않는다.
+    """
+    # 레거시 상태로 되돌림 — 모든 빌트인에서 메모 권한 제거
+    with db.connect() as conn:
+        for name in ("admin", "archive_manager", "archiver", "viewer"):
+            row = conn.execute(
+                "SELECT permissions FROM permission_groups WHERE name = ?", (name,)
+            ).fetchone()
+            kept = [p for p in db._parse_permission_list(row["permissions"])
+                    if not p.startswith("memo_")]
+            conn.execute(
+                "UPDATE permission_groups SET permissions = ? WHERE name = ?",
+                (json.dumps(kept), name),
+            )
+    with db.connect() as conn:
+        db._migrate_memo_permissions(conn)
+        presets = db.role_presets(conn)
+    assert {"memo_view", "memo_create", "memo_delete"} <= presets["admin"]
+    assert presets["archive_manager"] >= {"memo_view", "memo_create", "memo_delete"}
+    assert "memo_view" in presets["archiver"] and "memo_create" in presets["archiver"]
+    assert "memo_delete" not in presets["archiver"]
+    assert "memo_view" in presets["viewer"]
+    assert "memo_create" not in presets["viewer"]
 
 
 # ---- 이름 정규화 ----

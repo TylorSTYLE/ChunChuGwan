@@ -8,6 +8,7 @@
 	import type { PageTimeline } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import Notes from '$lib/components/Notes.svelte';
 	import { createAction } from '$lib/action.svelte';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -55,6 +56,15 @@
 {#if tl.page.title}<p class="muted">{tl.page.title}</p>{/if}
 
 <AlertBox error={action.error} />
+
+<Notes
+	kind="page"
+	targetId={tl.page.id}
+	notes={tl.notes}
+	canView={tl.can_memo_view}
+	canCreate={tl.can_memo_create}
+	canDelete={tl.can_memo_delete}
+/>
 
 <div class="toolbar">
 	{#if tl.site}<a href="{base}/archive/sites/{tl.site.id}">← {t('사이트 상세')}</a>{/if}

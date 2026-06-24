@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import capture, config, db, netcheck
+from . import capture, config, db, input_replay, netcheck
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ class LiveChallengeSession:
                 with db.connect() as conn:
                     cmds = db.claim_live_commands(conn, self.token)
                 for cmd in cmds:
-                    self._replay(page, cmd, vw, vh)
+                    input_replay.replay(page, cmd, vw, vh)
                 # 5) 통과 판정
                 raw_html = page.content()
                 if capture.challenge_reason(raw_html, None, page.url, page.title()) is None:
@@ -126,29 +126,3 @@ class LiveChallengeSession:
             os.replace(tmp, path)
         except Exception as e:
             logger.warning("라이브 스크린샷 실패(계속): %s", e)
-
-    def _replay(self, page, cmd, vw: int, vh: int) -> None:
-        """입력 명령 하나를 재생 (좌표는 뷰포트로 클램프, CDP Input → isTrusted)."""
-        delay = cmd["delay_ms"] or 0
-        if delay:
-            page.wait_for_timeout(min(delay, 3000))  # 비정상적으로 큰 간격은 상한
-        x = max(0, min(cmd["x"] if cmd["x"] is not None else 0, vw - 1))
-        y = max(0, min(cmd["y"] if cmd["y"] is not None else 0, vh - 1))
-        kind = cmd["kind"]
-        try:
-            if kind == "click":
-                page.mouse.click(x, y)
-            elif kind == "move":
-                page.mouse.move(x, y)
-            elif kind == "down":
-                page.mouse.move(x, y)
-                page.mouse.down()
-            elif kind == "up":
-                page.mouse.move(x, y)
-                page.mouse.up()
-            elif kind == "key":
-                page.keyboard.press(cmd["key"] or "")
-            elif kind == "text":
-                page.keyboard.type(cmd["key"] or "")
-        except Exception as e:
-            logger.warning("라이브 입력 재생 실패(%s): %s", kind, e)

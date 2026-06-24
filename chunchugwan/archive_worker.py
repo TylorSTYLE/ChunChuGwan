@@ -20,7 +20,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from . import capture, config, crawler, db, live_challenge, pipeline, scheduler
+from . import (
+    ai_challenge, capture, config, crawler, db, live_challenge, pipeline, scheduler,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,25 @@ def _live_session_for(item) -> "live_challenge.LiveChallengeSession | None":
             "으로 설정하세요."
         )
     return None
+
+
+def _ai_session_for(item) -> "ai_challenge.AIChallengeSession | None":
+    """이 작업에 줄 AI 자동 챌린지 해결 세션(B). 설정이 켜져 있고 base_url·model·
+    api_key 가 모두 갖춰졌을 때만 만든다 (어느 하나라도 비면 None — 그냥 사람
+    보조 C 로만 캐스케이드).
+
+    live(C)와 달리 엔진 게이트(patchright/headful)를 두지 않는다 — 자동 통과
+    대기(A)로도 안 풀린 인터랙티브 게이트를 LLM 이 입력으로 풀 수 있으므로
+    헤드리스에서도 의미가 있다(통과 후 raw_html 로 정상 캡처 진행)."""
+    with db.connect() as conn:
+        cfg = db.ai_challenge_settings(conn)
+    if not cfg["enabled"]:
+        return None
+    if not (cfg["base_url"] and cfg["model"] and cfg["api_key"]):
+        return None
+    return ai_challenge.AIChallengeSession(
+        item["id"], network_tag_id=item["network_tag_id"]
+    )
 
 
 def _utcnow() -> datetime:
@@ -167,6 +188,11 @@ def process_next(
             live_session = _live_session_for(item)
             if live_session is not None:
                 extra["live_session"] = live_session
+            # AI 자동 챌린지 해결(B): 양성 게이트를 비전 LLM 입력으로 통과 시도.
+            # 설정 완비 + enabled 일 때만 주입되며, 못 풀면 사람 보조(C)로 넘어간다.
+            ai_session = _ai_session_for(item)
+            if ai_session is not None:
+                extra["ai_session"] = ai_session
             # 기본 캡처 함수는 호출 시점에 참조한다 (테스트의 monkeypatch 반영)
             fn = archive_fn if archive_fn is not None else pipeline.archive_url
             outcome = fn(
@@ -185,6 +211,17 @@ def process_next(
             # 확장 1회성 세션 자격증명은 소비 후 폐기 (영속 자격증명은 보존).
             # 실패·재시도 분은 만료 GC(delete_expired_ext_credentials)가 정리한다.
             db.delete_ephemeral_credential(conn, item["credential_id"])
+        # 클러스터 보호 선택 — 캡처 후 메타 적용(캡처 로직과 분리). 작업 행에 컬럼이
+        # 없을 수 있는 주입 테스트를 대비해 안전 접근(keys() 검사).
+        keys = item.keys() if hasattr(item, "keys") else ()
+        protect = item["protect"] if "protect" in keys else None
+        site_default = item["site_protect_default"] if "site_protect_default" in keys else None
+        if (protect is not None or site_default is not None) and outcome.page_id:
+            db.apply_archive_protect(
+                conn, outcome.page_id,
+                protect=None if protect is None else bool(protect),
+                site_protect_default=None if site_default is None else bool(site_default),
+            )
     # interval 이 있으면 아카이빙 후 자동 재아카이빙 주기를 등록한다 — 신규 URL 은
     # 아카이빙이 끝나야 pages 행이 생기므로 등록을 여기서 한다.
     if item["interval_seconds"]:

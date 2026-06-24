@@ -727,7 +727,7 @@ function pushProgress(phase, done, total) {
 
 // 현재 페이지를 브라우저에서 캡처해 ingest 로 올린다.
 async function captureAndIngest(payload) {
-  const { url, tabId, force, network_tag } = payload || {};
+  const { url, tabId, force, network_tag, protect } = payload || {};
   if (tabId == null || !isCapturable(url)) {
     return { ok: false, status: 0, error: "unsupported_page" };
   }
@@ -773,6 +773,7 @@ async function captureAndIngest(payload) {
     dpr: grab.dpr, ua: navigator.userAgent,
   }));
   if (network_tag) form.set("network_tag", network_tag);
+  if (typeof protect === "boolean") form.set("protect", protect ? "true" : "false"); // 클러스터 보호
   form.set("page_html", new Blob([pageHtml], { type: "text/html" }), "page.html");
   form.set("raw_html", new Blob([grab.raw_html], { type: "text/html" }), "raw.html");
   if (shotB64) form.set("screenshot", b64ToBlob(shotB64, "image/png"), "screenshot.png");
@@ -851,6 +852,7 @@ const HANDLERS = {
   archivePage: async (m) => {
     const body = { url: m.payload.url, force: !!m.payload.force };
     if (m.payload.network_tag) body.network_tag = m.payload.network_tag; // 사설 호스트 사전 태그
+    if (typeof m.payload.protect === "boolean") body.protect = m.payload.protect; // 클러스터 보호
     const res = await apiFetch("/api/v1/archive", { method: "POST", body });
     await trackJob(res, m.payload.url);
     return res;
@@ -859,6 +861,13 @@ const HANDLERS = {
   // 브라우저에서 직접 캡처해 ingest 로 업로드 (서버 무요청). 사설 호스트 무태그면
   // {needs_network_tag, host} 로 응답해 팝업이 태그를 고르게 한다.
   captureBrowser: (m) => captureAndIngest(m.payload),
+
+  // 페이지 메모 등록 — 캡처 메커니즘과 독립. 토큰 소유자의 memo_create 권한이 필요.
+  addNote: (m) =>
+    apiFetch("/api/v1/notes", {
+      method: "POST",
+      body: { url: m.payload.url, content: m.payload.content },
+    }),
 
   // 로컬 네트워크 태그 목록·생성 (사설 호스트 캡처 시 팝업이 사용).
   listNetworkTags: () => apiFetch("/api/v1/network-tags"),

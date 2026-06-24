@@ -35,6 +35,7 @@
 | POST | `/api/v1/ingest` | 아카이브 | 확장이 브라우저에서 직접 캡처한 산출물 적재 (멀티파트, 동기 응답, 사용자 토큰 전용) — 서버 무요청 |
 | GET | `/api/v1/network-tags` | 아카이브 | 로컬 네트워크 태그 목록 (사설 호스트 캡처 시 선택) |
 | POST | `/api/v1/network-tags` | 시스템 관리 | 로컬 네트워크 태그 생성 (`manage_system` 권한) |
+| POST | `/api/v1/notes` | 메모 등록 | URL 의 페이지에 메모 1건 등록 — 본문 `{"url": "...", "content": "..."}`. 캡처와 독립(`memo_create` 권한 필요) |
 
 ```bash
 curl -H "Authorization: Bearer wccg_..." http://127.0.0.1:8765/api/v1/pages

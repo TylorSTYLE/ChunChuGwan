@@ -78,6 +78,23 @@ def test_system_overview(tmp_db):
     assert body["smtp_config"]["has_password"] is False
     assert "migration_mode" in body
     assert body["version"]
+    # 저장 사용량은 GET /system/usage 로 분리됐고, 프론트가 안 읽던 비싼 필드는 제거됨
+    # (페이지 진입을 막던 sites/ 전체 스캔 — 개요 응답에서 빠져야 한다).
+    assert "usage" not in body
+    assert "optimize_pending" not in body
+    assert "search" not in body
+
+
+def test_system_usage(tmp_db):
+    body = admin_client().get("/api/web/system/usage").json()
+    assert set(body["usage"]) >= {"db", "sites", "resources", "documents"}
+    assert all(isinstance(v, int) for v in body["usage"].values())
+
+
+def test_system_usage_requires_manage_system(tmp_db):
+    assert client_for().get("/api/web/system/usage").status_code == 401
+    _, arch = make_user(email="arch@test.co", role="archiver")
+    assert client_for(arch).get("/api/web/system/usage").status_code == 403
 
 
 # ---- 가입 설정 ----
@@ -249,3 +266,77 @@ def test_system_logs_default_page_size(tmp_db):
     assert body["page_num"] == 1
     assert c.get("/api/web/system/logs?limit=10").json()["limit"] == 10  # 10 허용
     assert c.get("/api/web/system/logs?limit=37").json()["limit"] == 25  # 허용 밖 → 25
+
+
+# ---- AI 자동 챌린지 해결(B) 설정 ----
+
+_AI_BODY = {
+    "ai_challenge_enabled": True,
+    "ai_challenge_base_url": "https://api.openai.com/v1",
+    "ai_challenge_model": "gpt-4o",
+    "ai_challenge_api_key": "sk-secret-123",
+    "ai_challenge_clear_api_key": False,
+    "ai_challenge_action_prompt": "",
+    "ai_challenge_verdict_prompt": "",
+    "ai_challenge_max_rounds": 3,
+    "ai_challenge_verdict_delay_ms": 1500,
+    "ai_challenge_max_actions": 10,
+    "ai_challenge_request_timeout": 30,
+    "ai_challenge_success_recheck": True,
+}
+
+
+def test_ai_challenge_get_exposes_no_plaintext_key(tmp_db, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    c = admin_client()
+    r = c.post("/api/web/system/ai-challenge-settings", json=_AI_BODY, headers=POST_HEADERS)
+    assert r.status_code == 200
+    cfg = c.get("/api/web/system").json()["ai_challenge_config"]
+    assert cfg["has_api_key"] is True
+    assert cfg["enabled"] is True and cfg["model"] == "gpt-4o"
+    assert "api_key" not in cfg                       # 평문 절대 노출 금지
+    assert "sk-secret-123" not in str(cfg)
+    # 저장은 암호문 — DB 의 원시 설정값이 평문이 아니다
+    with db.connect() as conn:
+        stored = db.get_setting(conn, db.AI_CHALLENGE_API_KEY_KEY)
+    assert stored and stored != "sk-secret-123"
+
+
+def test_ai_challenge_blank_prompt_resets_to_default(tmp_db, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    c = admin_client()
+    c.post("/api/web/system/ai-challenge-settings", json=_AI_BODY, headers=POST_HEADERS)
+    cfg = c.get("/api/web/system").json()["ai_challenge_config"]
+    assert cfg["action_prompt"] == cfg["default_action_prompt"]   # 공백 → 기본값 폴백
+    assert cfg["verdict_prompt"] == cfg["default_verdict_prompt"]
+
+
+def test_ai_challenge_clamp_rejects_out_of_range(tmp_db, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    c = admin_client()
+    bad = dict(_AI_BODY, ai_challenge_max_rounds=999)
+    r = c.post("/api/web/system/ai-challenge-settings", json=bad, headers=POST_HEADERS)
+    assert r.status_code == 400
+
+
+def test_ai_challenge_api_key_blank_keeps_existing(tmp_db, monkeypatch):
+    monkeypatch.setattr(config, "SECRET_KEY", "test-secret")
+    c = admin_client()
+    c.post("/api/web/system/ai-challenge-settings", json=_AI_BODY, headers=POST_HEADERS)
+    # 키 없이 재저장(빈 문자열) → 기존 키 유지
+    r = c.post("/api/web/system/ai-challenge-settings",
+               json=dict(_AI_BODY, ai_challenge_api_key=""), headers=POST_HEADERS)
+    assert r.status_code == 200
+    assert c.get("/api/web/system").json()["ai_challenge_config"]["has_api_key"] is True
+    # clear 면 삭제
+    r = c.post("/api/web/system/ai-challenge-settings",
+               json=dict(_AI_BODY, ai_challenge_api_key="", ai_challenge_clear_api_key=True),
+               headers=POST_HEADERS)
+    assert c.get("/api/web/system").json()["ai_challenge_config"]["has_api_key"] is False
+
+
+def test_ai_challenge_requires_manage_system(tmp_db):
+    _, token = make_user(email="arch2@test.co", role="archiver")
+    r = client_for(token).post(
+        "/api/web/system/ai-challenge-settings", json=_AI_BODY, headers=POST_HEADERS)
+    assert r.status_code == 403

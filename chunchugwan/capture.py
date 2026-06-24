@@ -21,9 +21,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
-from urllib.parse import urldefrag, urljoin, urlsplit
+from urllib.parse import quote, urldefrag, urljoin, urlsplit
 
-from . import browser_engine, config, documents, netcheck, storage, trackers
+from . import (
+    browser_engine, config, consent_overlays, documents, netcheck, storage,
+    trackers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +43,12 @@ logger = logging.getLogger(__name__)
 # crypto.subtle(보안 컨텍스트)로 계산하고, http 페이지처럼 없는 환경에서는
 # expose_function 으로 노출된 Python 바인딩(_sha256_of_base64)으로 폴백한다.
 _INLINE_JS = """
-async ({ timeoutMs, concurrency }) => {
+async ({ timeoutMs, concurrency, baseUrl }) => {
   const failed = [];
   const inlined = [];
+  // 상대경로 해석 기준 — 링크 재작성이 <base> 를 떼기 전에 Python 이 떠 둔 값.
+  // 없으면(직접 호출 등) 현재 baseURI 로 폴백.
+  const base = baseUrl || document.baseURI;
   const shaHex = async (blob, dataUrl) => {
     if (crypto.subtle) {
       const buf = await blob.arrayBuffer();
@@ -56,7 +62,8 @@ async ({ timeoutMs, concurrency }) => {
     }
     return null;
   };
-  const toDataUrl = async (url) => {
+  const dataUrlCache = new Map();
+  const fetchDataUrl = async (url) => {
     const res = await fetch(url, {
       credentials: "omit", signal: AbortSignal.timeout(timeoutMs),
     });
@@ -73,6 +80,13 @@ async ({ timeoutMs, concurrency }) => {
       if (sha) inlined.push({ url, sha256: sha });
     } catch (e) { /* 해시 실패는 인라인을 막지 않는다 */ }
     return dataUrl;
+  };
+  // URL 단위로 in-flight 프로미스를 캐시 — 같은 자원을 여러 요소가 써도
+  // fetch·인코딩·inlined 기록은 1회. 실패(reject)도 공유해 재시도를 막는다.
+  const toDataUrl = (url) => {
+    let cached = dataUrlCache.get(url);
+    if (!cached) { cached = fetchDataUrl(url); dataUrlCache.set(url, cached); }
+    return cached;
   };
   const FONT_URL_RE = /url\\((['"]?)([^)'"]+?\\.(?:woff2?|ttf|otf|eot)(?:[?#][^)'"]*)?)\\1\\)/gi;
   const inlineFonts = async (cssText, baseUrl) => {
@@ -99,6 +113,35 @@ async ({ timeoutMs, concurrency }) => {
     out.push(cssText.slice(last));
     return out.join("");
   };
+  // 인라인 style="...url(...)..." 의 이미지 참조 — <img>/<style>/<link> 어디에도
+  // 안 걸려 상대경로면 뷰어(/snapshot/{id}/file/)에서 깨진다. <img> 와 동일하게
+  // data URI 로 인라인한다 (실패분은 failed 로 — 컨텍스트/과거캡처 폴백이 받는다).
+  const STYLE_URL_RE = /url\\((['"]?)([^)'"]+?)\\1\\)/gi;
+  const inlineStyleUrls = async (styleText, baseUrl) => {
+    const matches = Array.from(styleText.matchAll(STYLE_URL_RE));
+    if (!matches.length) return styleText;
+    const repls = await Promise.all(matches.map(async (m) => {
+      const ref = m[2].trim();
+      if (!ref || ref.startsWith("data:") || ref.startsWith("#")) return m[0];
+      let abs = null;
+      try { abs = new URL(ref, baseUrl).href; } catch (e) {}
+      try {
+        if (!abs) throw new Error("URL 해석 실패");
+        return "url(" + (await toDataUrl(abs)) + ")";
+      } catch (e) {
+        failed.push({ kind: "bgstyle", url: abs, raw: m[0] });
+        return m[0];
+      }
+    }));
+    const out = [];
+    let last = 0;
+    matches.forEach((m, i) => {
+      out.push(styleText.slice(last, m.index), repls[i]);
+      last = m.index + m[0].length;
+    });
+    out.push(styleText.slice(last));
+    return out.join("");
+  };
   const tasks = [];
   // <style> 스냅샷은 작업 생성 시점에 뜬다 — 링크 치환으로 새로 생기는
   // <style> 은 이미 inlineFonts 를 거쳤으므로 다시 처리하지 않는다
@@ -119,7 +162,7 @@ async ({ timeoutMs, concurrency }) => {
   }
   for (const style of Array.from(document.querySelectorAll("style"))) {
     tasks.push(async () => {
-      style.textContent = await inlineFonts(style.textContent, document.baseURI);
+      style.textContent = await inlineFonts(style.textContent, base);
     });
   }
   for (const img of Array.from(document.querySelectorAll("img[src]"))) {
@@ -135,6 +178,14 @@ async ({ timeoutMs, concurrency }) => {
       }
     });
   }
+  for (const el of Array.from(document.querySelectorAll('[style*="url(" i]'))) {
+    const styleText = el.getAttribute("style");
+    if (!styleText) continue;
+    tasks.push(async () => {
+      const replaced = await inlineStyleUrls(styleText, base);
+      if (replaced !== styleText) el.setAttribute("style", replaced);
+    });
+  }
   const queue = tasks.slice();
   const worker = async () => {
     while (queue.length) await queue.shift()();
@@ -148,7 +199,8 @@ async ({ timeoutMs, concurrency }) => {
 
 # 폴백으로 받아온 자원을 DOM 에 반영. img 는 data URI 치환,
 # css 는 <style> 로 교체(url 은 Python 에서 절대화됨), font 는 인라인된
-# <style> 텍스트 안의 원본 url(...) 토큰을 data URI 로 치환.
+# <style> 텍스트 안의 원본 url(...) 토큰을 data URI 로 치환, bgstyle 은
+# 인라인 style="" 속성 안의 원본 url(...) 토큰을 data URI 로 치환.
 _APPLY_INLINE_JS = """
 (repls) => {
   for (const r of repls) {
@@ -171,6 +223,13 @@ _APPLY_INLINE_JS = """
       for (const style of Array.from(document.querySelectorAll("style"))) {
         if (style.textContent.includes(r.raw)) {
           style.textContent = style.textContent.split(r.raw).join("url(" + r.dataUrl + ")");
+        }
+      }
+    } else if (r.kind === "bgstyle") {
+      for (const el of Array.from(document.querySelectorAll("[style]"))) {
+        const s = el.getAttribute("style");
+        if (s && s.includes(r.raw)) {
+          el.setAttribute("style", s.split(r.raw).join("url(" + r.dataUrl + ")"));
         }
       }
     }
@@ -235,6 +294,26 @@ _REMOVE_FROM_LIVE_DOM_JS = """
 }
 """
 
+# live DOM에서 쿠키 동의(CMP) 오버레이를 제거하고, 그것이 걸어둔 스크롤 잠금
+# (html/body 의 인라인 overflow:hidden)을 푼다 — 무언가 실제로 제거했을 때만
+# 잠금을 풀어 정상 페이지의 overflow 를 건드리지 않는다.
+_REMOVE_CONSENT_JS = """
+(selectors) => {
+  let removed = 0;
+  for (const sel of selectors) {
+    try {
+      document.querySelectorAll(sel).forEach(el => { el.remove(); removed += 1; });
+    } catch (e) { /* 잘못된 셀렉터 무시 */ }
+  }
+  if (removed > 0) {
+    for (const el of [document.documentElement, document.body]) {
+      if (el && el.style && el.style.overflow === 'hidden') el.style.overflow = '';
+    }
+  }
+  return removed;
+}
+"""
+
 # live DOM에서 src 없는 <script>와 <noscript> 중 텍스트가 패턴에 일치하는 것을 제거.
 _REMOVE_INLINE_TRACKERS_JS = """
 (patterns) => {
@@ -288,6 +367,30 @@ class CaptureResult:
 
 # 앵커 절대 URL 목록 → {원본 href: 재작성 href}. 비거나 None 이면 재작성 없음.
 LinkRewriter = Callable[[Sequence[str]], dict[str, str]]
+
+
+def generic_link_rewriter() -> LinkRewriter:
+    """단일 페이지(비크롤) 캡처용 앵커 재작성 — http(s) 링크를 /goto 리졸버로.
+
+    크롤은 crawl_id 종속 /crawl/{id}/goto 로 보내지만(crawler.link_rewriter),
+    단일 페이지는 대상 스냅샷 id 를 캡처 시점에 알 수 없어 url 리졸버
+    /goto?url=... 로 보낸다. http(s) 가 아닌 mailto:/javascript:/# 등은 그대로
+    둔다. crawler._normalize_http 와 같은 정규화(명시적 스킴 요구).
+    """
+
+    def rewrite(hrefs: Sequence[str]) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for href in hrefs:
+            if not href.startswith(("http://", "https://")):
+                continue
+            try:
+                norm = storage.normalize_url(href)
+            except ValueError:
+                continue
+            mapping[href] = f"/goto?url={quote(norm, safe='')}"
+        return mapping
+
+    return rewrite
 
 # 자원 인라인 실패 시 과거 캡처본 조회 — URL 을 받아 (content-type, body) 또는
 # None 을 반환한다 (pipeline 이 snapshot_resources + 자원 CAS 로 구현).
@@ -499,6 +602,7 @@ def capture(
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
     live_session: "object | None" = None,
+    ai_session: "object | None" = None,
     mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
@@ -520,7 +624,7 @@ def capture(
         return _capture_once(url, out_dir, remove_selectors, link_rewriter,
                              session=session, resource_fallback=resource_fallback,
                              insecure_tls=insecure_tls, credential=credential,
-                             live_session=live_session,
+                             live_session=live_session, ai_session=ai_session,
                              mobile_screenshot=mobile_screenshot)
     except CaptureError as e:
         if "ERR_HTTP2" not in str(e):
@@ -531,7 +635,8 @@ def capture(
             browser_args=("--disable-http2",),
             resource_fallback=resource_fallback,
             insecure_tls=insecure_tls, credential=credential,
-            live_session=live_session, mobile_screenshot=mobile_screenshot,
+            live_session=live_session, ai_session=ai_session,
+            mobile_screenshot=mobile_screenshot,
         )
 
 
@@ -546,6 +651,7 @@ def _capture_once(
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
     live_session: "object | None" = None,
+    ai_session: "object | None" = None,
     mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
@@ -556,7 +662,7 @@ def _capture_once(
             return _capture_in_browser(
                 session.browser(), url, out_dir, remove_selectors, link_rewriter,
                 resource_fallback, insecure_tls, credential, live_session,
-                mobile_screenshot,
+                ai_session, mobile_screenshot,
             )
         with sync_playwright() as p:
             browser = _launch(p, browser_args)
@@ -564,7 +670,7 @@ def _capture_once(
                 return _capture_in_browser(
                     browser, url, out_dir, remove_selectors, link_rewriter,
                     resource_fallback, insecure_tls, credential, live_session,
-                    mobile_screenshot,
+                    ai_session, mobile_screenshot,
                 )
             finally:
                 browser.close()
@@ -586,6 +692,7 @@ def _capture_in_browser(
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
     live_session: "object | None" = None,
+    ai_session: "object | None" = None,
     mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다.
@@ -597,7 +704,7 @@ def _capture_in_browser(
     credential 이 있으면 종류별로 컨텍스트에 주입한다 (http_credentials/
     storage_state) — jwt 는 대상 origin 요청에만 Authorization 헤더를 붙인다.
     """
-    _, _, _, PlaywrightTimeoutError = browser_engine.get_engine()
+    _, _, PlaywrightError, PlaywrightTimeoutError = browser_engine.get_engine()
 
     context_kwargs, jwt_authorization = _context_options(credential, insecure_tls)
     context = browser.new_context(**context_kwargs)
@@ -607,6 +714,11 @@ def _capture_in_browser(
         page = context.new_page()
         page.set_default_timeout(config.PAGE_LOAD_TIMEOUT_MS)
         _expose_sha256_binding(page)
+        # 탐색이 다운로드로 전환되면 goto 가 "Download is starting" 으로 실패하지만,
+        # 이 시점에 브라우저는 이미 WAF/안티봇을 통과해 파일을 받았다. 이미 발사된
+        # download 이벤트를 놓치지 않도록 goto 전에 리스너를 단다.
+        downloads: list = []
+        page.on("download", lambda d: downloads.append(d))
         try:
             response = page.goto(
                 url, wait_until="load", timeout=config.PAGE_LOAD_TIMEOUT_MS
@@ -634,6 +746,14 @@ def _capture_in_browser(
             except Exception as stop_err:
                 logger.warning("window.stop() 실패, 그대로 진행: %s", stop_err)
             response = None
+        except PlaywrightError as e:
+            # 탐색이 파일 다운로드로 전환 — URL 이 페이지가 아니라 파일이다.
+            # 컨텍스트가 살아 있는 지금 브라우저가 받은 파일을 out_dir 에 빼내고
+            # (httpx 재요청은 WAF 의 TLS 핑거프린팅에 막힌다) enriched 오류로
+            # 전파한다. 그 외 PlaywrightError 는 _capture_once 가 분류하도록 재전파.
+            if _DOWNLOAD_MARKER not in str(e):
+                raise
+            raise _capture_download(page, url, out_dir, downloads) from e
 
         raw_html = page.content()
         # 봇 차단/사람 확인 챌린지 페이지면 정상 콘텐츠가 아니므로 저장하지
@@ -649,6 +769,11 @@ def _capture_in_browser(
             # 스텔스 캡처면 비상호작용 챌린지가 자동 통과하도록 잠시 기다린다.
             # 풀리면 갱신된 raw_html 로 진행, 끝내 안 풀리면 차단으로 실패.
             raw_html, reason = _await_challenge_clear(page, raw_html, reason)
+        if reason and ai_session is not None:
+            # 자동으로 안 풀린 양성 게이트(동의·연령 확인 등) — 비전 LLM 으로 입력을
+            # 대신 수행해 통과를 시도한다(B). 못 풀면 reason 이 유지돼 아래 사람
+            # 보조(C)로 캐스케이드한다. 세션은 설정 완비 + enabled 일 때만 주입된다.
+            raw_html, reason = ai_session.solve(page, reason)
         if reason and live_session is not None and config.LIVE_CHALLENGE:
             # 자동으로 안 풀린 인터랙티브 챌린지 — 최후 수단으로 사람이 대시보드
             # 에서 직접 풀게 한다 (page 가 살아있는 이 지점에서 그대로 이어간다).
@@ -660,6 +785,10 @@ def _capture_in_browser(
         (out_dir / "raw.html").write_text(raw_html, encoding="utf-8")
         document_links = _collect_document_links(page)
         page_links = _collect_page_links(page)
+        # 상대경로 자원 인라인 기준 base — 링크 재작성(_rewrite_links)이 <base> 를
+        # 떼기 전에 떠 둔다. 떼인 뒤 document.baseURI 로 풀면 <base href> 가 가리키던
+        # 곳이 아니라 문서 URL 로 잘못 절대화된다.
+        base_uri = page.evaluate("document.baseURI")
 
         # 추출용 content_html 은 인라인 전의 raw_html 기준으로 만든다 —
         # 인라인 후 DOM 에는 base64 데이터가 섞여 extract 가 느려진다.
@@ -675,6 +804,11 @@ def _capture_in_browser(
             logger.info("추적기 제거 (page.html): 외부 %d · 인라인/noscript %d: %s",
                         n_ext, n_inline, page.url)
 
+        n_consent = _remove_consent_overlays(page)
+        if n_consent:
+            logger.info("쿠키 동의 오버레이 제거 (page.html): %d개: %s",
+                        n_consent, page.url)
+
         if link_rewriter is not None:
             _rewrite_links(page, link_rewriter, page_links)
 
@@ -686,7 +820,7 @@ def _capture_in_browser(
             # 데스크탑 컨텍스트/page 는 건드리지 않는다.
             _capture_mobile_screenshot(browser, url, out_dir, credential, insecure_tls)
         page_html, resource_urls = _inline_resources(
-            page, raw_html, resource_fallback
+            page, raw_html, resource_fallback, base_uri
         )
         (out_dir / "page.html").write_text(page_html, encoding="utf-8")
 
@@ -702,6 +836,49 @@ def _capture_in_browser(
         )
     finally:
         context.close()
+
+
+def _capture_download(page, url: str, out_dir: Path, downloads: list) -> CaptureDownloadError:
+    """탐색이 다운로드로 전환됐을 때, 브라우저가 받은 파일을 out_dir 에 저장한다.
+
+    goto 가 "Download is starting" 으로 실패한 시점에 브라우저는 이미 WAF 를
+    통과해 파일을 받았다. 이미 발사된 download 이벤트(downloads)나 곧 도달할
+    이벤트를 받아 out_dir/files 에 임시 이름으로 저장하고(최종 파일명은 pipeline
+    이 documents 로 정한다), 파일·제안명·최종 URL 을 실은 CaptureDownloadError 를
+    돌려준다. 다운로드를 못 잡으면 정보 없이 돌려줘 pipeline 이 httpx 폴백하게 한다.
+    """
+    download = downloads[0] if downloads else None
+    if download is None:
+        try:
+            download = page.wait_for_event(
+                "download", timeout=config.RESOURCE_FETCH_TIMEOUT_MS
+            )
+        except Exception:  # noqa: BLE001 — 못 잡으면 httpx 폴백
+            download = None
+    if download is None:
+        return CaptureDownloadError(f"{url} 은 파일 다운로드 URL")
+    try:
+        files_dir = out_dir / "files"
+        files_dir.mkdir(parents=True, exist_ok=True)
+        # 임시 이름으로 저장 (확장자·정제는 documents.entry_from_local_file 이 처리)
+        saved = files_dir / f"download-{hashlib.sha256(url.encode()).hexdigest()[:16]}"
+        download.save_as(str(saved))
+    except Exception as e:  # noqa: BLE001 — 저장 실패 시 httpx 폴백
+        logger.warning("브라우저 다운로드 저장 실패(httpx 폴백): %s — %s", url, e)
+        return CaptureDownloadError(f"{url} 은 파일 다운로드 URL: {e}")
+    suggested = None
+    final_url = url
+    try:
+        suggested = download.suggested_filename
+        final_url = download.url or url
+    except Exception:  # noqa: BLE001 — 메타 조회 실패는 무해 (파일은 이미 저장됨)
+        pass
+    return CaptureDownloadError(
+        f"{url} 은 파일 다운로드 URL",
+        download_path=saved,
+        suggested_filename=suggested,
+        final_url=final_url,
+    )
 
 
 def _capture_mobile_screenshot(
@@ -848,7 +1025,10 @@ def _expose_sha256_binding(page) -> None:
 
 
 def _inline_resources(
-    page, raw_html: str, resource_fallback: ResourceFallback | None = None
+    page,
+    raw_html: str,
+    resource_fallback: ResourceFallback | None = None,
+    base_uri: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """<img src>, <link rel=stylesheet>, 폰트를 data URI로 치환한 단일 HTML 생성.
 
@@ -862,6 +1042,7 @@ def _inline_resources(
         result: dict = page.evaluate(_INLINE_JS, {
             "timeoutMs": config.RESOURCE_FETCH_TIMEOUT_MS,
             "concurrency": config.RESOURCE_FETCH_CONCURRENCY,
+            "baseUrl": base_uri,
         })
         failed: list[dict] = result["failed"]
         resource_urls = {
@@ -950,6 +1131,108 @@ def _apply_resource_fallback(
     if replacements:
         page.evaluate(_APPLY_INLINE_JS, replacements)
     return still_failed
+
+
+def fetch_documents_via_browser(
+    session: "BrowserSession | None",
+    links: list[str],
+    dest_dir: Path,
+    *,
+    referer: str | None = None,
+    credential: CaptureCredential | None = None,
+    insecure_tls: bool = False,
+    limits: "documents.DocumentLimits | None" = None,
+) -> tuple[list[dict[str, object]], list[str]]:
+    """링크 문서들을 브라우저 네트워크 스택(context.request)으로 받아 (manifest, 실패 URL).
+
+    httpx 와 달리 Chromium 네트워크 스택을 경유하므로 WAF 의 TLS 핑거프린팅을
+    통과한다(루트 원인 — `[Errno 104] Connection reset by peer`). 컨텍스트가
+    credential(http_basic/storage_state)·insecure_tls 를 반영하지만 jwt 토큰은
+    context.request 에 안 붙으므로(_install_origin_scoped_header 한계), 그런 문서는
+    실패로 돌아가 호출부의 httpx 폴백이 인증을 싣는다. session 이 있으면 그 브라우저를
+    재사용하고(새 컨텍스트만), 없으면 일회용으로 띄운다.
+    """
+    limits = limits or documents.DEFAULT_LIMITS
+    links = list(dict.fromkeys(links))
+    if len(links) > limits.max_count:
+        logger.warning(
+            "문서 링크 %d개 중 앞 %d개만 시도 (개수 한도)", len(links), limits.max_count
+        )
+        links = links[: limits.max_count]
+    if not links:
+        return [], []
+
+    manifest: list[dict[str, object]] = []
+    failed: list[str] = []
+
+    def _run(browser) -> None:
+        context_kwargs, jwt_authorization = _context_options(credential, insecure_tls)
+        context = browser.new_context(**context_kwargs)
+        if jwt_authorization and credential is not None:
+            _install_origin_scoped_header(context, credential.origin, jwt_authorization)
+        try:
+            for url in links:
+                try:
+                    manifest.append(
+                        _fetch_document_via_context(context, url, dest_dir, referer, limits)
+                    )
+                except Exception as e:  # noqa: BLE001 — 실패분은 httpx 폴백 대상
+                    logger.warning("브라우저 문서 다운로드 실패(폴백 대상): %s — %s", url, e)
+                    failed.append(url)
+        finally:
+            context.close()
+
+    try:
+        if session is not None:
+            _run(session.browser())
+        else:
+            _, sync_playwright, _, _ = browser_engine.get_engine()
+            with sync_playwright() as p:
+                browser = _launch(p)
+                try:
+                    _run(browser)
+                finally:
+                    browser.close()
+    except Exception as e:  # noqa: BLE001 — 브라우저 기동·컨텍스트 실패는 전부 httpx 폴백
+        logger.warning("브라우저 문서 다운로드 불가(전부 httpx 폴백): %s", e)
+        done = {str(m["url"]) for m in manifest}
+        failed = [u for u in links if u not in done]
+    return manifest, failed
+
+
+def _fetch_document_via_context(
+    context, url: str, dest_dir: Path, referer: str | None,
+    limits: "documents.DocumentLimits",
+) -> dict[str, object]:
+    """문서 1개를 context.request 로 받아 dest_dir 에 저장하고 manifest 항목 반환.
+
+    HTML 응답(로그인/오류 페이지)·크기 한도 초과는 ValueError 로 거부한다
+    (httpx 경로와 동일 정책). 파일명은 documents.document_filename(URL 경로 기반).
+    """
+    headers = {"User-Agent": config.USER_AGENT}
+    if referer:
+        headers["Referer"] = referer
+    resp = context.request.get(
+        url, headers=headers, timeout=limits.timeout_seconds * 1000
+    )
+    if not resp.ok:
+        raise ValueError(f"http {resp.status}")
+    content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type in documents._HTML_TYPES:
+        raise ValueError(f"HTML 응답 — 문서 아님 ({content_type})")
+    body = resp.body()
+    if len(body) > limits.max_bytes:
+        raise ValueError(f"크기 한도 초과 (> {limits.max_bytes} bytes)")
+    name = documents.document_filename(url)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / name).write_bytes(body)
+    return {
+        "url": url,
+        "file": name,
+        "bytes": len(body),
+        "sha256": hashlib.sha256(body).hexdigest(),
+        "content_type": content_type or "application/octet-stream",
+    }
 
 
 def _fetch_via_context(page, url: str) -> tuple[str, bytes] | None:
@@ -1113,6 +1396,21 @@ def _await_challenge_clear(page, raw_html: str, reason: str) -> tuple[str, str |
     return raw_html, reason
 
 
+def _remove_consent_overlays(page) -> int:
+    """page.html 저장 전 live DOM 에서 쿠키 동의(CMP) 오버레이 제거.
+
+    스냅샷 렌더는 iframe sandbox 라 스크립트가 안 돌아 배너를 닫을 수 없어 본문을
+    가린다 — 알려진 CMP 컨테이너(consent_overlays.SELECTORS)를 미리 제거하고
+    스크롤 잠금을 푼다. raw.html·content_html(해시/diff)에는 영향 없다. 실패해도
+    캡처는 계속된다. 제거한 노드 수 반환.
+    """
+    try:
+        return page.evaluate(_REMOVE_CONSENT_JS, list(consent_overlays.SELECTORS))
+    except Exception as e:
+        logger.warning("쿠키 동의 오버레이 제거 실패: %s", e)
+        return 0
+
+
 def _remove_trackers(page) -> tuple[int, int]:
     """page.html 저장 전 live DOM 에서 추적기 스크립트·픽셀 제거.
 
@@ -1141,8 +1439,24 @@ class CaptureConnectError(CaptureError):
 class CaptureDownloadError(CaptureError):
     """탐색이 파일 다운로드로 전환된 실패 — URL 이 페이지가 아니라 파일.
 
-    pipeline 이 문서 아카이빙(documents.download_direct)으로 전환하는 신호다.
+    pipeline 이 문서 아카이빙으로 전환하는 신호다. 브라우저가 WAF/안티봇을
+    통과해 이미 받은 다운로드 파일을 들고 올 수 있다(download_path) — 그러면
+    pipeline 은 httpx 재요청(WAF 에 TLS 단계에서 막힘) 없이 그 파일을 그대로
+    문서 스냅샷으로 만든다. 정보 없이 raise 되면 종전처럼 httpx 폴백한다.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        download_path: "Path | None" = None,
+        suggested_filename: str | None = None,
+        final_url: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.download_path = download_path
+        self.suggested_filename = suggested_filename
+        self.final_url = final_url
 
 
 class CaptureChallengeError(CaptureError):

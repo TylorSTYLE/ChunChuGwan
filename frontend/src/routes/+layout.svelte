@@ -5,6 +5,7 @@
 	import { t } from '$lib/i18n';
 	import { ModeWatcher, userPrefersMode, setMode } from 'mode-watcher';
 	import NavMenu from '$lib/components/NavMenu.svelte';
+	import NavProgress from '$lib/components/NavProgress.svelte';
 	import UpdateNoticeModal from '$lib/components/UpdateNoticeModal.svelte';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import { Toaster } from '$lib/components/ui/sonner';
@@ -99,6 +100,8 @@
 			if (me.flags.can_manage_users)
 				sys.push({ href: '/system/api-keys', label: t('API Key 관리') });
 			if (me.flags.can_manage_system)
+				sys.push({ href: '/system/cluster', label: t('클러스터') });
+			if (me.flags.can_manage_system)
 				sys.push({ href: '/system/general', label: t('시스템 설정') });
 			groups.push({ label: t('설정'), badge: 0, items: sys });
 		}
@@ -140,6 +143,7 @@
 
 <ModeWatcher />
 <Toaster />
+<NavProgress />
 <form method="POST" action="/logout" bind:this={logoutForm} class="hidden"></form>
 
 {#if me && me.user?.role !== 'pending'}

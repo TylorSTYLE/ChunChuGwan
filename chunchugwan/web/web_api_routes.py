@@ -30,8 +30,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from .. import (
-    __version__, auth, config, crawler, crypto, db, deletion, differ, documents,
-    mailer, optimize, resources, scheduler, searchindex, storage,
+    __version__, auth, cluster, config, crawler, crypto, db, deletion, differ,
+    documents, linkrepair, mailer, optimize, resources, scheduler, searchindex,
+    storage,
 )
 from . import audit, i18n, permissions, release_notes
 
@@ -350,6 +351,11 @@ def page_timeline(
         )
         site = db.get_site(conn, page["site_id"]) if page["site_id"] else None
         snap_logs = db.list_snapshot_archive_logs(conn, page_id)
+        notes = (
+            db.list_notes(conn, "page", page_id)
+            if permissions.can_memo_view(user)
+            else []
+        )
 
     visible = [
         s for s in snaps
@@ -363,9 +369,9 @@ def page_timeline(
     items = []
     for i, s in enumerate(snaps, 1):
         badge = "new" if i == 1 else _BADGES[s["changed"]]
-        files = storage.snapshot_files(
-            storage.page_dir(page["domain"], page["slug"]) / s["dir_name"]
-        )
+        # 용량은 DB 비정규화 값(snapshots.bytes)을 쓴다 — 스냅샷마다 디렉토리를
+        # 훑으면(snapshot_files) S3 모드에서 파일별 HEAD 가 쌓여 타임라인이
+        # 수십 초씩 걸린다. 파일별 목록은 타임라인에서 쓰지 않는다.
         log = log_by_snap.get(s["id"])
         steps: list = []
         if log is not None and log["steps"]:
@@ -377,8 +383,7 @@ def page_timeline(
             "idx": i,
             "snap": dict(s),
             "badge": badge,
-            "files": files,
-            "total_bytes": sum(f["bytes"] for f in files) if files else None,
+            "total_bytes": s["bytes"],
             "steps": steps,
             "log": dict(log) if log is not None else None,
         })
@@ -399,8 +404,12 @@ def page_timeline(
         ),
         "snapshots": items,
         "checks": [dict(c) for c in checks],
+        "notes": [dict(n) for n in notes],
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
+        "can_memo_view": permissions.can_memo_view(user),
+        "can_memo_create": permissions.can_memo_create(user),
+        "can_memo_delete": permissions.can_memo_delete(user),
         "trash_enabled": _trash_enabled_now(),
     }
 
@@ -605,6 +614,11 @@ def site_detail(
         site_documents = db.list_site_document_groups(
             conn, site_id, limit=200, offset=0
         )
+        notes = (
+            db.list_notes(conn, "site", site_id)
+            if permissions.can_memo_view(user)
+            else []
+        )
 
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
@@ -645,9 +659,13 @@ def site_detail(
         "certificates": cert_rows,
         "documents": [dict(d) for d in site_documents],
         "doc_total": doc_total,
+        "notes": [dict(n) for n in notes],
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
         "can_manage_credentials": permissions.can_manage_credentials(user),
+        "can_memo_view": permissions.can_memo_view(user),
+        "can_memo_create": permissions.can_memo_create(user),
+        "can_memo_delete": permissions.can_memo_delete(user),
         "trash_enabled": _trash_enabled_now(),
     }
 
@@ -1008,6 +1026,23 @@ def _require_manage_trash(user: sqlite3.Row | None) -> None:
         raise HTTPException(403, "휴지통 관리 권한이 없습니다")
 
 
+def _require_memo_create(user: sqlite3.Row | None) -> None:
+    if not permissions.can_memo_create(user):
+        raise HTTPException(403, "메모 등록 권한이 없습니다")
+
+
+def _require_memo_delete(user: sqlite3.Row | None) -> None:
+    if not permissions.can_memo_delete(user):
+        raise HTTPException(403, "메모 삭제 권한이 없습니다")
+
+
+def _note_author(user: sqlite3.Row | None) -> tuple[int | None, str]:
+    """메모 작성자 (id, 표시 라벨=display_name 또는 email). 인증 off/loopback 이면 (None, '시스템')."""
+    if user is None:
+        return None, "시스템"
+    return user["id"], (user["display_name"] or user["email"])
+
+
 def _actor_id(user: sqlite3.Row | None) -> int | None:
     """삭제·복원 기록용 사용자 id (인증 off/loopback 이면 None)."""
     return user["id"] if user is not None else None
@@ -1066,6 +1101,9 @@ class ArchiveReq(BaseModel):
     crawl_max_pages: str = ""
     crawl_max_depth: str = ""
     crawl_delay: str = ""
+    # 클러스터 보호 — None=사이트 기본 상속, True=보호(미전송), False=공유 허용.
+    # 새 사이트면 이 값이 사이트 보호 기본값으로도 적용된다(폼 기본=보호).
+    protect: bool | None = None
     # 로그인 자격증명 연결 (자격증명 관리 권한) — ""=연결 안 함, "__new__"=신규 생성, 숫자=기존
     cred_existing_id: str = ""
     cred_kind: str = ""
@@ -1132,6 +1170,18 @@ def archive_new(
                 )
         except ValueError as exc:
             raise HTTPException(400, f"아카이빙 실패: {exc}")
+        # 새 사이트면 사이트 보호 기본값을 적용한다(소속 페이지가 아직 없을 때만 —
+        # 기존 사이트 재크롤은 설정을 덮지 않는다). 페이지는 크롤이 만들며 사이트
+        # 기본값을 상속한다.
+        crawl_site_id = crawl["site_id"]
+        if body.protect is not None and crawl_site_id:
+            with db.connect() as conn:
+                n = conn.execute(
+                    "SELECT COUNT(*) AS c FROM pages WHERE site_id = ?",
+                    (crawl_site_id,),
+                ).fetchone()["c"]
+                if n == 0:
+                    db.set_site_cluster_protect_default(conn, crawl_site_id, bool(body.protect))
         audit.log(request, "새 사이트 아카이브 등록: %s", body.url,
                   action="archive", target=norm)
         return {"site": True, "crawl_id": crawl["id"], "merged": merged}
@@ -1142,6 +1192,9 @@ def archive_new(
         interval_seconds=seconds or None,
         run_at=(body.run_at or None) if seconds else None,
         network_tag_id=tag_id,
+        protect=body.protect,
+        # 새 사이트면 사이트 기본값도 이 선택으로 (워커가 소속 페이지 1개일 때만 적용).
+        site_protect_default=body.protect,
     )
     if queued:
         audit.log(request, "새 아카이빙 등록: %s", norm,
@@ -1176,6 +1229,91 @@ def rearchive(
         audit.log(request, "재아카이빙 등록: %s", page["url"],
                   action="archive", target=page["url"])
     return {"enqueued": enqueued}
+
+
+# ---- 메모 (페이지·사이트) ----
+
+_NOTE_MAX_LEN = 5000
+
+
+class NoteReq(BaseModel):
+    content: str
+
+
+def _clean_note_content(raw: str) -> str:
+    """메모 본문 정리·검증 — 빈 내용 거부, 길이 상한."""
+    content = (raw or "").strip()
+    if not content:
+        raise HTTPException(400, "메모 내용이 비어 있습니다")
+    if len(content) > _NOTE_MAX_LEN:
+        raise HTTPException(400, "메모가 너무 깁니다")
+    return content
+
+
+@router.post("/pages/{page_id}/notes", status_code=201)
+def page_note_add(
+    request: Request,
+    page_id: int,
+    body: NoteReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """페이지 메모 1건 추가 (memo_create)."""
+    _require_memo_create(user)
+    content = _clean_note_content(body.content)
+    author_id, author_label = _note_author(user)
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+        if page is None:
+            raise HTTPException(404, "페이지 없음")
+        note_id = db.add_note(
+            conn, "page", page_id, content,
+            author_user_id=author_id, author_label=author_label,
+        )
+    audit.log(request, "페이지 메모 등록: %s", page["url"],
+              action="admin", target=page["url"])
+    return {"id": note_id}
+
+
+@router.post("/sites/{site_id}/notes", status_code=201)
+def site_note_add(
+    request: Request,
+    site_id: int,
+    body: NoteReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사이트 메모 1건 추가 (memo_create)."""
+    _require_memo_create(user)
+    content = _clean_note_content(body.content)
+    author_id, author_label = _note_author(user)
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, "사이트 없음")
+        note_id = db.add_note(
+            conn, "site", site_id, content,
+            author_user_id=author_id, author_label=author_label,
+        )
+    audit.log(request, "사이트 메모 등록: %s", site["site_key"],
+              action="admin", target=site["site_key"])
+    return {"id": note_id}
+
+
+@router.delete("/notes/{note_id}", status_code=204)
+def note_delete(
+    request: Request,
+    note_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> Response:
+    """메모 1건 삭제 (memo_delete) — 권한이 전역이라 page/site 공용."""
+    _require_memo_delete(user)
+    with db.connect() as conn:
+        note = db.get_note(conn, note_id)
+        if note is None:
+            raise HTTPException(404, "메모 없음")
+        db.delete_note(conn, note_id)
+    audit.log(request, "메모 삭제: %s#%s", note["kind"], note_id,
+              action="admin", target=f"{note['kind']}:{note['target_id']}")
+    return Response(status_code=204)
 
 
 class ScheduleReq(BaseModel):
@@ -1968,6 +2106,8 @@ class ApiKeyReq(BaseModel):
     name: str
     can_view: bool = False
     can_archive: bool = False
+    can_cluster_send: bool = False
+    can_cluster_receive: bool = False
     expiry: str = "permanent"
     custom_days: int = 0
 
@@ -1988,7 +2128,8 @@ def _resolve_api_key_ttl(body: ApiKeyReq) -> int | None:
 
 def _public_api_key(k: sqlite3.Row) -> dict:
     """API 키 행에서 화면 표시용 필드만 추린다 — token_hash 등 비밀·내부 컬럼 제외(원칙 6)."""
-    fields = ("id", "name", "can_view", "can_archive", "expires_at", "created_at", "last_used_at")
+    fields = ("id", "name", "can_view", "can_archive", "can_cluster_send",
+              "can_cluster_receive", "expires_at", "created_at", "last_used_at")
     cols = k.keys()
     return {f: k[f] for f in fields if f in cols}
 
@@ -2004,7 +2145,8 @@ def system_api_key_create(
     err = auth.validate_api_key_name(name)
     if err is not None:
         raise HTTPException(400, err)
-    if not (body.can_view or body.can_archive):
+    if not (body.can_view or body.can_archive
+            or body.can_cluster_send or body.can_cluster_receive):
         raise HTTPException(400, "권한을 하나 이상 선택하세요")
     ttl = _resolve_api_key_ttl(body)
     with db.connect() as conn:
@@ -2012,6 +2154,8 @@ def system_api_key_create(
             conn, name, can_view=body.can_view, can_archive=body.can_archive,
             created_by=user["id"] if user else None,
             ttl_seconds=ttl, owner_user_id=None,
+            can_cluster_send=body.can_cluster_send,
+            can_cluster_receive=body.can_cluster_receive,
         )
     audit.log(request, "API 키 발급: '%s'", name)
     return {"ok": True, "token": token}
@@ -2030,6 +2174,161 @@ def system_api_key_delete(
             raise HTTPException(404, "API 키 없음")
         db.delete_api_key(conn, key_id)
     audit.log(request, "API 키 폐기: #%d", key_id)
+    return {"ok": True}
+
+
+# ── 클러스터(federation) 관리 ────────────────────────────────────────────────
+
+
+def _public_cluster_peer(p: sqlite3.Row) -> dict:
+    """피어 행에서 화면 표시용 필드만 — 암호화 키(api_key_enc)는 절대 노출 금지(원칙 6)."""
+    return {
+        "id": p["id"],
+        "peer_node_id": p["peer_node_id"],
+        "display_name": p["display_name"],
+        "base_url": p["base_url"],
+        "send_enabled": bool(p["send_enabled"]),
+        "receive_enabled": bool(p["receive_enabled"]),
+        "status": p["status"],
+        "last_error": p["last_error"],
+        "send_cursor": p["send_cursor"],
+        "receive_cursor": p["receive_cursor"],
+        "last_synced_at": p["last_synced_at"],
+        "created_at": p["created_at"],
+    }
+
+
+class ClusterNodeReq(BaseModel):
+    display_name: str = ""
+
+
+class ClusterSyncSettingsReq(BaseModel):
+    sync_interval_seconds: int
+    protect_default: bool  # True=보호(미전송) 시스템 기본값
+
+
+class ClusterPeerReq(BaseModel):
+    base_url: str
+    api_key: str
+    send_enabled: bool = False
+    receive_enabled: bool = False
+
+
+class ClusterPeerUpdateReq(BaseModel):
+    send_enabled: bool = False
+    receive_enabled: bool = False
+
+
+@router.get("/system/cluster")
+def system_cluster(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """클러스터 화면 데이터 — 이 노드 신원 + 피어 목록 + 동기화 설정."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        identity = cluster.node_identity(conn)
+        peers = [_public_cluster_peer(p) for p in db.list_cluster_peers(conn)]
+        sync_interval = db.cluster_sync_interval_seconds(conn)
+        protect_default = db.cluster_protect_default(conn)
+    return {
+        "node": identity,
+        "peers": peers,
+        "secret_configured": crypto.is_configured(),
+        "sync_interval_seconds": sync_interval,
+        "protect_default": protect_default,
+        "sync_interval_min": config.CLUSTER_SYNC_INTERVAL_SECONDS_MIN,
+        "sync_interval_max": config.CLUSTER_SYNC_INTERVAL_SECONDS_MAX,
+    }
+
+
+@router.post("/system/cluster/node")
+def system_cluster_node(
+    request: Request, body: ClusterNodeReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """이 노드의 디스플레이 이름 설정 (표시 전용 — 식별은 UUID)."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        db.set_cluster_display_name(conn, body.display_name)
+    audit.log(request, "클러스터 노드 이름 변경: '%s'", body.display_name.strip())
+    return {"ok": True}
+
+
+@router.post("/system/cluster/sync-settings")
+def system_cluster_sync_settings(
+    request: Request, body: ClusterSyncSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """조정 주기·시스템 보호 기본값 저장 (범위 밖 주기는 db 가 클램핑)."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        db.set_setting(
+            conn, db.CLUSTER_SYNC_INTERVAL_KEY, str(int(body.sync_interval_seconds))
+        )
+        db.set_setting(
+            conn, db.CLUSTER_PROTECT_DEFAULT_KEY,
+            "on" if body.protect_default else "off",
+        )
+    audit.log(request, "클러스터 동기화 설정 변경")
+    return {"ok": True}
+
+
+@router.post("/system/cluster/peers")
+def system_cluster_peer_create(
+    request: Request, body: ClusterPeerReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """피어 연결 등록 — 핸드셰이크로 A 의 UUID·버전 획득 후 키 암호화 저장."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        try:
+            peer_id = cluster.register_peer(
+                conn,
+                base_url=body.base_url,
+                api_key=body.api_key,
+                send_enabled=body.send_enabled,
+                receive_enabled=body.receive_enabled,
+            )
+        except cluster.ClusterError as e:
+            raise HTTPException(400, str(e))
+        peer = db.get_cluster_peer(conn, peer_id)
+    audit.log(request, "클러스터 피어 등록: %s", peer["base_url"])
+    return {"ok": True, "peer": _public_cluster_peer(peer)}
+
+
+@router.post("/system/cluster/peers/{peer_id}")
+def system_cluster_peer_update(
+    request: Request, peer_id: int, body: ClusterPeerUpdateReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """피어 방향 토글(보내기/받기) 갱신. 둘 다 끄면 동기화는 멈추되 연결은 유지."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        peer = db.get_cluster_peer(conn, peer_id)
+        if peer is None:
+            raise HTTPException(404, "피어 없음")
+        db.update_cluster_peer_directions(
+            conn, peer_id,
+            send_enabled=body.send_enabled,
+            receive_enabled=body.receive_enabled,
+        )
+    audit.log(request, "클러스터 피어 방향 변경: %s", peer["base_url"])
+    return {"ok": True}
+
+
+@router.post("/system/cluster/peers/{peer_id}/delete")
+def system_cluster_peer_delete(
+    request: Request, peer_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """피어 연결 해제 — 즉시 동기화 중단. 수신 아카이브는 보존된다."""
+    _require_manage_system(user)
+    with db.connect() as conn:
+        peer = db.get_cluster_peer(conn, peer_id)
+        if peer is None:
+            raise HTTPException(404, "피어 없음")
+        db.delete_cluster_peer(conn, peer_id)
+    audit.log(request, "클러스터 피어 해제: %s", peer["base_url"])
     return {"ok": True}
 
 
@@ -2070,12 +2369,13 @@ def system_overview(
         doc_limits = documents.limits(conn)
         smtp = mailer.resolve_config(conn)
         smtp_has_password = db.get_setting(conn, db.SMTP_PASSWORD_KEY) not in (None, "")
+        ai_challenge = db.ai_challenge_settings(conn)
+        ai_challenge_has_key = db.get_setting(
+            conn, db.AI_CHALLENGE_API_KEY_KEY) not in (None, "")
         migration_mode = db.migration_mode_enabled(conn)
         migration_token_created_at = db.get_setting(
             conn, db.MIGRATION_TOKEN_CREATED_AT_KEY
         )
-    usage = storage.archive_disk_usage()
-    with db.connect() as conn:
         active_backend = db.storage_backend(conn)
     return {
         "version": __version__,
@@ -2144,13 +2444,39 @@ def system_overview(
             "has_password": smtp_has_password,
         },
         "smtp_tls_modes": list(mailer.SMTP_TLS_MODES),
-        "archive_root": str(config.ARCHIVE_ROOT),
-        "usage": {
-            "db": usage["db"], "sites": usage["sites"],
-            "resources": usage["resources"], "documents": usage["documents"],
+        # AI 자동 챌린지 해결(B) — api_key 평문은 절대 내보내지 않고 has_api_key 만.
+        # 프롬프트 기본값은 '기본값으로 되돌리기' 용으로 함께 내려준다.
+        "ai_challenge_config": {
+            "enabled": ai_challenge["enabled"],
+            "base_url": ai_challenge["base_url"],
+            "model": ai_challenge["model"],
+            "has_api_key": ai_challenge_has_key,
+            "action_prompt": ai_challenge["action_prompt"],
+            "verdict_prompt": ai_challenge["verdict_prompt"],
+            "max_rounds": ai_challenge["max_rounds"],
+            "verdict_delay_ms": ai_challenge["verdict_delay_ms"],
+            "max_actions": ai_challenge["max_actions"],
+            "request_timeout": ai_challenge["request_timeout"],
+            "success_recheck": ai_challenge["success_recheck"],
+            "key_set": crypto.is_configured(),
+            "default_action_prompt": config.DEFAULT_AI_ACTION_PROMPT,
+            "default_verdict_prompt": config.DEFAULT_AI_VERDICT_PROMPT,
+            "limits": {
+                "max_rounds_min": config.AI_CHALLENGE_MAX_ROUNDS_MIN,
+                "max_rounds_max": config.AI_CHALLENGE_MAX_ROUNDS_MAX,
+                "verdict_delay_ms_min": config.AI_CHALLENGE_VERDICT_DELAY_MS_MIN,
+                "verdict_delay_ms_max": config.AI_CHALLENGE_VERDICT_DELAY_MS_MAX,
+                "max_actions_min": config.AI_CHALLENGE_MAX_ACTIONS_MIN,
+                "max_actions_max": config.AI_CHALLENGE_MAX_ACTIONS_MAX,
+                "request_timeout_min": config.AI_CHALLENGE_REQUEST_TIMEOUT_MIN,
+                "request_timeout_max": config.AI_CHALLENGE_REQUEST_TIMEOUT_MAX,
+            },
         },
-        "optimize_pending": sum(optimize.pending_counts()),
-        "search": searchindex.verify(),
+        "archive_root": str(config.ARCHIVE_ROOT),
+        # 저장 사용량(usage)은 sites/resources/documents 트리를 전부 스캔하는
+        # 비싼 파생값이라 페이지 진입을 막지 않도록 GET /system/usage 로 분리해
+        # 화면 마운트 후 비동기로 받는다. (optimize_pending·search 는 프론트가
+        # 읽지 않던 죽은 필드라 제거 — 매 로드마다 sites/ 전체 스캔만 유발했다.)
         "migration_mode": migration_mode,
         "migration_token_created_at": migration_token_created_at,
         "public_url": config.PUBLIC_URL,
@@ -2401,6 +2727,87 @@ def system_document_settings(
         db.set_setting(conn, db.DOCUMENT_MAX_MB_KEY, str(body.document_max_mb))
         db.set_setting(conn, db.DOCUMENT_FETCH_TIMEOUT_KEY, str(body.document_fetch_timeout))
     audit.log(request, "문서 아카이브 설정 변경")
+    return {"ok": True}
+
+
+class AiChallengeSettingsReq(BaseModel):
+    ai_challenge_enabled: bool = False
+    ai_challenge_base_url: str = ""
+    ai_challenge_model: str = ""
+    ai_challenge_api_key: str = ""
+    ai_challenge_clear_api_key: bool = False
+    ai_challenge_action_prompt: str = ""
+    ai_challenge_verdict_prompt: str = ""
+    ai_challenge_max_rounds: int
+    ai_challenge_verdict_delay_ms: int
+    ai_challenge_max_actions: int
+    ai_challenge_request_timeout: int
+    ai_challenge_success_recheck: bool = True
+
+
+@router.post("/system/ai-challenge-settings")
+def system_ai_challenge_settings(
+    request: Request, body: AiChallengeSettingsReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """AI 자동 챌린지 해결(B) 설정 — JSON 판.
+
+    api_key 는 대칭 암호화 암호문으로만 저장(원칙 6 예외 — 외부 LLM 서버에
+    replay). 빈 입력이면 기존 저장값 유지, clear_api_key 면 삭제. 프롬프트가
+    공백이면 기본값으로 되돌린다(설정 삭제 → 리졸버가 config DEFAULT 폴백).
+    """
+    _require_manage_system(user)
+    ranges = (
+        (body.ai_challenge_max_rounds, config.AI_CHALLENGE_MAX_ROUNDS_MIN,
+         config.AI_CHALLENGE_MAX_ROUNDS_MAX, "최대 라운드 수"),
+        (body.ai_challenge_verdict_delay_ms, config.AI_CHALLENGE_VERDICT_DELAY_MS_MIN,
+         config.AI_CHALLENGE_VERDICT_DELAY_MS_MAX, "판정 대기(ms)"),
+        (body.ai_challenge_max_actions, config.AI_CHALLENGE_MAX_ACTIONS_MIN,
+         config.AI_CHALLENGE_MAX_ACTIONS_MAX, "라운드당 액션 수 상한"),
+        (body.ai_challenge_request_timeout, config.AI_CHALLENGE_REQUEST_TIMEOUT_MIN,
+         config.AI_CHALLENGE_REQUEST_TIMEOUT_MAX, "요청 타임아웃(초)"),
+    )
+    for value, lo, hi, label in ranges:
+        if not (lo <= value <= hi):
+            raise HTTPException(400, f"{label}는 {lo} ~ {hi} 사이여야 합니다")
+    if body.ai_challenge_api_key and not crypto.is_configured():
+        raise HTTPException(
+            400, "WCCG_SECRET_KEY 가 설정되지 않아 API 키를 저장할 수 없습니다.")
+    with db.connect() as conn:
+        db.set_setting(conn, db.AI_CHALLENGE_ENABLED_KEY,
+                       "on" if body.ai_challenge_enabled else "off")
+        db.set_setting(conn, db.AI_CHALLENGE_BASE_URL_KEY,
+                       body.ai_challenge_base_url.strip())
+        db.set_setting(conn, db.AI_CHALLENGE_MODEL_KEY,
+                       body.ai_challenge_model.strip())
+        db.set_setting(conn, db.AI_CHALLENGE_MAX_ROUNDS_KEY,
+                       str(body.ai_challenge_max_rounds))
+        db.set_setting(conn, db.AI_CHALLENGE_VERDICT_DELAY_MS_KEY,
+                       str(body.ai_challenge_verdict_delay_ms))
+        db.set_setting(conn, db.AI_CHALLENGE_MAX_ACTIONS_KEY,
+                       str(body.ai_challenge_max_actions))
+        db.set_setting(conn, db.AI_CHALLENGE_REQUEST_TIMEOUT_KEY,
+                       str(body.ai_challenge_request_timeout))
+        db.set_setting(conn, db.AI_CHALLENGE_SUCCESS_RECHECK_KEY,
+                       "on" if body.ai_challenge_success_recheck else "off")
+        # 프롬프트: 공백이면 설정을 지워 기본값(config DEFAULT)으로 되돌린다.
+        if body.ai_challenge_action_prompt.strip():
+            db.set_setting(conn, db.AI_CHALLENGE_ACTION_PROMPT_KEY,
+                           body.ai_challenge_action_prompt)
+        else:
+            db.delete_setting(conn, db.AI_CHALLENGE_ACTION_PROMPT_KEY)
+        if body.ai_challenge_verdict_prompt.strip():
+            db.set_setting(conn, db.AI_CHALLENGE_VERDICT_PROMPT_KEY,
+                           body.ai_challenge_verdict_prompt)
+        else:
+            db.delete_setting(conn, db.AI_CHALLENGE_VERDICT_PROMPT_KEY)
+        # API 키: 값이 있으면 암호화 저장, clear 면 삭제, 빈 문자열이면 기존값 유지.
+        if body.ai_challenge_api_key:
+            db.set_setting(conn, db.AI_CHALLENGE_API_KEY_KEY,
+                           crypto.encrypt(body.ai_challenge_api_key))
+        elif body.ai_challenge_clear_api_key:
+            db.delete_setting(conn, db.AI_CHALLENGE_API_KEY_KEY)
+    audit.log(request, "AI 자동 챌린지 설정 변경")
     return {"ok": True}
 
 
@@ -2706,6 +3113,39 @@ def system_search_reindex_status(
     return reindex_status()
 
 
+@router.post("/system/links/repair")
+def system_links_repair(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """아카이브 링크 교정을 백그라운드로 시작 — 구형 단일 페이지 스냅샷의 앵커 재작성."""
+    import threading
+
+    from .maintenance import (
+        _linkrepair_lock, _linkrepair_state, _linkrepair_worker,
+    )
+
+    _require_manage_system(user)
+    with _linkrepair_lock:
+        if _linkrepair_state["running"]:
+            return {"ok": True, "started": False, "already_running": True}
+        _linkrepair_state.update(
+            running=True, done=0, total=0, result=None, error=None, finished_at=None)
+    audit.log(request, "아카이브 링크 교정 시작")
+    threading.Thread(target=_linkrepair_worker, daemon=True).start()
+    return {"ok": True, "started": True}
+
+
+@router.get("/system/links/repair/status")
+def system_links_repair_status(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """아카이브 링크 교정 진행 상태(JSON) — 시스템 화면 폴링용. pending 동봉."""
+    from .maintenance import linkrepair_status
+
+    _require_manage_system(user)
+    return {**linkrepair_status(), "pending": linkrepair.pending_count()}
+
+
 @router.get("/system/storage/status")
 def system_storage_status(
     request: Request, user: sqlite3.Row | None = Depends(require_session)
@@ -2715,6 +3155,20 @@ def system_storage_status(
 
     _require_manage_system(user)
     return storage_migration.status()
+
+
+@router.get("/system/usage")
+def system_usage(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """아카이브 저장 사용량 분해 — system_overview 에서 분리한 지연 로드 엔드포인트.
+
+    로컬 모드는 db/sites/resources/documents, S3 모드는 db/cache/blobcache 키를
+    돌려준다(archive_disk_usage — 30초 TTL 캐시, S3 미호출). 시스템 화면이 진입
+    직후 비동기로 받아 저장 용량 미터를 채운다.
+    """
+    _require_manage_system(user)
+    return {"usage": dict(storage.archive_disk_usage())}
 
 
 @router.get("/system/storage/usage")

@@ -14,6 +14,20 @@ export interface MeFlags {
 	can_search: boolean;
 	can_use_api_keys: boolean;
 	can_manage_trash: boolean;
+	can_memo_view: boolean;
+	can_memo_create: boolean;
+	can_memo_delete: boolean;
+}
+
+/** 페이지·사이트 메모 1건 (notes 테이블) — 작성자/시각이 행마다 남는다. */
+export interface Note {
+	id: number;
+	kind: 'page' | 'site';
+	target_id: number;
+	content: string;
+	author_user_id: number | null;
+	author_label: string;
+	created_at: string;
 }
 
 export interface MeUser {
@@ -202,7 +216,6 @@ export interface TimelineSnap {
 	idx: number;
 	snap: SnapshotRow;
 	badge: string;
-	files: { name: string; bytes: number }[];
 	total_bytes: number | null;
 	steps: unknown[];
 	log: Record<string, unknown> | null;
@@ -215,8 +228,12 @@ export interface PageTimeline {
 	schedule: (Record<string, unknown> & { label: string }) | null;
 	snapshots: TimelineSnap[];
 	checks: Record<string, unknown>[];
+	notes: Note[];
 	can_archive: boolean;
 	can_delete: boolean;
+	can_memo_view: boolean;
+	can_memo_create: boolean;
+	can_memo_delete: boolean;
 	trash_enabled: boolean;
 }
 
@@ -285,11 +302,15 @@ export interface SiteDetail {
 	}[];
 	documents: Record<string, unknown>[];
 	doc_total: number;
+	notes: Note[];
 	failed_items: FailedItem[];
 	failed_pager: Pager;
 	can_archive: boolean;
 	can_delete: boolean;
 	can_manage_credentials: boolean;
+	can_memo_view: boolean;
+	can_memo_create: boolean;
+	can_memo_delete: boolean;
 	trash_enabled: boolean;
 }
 
@@ -582,8 +603,35 @@ export interface SystemApiKeysData {
 		name: string;
 		can_view: number;
 		can_archive: number;
+		can_cluster_send: number;
+		can_cluster_receive: number;
 		expires_at: string | null;
 	})[];
+}
+
+export interface ClusterPeer {
+	id: number;
+	peer_node_id: string;
+	display_name: string;
+	base_url: string;
+	send_enabled: boolean;
+	receive_enabled: boolean;
+	status: string; // pending|active|degraded|revoked|error
+	last_error: string | null;
+	send_cursor: number;
+	receive_cursor: number;
+	last_synced_at: string | null;
+	created_at: string;
+}
+
+export interface ClusterData {
+	node: { node_id: string; display_name: string; protocol_version: number };
+	peers: ClusterPeer[];
+	secret_configured: boolean;
+	sync_interval_seconds: number;
+	protect_default: boolean;
+	sync_interval_min: number;
+	sync_interval_max: number;
 }
 
 export interface SystemOverview {
@@ -635,10 +683,33 @@ export interface SystemOverview {
 		has_password: boolean;
 	};
 	smtp_tls_modes: string[];
+	ai_challenge_config: {
+		enabled: boolean;
+		base_url: string;
+		model: string;
+		has_api_key: boolean;
+		action_prompt: string;
+		verdict_prompt: string;
+		max_rounds: number;
+		verdict_delay_ms: number;
+		max_actions: number;
+		request_timeout: number;
+		success_recheck: boolean;
+		key_set: boolean;
+		default_action_prompt: string;
+		default_verdict_prompt: string;
+		limits: {
+			max_rounds_min: number;
+			max_rounds_max: number;
+			verdict_delay_ms_min: number;
+			verdict_delay_ms_max: number;
+			max_actions_min: number;
+			max_actions_max: number;
+			request_timeout_min: number;
+			request_timeout_max: number;
+		};
+	};
 	archive_root: string;
-	usage: Record<string, number>;
-	optimize_pending: number;
-	search: Record<string, unknown>;
 	migration_mode: boolean;
 	migration_token_created_at: string | null;
 	public_url: string | null;

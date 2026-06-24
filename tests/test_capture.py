@@ -85,6 +85,119 @@ def test_capture_artifacts_and_inlining(site_url, tmp_path):
     assert result.document_links == [f"{base}/report.pdf"]
 
 
+def test_capture_inlines_inline_style_background(tmp_path):
+    """인라인 style="background-image:url('상대경로')" 도 data URI 로 인라인한다.
+
+    <img>/<style>/<link> 어디에도 안 걸려 상대경로면 뷰어(/snapshot/{id}/file/)
+    에서 깨지던 회귀를 막는다. 페이지를 /sub/ 아래 두어 ../bg.png 의 상대 해석까지 검증.
+    """
+    site = tmp_path / "site"
+    (site / "sub").mkdir(parents=True)
+    (site / "sub" / "page.html").write_text(
+        "<!doctype html><html><head><meta charset='utf-8'><title>bg</title></head>"
+        "<body><div class='hero' "
+        "style=\"background-image:url('../bg.png')\">히어로</div></body></html>",
+        encoding="utf-8",
+    )
+    Image.new("RGB", (4, 4), (0, 128, 0)).save(site / "bg.png")
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        url = f"http://127.0.0.1:{server.server_address[1]}/sub/page.html"
+        capture.capture(url, out)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    # 상대 참조는 사라지고 인라인 style 안에 data URI 가 들어간다 (페이지의 유일한 이미지)
+    assert "bg.png" not in page_html
+    assert "data:image/png" in page_html
+    assert "히어로" in page_html
+
+
+def test_capture_inline_style_bg_resolves_against_base_href(tmp_path):
+    """<base href> 가 문서 URL 과 다를 때도 인라인 style 배경이 base 기준으로 풀린다.
+
+    링크 재작성(_rewrite_links)이 <base> 를 제거한 뒤 인라인이 돌기 때문에, 제거
+    전에 떠 둔 base 로 풀지 않으면 상대 배경이 문서 URL 기준으로 잘못 절대화돼 404 로
+    깨진다. generic_link_rewriter 로 <base> 가 떨어지는 프로덕션 경로를 강제한다.
+    """
+    site = tmp_path / "site"
+    (site / "sub").mkdir(parents=True)
+    (site / "assets").mkdir()
+    # 페이지는 /sub/ 아래, <base> 는 /assets/ → 'bg.png' 의 정답은 /assets/bg.png.
+    # base 가 떨어진 채 document.baseURI(=/sub/page.html)로 풀면 /sub/bg.png(없음)로 깨진다.
+    (site / "sub" / "page.html").write_text(
+        "<!doctype html><html><head><meta charset='utf-8'><title>bg</title>"
+        "<base href='/assets/'></head>"
+        "<body><div style=\"background-image:url('bg.png')\">히어로</div>"
+        "<a href='other.html'>링크</a></body></html>",
+        encoding="utf-8",
+    )
+    Image.new("RGB", (4, 4), (0, 128, 0)).save(site / "assets" / "bg.png")
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        url = f"http://127.0.0.1:{server.server_address[1]}/sub/page.html"
+        # link_rewriter 가 앵커를 재작성하며 <base> 를 떼는 프로덕션 경로를 강제
+        capture.capture(url, out, link_rewriter=capture.generic_link_rewriter())
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    # base(/assets/) 기준으로 올바로 풀려 data URI 로 인라인됨 (상대 참조 잔존 없음)
+    assert "bg.png" not in page_html
+    assert "data:image/png" in page_html
+
+
+def test_capture_inlines_uppercase_url_inline_style_background(tmp_path):
+    """대문자 URL() 인라인 style 배경도 인라인된다 (선택자 대소문자 무시).
+
+    `[style*="url("]` 가 대소문자를 구분하면 'URL(' 요소가 후보에서 빠져 상대 배경이
+    그대로 남는다 — 정규식엔 /i 가 있어도 요소 자체가 안 걸려 무의미했다.
+    """
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "page.html").write_text(
+        "<!doctype html><html><head><meta charset='utf-8'><title>bg</title></head>"
+        "<body><div style=\"background-image:URL('bg.png')\">히어로</div></body></html>",
+        encoding="utf-8",
+    )
+    Image.new("RGB", (4, 4), (0, 0, 255)).save(site / "bg.png")
+
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        url = f"http://127.0.0.1:{server.server_address[1]}/page.html"
+        capture.capture(url, out)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    assert "bg.png" not in page_html
+    assert "data:image/png" in page_html
+
+
 def test_capture_no_mobile_screenshot_by_default(site_url, tmp_path):
     """mobile_screenshot 기본값(False)에선 모바일 스크린샷을 만들지 않는다."""
     out = tmp_path / "out"
@@ -303,6 +416,47 @@ def test_capture_cors_blocked_image_inlined_via_fallback(cross_origin_url, tmp_p
     assert "missing.png" in page_html
 
 
+def test_capture_inlines_cross_origin_inline_style_bg_via_fallback(tmp_path):
+    """CORS 로 fetch() 막힌 인라인 style 배경도 context.request 폴백으로 인라인된다."""
+    asset = tmp_path / "xo-asset"
+    asset.mkdir()
+    Image.new("RGB", (4, 4), (0, 0, 255)).save(asset / "hero.png")
+    asset_server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(asset))
+    )
+    asset_thread = threading.Thread(target=asset_server.serve_forever, daemon=True)
+    asset_thread.start()
+    asset_base = f"http://127.0.0.1:{asset_server.server_address[1]}"
+
+    site = tmp_path / "xo-bg-site"
+    site.mkdir()
+    (site / "index.html").write_text(
+        "<!doctype html><html><head><meta charset='utf-8'><title>xo-bg</title></head>"
+        f"<body><div style=\"background-image:url('{asset_base}/hero.png')\">히어로</div>"
+        "</body></html>",
+        encoding="utf-8",
+    )
+    site_server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    site_thread = threading.Thread(target=site_server.serve_forever, daemon=True)
+    site_thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        url = f"http://127.0.0.1:{site_server.server_address[1]}/index.html"
+        capture.capture(url, out)
+    finally:
+        site_server.shutdown()
+        asset_server.shutdown()
+        site_thread.join(timeout=5)
+        asset_thread.join(timeout=5)
+
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    assert "hero.png" not in page_html
+    assert "data:image/png;base64," in page_html
+
+
 def test_capture_retries_with_http2_disabled(monkeypatch, tmp_path):
     """net::ERR_HTTP2_* 실패는 HTTP/2 를 끄고 한 번 더 시도한다 (구형 IIS 등)."""
     calls = []
@@ -310,7 +464,7 @@ def test_capture_retries_with_http2_disabled(monkeypatch, tmp_path):
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
                   browser_args=(), session=None, resource_fallback=None,
                   insecure_tls=False, credential=None, live_session=None,
-                  mobile_screenshot=False):
+                  ai_session=None, mobile_screenshot=False):
         calls.append(browser_args)
         if not browser_args:
             raise capture.CaptureError(
@@ -330,7 +484,7 @@ def test_capture_does_not_retry_other_errors(monkeypatch, tmp_path):
     def fake_once(url, out_dir, remove_selectors=(), link_rewriter=None,
                   browser_args=(), session=None, resource_fallback=None,
                   insecure_tls=False, credential=None, live_session=None,
-                  mobile_screenshot=False):
+                  ai_session=None, mobile_screenshot=False):
         calls.append(browser_args)
         raise capture.CaptureError(f"{url} 캡처 실패: net::ERR_NAME_NOT_RESOLVED")
 
@@ -386,8 +540,13 @@ def test_capture_download_url_raises_download_error(tmp_path):
     thread.start()
     try:
         url = f"http://127.0.0.1:{server.server_address[1]}/download.php?file=report.pdf"
-        with pytest.raises(capture.CaptureDownloadError):
+        with pytest.raises(capture.CaptureDownloadError) as exc:
             capture.capture(url, tmp_path)
+        # 브라우저가 받은 파일을 실제로 저장하고 정보를 실어 온다 (httpx 재요청 불필요)
+        err = exc.value
+        assert err.download_path is not None and err.download_path.is_file()
+        assert err.download_path.read_bytes() == b"%PDF-1.4 fixture"
+        assert err.suggested_filename == "report.pdf"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -549,3 +708,62 @@ def test_capture_self_signed_with_insecure_tls(self_signed_site, tmp_path):
     assert result.http_status == 200
     assert "자체 서명 본문" in result.raw_html
     assert (out / "page.html").is_file()
+
+
+def test_generic_link_rewriter_maps_http_links_to_goto():
+    """단일 페이지 캡처용 리라이터 — http(s) 앵커를 /goto 리졸버로, 비웹은 스킵."""
+    rw = capture.generic_link_rewriter()
+    mapping = rw([
+        "https://example.com/a",
+        "http://example.com/b",
+        "mailto:x@y.z",
+        "javascript:void(0)",
+    ])
+    assert mapping["https://example.com/a"] == (
+        "/goto?url=https%3A%2F%2Fexample.com%2Fa"
+    )
+    assert mapping["http://example.com/b"].startswith("/goto?url=")
+    assert "mailto:x@y.z" not in mapping       # 비웹 스킴은 재작성 안 함
+    assert "javascript:void(0)" not in mapping
+
+
+_CONSENT_HTML = (
+    "<!doctype html><html><head><meta charset='utf-8'><title>consent</title></head>"
+    "<body style='overflow:hidden'>"
+    "<div id='onetrust-consent-sdk'>"
+    "<div id='onetrust-banner-sdk'>쿠키 동의 배너 문구</div>"
+    "<div class='onetrust-pc-dark-filter'></div></div>"
+    "<article>본문 콘텐츠입니다.</article>"
+    "</body></html>"
+)
+
+
+def test_capture_removes_consent_overlay_from_page_html(tmp_path):
+    """쿠키 동의(CMP) 오버레이는 page.html(보기용)에서 제거되고 raw.html 엔 남는다."""
+    site = tmp_path / "csite"
+    site.mkdir()
+    (site / "index.html").write_text(_CONSENT_HTML, encoding="utf-8")
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        url = f"http://127.0.0.1:{server.server_address[1]}/index.html"
+        capture.capture(url, out)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    raw = (out / "raw.html").read_text(encoding="utf-8")
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    # raw.html(원본 소스)에는 동의 배너가 그대로 — 충실한 기록
+    assert "onetrust-consent-sdk" in raw and "쿠키 동의 배너 문구" in raw
+    # page.html(보기용)에서는 CMP 오버레이가 제거되고 본문은 남는다
+    assert "onetrust-consent-sdk" not in page_html
+    assert "쿠키 동의 배너 문구" not in page_html
+    assert "본문 콘텐츠입니다." in page_html
+    # body 인라인 스크롤 잠금(overflow:hidden) 해제
+    assert "overflow:hidden" not in page_html.replace(" ", "")
