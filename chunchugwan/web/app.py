@@ -1107,6 +1107,8 @@ def _queue_archive(
     requested_by: int | None = None,
     network_tag_id: str | None = None,
     credential_id: int | None = None,
+    protect: bool | None = None,
+    site_protect_default: bool | None = None,
 ) -> bool:
     """단발 아카이빙 작업을 archive_jobs 큐에 추가. 같은 URL 이 이미 큐에 있으면
     무시(False — 호출부가 기존처럼 '이미 진행 중' 안내를 띄운다).
@@ -1123,6 +1125,7 @@ def _queue_archive(
             conn, url, force=force, source=source, requested_by=requested_by,
             network_tag_id=network_tag_id, credential_id=credential_id,
             interval_seconds=interval_seconds, run_at=run_at,
+            protect=protect, site_protect_default=site_protect_default,
         )
 
 

@@ -657,6 +657,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
             ("live_viewport_h", "INTEGER"),
             # 요청한 사용자 — 작업이 로그가 될 때 archive_logs.requested_by 로 이어진다
             ("requested_by", "INTEGER REFERENCES users(id)"),
+            # 클러스터 보호 선택 — NULL=미지정(사이트 기본 상속), 1=보호, 0=공유 허용.
+            # 워커가 캡처 후 page.cluster_protect 에 적용한다(메타 후처리, 캡처 로직 불변).
+            ("protect", "INTEGER"),
+            # 새 사이트 생성 시 적용할 사이트 보호 기본값 — NULL=미지정. 워커가 이 작업으로
+            # 사이트가 처음 생긴 경우(소속 페이지 1개)에만 적용한다.
+            ("site_protect_default", "INTEGER"),
         ):
             if col not in cols:
                 conn.execute(f"ALTER TABLE archive_jobs ADD COLUMN {col} {ddl}")
@@ -1193,6 +1199,34 @@ def set_page_cluster_protect(
         "UPDATE pages SET cluster_protect = ? WHERE id = ?",
         (None if protect is None else int(protect), page_id),
     )
+
+
+def apply_archive_protect(
+    conn: sqlite3.Connection,
+    page_id: int,
+    *,
+    protect: bool | None,
+    site_protect_default: bool | None,
+) -> None:
+    """캡처 후 클러스터 보호 메타 적용 (워커 후처리) — 캡처 로직과 분리된 메타 갱신.
+
+    protect 가 있으면 page.cluster_protect 에 적용한다. site_protect_default 가 있고
+    이 작업으로 사이트가 처음 생긴 경우(소속 페이지 1개)에만 사이트 기본값을 적용한다
+    (기존 사이트의 설정을 매 아카이빙마다 덮어쓰지 않는다). None 인 항목은 건드리지 않는다.
+    """
+    if protect is not None:
+        set_page_cluster_protect(conn, page_id, bool(protect))
+    if site_protect_default is not None:
+        row = conn.execute(
+            "SELECT site_id FROM pages WHERE id = ?", (page_id,)
+        ).fetchone()
+        site_id = row["site_id"] if row else None
+        if site_id is not None:
+            n = conn.execute(
+                "SELECT COUNT(*) AS c FROM pages WHERE site_id = ?", (site_id,)
+            ).fetchone()["c"]
+            if n <= 1:
+                set_site_cluster_protect_default(conn, site_id, bool(site_protect_default))
 
 
 def resolve_page_cluster_protected(conn: sqlite3.Connection, page_id: int) -> bool:
@@ -3140,6 +3174,8 @@ def enqueue_archive_job(
     credential_id: int | None = None,
     interval_seconds: int | None = None,
     run_at: str | None = None,
+    protect: bool | None = None,
+    site_protect_default: bool | None = None,
 ) -> bool:
     """단발 아카이빙 작업을 큐에 추가. 같은 URL 의 활성 작업이 이미 있으면 무시(False).
 
@@ -3160,11 +3196,15 @@ def enqueue_archive_job(
         """
         INSERT OR IGNORE INTO archive_jobs
             (url, force, source, requested_by, network_tag_id, credential_id,
-             interval_seconds, run_at, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+             interval_seconds, run_at, protect, site_protect_default,
+             status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
         """,
         (url, 1 if force else 0, source, requested_by, network_tag_id,
-         credential_id, interval_seconds, run_at, _utcnow()),
+         credential_id, interval_seconds, run_at,
+         None if protect is None else int(protect),
+         None if site_protect_default is None else int(site_protect_default),
+         _utcnow()),
     )
     return cur.rowcount == 1
 

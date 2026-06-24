@@ -168,6 +168,7 @@ def ingest_capture(
     force: bool = False,
     network_tag: str | None = None,
     requested_by: int | None = None,
+    protect: bool | None = None,
 ) -> IngestResult:
     """확장이 올린 페이지 캡처를 코어로 적재한다 (네트워크 없음).
 
@@ -265,6 +266,11 @@ def ingest_capture(
                     conn, snapshot_id, [{"name": n, "url": None} for n in stats.resource_names]
                 )
             db.set_page_client_captured(conn, page_id)  # 서버 재요청 차단 (불변식 2)
+            # 클러스터 보호 선택 — 지정 시 page 보호값 + (새 사이트면) 사이트 기본값.
+            if protect is not None:
+                db.apply_archive_protect(
+                    conn, page_id, protect=protect, site_protect_default=protect
+                )
 
         # 검색 색인 (best-effort — 실패해도 search_indexed=0 로 두고 진행)
         with db.connect() as conn:

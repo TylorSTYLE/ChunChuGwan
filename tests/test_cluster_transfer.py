@@ -298,6 +298,58 @@ def test_push_delta_uploads_missing_blob(tmp_db, monkeypatch):
     assert uploaded == [("resource", name, body)]
 
 
+# ---- 보호 opt-in (워커 후처리·enqueue 전달) ----
+
+
+def test_apply_archive_protect_page_and_new_site(tmp_db):
+    pid, _ = _seed_snapshot("https://new.test/only", shareable=False)
+    with db.connect() as conn:
+        page = db.get_page(conn, "https://new.test/only")
+        site_id = page["site_id"]
+        # 새 사이트(소속 페이지 1개) → page + site 기본값 모두 적용
+        db.apply_archive_protect(conn, page["id"], protect=False, site_protect_default=False)
+        assert db.get_page_by_id(conn, page["id"])["cluster_protect"] == 0
+        assert db.get_site(conn, site_id)["cluster_protect_default"] == 0
+
+
+def test_apply_archive_protect_keeps_existing_site_default(tmp_db):
+    _seed_snapshot("https://multi.test/a")
+    db.get_or_create_page  # noqa
+    p2, _ = _seed_snapshot("https://multi.test/b", dir_name="2026-06-02T00-00-00")
+    with db.connect() as conn:
+        page = db.get_page(conn, "https://multi.test/b")
+        site_id = page["site_id"]
+        db.set_site_cluster_protect_default(conn, site_id, True)
+        # 소속 페이지 2개(기존 사이트) → site 기본값은 덮지 않는다
+        db.apply_archive_protect(conn, page["id"], protect=False, site_protect_default=False)
+        assert db.get_site(conn, site_id)["cluster_protect_default"] == 1  # 유지
+        assert db.get_page_by_id(conn, page["id"])["cluster_protect"] == 0  # page 는 적용
+
+
+def test_web_archive_enqueues_protect(tmp_db, monkeypatch):
+    # netcheck 게이트 우회 — 공인 주소로 가정
+    from chunchugwan.web import app as appmod
+    monkeypatch.setattr(appmod, "_network_gate", lambda req, norm, tag: None)
+    c = _admin_client()
+    r = c.post("/api/web/archive",
+               json={"url": "https://pub.test/x", "protect": False},
+               headers=POST_HEADERS)
+    assert r.status_code == 202
+    with db.connect() as conn:
+        job = conn.execute("SELECT protect, site_protect_default FROM archive_jobs "
+                           "WHERE url = ?", ("https://pub.test/x",)).fetchone()
+    assert job["protect"] == 0 and job["site_protect_default"] == 0
+
+
+def _admin_client():
+    with db.connect() as conn:
+        uid = db.create_user(conn, "admin2@test.co", auth.hash_password("adminpass123"), role="admin")
+        token = auth.issue_session(conn, uid)
+    c = TestClient(web_app.app)
+    c.cookies.set(config.SESSION_COOKIE, token)
+    return c
+
+
 # ---- 보호 해소 순서 ----
 
 

@@ -918,6 +918,9 @@ _EN: dict[str, str] = {
     "연결됨": "Connected",
     "일시 오류": "Temporary error",
     "폐기됨": "Revoked",
+    "다른 클러스터로 공유 허용": "Allow sharing to other clusters",
+    "기본은 보호(전송 안 함)입니다. 켜면 연결된 클러스터로 이 아카이브를 보낼 수 있습니다.":
+        "Protected by default (not sent). Turn on to send this archive to connected clusters.",
     "발급된 키가 없습니다.": "No keys issued yet.",
     "새 키 발급": "Issue a new key",
     "키 이름 (예: rss-bot)": "Key name (e.g. rss-bot)",

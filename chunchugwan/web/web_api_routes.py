@@ -1100,6 +1100,9 @@ class ArchiveReq(BaseModel):
     crawl_max_pages: str = ""
     crawl_max_depth: str = ""
     crawl_delay: str = ""
+    # 클러스터 보호 — None=사이트 기본 상속, True=보호(미전송), False=공유 허용.
+    # 새 사이트면 이 값이 사이트 보호 기본값으로도 적용된다(폼 기본=보호).
+    protect: bool | None = None
     # 로그인 자격증명 연결 (자격증명 관리 권한) — ""=연결 안 함, "__new__"=신규 생성, 숫자=기존
     cred_existing_id: str = ""
     cred_kind: str = ""
@@ -1166,6 +1169,18 @@ def archive_new(
                 )
         except ValueError as exc:
             raise HTTPException(400, f"아카이빙 실패: {exc}")
+        # 새 사이트면 사이트 보호 기본값을 적용한다(소속 페이지가 아직 없을 때만 —
+        # 기존 사이트 재크롤은 설정을 덮지 않는다). 페이지는 크롤이 만들며 사이트
+        # 기본값을 상속한다.
+        crawl_site_id = crawl["site_id"]
+        if body.protect is not None and crawl_site_id:
+            with db.connect() as conn:
+                n = conn.execute(
+                    "SELECT COUNT(*) AS c FROM pages WHERE site_id = ?",
+                    (crawl_site_id,),
+                ).fetchone()["c"]
+                if n == 0:
+                    db.set_site_cluster_protect_default(conn, crawl_site_id, bool(body.protect))
         audit.log(request, "새 사이트 아카이브 등록: %s", body.url,
                   action="archive", target=norm)
         return {"site": True, "crawl_id": crawl["id"], "merged": merged}
@@ -1176,6 +1191,9 @@ def archive_new(
         interval_seconds=seconds or None,
         run_at=(body.run_at or None) if seconds else None,
         network_tag_id=tag_id,
+        protect=body.protect,
+        # 새 사이트면 사이트 기본값도 이 선택으로 (워커가 소속 페이지 1개일 때만 적용).
+        site_protect_default=body.protect,
     )
     if queued:
         audit.log(request, "새 아카이빙 등록: %s", norm,
