@@ -11,7 +11,7 @@ import click
 
 from . import __version__
 from . import backup as backup_mod
-from . import config, db, searchindex, storage, system_log
+from . import config, db, linkrepair, searchindex, storage, system_log
 # crawler·archive_worker·worker·differ·optimize·scheduler·deletion 은 capture
 # (playwright)·extract(lxml)·PIL 을 전이로 끌어와 import 비용이 크다 — 해당 명령
 # 에서만 쓰므로 함수 안에서 지연 import 한다 (cron 으로 자주 도는 list/search/add/
@@ -1078,6 +1078,36 @@ def search_verify(repair: bool) -> None:
             f"교정 완료 — orphan {result.orphans_removed}개 삭제 · "
             f"재색인 {result.reindexed}개"
         )
+
+
+@main.group()
+def links() -> None:
+    """아카이브 링크 교정 — wccg links status | repair.
+
+    구형 단일 페이지 스냅샷의 page.html 앵커를 /goto 리졸버로 재작성해
+    렌더링 시 내부 링크가 깨지지 않게 한다 (신규 스냅샷은 캡처가 처리).
+    """
+
+
+@links.command("status")
+def links_status() -> None:
+    """링크 교정 상태 — 앵커 재작성이 안 된 스냅샷 수."""
+    pending = linkrepair.pending_count()
+    if pending:
+        click.echo(f"링크 교정: 미교정 스냅샷 {pending}개 (wccg links repair 로 교정)")
+    else:
+        click.echo("링크 교정: 모든 스냅샷의 앵커가 재작성됨")
+
+
+@links.command("repair")
+def links_repair() -> None:
+    """미교정 스냅샷의 page.html 앵커를 /goto 리졸버로 재작성 (멱등)."""
+    pending = linkrepair.pending_count()
+    if pending == 0:
+        click.echo("교정할 스냅샷이 없습니다 — 모두 최신 상태입니다.")
+        return
+    count = linkrepair.backfill_all()
+    click.echo(f"링크 교정 완료 — 스냅샷 {count}개 재작성")
 
 
 def _counts_label(manifest: dict) -> str:

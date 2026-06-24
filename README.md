@@ -103,6 +103,7 @@ uv run wccg diff <url>               # 최신 2개 스냅샷 비교 (+ 스크린
 uv run wccg diff <url> --from 1 --to 3
 uv run wccg search <검색어>          # 본문·첨부 문서 전문 검색 (docs/SEARCH.md)
 uv run wccg search reindex          # 기존/가져온 스냅샷을 검색 인덱스에 색인
+uv run wccg links repair            # 구형 단일 페이지 스냅샷의 깨진 내부 링크 교정
 uv run wccg delete <url>             # 아카이브 삭제 — 휴지통이 켜져 있으면 휴지통으로 이동
 uv run wccg delete <url> --hard      # 휴지통을 거치지 않고 즉시 영구 삭제
 uv run wccg delete <url> --snapshot 2  # history 번호의 스냅샷 하나만 삭제 (항상 즉시)

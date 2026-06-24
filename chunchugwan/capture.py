@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
-from urllib.parse import urldefrag, urljoin, urlsplit
+from urllib.parse import quote, urldefrag, urljoin, urlsplit
 
 from . import browser_engine, config, documents, netcheck, storage, trackers
 
@@ -288,6 +288,30 @@ class CaptureResult:
 
 # 앵커 절대 URL 목록 → {원본 href: 재작성 href}. 비거나 None 이면 재작성 없음.
 LinkRewriter = Callable[[Sequence[str]], dict[str, str]]
+
+
+def generic_link_rewriter() -> LinkRewriter:
+    """단일 페이지(비크롤) 캡처용 앵커 재작성 — http(s) 링크를 /goto 리졸버로.
+
+    크롤은 crawl_id 종속 /crawl/{id}/goto 로 보내지만(crawler.link_rewriter),
+    단일 페이지는 대상 스냅샷 id 를 캡처 시점에 알 수 없어 url 리졸버
+    /goto?url=... 로 보낸다. http(s) 가 아닌 mailto:/javascript:/# 등은 그대로
+    둔다. crawler._normalize_http 와 같은 정규화(명시적 스킴 요구).
+    """
+
+    def rewrite(hrefs: Sequence[str]) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        for href in hrefs:
+            if not href.startswith(("http://", "https://")):
+                continue
+            try:
+                norm = storage.normalize_url(href)
+            except ValueError:
+                continue
+            mapping[href] = f"/goto?url={quote(norm, safe='')}"
+        return mapping
+
+    return rewrite
 
 # 자원 인라인 실패 시 과거 캡처본 조회 — URL 을 받아 (content-type, body) 또는
 # None 을 반환한다 (pipeline 이 snapshot_resources + 자원 CAS 로 구현).

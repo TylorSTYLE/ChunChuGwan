@@ -114,6 +114,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
                                                   --   0 이면 저장공간 최적화의 추출 대상
     search_indexed INTEGER NOT NULL DEFAULT 0,    -- 텍스트 검색 인덱스(snapshot_fts) 반영 여부.
                                                   --   0 이면 'wccg search reindex' 백필 대상
+    links_rewritten INTEGER NOT NULL DEFAULT 0,   -- page.html 앵커가 /goto·/crawl/{id}/goto
+                                                  --   리졸버로 재작성됐는지. 0 이면 'wccg links
+                                                  --   repair' 백필 대상(구형 단일 페이지 스냅샷)
     bytes         INTEGER NOT NULL DEFAULT 0,     -- 스냅샷 디렉토리 파일 용량 합(비정규화).
                                                   --   캡처/compact 시 1회 기록, 용량 집계가
                                                   --   파일시스템 stat 대신 SUM(bytes) 를 쓴다
@@ -555,6 +558,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if cols and "search_indexed" not in cols:
         conn.execute(
             "ALTER TABLE snapshots ADD COLUMN search_indexed INTEGER NOT NULL DEFAULT 0"
+        )
+    # page.html 앵커 재작성 여부 — 0 인 스냅샷은 'wccg links repair'/시스템 링크 교정
+    # 백필 대상(크롤 이전 단일 페이지 스냅샷). 마이그레이션은 컬럼만 추가하고 실제
+    # 교정은 명시 트리거로 채운다 (search_indexed 와 같은 이유 — connect 마다 page.html
+    #  수천 개를 읽지 않게).
+    if cols and "links_rewritten" not in cols:
+        conn.execute(
+            "ALTER TABLE snapshots ADD COLUMN links_rewritten INTEGER NOT NULL DEFAULT 0"
         )
     # 로그인 자격증명으로 캡처된(로그인 뒤 콘텐츠) 스냅샷 표식 — 소유자/관리자만
     # 열람. authenticated_by 는 캡처에 쓰인 자격증명의 등록자(없으면 NULL=admin 전용).
@@ -1408,7 +1419,8 @@ def last_snapshot(conn: sqlite3.Connection, page_id: int) -> sqlite3.Row | None:
 
 _SNAPSHOT_COLUMNS = frozenset(
     {"taken_at", "dir_name", "content_hash", "final_url", "http_status", "changed",
-     "note", "resources_indexed", "css_externalized", "search_indexed", "bytes",
+     "note", "resources_indexed", "css_externalized", "search_indexed",
+     "links_rewritten", "bytes",
      "title", "authenticated", "authenticated_by", "origin", "incomplete"}
 )
 
@@ -2226,6 +2238,39 @@ def mark_snapshot_css_externalized(
     """스냅샷의 인라인 <style> 추출 완료 표시 — 이후 추출 대상에서 제외된다."""
     conn.execute(
         "UPDATE snapshots SET css_externalized = 1 WHERE id = ?", (snapshot_id,)
+    )
+
+
+def count_links_pending_snapshots(conn: sqlite3.Connection) -> int:
+    """앵커 재작성이 아직 안 된 스냅샷 수 — 링크 교정 백필 대상."""
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots WHERE links_rewritten = 0"
+    ).fetchone()["c"]
+
+
+def list_links_pending_snapshots(
+    conn: sqlite3.Connection, limit: int | None = None
+) -> list[sqlite3.Row]:
+    """앵커 재작성 백필 대상 스냅샷 (+ 디렉토리 위치·final_url) — 링크 교정용.
+
+    final_url 은 상대 href 절대화 기준으로 함께 내려준다.
+    """
+    sql = """
+        SELECT s.id, p.domain, p.slug, s.dir_name, s.final_url
+        FROM snapshots s JOIN pages p ON p.id = s.page_id
+        WHERE s.links_rewritten = 0 ORDER BY s.id
+    """
+    if limit is not None:
+        return conn.execute(sql + " LIMIT ?", (limit,)).fetchall()
+    return conn.execute(sql).fetchall()
+
+
+def mark_snapshot_links_rewritten(
+    conn: sqlite3.Connection, snapshot_id: int
+) -> None:
+    """스냅샷의 앵커 재작성 완료 표시 — 이후 링크 교정 대상에서 제외된다."""
+    conn.execute(
+        "UPDATE snapshots SET links_rewritten = 1 WHERE id = ?", (snapshot_id,)
     )
 
 

@@ -549,3 +549,20 @@ def test_capture_self_signed_with_insecure_tls(self_signed_site, tmp_path):
     assert result.http_status == 200
     assert "자체 서명 본문" in result.raw_html
     assert (out / "page.html").is_file()
+
+
+def test_generic_link_rewriter_maps_http_links_to_goto():
+    """단일 페이지 캡처용 리라이터 — http(s) 앵커를 /goto 리졸버로, 비웹은 스킵."""
+    rw = capture.generic_link_rewriter()
+    mapping = rw([
+        "https://example.com/a",
+        "http://example.com/b",
+        "mailto:x@y.z",
+        "javascript:void(0)",
+    ])
+    assert mapping["https://example.com/a"] == (
+        "/goto?url=https%3A%2F%2Fexample.com%2Fa"
+    )
+    assert mapping["http://example.com/b"].startswith("/goto?url=")
+    assert "mailto:x@y.z" not in mapping       # 비웹 스킴은 재작성 안 함
+    assert "javascript:void(0)" not in mapping

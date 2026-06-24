@@ -342,9 +342,17 @@ def _archive_url(
         logger.warning("자격증명 복호화 실패 — 인증 없이 진행: %s (%s)", norm, e)
 
     # 해시가 같으면 스냅샷 디렉토리를 만들지 않도록 임시 디렉토리에 먼저 캡처
+    # 비크롤(단일 페이지)은 대상 스냅샷 id 를 캡처 시점에 모르므로 url 리졸버
+    # /goto 로 앵커를 재작성한다 — 크롤은 crawl_id 종속 리라이터를 이미 넘긴다.
+    # 문서 다운로드는 capture 가 _rewrite_links 전에 CaptureDownloadError 로 빠져
+    # 리라이터가 적용되지 않는다(안전).
+    effective_rewriter = (
+        link_rewriter if link_rewriter is not None
+        else capture.generic_link_rewriter()
+    )
     capture_kwargs = dict(
         remove_selectors=tuple(rules.get("remove_selectors") or ()),
-        link_rewriter=link_rewriter,
+        link_rewriter=effective_rewriter,
         session=browser_session,
         resource_fallback=_resource_fallback,
         mobile_screenshot=mobile_screenshot,
@@ -560,6 +568,7 @@ def _archive_url(
                 http_status=result.http_status, changed=changed,
                 resources_indexed=1,  # 참조는 바로 아래에서 기록 — 백필 불필요
                 css_externalized=1,   # compact_snapshot_dir 가 위에서 추출 완료
+                links_rewritten=1,    # 앵커는 캡처가 /goto·/crawl/{id}/goto 로 재작성 완료
                 bytes=storage.snapshot_dir_bytes(snap_dir),
                 title=result.title,
                 authenticated=1 if credential is not None else 0,
@@ -803,6 +812,7 @@ def _archive_document_url(
             http_status=dl.http_status, changed=changed,
             resources_indexed=1,  # 공유 자원 없음 — 백필 불필요
             css_externalized=1,   # 인라인 <style> 없음
+            links_rewritten=1,    # 문서 안내 page.html — 재작성할 외부 앵커 없음
             bytes=storage.snapshot_dir_bytes(snap_dir),
             title=meta.title,
             authenticated=1 if credential is not None else 0,
