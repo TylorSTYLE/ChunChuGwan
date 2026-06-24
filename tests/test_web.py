@@ -1,5 +1,6 @@
 """대시보드 라우트 테스트. 캡처 없이 fixture 데이터로 검증."""
 import hashlib
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -350,5 +351,47 @@ def test_resource_route_serves_gzipped_css(client, monkeypatch):
     assert res.headers.get("content-encoding") == "gzip"
     assert res.headers["content-type"].startswith("text/css")
     assert res.headers["content-security-policy"] == "sandbox"
+
+
+# ── 링크 리졸버: /goto · /crawl/{id}/goto 가 정식 중첩 경로로 보내는지 ──
+# (C2 컷오버 회귀 방지 — 구형 /snapshot/{id} 로 가면 SPA 가 못 그려 깨졌다.)
+
+_CANON_RE = re.compile(r"^/archive/sites/\d+/page/1/snapshot/2$")
+
+
+def test_goto_redirects_to_canonical_snapshot(client):
+    """단일 페이지 리졸버 — URL 의 최신 스냅샷(=2) 정식 경로로 302."""
+    res = client.get(
+        "/goto", params={"url": "https://example.com/post"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 302
+    assert _CANON_RE.match(res.headers["location"]), res.headers["location"]
+
+
+def test_goto_archive_miss_returns_guidance(client):
+    """아카이브에 없는 링크 — 라이브로 안 새고 안내 화면(스크립트 없음) 404."""
+    res = client.get(
+        "/goto", params={"url": "https://nope.example/x"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 404
+    assert "<script" not in res.text.lower()
+    assert "nope.example" in res.text  # 원본 링크 안내
+
+
+def test_crawl_goto_redirects_to_canonical_snapshot(client):
+    """크롤 리졸버도 정식 중첩 경로로 302 (구형 /snapshot/{id} 아님)."""
+    with db.connect() as conn:
+        crawl_id = db.insert_crawl(
+            conn, start_url="https://example.com/", scope_host="example.com",
+            scope_path="/", max_pages=10, max_depth=2, delay_seconds=0, source="web",
+        )
+    res = client.get(
+        f"/crawl/{crawl_id}/goto", params={"url": "https://example.com/post"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 302
+    assert _CANON_RE.match(res.headers["location"]), res.headers["location"]
 
 

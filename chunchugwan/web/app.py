@@ -1488,13 +1488,66 @@ def api_crawl_status(request: Request, crawl_id: int) -> dict:
 # ---- 사이트 아카이브 스케줄 (주기적 재크롤) ----
 
 
+def _canonical_snapshot_path(conn, snapshot_id: int) -> str | None:
+    """스냅샷 id → 정식 뷰어 경로(/archive/sites/{site}/page/{page}/snapshot/{id}).
+
+    리졸버(crawl_goto·goto)가 리다이렉트할 목적지. 휴지통 등으로 스냅샷을 못
+    찾으면 None — 호출부가 '아카이브에 없음' 안내로 폴백한다. C2 컷오버 후
+    SPA 가 해석하는 유일한 스냅샷 경로라 구형 /snapshot/{id} 대신 이걸 쓴다.
+    """
+    snap = db.get_snapshot(conn, snapshot_id)
+    if snap is None:
+        return None
+    return (
+        f"/archive/sites/{snap['site_id'] or 0}"
+        f"/page/{snap['page_id']}/snapshot/{snapshot_id}"
+    )
+
+
+def _archive_miss_html(request: Request, norm: str, *, crawl=None) -> str:
+    """아카이브에 없는 링크 안내 HTML — 라이브로 조용히 새지 않도록 보여준다.
+
+    SPA 셸이 아니라 자체완결 HTML(스크립트 없음)로, 사용자가 직접 클릭한
+    top-navigation 목적지라 대시보드 컨텍스트에서 안전하게 렌더된다. crawl 이
+    주어지면(크롤 리졸버) 크롤 회차 줄을 함께 보여준다.
+    """
+    esc_url = html_escape(norm)
+    title = t(request, "아카이브에 없는 페이지")
+    body = t(
+        request,
+        "이 링크의 페이지는 아카이브되지 않았습니다 — 크롤 범위 밖이거나 아직/끝내 저장되지 않았습니다.",
+    )
+    open_label = t(request, "원본 페이지 열기 (라이브 사이트)")
+    rows = f"<tr><th>URL</th><td class=\"mono\">{esc_url}</td></tr>"
+    if crawl is not None:
+        crawl_label = t(request, "크롤")
+        esc_start = html_escape(crawl["start_url"])
+        rows += (
+            f"<tr><th>{html_escape(crawl_label)}</th><td>"
+            f"<a href=\"/crawls/{crawl['id']}\" class=\"mono\">{esc_start}</a></td></tr>"
+        )
+    return (
+        "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{html_escape(title)} — 춘추관</title>"
+        "<style>body{font:14px/1.6 system-ui,sans-serif;max-width:760px;margin:48px auto;"
+        "padding:0 16px;color:#222}a{color:#c2410c}.mono{font-family:ui-monospace,monospace}"
+        "table{border-collapse:collapse;margin:16px 0}th{text-align:left;padding:4px 12px 4px 0;"
+        "vertical-align:top;color:#666}td{padding:4px 0}</style></head><body>"
+        f"<h2>{html_escape(title)}</h2><p>{html_escape(body)}</p>"
+        f"<table><tbody>{rows}</tbody></table>"
+        f"<p><a href=\"{esc_url}\" rel=\"noopener noreferrer\">{html_escape(open_label)}</a></p>"
+        "</body></html>"
+    )
+
+
 @app.get("/crawl/{crawl_id}/goto")
 def crawl_goto(request: Request, crawl_id: int, url: str):
     """아카이브 내 링크 리졸버 — 재작성된 page.html 앵커의 목적지.
 
     같은 크롤 세트에서 확인된 스냅샷 → 해당 URL 의 최신 스냅샷 순으로
-    찾아 리다이렉트하고, 없으면 원본 링크를 안내하는 화면을 보여준다
-    (라이브 사이트로 조용히 새지 않는다).
+    찾아 정식 뷰어 경로로 리다이렉트하고, 없으면 원본 링크를 안내하는
+    화면을 보여준다 (라이브 사이트로 조용히 새지 않는다).
     """
     _require_viewer(request)
     crawl = _load_crawl(request, crawl_id)
@@ -1509,38 +1562,42 @@ def crawl_goto(request: Request, crawl_id: int, url: str):
             if page is not None:
                 last = db.last_snapshot(conn, page["id"])
                 snapshot_id = last["id"] if last else None
-    if snapshot_id is not None:
-        return RedirectResponse(f"/snapshot/{snapshot_id}", status_code=302)
-    # 아카이브에 없는 링크 — 라이브 사이트로 조용히 새지 않도록 안내 화면을 보여준다.
-    # SPA 셸이 아니라 자체완결 HTML(스크립트 없음)로, 사용자가 직접 클릭한 top-navigation
-    # 목적지라 대시보드 컨텍스트에서 안전하게 렌더된다.
-    esc_url = html_escape(norm)
-    esc_start = html_escape(crawl["start_url"])
-    title = t(request, "아카이브에 없는 페이지")
-    body = t(
-        request,
-        "이 링크의 페이지는 아카이브되지 않았습니다 — 크롤 범위 밖이거나 아직/끝내 저장되지 않았습니다.",
-    )
-    crawl_label = t(request, "크롤")
-    open_label = t(request, "원본 페이지 열기 (라이브 사이트)")
-    page_html = (
-        "<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        f"<title>{html_escape(title)} — 춘추관</title>"
-        "<style>body{font:14px/1.6 system-ui,sans-serif;max-width:760px;margin:48px auto;"
-        "padding:0 16px;color:#222}a{color:#c2410c}.mono{font-family:ui-monospace,monospace}"
-        "table{border-collapse:collapse;margin:16px 0}th{text-align:left;padding:4px 12px 4px 0;"
-        "vertical-align:top;color:#666}td{padding:4px 0}</style></head><body>"
-        f"<h2>{html_escape(title)}</h2><p>{html_escape(body)}</p>"
-        "<table><tbody>"
-        f"<tr><th>URL</th><td class=\"mono\">{esc_url}</td></tr>"
-        f"<tr><th>{html_escape(crawl_label)}</th><td>"
-        f"<a href=\"/crawls/{crawl['id']}\" class=\"mono\">{esc_start}</a></td></tr>"
-        "</tbody></table>"
-        f"<p><a href=\"{esc_url}\" rel=\"noopener noreferrer\">{html_escape(open_label)}</a></p>"
-        "</body></html>"
-    )
-    return HTMLResponse(page_html, status_code=404)
+        dest = (
+            _canonical_snapshot_path(conn, snapshot_id)
+            if snapshot_id is not None else None
+        )
+    if dest is not None:
+        return RedirectResponse(dest, status_code=302)
+    return HTMLResponse(_archive_miss_html(request, norm, crawl=crawl), status_code=404)
+
+
+@app.get("/goto")
+def goto(request: Request, url: str):
+    """아카이브 내 링크 리졸버(크롤 비종속) — 단일 페이지 스냅샷 앵커의 목적지.
+
+    해당 URL 의 최신 스냅샷을 찾아 정식 뷰어 경로로 리다이렉트하고, 없으면
+    원본 링크 안내 화면(crawl_goto 와 같은 보안 모델, 원칙 5 — 라이브로
+    조용히 안 샘). 단일 페이지는 캡처 시점에 대상 스냅샷 id 를 알 수 없어
+    크롤처럼 snapshot 종속 경로 대신 url 리졸버로 재작성한다.
+    """
+    _require_viewer(request)
+    try:
+        norm = storage.normalize_url(url)
+    except ValueError:
+        raise HTTPException(400, t(request, "잘못된 URL"))
+    with db.connect() as conn:
+        page = db.get_page(conn, norm)
+        snapshot_id = None
+        if page is not None:
+            last = db.last_snapshot(conn, page["id"])
+            snapshot_id = last["id"] if last else None
+        dest = (
+            _canonical_snapshot_path(conn, snapshot_id)
+            if snapshot_id is not None else None
+        )
+    if dest is not None:
+        return RedirectResponse(dest, status_code=302)
+    return HTMLResponse(_archive_miss_html(request, norm), status_code=404)
 
 
 # ── SPA 루트 catch-all (반드시 마지막 등록) ──────────────────────────────────

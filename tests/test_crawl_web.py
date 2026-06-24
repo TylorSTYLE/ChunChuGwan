@@ -37,6 +37,13 @@ def make_snapshot(url: str) -> tuple[int, int]:
     return page_id, snap_id
 
 
+def _canonical(snap_id: int) -> str:
+    """리졸버가 302 로 보내는 정식 뷰어 경로 (구형 /snapshot/{id} 아님)."""
+    with db.connect() as conn:
+        s = db.get_snapshot(conn, snap_id)
+    return f"/archive/sites/{s['site_id'] or 0}/page/{s['page_id']}/snapshot/{snap_id}"
+
+
 def _add_failed_page(crawl_id: int, url: str) -> int:
     """크롤에 실패(failed) 페이지 한 줄 추가 후 crawl_page id 반환."""
     with db.connect() as conn:
@@ -60,7 +67,7 @@ def test_goto_redirects_to_crawl_snapshot(client):
         f"/crawl/{crawl['id']}/goto", params={"url": url}, follow_redirects=False
     )
     assert res.status_code == 302
-    assert res.headers["location"] == f"/snapshot/{snap_id}"
+    assert res.headers["location"] == _canonical(snap_id)
 
 
 def test_goto_falls_back_to_latest_snapshot(client):
@@ -72,7 +79,7 @@ def test_goto_falls_back_to_latest_snapshot(client):
         f"/crawl/{crawl['id']}/goto", params={"url": url}, follow_redirects=False
     )
     assert res.status_code == 302
-    assert res.headers["location"] == f"/snapshot/{snap_id}"
+    assert res.headers["location"] == _canonical(snap_id)
 
 
 def test_goto_missing_shows_original_link(client):
@@ -110,4 +117,4 @@ def test_goto_normalizes_url(client):
         follow_redirects=False,
     )
     assert res.status_code == 302
-    assert res.headers["location"] == f"/snapshot/{snap_id}"
+    assert res.headers["location"] == _canonical(snap_id)

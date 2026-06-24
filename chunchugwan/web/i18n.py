@@ -1732,6 +1732,13 @@ _EN.update({
     "유지보수": "Maintenance",
     "저장공간·검색": "Storage & search",
     "검색 인덱스 전체 재색인": "Reindex search (full)",
+    "아카이브 링크 교정": "Repair archive links",
+    "구형 스냅샷의 깨진 내부 링크를 아카이브 리졸버로 바로잡습니다 (내용은 그대로).":
+        "Fix broken internal links in older snapshots via the archive resolver (content unchanged).",
+    "링크 교정 중": "Repairing links",
+    "미교정 스냅샷": "Unrepaired snapshots",
+    "링크 교정 실패": "Link repair failed",
+    "링크 교정을 완료했습니다.": "Link repair complete.",
     "데이터 이전은 이어서 추가됩니다.": "Data migration is coming next.",
     "데이터 이전": "Data migration",
     "이전 모드 켜짐": "Migration mode on",

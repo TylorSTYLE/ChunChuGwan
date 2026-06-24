@@ -94,6 +94,12 @@
 	let reindexDone = $state(0);
 	let reindexTotal = $state(0);
 
+	// 유지보수 — 아카이브 링크 교정 진행
+	let linkRepairRunning = $state(false);
+	let linkRepairDone = $state(0);
+	let linkRepairTotal = $state(0);
+	let linkRepairPending = $state(0);
+
 	// 데이터 이전(마이그레이션) — 발급 토큰은 1회만 표시
 	let migrationToken = $state('');
 
@@ -316,6 +322,47 @@
 		}
 	}
 
+	async function pollLinkRepair() {
+		try {
+			const s = await api<{
+				running: boolean;
+				done: number;
+				total: number;
+				pending: number;
+				error: string | null;
+			}>('/system/links/repair/status');
+			linkRepairDone = s.done;
+			linkRepairTotal = s.total;
+			linkRepairPending = s.pending;
+			if (s.running) {
+				setTimeout(pollLinkRepair, 1000);
+			} else {
+				linkRepairRunning = false;
+				notice = s.error
+					? `${t('링크 교정 실패')}: ${s.error}`
+					: t('링크 교정을 완료했습니다.');
+				await invalidateAll();
+			}
+		} catch (err) {
+			linkRepairRunning = false;
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
+	async function startLinkRepair() {
+		error = '';
+		notice = '';
+		try {
+			await api('/system/links/repair', { method: 'POST' });
+			linkRepairRunning = true;
+			linkRepairDone = 0;
+			linkRepairTotal = 0;
+			pollLinkRepair();
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		}
+	}
+
 	let storagePolling = false;
 	async function loadStorage() {
 		try {
@@ -503,8 +550,29 @@
 		}
 	}
 
+	async function loadLinkRepair() {
+		try {
+			const s = await api<{
+				running: boolean;
+				done: number;
+				total: number;
+				pending: number;
+			}>('/system/links/repair/status');
+			linkRepairPending = s.pending;
+			if (s.running) {
+				linkRepairRunning = true;
+				linkRepairDone = s.done;
+				linkRepairTotal = s.total;
+				pollLinkRepair(); // 진행 중이면 폴링 재개(화면 재진입 대응)
+			}
+		} catch {
+			/* 상태 조회 실패는 무시 — 버튼은 그대로 쓸 수 있다 */
+		}
+	}
+
 	onMount(() => {
 		loadStorage(); // 진행 중이면 폴링을 재개한다(화면 재진입 대응)
+		loadLinkRepair();
 		loadDbBackup();
 		loadRecovery();
 		loadDiskUsage(); // 저장 용량 미터(분리된 비싼 스캔) — 양 모드 모두
@@ -627,6 +695,16 @@
 			{#if reindexRunning}<Spinner />{/if}{t('검색 인덱스 전체 재색인')}
 		</Button>
 		{#if reindexRunning}<span class="muted">{t('재색인 중')} {reindexDone}/{reindexTotal}</span>{/if}
+	</div>
+</fieldset>
+<fieldset class="sec">
+	<legend>{t('아카이브 링크 교정')}</legend>
+	<p class="desc">{t('구형 스냅샷의 깨진 내부 링크를 아카이브 리졸버로 바로잡습니다 (내용은 그대로).')}</p>
+	<div class="btn-row">
+		<Button variant="outline" size="sm" disabled={busy || linkRepairRunning || storageRunning} onclick={startLinkRepair} aria-busy={linkRepairRunning}>
+			{#if linkRepairRunning}<Spinner />{/if}{t('아카이브 링크 교정')}
+		</Button>
+		{#if linkRepairRunning}<span class="muted">{t('링크 교정 중')} {linkRepairDone}/{linkRepairTotal}</span>{:else if linkRepairPending}<span class="muted">{t('미교정 스냅샷')} {linkRepairPending}{t('개')}</span>{/if}
 	</div>
 </fieldset>
 <fieldset class="sec">

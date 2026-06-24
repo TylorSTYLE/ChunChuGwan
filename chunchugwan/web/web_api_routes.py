@@ -31,7 +31,8 @@ from pydantic import BaseModel
 
 from .. import (
     __version__, auth, cluster, config, crawler, crypto, db, deletion, differ,
-    documents, mailer, optimize, resources, scheduler, searchindex, storage,
+    documents, linkrepair, mailer, optimize, resources, scheduler, searchindex,
+    storage,
 )
 from . import audit, i18n, permissions, release_notes
 
@@ -2998,6 +2999,39 @@ def system_search_reindex_status(
 
     _require_manage_system(user)
     return reindex_status()
+
+
+@router.post("/system/links/repair")
+def system_links_repair(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """아카이브 링크 교정을 백그라운드로 시작 — 구형 단일 페이지 스냅샷의 앵커 재작성."""
+    import threading
+
+    from .maintenance import (
+        _linkrepair_lock, _linkrepair_state, _linkrepair_worker,
+    )
+
+    _require_manage_system(user)
+    with _linkrepair_lock:
+        if _linkrepair_state["running"]:
+            return {"ok": True, "started": False, "already_running": True}
+        _linkrepair_state.update(
+            running=True, done=0, total=0, result=None, error=None, finished_at=None)
+    audit.log(request, "아카이브 링크 교정 시작")
+    threading.Thread(target=_linkrepair_worker, daemon=True).start()
+    return {"ok": True, "started": True}
+
+
+@router.get("/system/links/repair/status")
+def system_links_repair_status(
+    request: Request, user: sqlite3.Row | None = Depends(require_session)
+) -> dict:
+    """아카이브 링크 교정 진행 상태(JSON) — 시스템 화면 폴링용. pending 동봉."""
+    from .maintenance import linkrepair_status
+
+    _require_manage_system(user)
+    return {**linkrepair_status(), "pending": linkrepair.pending_count()}
 
 
 @router.get("/system/storage/status")

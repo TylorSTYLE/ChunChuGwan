@@ -50,7 +50,11 @@ paths:
   `.claude/rules/capture-crawl.md`·`.claude/rules/api-extension.md`)
 - `snapshots` — 스냅샷 단위, `pages.id` FK, content_hash 보관.
   `search_indexed` 는 텍스트 검색 인덱스(snapshot_fts) 반영 여부 — 0 이면
-  `wccg search reindex` 백필 대상 (resources_indexed 와 같은 패턴). `origin`
+  `wccg search reindex` 백필 대상 (resources_indexed 와 같은 패턴). `links_rewritten`
+  은 page.html 앵커가 리졸버(`/goto`·`/crawl/{id}/goto`)로 재작성됐는지 — 0 이면
+  `wccg links repair`/시스템 설정 "아카이브 링크 교정" 백필 대상(크롤 이전 단일 페이지
+  스냅샷). 신규 캡처는 1로 저장, 교정은 page.html 을 다시 쓰는 compact 류 내용 보존
+  변환(원본은 raw.html.gz 보존 — `chunchugwan/linkrepair.py`). `origin`
   은 캡처 출처 `server`(기본) | `extension`(브라우저 클라이언트 캡처), `incomplete`
   은 일부 자원·프레임·스크린샷 수집이 실패한 불완전 캡처 표식 — 둘 다 뷰어·
   타임라인 뱃지("브라우저 캡처"·"불완전")로 표시되고, 한쪽이라도 extension 이면
