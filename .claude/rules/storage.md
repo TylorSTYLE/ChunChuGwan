@@ -53,13 +53,24 @@ archive/
 그대로 읽힌다 — 대시보드 파일 라우트가 신/구 이름을 모두 해석한다.
 
 URL 자체가 파일 다운로드(download.php?file=...pdf 등)면 페이지 캡처 대신
-**문서 스냅샷**으로 저장된다 (capture 가 `CaptureDownloadError` 로 감지 →
-pipeline `_archive_document_url` → `documents.download_direct`). 파일 본체는
+**문서 스냅샷**으로 저장된다 (capture 가 goto 의 "Download is starting" 으로
+감지 → `CaptureDownloadError` → pipeline `_archive_document_url`). 파일 본체는
 문서 CAS 에, 스냅샷 디렉토리에는 생성된 안내 page.html.gz + 문서 메타데이터
 content.md(파일 sha256 포함 — 같은 파일이면 unchanged) + meta.json 만 남고
 raw.html·스크린샷은 없다 (뷰어는 스크린샷 탭을 숨긴다). 파일명은
 Content-Disposition(EUC-KR 모지바케 복구 포함) → URL 경로 → 쿼리 값 →
 content-type 순으로 결정하며, 문서 화이트리스트 확장자를 못 정하면 실패.
+
+> **문서 다운로드는 브라우저 네트워크 스택 우선, httpx 폴백.** 일부 사이트(WAF)
+> 가 봇 차단으로 httpx 의 TLS ClientHello 를 핑거프린팅해 `start_tls` 단계에서
+> 연결을 끊으므로(`[Errno 104] Connection reset by peer`), 문서는 Chromium 의
+> 네트워크 스택으로 받아 WAF 를 통과시킨다. (1) 직접 다운로드 — 브라우저가 goto
+> 중 이미 받은 파일을 `CaptureDownloadError.download_path` 로 운반해
+> `documents.entry_from_local_file` 로 재요청 없이 그대로 쓴다. (2) 링크 문서 —
+> `capture.fetch_documents_via_browser`(`context.request`)로 받고, 브라우저로 못
+> 받은 것만 `documents.download_documents`(httpx)로 폴백한다(jwt 토큰은
+> context.request 에 안 붙으므로 그런 인증 문서는 폴백이 싣는다). 두 경로 모두
+> 브라우저가 불가하면 httpx 직접 다운로드(`documents.download_direct`)로 떨어진다.
 
 ## 관련 DB 테이블
 

@@ -355,6 +355,7 @@ def _archive_url(
         capture_kwargs["live_session"] = live_session
     insecure_tls = False
     is_download = False  # 탐색이 파일 다운로드로 전환 — 문서 아카이빙으로 분기
+    download_err: capture.CaptureDownloadError | None = None  # 브라우저가 받은 파일 운반
     tmp_dir = Path(tempfile.mkdtemp(prefix="wccg-"))
     try:
         # 캡처가 실제로 어떤 모드로 도는지 로그에 남긴다 — 스텔스 설정
@@ -362,8 +363,8 @@ def _archive_url(
         run.step("engine", capture.capture_mode_str())
         try:
             result = capture.capture(norm, tmp_dir, **capture_kwargs)
-        except capture.CaptureDownloadError:
-            is_download = True
+        except capture.CaptureDownloadError as e:
+            is_download, download_err = True, e
         except capture.CaptureChallengeError as e:
             # 봇 차단/사람 확인 챌린지 — http 폴백으로도 못 풀고, 차단 페이지를
             # 저장/해시하면 아카이브가 오염된다 (원칙 3). 저장 없이 실패로만 남긴다.
@@ -385,8 +386,8 @@ def _archive_url(
                         norm, tmp_dir, insecure_tls=True, **capture_kwargs
                     )
                     insecure_tls = True
-                except capture.CaptureDownloadError:
-                    is_download, insecure_tls = True, True
+                except capture.CaptureDownloadError as e:
+                    is_download, insecure_tls, download_err = True, True, e
                 except capture.CaptureError:
                     pass  # http 폴백 판단은 원래 오류 기준으로 이어간다
             if result is None and not is_download:
@@ -413,15 +414,15 @@ def _archive_url(
                     capture_kwargs["credential"] = credential
                 try:
                     result = capture.capture(norm, tmp_dir, **capture_kwargs)
-                except capture.CaptureDownloadError:
-                    is_download = True
+                except capture.CaptureDownloadError as e:
+                    is_download, download_err = True, e
         if is_download:
             run.step("capture", "탐색이 파일 다운로드로 전환 — 문서 파일로 아카이빙")
             return _archive_document_url(
                 norm, domain, slug, force, run, tmp_dir,
                 network_tag_id=network_tag_id, credential_id=credential_id,
                 credential=credential, authenticated_by=authenticated_by,
-                verify=not insecure_tls,
+                verify=not insecure_tls, download_err=download_err,
             )
         run.step(
             "capture",
@@ -507,15 +508,26 @@ def _archive_url(
         # 같은 내용은 스냅샷·페이지가 달라도 한 번만 저장된다.
         doc_manifest: list[dict] = []
         if result.document_links:
-            doc_manifest, doc_failed = documents.download_documents(
-                result.document_links, tmp_dir / "files",
+            # 1순위: 브라우저 네트워크 스택(context.request)으로 받는다 — WAF 의 TLS
+            # 핑거프린팅을 통과한다(httpx 는 막힘). 브라우저로 못 받은 것만 httpx 폴백
+            # (jwt 인증 문서 등 — context.request 에는 origin-스코프 토큰이 안 붙는다).
+            doc_manifest, doc_failed = capture.fetch_documents_via_browser(
+                browser_session, result.document_links, tmp_dir / "files",
                 referer=result.final_url,
-                verify=not insecure_tls,  # 자체 서명 사이트의 문서도 받는다
-                auth=(credentials.httpx_auth(credential.kind, credential.payload)
-                      if credential else None),
-                auth_origin=credential.origin if credential else None,
+                credential=credential, insecure_tls=insecure_tls,
                 limits=doc_limits,
             )
+            if doc_failed:
+                fb_manifest, doc_failed = documents.download_documents(
+                    doc_failed, tmp_dir / "files",
+                    referer=result.final_url,
+                    verify=not insecure_tls,  # 자체 서명 사이트의 문서도 받는다
+                    auth=(credentials.httpx_auth(credential.kind, credential.payload)
+                          if credential else None),
+                    auth_origin=credential.origin if credential else None,
+                    limits=doc_limits,
+                )
+                doc_manifest.extend(fb_manifest)
             documents.ingest_into_cas(tmp_dir / "files", doc_manifest)
             run.step(
                 "documents",
@@ -678,33 +690,57 @@ def _archive_document_url(
     credential: "capture.CaptureCredential | None" = None,
     authenticated_by: int | None = None,
     verify: bool,
+    download_err: "capture.CaptureDownloadError | None" = None,
 ) -> ArchiveOutcome:
     """URL 자체가 파일 다운로드인 경우의 아카이빙 — 문서 스냅샷.
 
-    탐색이 다운로드로 전환된 URL(capture.CaptureDownloadError)을
-    documents.download_direct 로 내려받아 문서 CAS 에 저장하고, 문서
-    메타데이터 텍스트를 content.md 로 갖는 스냅샷을 만든다 (raw.html·
-    스크린샷은 없다 — 페이지가 아니므로). 같은 파일이면 직전 스냅샷과
-    해시가 같아 저장이 생략된다. verify=False 는 자체 서명 https 를 검증
-    무시로 시도한 경우다.
+    탐색이 다운로드로 전환된 URL 의 파일을 문서 CAS 에 저장하고, 문서 메타데이터
+    텍스트를 content.md 로 갖는 스냅샷을 만든다 (raw.html·스크린샷은 없다 —
+    페이지가 아니므로). 같은 파일이면 직전 스냅샷과 해시가 같아 저장이 생략된다.
+    verify=False 는 자체 서명 https 를 검증 무시로 시도한 경우다.
+
+    download_err 가 브라우저가 받은 파일(download_path)을 들고 오면 그 파일을
+    그대로 쓴다 — 브라우저는 WAF/안티봇을 통과해 받았고, httpx 재요청은 WAF 의
+    TLS 핑거프린팅에 막히기 때문이다(`[Errno 104] Connection reset by peer`).
+    브라우저 파일이 없거나 쓸 수 없으면 documents.download_direct(httpx) 폴백.
     """
     import httpx
 
     with db.connect() as conn:
         doc_limits = documents.limits(conn)
-    try:
-        dl = documents.download_direct(
-            norm, tmp_dir / "files", verify=verify,
-            auth=(credentials.httpx_auth(credential.kind, credential.payload)
-                  if credential else None),
-            limits=doc_limits,
-        )
-    except (ValueError, httpx.HTTPError) as e:
-        raise capture.CaptureError(f"{norm} 문서 다운로드 실패: {e}") from e
+
+    # 1순위: 브라우저가 WAF 를 통과해 이미 받은 파일 (네트워크 재요청 없음)
+    dl = None
+    used_browser = False
+    if download_err is not None and download_err.download_path is not None:
+        try:
+            entry = documents.entry_from_local_file(
+                norm, download_err.final_url or norm, download_err.download_path,
+                suggested_filename=download_err.suggested_filename,
+                limits=doc_limits,
+            )
+            dl = documents.DirectDownload(
+                entry=entry, final_url=download_err.final_url or norm, http_status=None,
+            )
+            used_browser = True
+        except ValueError as e:
+            run.step("download", f"브라우저 다운로드 사용 불가, httpx 폴백: {e}")
+    # 폴백: httpx 직접 다운로드 (인증서·로컬 네트워크 등 브라우저 파일이 없을 때)
+    if dl is None:
+        try:
+            dl = documents.download_direct(
+                norm, tmp_dir / "files", verify=verify,
+                auth=(credentials.httpx_auth(credential.kind, credential.payload)
+                      if credential else None),
+                limits=doc_limits,
+            )
+        except (ValueError, httpx.HTTPError) as e:
+            raise capture.CaptureError(f"{norm} 문서 다운로드 실패: {e}") from e
     entry = dl.entry
     run.step(
         "download",
-        f"http {dl.http_status} · {entry['file']} · {entry['bytes']} bytes",
+        ("브라우저" if used_browser else f"http {dl.http_status}")
+        + f" · {entry['file']} · {entry['bytes']} bytes",
     )
 
     cert_info = (
