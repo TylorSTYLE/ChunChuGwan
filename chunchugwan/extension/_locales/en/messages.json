@@ -21,6 +21,7 @@
   "archive_page_btn": { "message": "Archive this page" },
   "archive_site_btn": { "message": "Whole site" },
   "archive_force": { "message": "Force save even if unchanged" },
+  "archive_protect_share": { "message": "Allow sharing to other clusters (default: protected)" },
   "archive_with_login": { "message": "Include my login (sends this site's cookies or token)" },
   "archive_login_note": { "message": "Sends only your login session cookies or token (JWT) — never your password or ID; the server discards them right after capture. The method is detected automatically. Applies to both a single page and the whole site." },
   "archive_login_https_only": { "message": "Including login info is only available on https pages." },

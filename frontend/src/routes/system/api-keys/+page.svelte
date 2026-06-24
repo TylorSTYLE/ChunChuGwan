@@ -19,6 +19,8 @@
 	let name = $state('');
 	let canView = $state(true);
 	let canArchive = $state(false);
+	let canClusterSend = $state(false);
+	let canClusterReceive = $state(false);
 	let expiry = $state('permanent');
 	let customDays = $state(30);
 
@@ -40,6 +42,8 @@
 					name: name.trim(),
 					can_view: canView,
 					can_archive: canArchive,
+					can_cluster_send: canClusterSend,
+					can_cluster_receive: canClusterReceive,
 					expiry,
 					custom_days: customDays
 				})
@@ -69,6 +73,8 @@
 		<Input type="text" bind:value={name} placeholder={t('키 이름')} class="grow basis-[180px] min-w-0" />
 		<label class="opt"><input type="checkbox" bind:checked={canView} /> {t('보기')}</label>
 		<label class="opt"><input type="checkbox" bind:checked={canArchive} /> {t('아카이브')}</label>
+		<label class="opt"><input type="checkbox" bind:checked={canClusterSend} /> {t('클러스터 보내기')}</label>
+		<label class="opt"><input type="checkbox" bind:checked={canClusterReceive} /> {t('클러스터 받기')}</label>
 		<select bind:value={expiry}>
 			{#each EXPIRY as [v, label]}<option value={v}>{t(label)}</option>{/each}
 		</select>
@@ -90,7 +96,14 @@
 					<tr>
 						<td data-label={t('이름')}>{k.name}</td>
 						<td class="muted" data-label={t('권한')}>
-							{[k.can_view ? t('보기') : '', k.can_archive ? t('아카이브') : ''].filter(Boolean).join(', ')}
+							{[
+								k.can_view ? t('보기') : '',
+								k.can_archive ? t('아카이브') : '',
+								k.can_cluster_send ? t('클러스터 보내기') : '',
+								k.can_cluster_receive ? t('클러스터 받기') : ''
+							]
+								.filter(Boolean)
+								.join(', ')}
 						</td>
 						<td class="mono" data-label={t('만료')}>{k.expires_at ? ts(k.expires_at) : t('영구')}</td>
 						<td><Button variant="destructive" onclick={() => revoke(k.id)} disabled={act.busy}>{t('폐기')}</Button></td>

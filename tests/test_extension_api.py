@@ -242,6 +242,22 @@ def test_api_ingest_creates_extension_snapshot(client):
     assert log["source"] == "extension" and log["requested_by"] == _admin_id()
 
 
+def test_api_ingest_applies_protect(client):
+    """protect=False 면 적재된 페이지가 공유 허용(cluster_protect=0)으로 표시된다."""
+    token = _user_token()
+    r = client.post(
+        "/api/v1/ingest",
+        data={"url": "https://example.com/shared", "protect": "false"},
+        files=_ingest_files(), headers=_headers(token),
+    )
+    assert r.status_code == 200, r.text
+    with db.connect() as conn:
+        page = conn.execute(
+            "SELECT cluster_protect FROM pages WHERE id=?", (r.json()["page_id"],)
+        ).fetchone()
+    assert page["cluster_protect"] == 0
+
+
 def test_api_ingest_requires_user_token(client):
     """시스템 키(owner=NULL)는 /api/v1 인증 자체가 거부된다 — 401 (개인 키 전용)."""
     token = _issue(owner_user_id=None, created_by=None)

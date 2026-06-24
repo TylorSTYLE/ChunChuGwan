@@ -34,6 +34,8 @@
 
 	let url = $state('');
 	let force = $state(false);
+	// 클러스터 공유 허용 — 기본 꺼짐(=보내기 불가/보호). payload 의 protect 는 !shareCluster.
+	let shareCluster = $state(false);
 	// 캡처 범위 세그먼트 — 'single'=단일 페이지, 'site'=사이트 전체. payload 의 site 는 파생값.
 	let scope = $state<'single' | 'site'>('single');
 	const site = $derived(scope === 'site');
@@ -149,6 +151,7 @@
 				body: JSON.stringify({
 					url: url.trim(),
 					force,
+					protect: !shareCluster,
 					site,
 					interval,
 					network_tag: networkTag,
@@ -223,6 +226,11 @@
 			bind:checked={force}
 			label={t('콘텐츠 동일해도 강제 저장')}
 			description={t('기본값은 본문 해시가 바뀐 경우에만 새 스냅샷을 만듭니다.')}
+		/>
+		<Toggle
+			bind:checked={shareCluster}
+			label={t('다른 클러스터로 공유 허용')}
+			description={t('기본은 보호(전송 안 함)입니다. 켜면 연결된 클러스터로 이 아카이브를 보낼 수 있습니다.')}
 		/>
 	</FormSection>
 
