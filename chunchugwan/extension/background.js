@@ -860,6 +860,13 @@ const HANDLERS = {
   // {needs_network_tag, host} 로 응답해 팝업이 태그를 고르게 한다.
   captureBrowser: (m) => captureAndIngest(m.payload),
 
+  // 페이지 메모 등록 — 캡처 메커니즘과 독립. 토큰 소유자의 memo_create 권한이 필요.
+  addNote: (m) =>
+    apiFetch("/api/v1/notes", {
+      method: "POST",
+      body: { url: m.payload.url, content: m.payload.content },
+    }),
+
   // 로컬 네트워크 태그 목록·생성 (사설 호스트 캡처 시 팝업이 사용).
   listNetworkTags: () => apiFetch("/api/v1/network-tags"),
   createNetworkTag: (m) =>

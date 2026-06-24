@@ -96,8 +96,12 @@ Pull 엔드포인트는 `.claude/rules/api-extension.md` 참조. `site_credentia
   사용자 관리에서 권한을 부여해 승인). `users.is_founder` 는 최초 등록
   관리자로 권한 변경 불가. **권한은 세분 권한(`db.PERMISSIONS` — view·archive·
   delete·manage_credentials·manage_system·manage_users·view_authenticated_all·
-  use_api_keys·view_audit_logs·view_system_logs·view_archive_logs·manage_trash, 고정 코드
-  상수)을 1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다. 로그 열람 3종(view_audit_logs=감사
+  use_api_keys·view_audit_logs·view_system_logs·view_archive_logs·manage_trash·
+  memo_view·memo_create·memo_delete, 고정 코드
+  상수)을 1차 단위로, 역할은 그 묶음의 프리셋으로** 둔다. 메모 권한 3종은 빌트인
+  기본값이 그룹마다 달라(보기=admin·archive_manager·archiver·viewer, 등록=
+  viewer 제외, 삭제=admin·archive_manager) `_seed_permission_groups` 가 신규 설치에
+  넣고 `_migrate_memo_permissions` 가 기존 설치를 멱등 보강한다. 로그 열람 3종(view_audit_logs=감사
   로그 `/log/audit`, view_system_logs=시스템 로그 `/log/system`, view_archive_logs=
   아카이브 로그 `/log/archive`)과 휴지통 관리(`manage_trash` — `/archive/trash` 열람·복원·
   영구삭제, `.claude/rules/database.md` 의 `trash_entries`)는 빌트인 중 **admin 에만 기본

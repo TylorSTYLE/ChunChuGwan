@@ -14,6 +14,20 @@ export interface MeFlags {
 	can_search: boolean;
 	can_use_api_keys: boolean;
 	can_manage_trash: boolean;
+	can_memo_view: boolean;
+	can_memo_create: boolean;
+	can_memo_delete: boolean;
+}
+
+/** 페이지·사이트 메모 1건 (notes 테이블) — 작성자/시각이 행마다 남는다. */
+export interface Note {
+	id: number;
+	kind: 'page' | 'site';
+	target_id: number;
+	content: string;
+	author_user_id: number | null;
+	author_label: string;
+	created_at: string;
 }
 
 export interface MeUser {
@@ -214,8 +228,12 @@ export interface PageTimeline {
 	schedule: (Record<string, unknown> & { label: string }) | null;
 	snapshots: TimelineSnap[];
 	checks: Record<string, unknown>[];
+	notes: Note[];
 	can_archive: boolean;
 	can_delete: boolean;
+	can_memo_view: boolean;
+	can_memo_create: boolean;
+	can_memo_delete: boolean;
 	trash_enabled: boolean;
 }
 
@@ -284,11 +302,15 @@ export interface SiteDetail {
 	}[];
 	documents: Record<string, unknown>[];
 	doc_total: number;
+	notes: Note[];
 	failed_items: FailedItem[];
 	failed_pager: Pager;
 	can_archive: boolean;
 	can_delete: boolean;
 	can_manage_credentials: boolean;
+	can_memo_view: boolean;
+	can_memo_create: boolean;
+	can_memo_delete: boolean;
 	trash_enabled: boolean;
 }
 

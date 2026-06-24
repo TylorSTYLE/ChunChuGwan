@@ -48,6 +48,23 @@ function applyI18n() {
   for (const el of document.querySelectorAll("[data-i18n]")) {
     el.textContent = msg(el.dataset.i18n);
   }
+  for (const el of document.querySelectorAll("[data-i18n-ph]")) {
+    el.placeholder = msg(el.dataset.i18nPh);
+  }
+}
+
+// 페이지 메모(선택) — 캡처/아카이브 성공 후 이 URL 의 페이지 메모로 등록한다.
+// 캡처 메커니즘과 독립이라 성공 결과 메시지에 등록 여부만 덧붙인다.
+async function maybeSaveMemo() {
+  const box = $("#capture-memo");
+  const memo = (box?.value || "").trim();
+  if (!memo) return "";
+  const res = await send("addNote", { url: currentUrl, content: memo });
+  if (res && res.ok) {
+    box.value = "";
+    return " · " + msg("memo_saved");
+  }
+  return " · " + msg("memo_failed");
 }
 
 function showNote(id, key, cls) {
@@ -227,7 +244,8 @@ function initArchive() {
       const base = res.data.queued ? msg("msg_archived", res.data.url) : msg("msg_already");
       const hint = res.data.queued && $("#notify-toggle").checked
         ? " " + msg("archive_notify_hint") : "";
-      showNote("#archive-result", base + (auth ? authSuffix(res) : "") + hint, "");
+      const memoSuffix = await maybeSaveMemo();
+      showNote("#archive-result", base + (auth ? authSuffix(res) : "") + hint + memoSuffix, "");
     } else showNote("#archive-result", msg(apiError(res)), "err");
   });
 
@@ -246,7 +264,8 @@ function initArchive() {
       const base = res.data.merged ? msg("msg_crawl_merged", String(res.data.crawl_id))
                                    : msg("msg_crawl_started", String(res.data.crawl_id));
       const hint = $("#notify-toggle").checked ? " " + msg("archive_notify_hint") : "";
-      showNote("#archive-result", base + (auth ? authSuffix(res) : "") + hint, "");
+      const memoSuffix = await maybeSaveMemo();
+      showNote("#archive-result", base + (auth ? authSuffix(res) : "") + hint + memoSuffix, "");
     } else showNote("#archive-result", msg(apiError(res)), "err");
   });
 }
@@ -330,7 +349,8 @@ async function runBrowserCapture(networkTag) {
     if (res.ok && res.data) {
       $("#tag-picker").style.display = "none";
       const inc = res.data.incomplete ? " · " + msg("capture_incomplete") : "";
-      showNote("#archive-result", msg("msg_captured", [msg("status_" + res.data.status)]) + inc, "");
+      const memoSuffix = await maybeSaveMemo();
+      showNote("#archive-result", msg("msg_captured", [msg("status_" + res.data.status)]) + inc + memoSuffix, "");
     } else if (res.needs_network_tag) {
       await showTagPicker();
       showNote("#archive-result", msg("capture_needs_tag", [res.host || ""]), "warn");

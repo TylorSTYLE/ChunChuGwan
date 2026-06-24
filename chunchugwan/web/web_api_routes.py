@@ -350,6 +350,11 @@ def page_timeline(
         )
         site = db.get_site(conn, page["site_id"]) if page["site_id"] else None
         snap_logs = db.list_snapshot_archive_logs(conn, page_id)
+        notes = (
+            db.list_notes(conn, "page", page_id)
+            if permissions.can_memo_view(user)
+            else []
+        )
 
     visible = [
         s for s in snaps
@@ -398,8 +403,12 @@ def page_timeline(
         ),
         "snapshots": items,
         "checks": [dict(c) for c in checks],
+        "notes": [dict(n) for n in notes],
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
+        "can_memo_view": permissions.can_memo_view(user),
+        "can_memo_create": permissions.can_memo_create(user),
+        "can_memo_delete": permissions.can_memo_delete(user),
         "trash_enabled": _trash_enabled_now(),
     }
 
@@ -604,6 +613,11 @@ def site_detail(
         site_documents = db.list_site_document_groups(
             conn, site_id, limit=200, offset=0
         )
+        notes = (
+            db.list_notes(conn, "site", site_id)
+            if permissions.can_memo_view(user)
+            else []
+        )
 
     schedule_labels = {
         s["page_id"]: i18n.interval_label(request, s["interval_seconds"])
@@ -644,9 +658,13 @@ def site_detail(
         "certificates": cert_rows,
         "documents": [dict(d) for d in site_documents],
         "doc_total": doc_total,
+        "notes": [dict(n) for n in notes],
         "can_archive": permissions.can_archive(user),
         "can_delete": permissions.can_delete(user),
         "can_manage_credentials": permissions.can_manage_credentials(user),
+        "can_memo_view": permissions.can_memo_view(user),
+        "can_memo_create": permissions.can_memo_create(user),
+        "can_memo_delete": permissions.can_memo_delete(user),
         "trash_enabled": _trash_enabled_now(),
     }
 
@@ -1007,6 +1025,23 @@ def _require_manage_trash(user: sqlite3.Row | None) -> None:
         raise HTTPException(403, "휴지통 관리 권한이 없습니다")
 
 
+def _require_memo_create(user: sqlite3.Row | None) -> None:
+    if not permissions.can_memo_create(user):
+        raise HTTPException(403, "메모 등록 권한이 없습니다")
+
+
+def _require_memo_delete(user: sqlite3.Row | None) -> None:
+    if not permissions.can_memo_delete(user):
+        raise HTTPException(403, "메모 삭제 권한이 없습니다")
+
+
+def _note_author(user: sqlite3.Row | None) -> tuple[int | None, str]:
+    """메모 작성자 (id, 표시 라벨=display_name 또는 email). 인증 off/loopback 이면 (None, '시스템')."""
+    if user is None:
+        return None, "시스템"
+    return user["id"], (user["display_name"] or user["email"])
+
+
 def _actor_id(user: sqlite3.Row | None) -> int | None:
     """삭제·복원 기록용 사용자 id (인증 off/loopback 이면 None)."""
     return user["id"] if user is not None else None
@@ -1175,6 +1210,91 @@ def rearchive(
         audit.log(request, "재아카이빙 등록: %s", page["url"],
                   action="archive", target=page["url"])
     return {"enqueued": enqueued}
+
+
+# ---- 메모 (페이지·사이트) ----
+
+_NOTE_MAX_LEN = 5000
+
+
+class NoteReq(BaseModel):
+    content: str
+
+
+def _clean_note_content(raw: str) -> str:
+    """메모 본문 정리·검증 — 빈 내용 거부, 길이 상한."""
+    content = (raw or "").strip()
+    if not content:
+        raise HTTPException(400, "메모 내용이 비어 있습니다")
+    if len(content) > _NOTE_MAX_LEN:
+        raise HTTPException(400, "메모가 너무 깁니다")
+    return content
+
+
+@router.post("/pages/{page_id}/notes", status_code=201)
+def page_note_add(
+    request: Request,
+    page_id: int,
+    body: NoteReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """페이지 메모 1건 추가 (memo_create)."""
+    _require_memo_create(user)
+    content = _clean_note_content(body.content)
+    author_id, author_label = _note_author(user)
+    with db.connect() as conn:
+        page = db.get_page_by_id(conn, page_id)
+        if page is None:
+            raise HTTPException(404, "페이지 없음")
+        note_id = db.add_note(
+            conn, "page", page_id, content,
+            author_user_id=author_id, author_label=author_label,
+        )
+    audit.log(request, "페이지 메모 등록: %s", page["url"],
+              action="admin", target=page["url"])
+    return {"id": note_id}
+
+
+@router.post("/sites/{site_id}/notes", status_code=201)
+def site_note_add(
+    request: Request,
+    site_id: int,
+    body: NoteReq,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> dict:
+    """사이트 메모 1건 추가 (memo_create)."""
+    _require_memo_create(user)
+    content = _clean_note_content(body.content)
+    author_id, author_label = _note_author(user)
+    with db.connect() as conn:
+        site = db.get_site(conn, site_id)
+        if site is None:
+            raise HTTPException(404, "사이트 없음")
+        note_id = db.add_note(
+            conn, "site", site_id, content,
+            author_user_id=author_id, author_label=author_label,
+        )
+    audit.log(request, "사이트 메모 등록: %s", site["site_key"],
+              action="admin", target=site["site_key"])
+    return {"id": note_id}
+
+
+@router.delete("/notes/{note_id}", status_code=204)
+def note_delete(
+    request: Request,
+    note_id: int,
+    user: sqlite3.Row | None = Depends(require_session),
+) -> Response:
+    """메모 1건 삭제 (memo_delete) — 권한이 전역이라 page/site 공용."""
+    _require_memo_delete(user)
+    with db.connect() as conn:
+        note = db.get_note(conn, note_id)
+        if note is None:
+            raise HTTPException(404, "메모 없음")
+        db.delete_note(conn, note_id)
+    audit.log(request, "메모 삭제: %s#%s", note["kind"], note_id,
+              action="admin", target=f"{note['kind']}:{note['target_id']}")
+    return Response(status_code=204)
 
 
 class ScheduleReq(BaseModel):
