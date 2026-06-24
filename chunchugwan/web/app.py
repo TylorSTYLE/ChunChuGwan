@@ -40,13 +40,13 @@ from fastapi.responses import (
 )
 
 from .. import (
-    __version__, archive_worker, auth, backup, config, crawler, credentials, crypto,
-    db, deletion, differ, documents, live_challenge, netcheck, resources, scheduler,
-    searchindex, storage, system_log,
+    __version__, archive_worker, auth, backup, cluster_sync, config, crawler,
+    credentials, crypto, db, deletion, differ, documents, live_challenge, netcheck,
+    resources, scheduler, searchindex, storage, system_log,
 )
 from . import (
-    api_routes, audit, auth_routes, i18n, migration_routes, permissions,
-    web_api_routes, web_auth_routes,
+    api_routes, audit, auth_routes, cluster_routes, i18n, migration_routes,
+    permissions, web_api_routes, web_auth_routes,
 )
 from pydantic import BaseModel
 from .i18n import t
@@ -95,6 +95,13 @@ async def _lifespan(app: FastAPI):
                 name="wccg-archive",
                 daemon=True,
             ),
+            # 클러스터 조정 루프 — 피어별 권한 갱신·델타 동기화(B 측에서만 동작).
+            threading.Thread(
+                target=cluster_sync.run_loop,
+                args=(stop,),
+                name="wccg-cluster",
+                daemon=True,
+            ),
         ]
         for thread in threads:
             thread.start()
@@ -108,6 +115,7 @@ app = FastAPI(title="춘추관", lifespan=_lifespan)
 app.include_router(auth_routes.router)
 app.include_router(api_routes.router)
 app.include_router(migration_routes.router)
+app.include_router(cluster_routes.router)
 app.include_router(web_api_routes.router)
 app.include_router(web_auth_routes.router)
 
@@ -1099,6 +1107,8 @@ def _queue_archive(
     requested_by: int | None = None,
     network_tag_id: str | None = None,
     credential_id: int | None = None,
+    protect: bool | None = None,
+    site_protect_default: bool | None = None,
 ) -> bool:
     """단발 아카이빙 작업을 archive_jobs 큐에 추가. 같은 URL 이 이미 큐에 있으면
     무시(False — 호출부가 기존처럼 '이미 진행 중' 안내를 띄운다).
@@ -1115,6 +1125,7 @@ def _queue_archive(
             conn, url, force=force, source=source, requested_by=requested_by,
             network_tag_id=network_tag_id, credential_id=credential_id,
             interval_seconds=interval_seconds, run_at=run_at,
+            protect=protect, site_protect_default=site_protect_default,
         )
 
 

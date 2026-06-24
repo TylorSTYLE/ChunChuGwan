@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from . import archive_worker, config, crawler, scheduler
+from . import archive_worker, cluster_sync, config, crawler, scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,14 @@ def run(stop: threading.Event, *, crawl_workers: int = 1) -> None:
             args=(stop,),
             kwargs={"claim": registry.claim, "release": registry.release},
             name="wccg-worker-archive",
+            daemon=True,
+        ),
+        # 클러스터 조정 루프 — 피어별 권한 갱신·델타 동기화 (B 측에서만 동작,
+        # 피어가 없으면 사실상 no-op). scheduler 와 같은 폴링 게이트(WCCG_SCHEDULER) 아래.
+        threading.Thread(
+            target=cluster_sync.run_loop,
+            args=(stop,),
+            name="wccg-worker-cluster",
             daemon=True,
         ),
     ]

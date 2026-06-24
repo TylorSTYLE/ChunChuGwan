@@ -373,6 +373,8 @@ class ArchiveRequest(BaseModel):
     url: str
     force: bool = False
     network_tag: str | None = None  # 사설 대역 GUID (공인 주소면 무시)
+    # 클러스터 보호 — None=사이트 기본 상속(미지정 시 서버가 기본 적용), True=보호, False=공유 허용
+    protect: bool | None = None
 
 
 @router.post("/archive", status_code=202)
@@ -398,6 +400,7 @@ def api_archive(request: Request, payload: ArchiveRequest):
         queued = db.enqueue_archive_job(
             conn, norm, force=payload.force, source="api", requested_by=owner_id,
             network_tag_id=tag_id,
+            protect=payload.protect, site_protect_default=payload.protect,
         )
         job_id = db.get_active_archive_job_id(conn, norm)
     if queued:
@@ -734,6 +737,7 @@ def api_ingest(
     capture_env: str | None = Form(None),
     network_tag: str | None = Form(None),
     is_document: bool = Form(False),
+    protect: bool | None = Form(None),
 ):
     """확장이 브라우저에서 캡처해 올린 산출물을 코어로 적재한다 (동기 응답).
 
@@ -779,6 +783,7 @@ def api_ingest(
                 documents_in=docs or None, capture_env=env,
                 incomplete=incomplete, force=force,
                 network_tag=network_tag, requested_by=owner_id,
+                protect=protect,
             )
     except ingest.NetworkTagRequired as e:
         raise HTTPException(422, detail={"needs_network_tag": True, "host": e.host})

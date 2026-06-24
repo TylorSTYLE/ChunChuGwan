@@ -187,11 +187,14 @@ def issue_api_key(
     created_by: int | None,
     ttl_seconds: int | None,
     owner_user_id: int | None = None,
+    can_cluster_send: bool = False,
+    can_cluster_receive: bool = False,
 ) -> str:
     """API 키를 생성하고 원문을 반환 (이후에는 다시 조회할 수 없다).
 
     ttl_seconds=None 이면 영구 키. owner_user_id 가 있으면 그 사용자에게
-    귀속된 확장 토큰으로 발급된다 (없으면 관리자 시스템 키).
+    귀속된 확장 토큰으로 발급된다 (없으면 관리자 시스템 키). can_cluster_send/
+    receive 는 시스템 키 전용 클러스터 권한(키 소유자=B 기준 방향).
     """
     token = API_KEY_PREFIX + secrets.token_urlsafe(32)
     db.create_api_key(
@@ -199,6 +202,8 @@ def issue_api_key(
         can_view=can_view, can_archive=can_archive,
         created_by=created_by, ttl_seconds=ttl_seconds,
         owner_user_id=owner_user_id,
+        can_cluster_send=can_cluster_send,
+        can_cluster_receive=can_cluster_receive,
     )
     return token
 

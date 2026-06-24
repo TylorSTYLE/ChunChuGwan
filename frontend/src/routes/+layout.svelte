@@ -100,6 +100,8 @@
 			if (me.flags.can_manage_users)
 				sys.push({ href: '/system/api-keys', label: t('API Key 관리') });
 			if (me.flags.can_manage_system)
+				sys.push({ href: '/system/cluster', label: t('클러스터') });
+			if (me.flags.can_manage_system)
 				sys.push({ href: '/system/general', label: t('시스템 설정') });
 			groups.push({ label: t('설정'), badge: 0, items: sys });
 		}

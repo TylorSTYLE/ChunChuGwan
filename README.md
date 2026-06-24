@@ -56,6 +56,7 @@
   사용자 관리 + 가입 설정(회원 가입 허용·초기 권한)
 - 자작 소프트웨어 연동용 `/api/v1` REST API (개인 API Key 전용 — 발급 권한 회수 시 키 비활성)
 - 크롬 확장 — 현재 페이지·사이트 전체를 바로 아카이브(단축키·우클릭 메뉴로 팝업 없이도)하고, 완료·실패·사람 확인 결과를 데스크톱 알림으로 받음. 툴바 아이콘에 현재 페이지의 아카이브 여부(✓)를 표시한다. 서버가 닿기 어려운 페이지는 **브라우저에서 직접 캡처**해 올릴 수도 있다(CDP 풀페이지 + 자원 재요청 → `/api/v1/ingest`, 서버 무요청 — `docs/API.md`)
+- 클러스터(federation) — 여러 인스턴스를 연결해 아카이브를 **선택적으로** 주고받음(방향·페이지 단위 보호로 통제, 기본은 보호=전송 안 함). 스냅샷 1건 단위로 델타만 교환하며 통신은 항상 연결을 건 쪽이 개시(`docs/CLUSTER.md`)
 
 ## 문서
 
@@ -69,6 +70,7 @@
 | [docs/DOCKER.md](docs/DOCKER.md) | 도커 / 도커 컴포즈 실행 (상세) |
 | [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) | 인증 · 권한 · 초대 · 2FA · OIDC · 환경변수 |
 | [docs/API.md](docs/API.md) | 외부 API (API 키) 레퍼런스 |
+| [docs/CLUSTER.md](docs/CLUSTER.md) | 클러스터(federation) — 인스턴스 간 아카이브 선택적 교환 |
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | 대시보드 화면별 라우트·권한·세부 동작 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 개발 · PyCharm 구성 · 모듈 구성 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 완료된 구현 로드맵 히스토리 |

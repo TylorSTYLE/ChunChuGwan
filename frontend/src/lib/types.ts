@@ -603,8 +603,35 @@ export interface SystemApiKeysData {
 		name: string;
 		can_view: number;
 		can_archive: number;
+		can_cluster_send: number;
+		can_cluster_receive: number;
 		expires_at: string | null;
 	})[];
+}
+
+export interface ClusterPeer {
+	id: number;
+	peer_node_id: string;
+	display_name: string;
+	base_url: string;
+	send_enabled: boolean;
+	receive_enabled: boolean;
+	status: string; // pending|active|degraded|revoked|error
+	last_error: string | null;
+	send_cursor: number;
+	receive_cursor: number;
+	last_synced_at: string | null;
+	created_at: string;
+}
+
+export interface ClusterData {
+	node: { node_id: string; display_name: string; protocol_version: number };
+	peers: ClusterPeer[];
+	secret_configured: boolean;
+	sync_interval_seconds: number;
+	protect_default: boolean;
+	sync_interval_min: number;
+	sync_interval_max: number;
 }
 
 export interface SystemOverview {

@@ -386,8 +386,13 @@ def test_capture_download_url_raises_download_error(tmp_path):
     thread.start()
     try:
         url = f"http://127.0.0.1:{server.server_address[1]}/download.php?file=report.pdf"
-        with pytest.raises(capture.CaptureDownloadError):
+        with pytest.raises(capture.CaptureDownloadError) as exc:
             capture.capture(url, tmp_path)
+        # 브라우저가 받은 파일을 실제로 저장하고 정보를 실어 온다 (httpx 재요청 불필요)
+        err = exc.value
+        assert err.download_path is not None and err.download_path.is_file()
+        assert err.download_path.read_bytes() == b"%PDF-1.4 fixture"
+        assert err.suggested_filename == "report.pdf"
     finally:
         server.shutdown()
         thread.join(timeout=5)
