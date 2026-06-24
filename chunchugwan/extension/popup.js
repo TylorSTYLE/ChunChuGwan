@@ -239,7 +239,8 @@ function initArchive() {
       return;
     }
     const res = await send(auth ? "archivePageAuth" : "archivePage",
-      { url: currentUrl, force: $("#force").checked, tabId: currentTabId, network_tag: selectedNetworkTag });
+      { url: currentUrl, force: $("#force").checked, tabId: currentTabId,
+        network_tag: selectedNetworkTag, protect: !$("#protect-share").checked });
     if (res.ok && res.data) {
       const base = res.data.queued ? msg("msg_archived", res.data.url) : msg("msg_already");
       const hint = res.data.queued && $("#notify-toggle").checked
@@ -345,6 +346,7 @@ async function runBrowserCapture(networkTag) {
     const res = await send("captureBrowser", {
       url: currentUrl, tabId: currentTabId,
       force: $("#force").checked, network_tag: networkTag || null,
+      protect: !$("#protect-share").checked,
     });
     if (res.ok && res.data) {
       $("#tag-picker").style.display = "none";

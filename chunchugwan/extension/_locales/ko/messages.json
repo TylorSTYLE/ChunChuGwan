@@ -21,6 +21,7 @@
   "archive_page_btn": { "message": "이 페이지 아카이브" },
   "archive_site_btn": { "message": "사이트 전체" },
   "archive_force": { "message": "콘텐츠가 같아도 강제 저장" },
+  "archive_protect_share": { "message": "다른 클러스터로 공유 허용 (기본: 보호)" },
   "archive_with_login": { "message": "내 로그인 정보 포함 (이 사이트 쿠키 또는 토큰을 서버로 전송)" },
   "archive_login_note": { "message": "비밀번호·아이디가 아니라 로그인 세션 쿠키 또는 토큰(JWT)만 전송하며, 서버는 캡처 직후 폐기합니다. 방식은 자동 감지됩니다. 단일 페이지·사이트 전체 모두 인증 상태로 캡처합니다." },
   "archive_login_https_only": { "message": "로그인 정보 포함은 https 페이지에서만 가능합니다." },
