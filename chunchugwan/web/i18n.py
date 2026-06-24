@@ -878,6 +878,8 @@ _EN: dict[str, str] = {
         "Revoke the key '{name}'? External software using this key loses access "
         "immediately.",
     "폐기": "Revoke",
+    "클러스터 보내기": "Cluster send",
+    "클러스터 받기": "Cluster receive",
     "발급된 키가 없습니다.": "No keys issued yet.",
     "새 키 발급": "Issue a new key",
     "키 이름 (예: rss-bot)": "Key name (e.g. rss-bot)",

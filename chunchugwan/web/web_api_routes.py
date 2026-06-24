@@ -2087,6 +2087,8 @@ class ApiKeyReq(BaseModel):
     name: str
     can_view: bool = False
     can_archive: bool = False
+    can_cluster_send: bool = False
+    can_cluster_receive: bool = False
     expiry: str = "permanent"
     custom_days: int = 0
 
@@ -2107,7 +2109,8 @@ def _resolve_api_key_ttl(body: ApiKeyReq) -> int | None:
 
 def _public_api_key(k: sqlite3.Row) -> dict:
     """API 키 행에서 화면 표시용 필드만 추린다 — token_hash 등 비밀·내부 컬럼 제외(원칙 6)."""
-    fields = ("id", "name", "can_view", "can_archive", "expires_at", "created_at", "last_used_at")
+    fields = ("id", "name", "can_view", "can_archive", "can_cluster_send",
+              "can_cluster_receive", "expires_at", "created_at", "last_used_at")
     cols = k.keys()
     return {f: k[f] for f in fields if f in cols}
 
@@ -2123,7 +2126,8 @@ def system_api_key_create(
     err = auth.validate_api_key_name(name)
     if err is not None:
         raise HTTPException(400, err)
-    if not (body.can_view or body.can_archive):
+    if not (body.can_view or body.can_archive
+            or body.can_cluster_send or body.can_cluster_receive):
         raise HTTPException(400, "권한을 하나 이상 선택하세요")
     ttl = _resolve_api_key_ttl(body)
     with db.connect() as conn:
@@ -2131,6 +2135,8 @@ def system_api_key_create(
             conn, name, can_view=body.can_view, can_archive=body.can_archive,
             created_by=user["id"] if user else None,
             ttl_seconds=ttl, owner_user_id=None,
+            can_cluster_send=body.can_cluster_send,
+            can_cluster_receive=body.can_cluster_receive,
         )
     audit.log(request, "API 키 발급: '%s'", name)
     return {"ok": True, "token": token}

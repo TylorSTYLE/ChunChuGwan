@@ -603,6 +603,8 @@ export interface SystemApiKeysData {
 		name: string;
 		can_view: number;
 		can_archive: number;
+		can_cluster_send: number;
+		can_cluster_receive: number;
 		expires_at: string | null;
 	})[];
 }

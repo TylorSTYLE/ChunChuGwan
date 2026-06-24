@@ -264,6 +264,17 @@ TRASH_RETENTION_DAYS_DEFAULT = 30
 TRASH_RETENTION_DAYS_MIN = 0               # 0 = 자동 purge 끔
 TRASH_RETENTION_DAYS_MAX = 365
 
+# 클러스터(federation) 조정 루프 — 피어별 주기 조정 사이클 간격(초, 시스템 설정으로 변경).
+# 한 사이클에서 권한 갱신 → pull 델타 → push 델타를 처리한다. 너무 짧으면 피어에
+# 부담이므로 하한을 둔다. 페이싱(건당 간격·배치 상한)은 별도 상수.
+CLUSTER_SYNC_INTERVAL_SECONDS_DEFAULT = 300   # 5분
+CLUSTER_SYNC_INTERVAL_SECONDS_MIN = 60        # 1분
+CLUSTER_SYNC_INTERVAL_SECONDS_MAX = 86400     # 1일
+CLUSTER_SYNC_BATCH_MAX = 20                   # 사이클·방향당 처리 스냅샷 상한(델타 배치)
+CLUSTER_SEND_MIN_INTERVAL_SECONDS = 2         # 전송 건당 최소 간격(대상 부담 방지)
+CLUSTER_HTTP_TIMEOUT_SECONDS = 30             # 피어 HTTP 호출 타임아웃
+CLUSTER_PROTOCOL_VERSION = 1                  # 핸드셰이크 프로토콜 버전(호환성 거부 기준)
+
 # 인증 무차별 대입 방어(rate limit) 기본값 — 시스템 설정(settings)으로 오버라이드한다
 # (db.auth_throttle_settings 가 [MIN, MAX] 로 클램핑). 고정 윈도우 카운터 방식.
 AUTH_LOGIN_LIMIT_DEFAULT = 10              # 이메일별 로그인 실패 허용 횟수/창
