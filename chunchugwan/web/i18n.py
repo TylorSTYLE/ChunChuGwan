@@ -346,8 +346,14 @@ _EN: dict[str, str] = {
     "아카이빙 중": "Archiving",
     "사람 확인 대기": "Awaiting human check",
     "재아카이빙": "Re-archive",
+    "재아카이빙을 등록했습니다.": "Re-archiving has been queued.",
     "스냅샷 {n}개를 포함한 아카이브 전체를 삭제합니다. 되돌릴 수 없습니다.":
         "This deletes the entire archive including {n} snapshot(s). It cannot be undone.",
+    # ---- 메모 (페이지·사이트) ----
+    "메모": "Notes",
+    "메모 등록": "Add note",
+    "메모를 입력하세요": "Enter a note",
+    "이 메모를 삭제할까요?": "Delete this note?",
     # ---- 현황 (dashboard) ----
     "아카이브 페이지": "Archived pages",
     "전체 스냅샷": "Total snapshots",

@@ -9,6 +9,7 @@
 	import { createList } from '$lib/list.svelte';
 	import type { SiteDetail, FailedItem, SiteLists } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
+	import Notes from '$lib/components/Notes.svelte';
 	import StatGrid from '$lib/components/StatGrid.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import Pager from '$lib/components/Pager.svelte';
@@ -145,6 +146,15 @@
 <h2 class="mono page-key">{s.site.site_key}</h2>
 {#if s.site_title}<p class="muted">{s.site_title}</p>{/if}
 <AlertBox error={action.error} notice={action.notice} />
+
+<Notes
+	kind="site"
+	targetId={s.site.id}
+	notes={s.notes}
+	canView={s.can_memo_view}
+	canCreate={s.can_memo_create}
+	canDelete={s.can_memo_delete}
+/>
 
 <StatGrid>
 	<StatCard label={t('페이지')} value={s.page_count} />

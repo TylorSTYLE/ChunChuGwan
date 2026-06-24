@@ -107,6 +107,21 @@ def can_use_api_keys(user: sqlite3.Row | None) -> bool:
     return has_permission(user, "use_api_keys")
 
 
+def can_memo_view(user: sqlite3.Row | None) -> bool:
+    """페이지·사이트 메모 보기 가능 여부 — 기본 admin·archive_manager·archiver·viewer."""
+    return has_permission(user, "memo_view")
+
+
+def can_memo_create(user: sqlite3.Row | None) -> bool:
+    """페이지·사이트 메모 등록 가능 여부 — 기본 admin·archive_manager·archiver."""
+    return has_permission(user, "memo_create")
+
+
+def can_memo_delete(user: sqlite3.Row | None) -> bool:
+    """페이지·사이트 메모 삭제 가능 여부 — 기본 admin·archive_manager."""
+    return has_permission(user, "memo_delete")
+
+
 def system_allowed(user: sqlite3.Row | None) -> bool:
     """관리자 영역(시스템·사용자·자격증명) 중 하나라도 접근 가능한지.
 
@@ -157,6 +172,9 @@ def menu_flags(user: sqlite3.Row | None) -> dict[str, bool]:
         "can_search": has("view"),
         "can_use_api_keys": has("use_api_keys"),
         "can_manage_trash": has("manage_trash"),
+        "can_memo_view": has("memo_view"),
+        "can_memo_create": has("memo_create"),
+        "can_memo_delete": has("memo_delete"),
     }
 
 

@@ -5,11 +5,26 @@
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
 	import { api, ApiError } from '$lib/api';
+	import { createAction } from '$lib/action.svelte';
+	import AlertBox from '$lib/components/AlertBox.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import type { SnapshotMeta, Me } from '$lib/types';
 
 	let { data }: { data: { meta: SnapshotMeta; me: Me | null } } = $props();
 	const m = $derived(data.meta);
+	// 이 URL 을 바로 다시 아카이빙 — 타임라인 버튼과 같은 API(POST /pages/{id}/rearchive).
+	const canArchive = $derived(!!data.me?.flags.can_archive);
+	const action = createAction();
+	let force = $state(false);
+	const rearchive = () =>
+		action.run(
+			() =>
+				api(`/pages/${m.snap.page_id}/rearchive`, {
+					method: 'POST',
+					body: JSON.stringify({ force })
+				}),
+			t('재아카이빙을 등록했습니다.')
+		);
 	// 관리자 전용 — 복구된(또는 로그인 캡처) 스냅샷의 접근 제한(authenticated) 토글.
 	const isAdmin = $derived(!!data.me?.flags.can_manage_system);
 	const restricted = $derived(!!m.snap.authenticated);
@@ -68,6 +83,17 @@
 		<tr><th>HTTP</th><td class="mono">{m.snap.http_status ?? '-'}</td></tr>
 	</tbody>
 </table>
+
+<AlertBox error={action.error} notice={action.notice} />
+
+{#if canArchive}
+	<div class="action-bar">
+		<Button variant="outline" size="sm" onclick={rearchive} disabled={action.busy}>
+			{t('재아카이빙')}
+		</Button>
+		<label class="muted"><input type="checkbox" bind:checked={force} /> {t('강제')}</label>
+	</div>
+{/if}
 
 {#if isAdmin}
 	<div class="auth-control">
@@ -141,6 +167,13 @@
 {/if}
 
 <style>
+	.action-bar {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 8px 0;
+		font-size: 13px;
+	}
 	.auth-control {
 		display: flex;
 		align-items: center;

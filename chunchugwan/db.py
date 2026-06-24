@@ -288,6 +288,20 @@ CREATE TABLE IF NOT EXISTS trash_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_trash_entries_deleted ON trash_entries(deleted_at);
 
+CREATE TABLE IF NOT EXISTS notes (
+    id             INTEGER PRIMARY KEY,
+    kind           TEXT NOT NULL,                 -- 'page' | 'site'
+    -- target_id 는 kind 에 따라 pages.id 또는 sites.id 를 가리키는 상관 키(FK 아님 —
+    -- 단일 FK 로 두 테이블을 못 가리키고, 페이지/사이트 prune·삭제가 막히지 않게).
+    -- author_user_id 도 표시·필터용 상관 키(trash_entries.deleted_by 와 같은 이유).
+    target_id      INTEGER NOT NULL,
+    content        TEXT NOT NULL,                 -- 메모 본문
+    author_user_id INTEGER,                       -- 작성 사용자 id (표시·필터용)
+    author_label   TEXT NOT NULL,                 -- 작성 시점 display_name 또는 email 사본
+    created_at     TEXT NOT NULL                  -- ISO 8601 UTC
+);
+CREATE INDEX IF NOT EXISTS idx_notes_target ON notes(kind, target_id, created_at);
+
 CREATE TABLE IF NOT EXISTS archive_logs (
     id           INTEGER PRIMARY KEY,
     url          TEXT NOT NULL,          -- 정규화 URL (정규화 실패 시 입력 원본)
@@ -688,6 +702,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _migrate_api_key_permission(conn)
     _migrate_log_view_permissions(conn)
     _migrate_trash_permission(conn)
+    _migrate_memo_permissions(conn)
     _backfill_sites(conn)
 
 
@@ -707,9 +722,11 @@ def _seed_permission_groups(conn: sqlite3.Connection) -> None:
     for name, label, perms, order in (
         ("admin", "관리자", list(PERMISSIONS), 10),
         ("archive_manager", "아카이브 관리",
-         ["view", "archive", "delete", "use_api_keys"], 15),
-        ("archiver", "아카이브", ["view", "archive", "use_api_keys"], 20),
-        ("viewer", "보기 전용", ["view"], 30),
+         ["view", "archive", "delete", "use_api_keys",
+          "memo_view", "memo_create", "memo_delete"], 15),
+        ("archiver", "아카이브",
+         ["view", "archive", "use_api_keys", "memo_view", "memo_create"], 20),
+        ("viewer", "보기 전용", ["view", "memo_view"], 30),
     ):
         conn.execute(
             "INSERT OR IGNORE INTO permission_groups "
@@ -795,6 +812,42 @@ def _migrate_trash_permission(conn: sqlite3.Connection) -> None:
             "UPDATE permission_groups SET permissions = ? WHERE name = 'admin'",
             (json.dumps(perms),),
         )
+        _bump_permission_groups_version(conn)
+
+
+def _migrate_memo_permissions(conn: sqlite3.Connection) -> None:
+    """기존 빌트인 그룹에 메모 권한(memo_view/create/delete)을 보강 — 멱등.
+
+    메모 권한 3종은 신규 추가 권한이라 기존 설치의 그룹 permissions JSON 에는
+    없다. 그룹별 기본 부여 범위가 달라(보기=4그룹·등록=3그룹·삭제=2그룹)
+    그룹마다 부여할 권한을 명시한다. admin 은 list(PERMISSIONS) 로 이미 전부
+    가지므로 _migrate_log_view_permissions 가 추가 보강하지만, 여기서도 누락분만
+    멱등 보강해 둔다. 신규 설치는 _seed_permission_groups 가 이미 넣어 no-op.
+    """
+    changed = False
+    for name, grant in (
+        ("admin", ("memo_view", "memo_create", "memo_delete")),
+        ("archive_manager", ("memo_view", "memo_create", "memo_delete")),
+        ("archiver", ("memo_view", "memo_create")),
+        ("viewer", ("memo_view",)),
+    ):
+        row = conn.execute(
+            "SELECT permissions FROM permission_groups "
+            "WHERE name = ? AND is_builtin = 1",
+            (name,),
+        ).fetchone()
+        if row is None:
+            continue
+        perms = _parse_permission_list(row["permissions"])
+        added = [p for p in grant if p not in perms]
+        if added:
+            perms.extend(added)
+            conn.execute(
+                "UPDATE permission_groups SET permissions = ? WHERE name = ?",
+                (json.dumps(perms), name),
+            )
+            changed = True
+    if changed:
         _bump_permission_groups_version(conn)
 
 
@@ -987,6 +1040,55 @@ def list_checks(conn: sqlite3.Connection, page_id: int, limit: int = 20) -> list
     ).fetchall()
 
 
+# ---- 메모 (페이지·사이트 단위 자유 메모, 항목별 누적) ----
+# kind='page'|'site', target_id 는 pages.id 또는 sites.id. 작성자/시각이 행마다
+# 남고 개별 삭제된다. 권한은 web.permissions.can_memo_* (memo_view/create/delete).
+
+NOTE_KINDS = ("page", "site")
+
+
+def list_notes(
+    conn: sqlite3.Connection, kind: str, target_id: int
+) -> list[sqlite3.Row]:
+    """대상(페이지/사이트)의 메모 목록 — 오래된 순(누적 표시용)."""
+    return conn.execute(
+        "SELECT * FROM notes WHERE kind = ? AND target_id = ? "
+        "ORDER BY created_at, id",
+        (kind, target_id),
+    ).fetchall()
+
+
+def add_note(
+    conn: sqlite3.Connection,
+    kind: str,
+    target_id: int,
+    content: str,
+    *,
+    author_user_id: int | None,
+    author_label: str,
+) -> int:
+    """메모 1건 추가하고 id 반환. content 는 호출자가 strip/검증한다."""
+    cur = conn.execute(
+        "INSERT INTO notes (kind, target_id, content, author_user_id, "
+        "author_label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (kind, target_id, content, author_user_id, author_label, _utcnow()),
+    )
+    return cur.lastrowid
+
+
+def get_note(conn: sqlite3.Connection, note_id: int) -> sqlite3.Row | None:
+    """메모 단건 조회."""
+    return conn.execute(
+        "SELECT * FROM notes WHERE id = ?", (note_id,)
+    ).fetchone()
+
+
+def delete_note(conn: sqlite3.Connection, note_id: int) -> bool:
+    """메모 1건 삭제. 삭제됐으면 True."""
+    cur = conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+    return cur.rowcount > 0
+
+
 # ---- 사이트 (서브도메인 단위 그룹) ----
 # 모든 페이지·크롤·크롤 스케줄은 사이트에 속한다. 키는 storage.site_key —
 # www 와 apex 는 같은 사이트, 다른 서브도메인·포트는 다른 사이트.
@@ -1045,6 +1147,9 @@ def prune_site_if_empty(conn: sqlite3.Connection, site_id: int | None) -> bool:
         return False
     conn.execute("DELETE FROM site_credentials WHERE site_id = ?", (site_id,))
     conn.execute("DELETE FROM site_certificates WHERE site_id = ?", (site_id,))
+    conn.execute(
+        "DELETE FROM notes WHERE kind = 'site' AND target_id = ?", (site_id,)
+    )
     cur = conn.execute("DELETE FROM sites WHERE id = ?", (site_id,))
     return cur.rowcount == 1
 
@@ -1062,6 +1167,10 @@ def prune_empty_sites(conn: sqlite3.Connection) -> int:
     )
     conn.execute(
         "DELETE FROM site_certificates WHERE site_id IN "
+        f"(SELECT id FROM sites WHERE {empty_filter})"
+    )
+    conn.execute(
+        "DELETE FROM notes WHERE kind = 'site' AND target_id IN "
         f"(SELECT id FROM sites WHERE {empty_filter})"
     )
     cur = conn.execute(f"DELETE FROM sites WHERE {empty_filter}")
@@ -1477,6 +1586,10 @@ def delete_page(conn: sqlite3.Connection, page_id: int) -> bool:
     conn.execute("DELETE FROM checks WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM schedules WHERE page_id = ?", (page_id,))
     conn.execute("DELETE FROM snapshots WHERE page_id = ?", (page_id,))
+    # 페이지 메모 정리 — target_id 가 상관 키(FK 아님)라 자동 삭제되지 않는다.
+    conn.execute(
+        "DELETE FROM notes WHERE kind = 'page' AND target_id = ?", (page_id,)
+    )
     conn.execute("DELETE FROM pages WHERE id = ?", (page_id,))
     prune_site_if_empty(conn, page["site_id"])
     return True
@@ -4041,6 +4154,9 @@ PERMISSIONS = (
     "view_system_logs",        # 시스템 로그(/log/system) 열람 — 기본 admin 만
     "view_archive_logs",       # 아카이브 로그(/log/archive) 열람 — 기본 admin 만
     "manage_trash",            # 휴지통 열람·복원·영구삭제 — 기본 admin 만
+    "memo_view",               # 페이지·사이트 메모 보기 — 기본 admin·archive_manager·archiver·viewer
+    "memo_create",             # 페이지·사이트 메모 등록 — 기본 admin·archive_manager·archiver
+    "memo_delete",             # 페이지·사이트 메모 삭제 — 기본 admin·archive_manager
 )
 PERMISSION_LABELS = {
     "view": "보기·검색",
@@ -4055,18 +4171,29 @@ PERMISSION_LABELS = {
     "view_system_logs": "시스템 로그 보기",
     "view_archive_logs": "아카이브 로그 보기",
     "manage_trash": "휴지통 관리",
+    "memo_view": "메모 보기",
+    "memo_create": "메모 등록",
+    "memo_delete": "메모 삭제",
 }
 # 로그 열람 3종 — 신규 추가 권한. 빌트인 중 admin 에만 기본 부여하고(관리자 권한
 # 그룹만 기본값), 기존 설치는 _migrate_log_view_permissions 가 보강한다.
 LOG_VIEW_PERMISSIONS = ("view_audit_logs", "view_system_logs", "view_archive_logs")
+# 메모 권한 — 신규 추가 권한. 빌트인 기본값(아래)과 기존 설치 보강
+# (_migrate_memo_permissions)에서 그룹별로 부여 범위가 다르다.
+MEMO_PERMISSIONS = ("memo_view", "memo_create", "memo_delete")
 # 빌트인 역할의 기본 프리셋 — permission_groups 시드의 소스이자, 캐시가 아직
 # 워밍되지 않은 프로세스의 conn 없는 fallback. 런타임 편집·커스텀 그룹은 DB
 # permission_groups 가 정본이며 role_presets(conn) 가 버전 비교로 최신화한다.
 _BUILTIN_PRESETS: dict[str, frozenset[str]] = {
     "admin": frozenset(PERMISSIONS),
-    "archive_manager": frozenset({"view", "archive", "delete", "use_api_keys"}),
-    "archiver": frozenset({"view", "archive", "use_api_keys"}),
-    "viewer": frozenset({"view"}),
+    "archive_manager": frozenset(
+        {"view", "archive", "delete", "use_api_keys",
+         "memo_view", "memo_create", "memo_delete"}
+    ),
+    "archiver": frozenset(
+        {"view", "archive", "use_api_keys", "memo_view", "memo_create"}
+    ),
+    "viewer": frozenset({"view", "memo_view"}),
 }
 PERMISSION_GROUPS_VERSION_KEY = "permission_groups_version"
 

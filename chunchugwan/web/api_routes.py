@@ -156,6 +156,24 @@ def _require_manage_system(request: Request) -> None:
         raise HTTPException(403, "시스템 관리 권한이 없습니다")
 
 
+def _require_memo_create(request: Request) -> int | None:
+    """메모 등록 권한 가드 — 토큰 소유자의 *현재* 실효 권한으로 판정. 소유자 id 반환.
+
+    인증 off(loopback)면 None 허용. 시스템 키(owner=NULL)는 주체를 정할 수 없어 403.
+    """
+    key = request.state.api_key
+    if key is None:
+        return None
+    owner_id = key["owner_user_id"]
+    if owner_id is None:
+        raise HTTPException(403, "메모 등록은 사용자 확장 토큰으로만 가능합니다 (시스템 키 불가)")
+    with db.connect() as conn:
+        owner = db.get_user_by_id(conn, owner_id)
+    if not permissions.can_memo_create(owner):
+        raise HTTPException(403, "메모 등록 권한이 없습니다")
+    return owner_id
+
+
 def _check_ingest_size(request: Request) -> None:
     """업로드 본문 상한(Content-Length) 가드 — DoS 방지 (config.INGEST_MAX_BYTES)."""
     cl = request.headers.get("content-length")
@@ -385,6 +403,44 @@ def api_archive(request: Request, payload: ArchiveRequest):
     if queued:
         audit.log(request, "새 아카이빙 등록(API): %s", norm)
     return {"queued": queued, "url": norm, "job_id": job_id}
+
+
+class NoteRequest(BaseModel):
+    """POST /api/v1/notes 요청 본문 — URL 의 페이지에 메모 1건 등록."""
+
+    url: str
+    content: str
+
+
+@router.post("/notes", status_code=201)
+def api_note_add(request: Request, payload: NoteRequest):
+    """확장 메모 등록 — URL 의 페이지에 메모 1건. 캡처 메커니즘과 독립이라
+    브라우저 캡처·서버 위임 아카이브 양쪽에서 같은 페이지 행에 붙는다."""
+    owner_id = _require_memo_create(request)
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(400, "메모 내용이 비어 있습니다")
+    if len(content) > 5000:
+        raise HTTPException(400, "메모가 너무 깁니다")
+    try:
+        norm = storage.normalize_url(payload.url)
+    except ValueError as e:
+        raise HTTPException(400, f"잘못된 URL: {e}")
+    domain = urlsplit(norm).hostname or ""
+    slug = storage.url_to_slug(norm)
+    with db.connect() as conn:
+        owner = db.get_user_by_id(conn, owner_id) if owner_id is not None else None
+        label = (
+            (owner["display_name"] or owner["email"])
+            if owner is not None else "시스템"
+        )
+        page_id = db.get_or_create_page(conn, norm, domain, slug)
+        db.add_note(
+            conn, "page", page_id, content,
+            author_user_id=owner_id, author_label=label,
+        )
+    audit.log(request, "페이지 메모 등록(API): %s", norm, action="admin", target=norm)
+    return {"ok": True, "url": norm}
 
 
 class CrawlRequest(BaseModel):
