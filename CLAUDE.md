@@ -131,13 +131,14 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 - 네트워크 요청에는 타임아웃 필수 (페이지 로드 기본 30s)
 - 새 기능 = 해당 테스트 추가 (네트워크 의존 테스트·실행은 `.claude/rules/testing.md`)
 - 커밋은 기능 단위로 작게
-- **브랜치 흐름 = gitflow.** 작업 시작 시 반드시 `git fetch origin` 후 원격 최신
-  `origin/develop` 에서 분리한다(로컬 develop 캐시 사용 금지). 기능 PR 은 `develop`
-  을 베이스로 머지한다(main 직행 금지). develop 에 병합 후 CI 가 develop→main 릴리스
-  PR 을 자동 생성하면 **사람이 검토 후 merge 커밋으로 머지**한다(squash 금지 —
-  develop 가 main 의 조상으로 남아야 FF 동기화가 유지됨). CI 자동화·`release:*`
-  라벨·버전 결정 상세는
-  `.claude/rules/release-docker.md` 참조.
+- **브랜치 흐름 = gitflow.** main·develop 은 직접 커밋/push 금지 — PR 병합만, 병합은
+  사람이 수행. 작업은 항상 `git fetch origin` 후 원격 최신 `origin/develop` 에서 분리하고
+  (로컬 캐시 금지), 기능 PR 은 `develop` 베이스로 머지한다(main 직행 금지). develop→main
+  릴리스 PR 은 **merge 커밋으로 머지**(squash 금지 — develop 가 main 의 조상으로 남아야
+  FF 동기화 유지).
+  - 브랜치 생성/재개·develop 대상 PR·릴리스 PR 등 **절차는 gitflow 스킬**
+    (`.claude/skills/gitflow/`)로 수행한다.
+  - CI 자동화·`release:*` 라벨·버전 결정 상세는 `.claude/rules/release-docker.md` 참조.
 
 ## 구현 로드맵
 
