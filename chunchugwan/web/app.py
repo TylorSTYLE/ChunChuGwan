@@ -45,8 +45,8 @@ from .. import (
     resources, scheduler, searchindex, storage, system_log,
 )
 from . import (
-    api_routes, audit, auth_routes, cluster_routes, i18n, migration_routes,
-    permissions, web_api_routes, web_auth_routes,
+    api_routes, audit, auth_routes, cluster_routes, debug_server, i18n,
+    migration_routes, permissions, web_api_routes, web_auth_routes,
 )
 from pydantic import BaseModel
 from .i18n import t
@@ -66,6 +66,8 @@ async def _lifespan(app: FastAPI):
     # 시스템 로그 DB 적재 — `wccg serve` 가 이미 설치했으면 중복 설치 무시.
     # uvicorn 으로 직접 띄우는 경우를 위해 여기서도 보장한다.
     system_log.install("serve")
+    # 디버그 진단 포트 (WCCG_DEBUG=on 일 때만 — 별도 포트, 릴리스 no-op)
+    debug_server.maybe_start("serve")
     stop = threading.Event()
     threads: list[threading.Thread] = []
     if config.SCHEDULER_ENABLED:

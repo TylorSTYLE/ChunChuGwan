@@ -287,6 +287,21 @@ EXT_CREDENTIAL_TTL_HOURS_MAX = 168
 DASHBOARD_HOST = os.environ.get("WCCG_HOST", "127.0.0.1")
 DASHBOARD_PORT = 8765
 
+# ---- 디버그 진단 포트 (web/debug_server.py) ----
+# 별도 HTTP 포트로 내부 상태(큐·DB·로그·설정)를 노출하고 안전한 트리거(1회성
+# 캡처·스케줄 1회 실행)를 제공한다 — 개발/테스트 중 문제를 빠르게 진단하기 위함.
+# 기본 off — 켜져야만 serve/worker 가 이 포트를 연다. 릴리스 compose 는 이 토글을
+# 주지 않으므로(=off) 포트가 열리지 않는다('릴리스에선 동작 안 함').
+# 시크릿은 절대 노출하지 않고(원칙 6), 쓰기 트리거는 코어 모듈을 경유한다(원칙 1).
+DEBUG_ENABLED = os.environ.get("WCCG_DEBUG", "off") == "on"
+# 기본 127.0.0.1. 컨테이너에서 호스트(LAN)로 노출하려면 0.0.0.0 으로 바인딩하되
+# 같은 네트워크의 누구나 접근할 수 있으므로 develop/테스트 전용으로만 쓴다.
+DEBUG_HOST = os.environ.get("WCCG_DEBUG_HOST", "127.0.0.1")
+DEBUG_PORT = int(os.environ.get("WCCG_DEBUG_PORT", "8799"))
+# 선택적 하드닝 — 설정하면 디버그 요청에 X-Debug-Token 헤더를 요구한다(LAN 노출 시
+# 권장). 빈값이면 토큰 검사 없이 (네트워크 배치 + WCCG_DEBUG 토글)로만 보호한다.
+DEBUG_TOKEN = os.environ.get("WCCG_DEBUG_TOKEN", "").strip()
+
 # ---- 스케줄러 (주기적 재아카이빙) ----
 # 대시보드(serve) 프로세스 안에서 폴링 스레드로 동작한다.
 # off 면 serve 는 스케줄을 실행하지 않는다 — cron 의 `wccg schedule run` 으로 대체 가능.
