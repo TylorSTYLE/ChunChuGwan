@@ -69,22 +69,44 @@ curl http://127.0.0.1:8799/debug    # 엔드포인트 목록(자체 문서)
 | `WCCG_DEBUG_PORT` | `8799` | 진단 포트 |
 | `WCCG_DEBUG_TOKEN` | (빈값) | 설정 시 모든 요청에 `X-Debug-Token` 헤더 요구 (LAN 노출 시 권장) |
 
-**엔드포인트** (읽기는 GET, 트리거는 POST):
+**엔드포인트** — `GET /debug` 가 전체 목록을 돌려준다(자체 문서). 읽기는 GET, 트리거는 POST.
+
+진단(읽기):
 
 | 경로 | 내용 |
 |---|---|
 | `/debug/health` | 프로세스 생존·버전·백그라운드 스레드(스케줄러/크롤/아카이브) 생존 |
-| `/debug/queues` | 단발 아카이빙·크롤·스케줄 큐 상태 + `writes_paused`/이전 모드 |
+| `/debug/queues` | 단발·크롤·스케줄 큐 상태 + `writes_paused`/이전 모드/스토리지 마이그레이션 |
 | `/debug/db` | 테이블별 행 수·무결성 빠른 점검·저널 모드·파일 크기 |
-| `/debug/logs?tail=N&level=&src=` | 시스템 로그 tail (워커 트레이스백 포함) |
-| `/debug/search`·`/debug/storage`·`/debug/config` | 검색 인덱스·저장 백엔드·유효 설정(**시크릿은 설정 여부만**) |
+| `/debug/logs?tail=N&level=&src=&q=` | 시스템 로그 tail (워커 트레이스백 포함, `q=` 본문 부분일치) |
+| `/debug/search`·`/debug/storage`·`/debug/config` | 검색 인덱스·저장 백엔드+마이그레이션 진행률·유효 설정(**시크릿은 설정 여부만**) |
+| `/debug/inspect?url=` | 특정 URL 의 페이지·스냅샷·최근 아카이브 로그(단계/오류) — "왜 이렇게 캡처됐나" |
+| `/debug/crawls` · `/debug/crawl/{id}/failures` | 크롤 회차·상태별 페이지 수 / 실패 페이지의 url·오류·시도횟수 |
+| `/debug/challenges` · `/debug/log/{id}` | 사람 확인 대기(needs_human) 작업 / 아카이브 로그 1건(steps 파싱) |
+
+제어(트리거 — 모두 코어 함수 경유):
+
+| 경로 | 내용 |
+|---|---|
 | `POST /debug/capture {url,force?}` | 1회성 캡처를 코어로 동기 실행 → netcheck/추출/스냅샷 결과 트레이스 |
-| `POST /debug/run/scheduler`·`/debug/run/archive` | 기한 스케줄·단발 큐를 1회 처리 |
+| `POST /debug/run/scheduler`·`/debug/run/archive` | 페이지 스케줄·단발 큐를 1회 처리 |
+| `POST /debug/run/crawl {crawl_id?}`·`/debug/run/crawl-schedules` | 크롤 페이지·크롤 스케줄을 1회 처리 (크롤이 멈춘 원인 격리) |
+| `POST /debug/run/recover-stale` | 중단으로 in_progress 에 박힌 작업·크롤 페이지를 pending 복구(멱등) |
+| `POST /debug/run/reindex {full?}` | 미색인 스냅샷 백필(또는 전체 재색인) |
+| `POST /debug/live/{job_id}/cancel`·`/solve` | 라이브 챌린지로 멈춘 워커를 취소/강제해결로 풀어줌 |
 
 **보안**: 시크릿 값은 절대 응답에 넣지 않고(원칙 6), 트리거 쓰기는 모두 코어
-모듈(`pipeline`·`scheduler`·`archive_worker`)을 경유한다(원칙 1). 비-loopback 바인딩은
+모듈(`pipeline`·`scheduler`·`crawler`·`archive_worker`·`searchindex`)을 경유한다(원칙 1) —
+직접 DB 조작·임의 SQL/eval·스냅샷 변경 류는 의도적으로 두지 않는다. 비-loopback 바인딩은
 경고를 남기며, LAN 노출 시 `WCCG_DEBUG_TOKEN` 으로 보호하는 것을 권장한다.
 도커 노출·핫리로드는 [DOCKER.md](DOCKER.md#디버그-진단-포트--핫리로드-develop-전용) 참조.
+
+**릴리스 빌드에는 디버그 코드가 없다.** 런타임 토글(`WCCG_DEBUG`) 위에 한 겹 더 —
+릴리스(`:latest`·`:main`·`:vX.Y.Z`) 이미지 빌드는 `web/debug_server.py` 를 **물리적으로
+제거**한다(Dockerfile `ARG INCLUDE_DEBUG`, CI 가 develop 빌드에만 `INCLUDE_DEBUG=1` 주입).
+호출부(`web/app.py`·`worker.py`)는 파일 부재 시 `ImportError` 를 잡아 graceful no-op 하므로
+릴리스 이미지에서는 `WCCG_DEBUG=on` 을 줘도 디버그 서버 코드 자체가 존재하지 않는다.
+`config.py` 의 `WCCG_DEBUG*` 상수만 남지만 소비처가 없어 무동작이다.
 
 ## 빠른 수정-검증 루프 (`serve --reload`)
 

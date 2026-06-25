@@ -57,6 +57,17 @@ COPY --from=frontend /frontend/build chunchugwan/web/frontend_dist
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --extra stealth
 
+# 디버그 진단 서버(web/debug_server.py)는 develop 이미지에만 둔다. 릴리스(:latest·
+# :main·:vX.Y.Z) 빌드에서는 파일을 물리적으로 제거해 코드 자체가 이미지에 없게 한다
+# — 런타임 토글(WCCG_DEBUG) 위에 한 겹 더(빌드 타임) 방어한다. CI(docker.yml)가
+# develop 브랜치 빌드에만 INCLUDE_DEBUG=1 을 넘기고, 그 외(main/태그)는 기본 빈값이라
+# 제거된다. 호출부(web/app.py·worker.py)는 파일 부재 시 graceful no-op 한다.
+ARG INCLUDE_DEBUG=""
+RUN if [ -z "$INCLUDE_DEBUG" ]; then \
+        rm -f chunchugwan/web/debug_server.py \
+              chunchugwan/web/__pycache__/debug_server.*.pyc; \
+    fi
+
 # 비루트 실행 — chromium 샌드박스를 --no-sandbox 없이 유지.
 # USER 지시어 대신 엔트리포인트가 root 로 시작해 바인드 마운트된
 # /data/archive 소유자를 보정한 뒤 gosu 로 wccg 가 되어 실행한다.
