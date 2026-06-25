@@ -263,6 +263,45 @@ docker compose down                    # 대시보드 중지
       WCCG_ADMIN_PASSWORD: "********"         # 8자 이상, 최초 구동 후 제거 권장
 ```
 
+## 디버그 진단 포트 · 핫리로드 (develop 전용)
+
+테스트 서버(develop)에서 컨테이너 내부 상태를 LAN 의 개발 PC 에서 바로 보고, 코드
+변경을 빠르게 반영하기 위한 두 오버레이다 — **릴리스(`latest`)에는 쓰지 않는다.** 동작
+원리·엔드포인트 목록은 [DEVELOPMENT.md](DEVELOPMENT.md#디버그-진단-포트-wccg_debug) 참조.
+
+**① 진단 포트 노출** (`docker-compose.debug.yml`) — serve·worker 가 별도 포트에 진단
+엔드포인트를 연다(읽기 + 안전한 트리거). 호스트 포트 매핑이 모든 인터페이스(0.0.0.0)라
+같은 LAN 의 다른 머신에서 닿는다.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+               -f docker-compose.debug.yml up -d
+# 같은 네트워크의 개발 PC 에서:
+curl http://<서버-LAN-IP>:8799/debug/health   # worker (캡처·큐가 도는 프로세스)
+curl http://<서버-LAN-IP>:8798/debug/health   # dashboard (API/서빙)
+```
+
+내부 상태가 보이므로 develop 전용으로만 쓰고, 더 조이려면 두 서비스의
+`WCCG_DEBUG_TOKEN` 을 켜서 요청에 `-H "X-Debug-Token: ..."` 를 요구하게 한다.
+
+**② 핫리로드** (`docker-compose.reload.yml`) — 위에 더해 dashboard 를 소스
+bind-mount + `serve --reload` 로 띄운다. 호스트의 `chunchugwan/` 소스를 고치면 자동
+재기동되고, 캡처/파이프라인을 고친 뒤 `POST /debug/capture` 로 트리거하면 새 코드가
+바로 돈다(재빌드 불필요).
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+               -f docker-compose.debug.yml -f docker-compose.reload.yml up -d dashboard
+```
+
+전제: 이 compose 파일이 있는 디렉토리(호스트)에 리포 소스가 있어야 한다 — 원격
+서버라면 소스를 그 디렉토리로 동기화(rsync/syncthing 등)해야 편집이 반영된다. 매번
+`-f` 를 넘기기 번거로우면 `.env` 의 `COMPOSE_FILE` 에 콜론으로 이어 둔다.
+
+> SPA(프론트엔드)는 이미지에 구워진 빌드 산출물을 쓴다 — bind-mount 한 호스트
+> 소스에 `web/frontend_dist` 가 없으면 SPA 루트(`/`)는 비고 디버그 포트만 동작한다.
+> 프론트 작업은 `cd frontend && npm run dev` 를 별도로 쓴다.
+
 ## Docker 단독 (compose 없이)
 
 ```bash

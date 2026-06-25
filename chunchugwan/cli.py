@@ -1226,7 +1226,12 @@ def _is_loopback(host: str) -> bool:
 @main.command()
 @click.option("--port", default=None, type=int)
 @click.option("--host", default=None, help="바인딩 주소 (기본 127.0.0.1, 외부 노출 시 인증 필수)")
-def serve(port: int | None, host: str | None) -> None:
+@click.option(
+    "--reload", is_flag=True,
+    help="소스 변경 시 자동 재기동 (개발용 — 소스 bind-mount 와 함께 쓴다. "
+         "docker-compose.reload.yml 참조)",
+)
+def serve(port: int | None, host: str | None, reload: bool) -> None:
     """대시보드 실행 (기본 loopback 전용)."""
     import uvicorn
 
@@ -1261,6 +1266,7 @@ def serve(port: int | None, host: str | None) -> None:
         "chunchugwan.web.app:app",
         host=bind_host,
         port=port or config.DASHBOARD_PORT,
+        reload=reload,
     )
 
 
