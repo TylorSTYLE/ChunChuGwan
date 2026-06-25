@@ -55,6 +55,6 @@ scripts/gen_release_notes.py X.Y.Z`.)
 
 ## Docker 명령
 
-컨테이너 실행 명령(`docker compose up`/`run`, `docker-compose.yml`·develop 은
-`docker-compose.dev.yml` 오버라이드)은 CLAUDE.md `## 명령어`
+컨테이너 실행 명령(`docker compose up`/`run`, 운영은 `docker-compose.yml`, develop 은
+별개 독립 파일 `docker-compose.dev.yml` — 디버그 진단 포트 포함)은 CLAUDE.md `## 명령어`
 참조. 운영·환경변수·배포 상세는 `docs/DOCKER.md`.

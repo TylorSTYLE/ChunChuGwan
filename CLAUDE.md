@@ -94,7 +94,7 @@ uv run wccg compact [--yes]              # 저장공간 최적화 — 압축 변
                                          #   + 자원 참조 백필 + 고아 공유 자원 정리 (멱등)
 uv run pytest                            # 테스트
 docker compose up -d dashboard           # 대시보드 + 워커 (:latest, 127.0.0.1:8765 — 개인 설정은 docker-compose.override.yml 에)
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d dashboard  # develop(테스트) 이미지로
+docker compose -f docker-compose.dev.yml up -d dashboard  # develop(테스트) 단독 파일 — 디버그 진단 포트 포함
 docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 ```
 

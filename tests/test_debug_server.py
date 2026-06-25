@@ -7,6 +7,9 @@
 from __future__ import annotations
 
 import importlib
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -158,3 +161,76 @@ def test_triggers_on_empty_queue(client) -> None:
     assert sched["processed"] == 0 and sched["results"] == []
     arch = client.post("/debug/run/archive").json()
     assert arch["processed"] is False
+
+
+# ---- 보강된 진단/제어 표면 ----
+
+def test_index_lists_new_endpoints(client) -> None:
+    body = client.get("/debug").json()
+    assert any("/debug/inspect" in e for e in body["read"])
+    assert any("/debug/run/crawl" in e for e in body["trigger"])
+    assert any("/debug/run/recover-stale" in e for e in body["trigger"])
+
+
+def test_crawl_and_challenge_reads(client) -> None:
+    assert client.get("/debug/crawls").json() == {"count": 0, "crawls": []}
+    assert client.get("/debug/challenges").json() == {"count": 0, "jobs": []}
+    # 빈 크롤 실패 조회
+    f = client.get("/debug/crawl/1/failures").json()
+    assert f["crawl_id"] == 1 and f["failed"] == 0
+
+
+def test_queue_and_storage_extras(client) -> None:
+    q = client.get("/debug/queues").json()
+    assert "storage_migration_active" in q          # 멈춤 원인 한 가지 더
+    s = client.get("/debug/storage").json()
+    assert s["backend"] == "local"
+    assert "migration" in s                          # 진행률/요약 병합
+
+
+def test_new_queue_triggers_empty(client) -> None:
+    """크롤·크롤스케줄·스테일복구 트리거 — 빈 상태에서 네트워크 없이 즉시 반환."""
+    assert client.post("/debug/run/crawl").json() == {"processed": False}
+    cs = client.post("/debug/run/crawl-schedules").json()
+    assert cs["processed"] == 0 and cs["results"] == []
+    rec = client.post("/debug/run/recover-stale").json()
+    assert rec == {"recovered_archive_jobs": 0, "recovered_crawl_pages": 0}
+
+
+def test_inspect_unknown_url_404(client) -> None:
+    r = client.get("/debug/inspect", params={"url": "https://nope.example/x"})
+    assert r.status_code == 404
+
+
+def test_logs_q_filter(client) -> None:
+    r = client.get("/debug/logs", params={"q": "절대없는문자열zzz", "tail": 5})
+    assert r.status_code == 200 and r.json()["logs"] == []
+
+
+def test_release_build_excludes_debug_server(tmp_path) -> None:
+    """릴리스 빌드 모사 — debug_server.py 를 제거해도 app/worker 가 import 되고,
+    WCCG_DEBUG=on 이어도 디버그 서버가 없어 graceful no-op 한다(원칙: 코드 자체 부재)."""
+    import chunchugwan.web as webpkg
+
+    src = Path(webpkg.__file__).parent / "debug_server.py"
+    bak = src.with_name("debug_server.py.bak")
+    src.rename(bak)
+    try:
+        code = (
+            "import os, tempfile, importlib\n"
+            "os.environ['WCCG_DEBUG']='on'; os.environ['WCCG_AUTH']='off'\n"
+            "os.environ['WCCG_ROOT']=tempfile.mkdtemp()\n"
+            "from chunchugwan.web import app as a\n"
+            "assert a.debug_server is None, 'app.debug_server must be None when removed'\n"
+            "try:\n"
+            "    importlib.import_module('chunchugwan.web.debug_server')\n"
+            "    raise SystemExit('debug_server still importable')\n"
+            "except ImportError:\n"
+            "    pass\n"
+            "print('OK')\n"
+        )
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        assert out.returncode == 0, f"stdout={out.stdout!r} stderr={out.stderr!r}"
+        assert "OK" in out.stdout
+    finally:
+        bak.rename(src)

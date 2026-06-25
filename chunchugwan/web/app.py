@@ -45,9 +45,15 @@ from .. import (
     resources, scheduler, searchindex, storage, system_log,
 )
 from . import (
-    api_routes, audit, auth_routes, cluster_routes, debug_server, i18n,
+    api_routes, audit, auth_routes, cluster_routes, i18n,
     migration_routes, permissions, web_api_routes, web_auth_routes,
 )
+# 디버그 서버는 릴리스 빌드에서 이미지에서 제거된다(Dockerfile ARG INCLUDE_DEBUG) —
+# 파일이 없으면 graceful no-op. develop 이미지에만 포함된다.
+try:
+    from . import debug_server
+except ImportError:
+    debug_server = None
 from pydantic import BaseModel
 from .i18n import t
 
@@ -66,8 +72,10 @@ async def _lifespan(app: FastAPI):
     # 시스템 로그 DB 적재 — `wccg serve` 가 이미 설치했으면 중복 설치 무시.
     # uvicorn 으로 직접 띄우는 경우를 위해 여기서도 보장한다.
     system_log.install("serve")
-    # 디버그 진단 포트 (WCCG_DEBUG=on 일 때만 — 별도 포트, 릴리스 no-op)
-    debug_server.maybe_start("serve")
+    # 디버그 진단 포트 (WCCG_DEBUG=on 일 때만 — 별도 포트). 릴리스 빌드엔 debug_server
+    # 자체가 없어(None) 호출을 건너뛴다.
+    if debug_server is not None:
+        debug_server.maybe_start("serve")
     stop = threading.Event()
     threads: list[threading.Thread] = []
     if config.SCHEDULER_ENABLED:

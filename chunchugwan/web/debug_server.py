@@ -20,12 +20,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .. import __version__, config, db
 
@@ -105,12 +106,18 @@ def build_app(source: str):
             "version": __version__,
             "read": [
                 "GET /debug/health", "GET /debug/queues", "GET /debug/db",
-                "GET /debug/logs?tail=N&level=&src=", "GET /debug/search",
+                "GET /debug/logs?tail=N&level=&src=&q=", "GET /debug/search",
                 "GET /debug/storage", "GET /debug/config",
+                "GET /debug/inspect?url=", "GET /debug/crawls",
+                "GET /debug/crawl/{id}/failures", "GET /debug/challenges",
+                "GET /debug/log/{id}",
             ],
             "trigger": [
                 "POST /debug/capture  {url, force?}",
                 "POST /debug/run/scheduler", "POST /debug/run/archive",
+                "POST /debug/run/crawl  {crawl_id?}", "POST /debug/run/crawl-schedules",
+                "POST /debug/run/recover-stale", "POST /debug/run/reindex  {full?}",
+                "POST /debug/live/{job_id}/cancel", "POST /debug/live/{job_id}/solve",
             ],
         }
 
@@ -154,6 +161,7 @@ def build_app(source: str):
                 # 아무것도 처리되지 않는 이유를 바로 보여준다 — 이전/마이그레이션 중이면 쓰기 중단.
                 "writes_paused": db.writes_paused(conn),
                 "migration_mode": db.migration_mode_enabled(conn),
+                "storage_migration_active": db.storage_migration_active(conn),
             }
 
     @app.get("/debug/db")
@@ -187,12 +195,20 @@ def build_app(source: str):
         }
 
     @app.get("/debug/logs")
-    def logs(tail: int = 100, level: str | None = None, src: str | None = None) -> dict:
-        """시스템 로그 tail (최신 순). level=ERROR·src=worker 등으로 필터."""
+    def logs(tail: int = 100, level: str | None = None,
+             src: str | None = None, q: str | None = None) -> dict:
+        """시스템 로그 tail (최신 순). level=ERROR·src=worker 로 필터, q= 는 본문 부분일치."""
         tail = max(1, min(tail, 1000))
         with db.connect() as conn:
-            rows = db.list_system_logs(conn, level=level, source=src, limit=tail)
-        return {"count": len(rows), "logs": [dict(r) for r in rows]}
+            # system_logs 는 본문 LIKE 미지원 — q 가 있으면 더 넓게 떠서 파이썬에서 거른다.
+            fetch = min(tail * 10, 5000) if q else tail
+            rows = db.list_system_logs(conn, level=level, source=src, limit=fetch)
+        out = [dict(r) for r in rows]
+        if q:
+            ql = q.lower()
+            out = [r for r in out
+                   if ql in " ".join(str(v) for v in r.values()).lower()][:tail]
+        return {"count": len(out), "logs": out}
 
     @app.get("/debug/search")
     def search_state() -> dict:
@@ -209,14 +225,21 @@ def build_app(source: str):
 
     @app.get("/debug/storage")
     def storage_state() -> dict:
-        """저장 백엔드(local/s3)·마이그레이션·쓰기 중단 상태."""
+        """저장 백엔드(local/s3)·마이그레이션 진행률·사용량·쓰기 중단 상태."""
+        from .. import storage_migration
         with db.connect() as conn:
-            return {
+            base = {
                 "backend": db.storage_backend(conn),
                 "migration_active": db.storage_migration_active(conn),
                 "writes_paused": db.writes_paused(conn),
                 "s3_requested": config.s3_requested(),
+                "s3_usage": db.s3_usage(conn),
             }
+        try:  # 인메모리 진행률(done/total/failed/direction) + DB 요약 — serve 프로세스 기준
+            base["migration"] = storage_migration.status()
+        except Exception as e:
+            base["migration"] = {"_error": str(e)}
+        return base
 
     @app.get("/debug/config")
     def config_state() -> dict:
@@ -317,6 +340,113 @@ def build_app(source: str):
             "error": step.error,
         }
 
+    # ── 큐 소비 트리거 — worker 가 돌리는 크롤·크롤스케줄 루프를 1회 스텝 (코어 경유) ──
+    @app.post("/debug/run/crawl")
+    def run_crawl(payload: dict | None = Body(default=None)) -> dict:
+        """기한이 된 크롤 페이지 하나를 1회 처리 (crawler.process_next). crawl_id 로 한정 가능."""
+        from .. import crawler
+
+        crawl_id = (payload or {}).get("crawl_id")
+        step = crawler.process_next(crawl_id=crawl_id)
+        if step is None:
+            return {"processed": False}
+        return {"processed": True, "crawl_id": step.crawl_id, "url": step.url,
+                "status": step.status, "error": step.error}
+
+    @app.post("/debug/run/crawl-schedules")
+    def run_crawl_schedules() -> dict:
+        """기한이 된 크롤 스케줄을 1회 실행 (crawler.run_due_schedules)."""
+        from .. import crawler
+
+        results = crawler.run_due_schedules(source="api")
+        return {"processed": len(results),
+                "results": [{"start_url": r.start_url, "status": r.status,
+                             "crawl_id": r.crawl_id, "error": r.error} for r in results]}
+
+    @app.post("/debug/run/recover-stale")
+    def run_recover_stale() -> dict:
+        """중단으로 in_progress 에 박힌 단발 작업·크롤 페이지를 pending 으로 복구(멱등)."""
+        cutoff = _stale_cutoff_iso()
+        with db.connect() as conn:
+            jobs = db.recover_stale_archive_jobs(conn, cutoff)
+            pages = db.recover_stale_crawl_pages(conn, cutoff)
+        return {"recovered_archive_jobs": jobs, "recovered_crawl_pages": pages}
+
+    @app.post("/debug/run/reindex")
+    def run_reindex(payload: dict | None = Body(default=None)) -> dict:
+        """미색인 스냅샷 백필(full=true 면 전체 재색인). 동기 — 큰 DB 에선 오래 걸린다."""
+        from .. import searchindex
+
+        full = bool((payload or {}).get("full", False))
+        n = searchindex.reindex_all() if full else searchindex.backfill_all()
+        return {"reindexed": n, "full": full}
+
+    # ── 라이브 챌린지로 멈춘 워커 풀어주기 (코어 플래그 — 워커가 다음 폴링에 반영) ──
+    @app.post("/debug/live/{job_id}/cancel")
+    def live_cancel(job_id: int) -> dict:
+        """needs_human 으로 page 를 붙든 작업을 취소(워커가 다음 폴링에 중단)."""
+        with db.connect() as conn:
+            db.set_live_cancel(conn, job_id)
+        return {"ok": True, "job_id": job_id, "action": "cancel"}
+
+    @app.post("/debug/live/{job_id}/solve")
+    def live_solve(job_id: int) -> dict:
+        """needs_human 작업을 '사람 확인 완료'로 강제 채택(워커가 현재 page 를 채택)."""
+        with db.connect() as conn:
+            db.set_live_force_solve(conn, job_id)
+        return {"ok": True, "job_id": job_id, "action": "force_solve"}
+
+    # ── 진단 읽기 — 특정 URL·크롤 실패·챌린지·로그 상세 ──
+    @app.get("/debug/inspect")
+    def inspect(url: str) -> dict:
+        """특정 URL 의 페이지·스냅샷·최근 아카이브 로그(단계/오류) — '왜 이렇게 캡처됐나'."""
+        with db.connect() as conn:
+            page = db.get_page_aggregate(conn, url)
+            if page is None:
+                raise HTTPException(status_code=404, detail="해당 URL 의 페이지가 없습니다")
+            page = dict(page)
+            snaps = [dict(s) for s in db.list_snapshots(conn, page["id"])][-10:]
+            log_rows = db.list_archive_logs(conn, page_id=page["id"], limit=10)
+        return {"page": page, "snapshots": snaps,
+                "archive_logs": [_log_row(r) for r in log_rows]}
+
+    @app.get("/debug/crawls")
+    def crawls(limit: int = 50) -> dict:
+        """크롤 회차 목록 + 상태별 페이지 수."""
+        with db.connect() as conn:
+            out = []
+            for c in db.list_crawls(conn, limit=max(1, min(limit, 200))):
+                row = dict(c)
+                row["page_counts"] = db.crawl_page_counts(conn, row["id"])
+                out.append(row)
+        return {"count": len(out), "crawls": out}
+
+    @app.get("/debug/crawl/{crawl_id}/failures")
+    def crawl_failures(crawl_id: int, limit: int = 50) -> dict:
+        """크롤의 실패 페이지 — url·오류·시도횟수 (실패 원인 진단)."""
+        with db.connect() as conn:
+            rows = db.list_crawl_pages(conn, crawl_id, status="failed")
+        items = [{"url": r["url"], "error": r["error"], "attempts": r["attempts"],
+                  "next_attempt_at": r["next_attempt_at"]}
+                 for r in rows[:max(1, min(limit, 500))]]
+        return {"crawl_id": crawl_id, "failed": len(rows), "pages": items}
+
+    @app.get("/debug/challenges")
+    def challenges() -> dict:
+        """사람 확인 대기(needs_human) 작업 — 라이브 챌린지로 멈춘 워커."""
+        with db.connect() as conn:
+            rows = db.list_needs_human_jobs(conn)
+        return {"count": len(rows), "jobs": [dict(r) for r in rows]}
+
+    @app.get("/debug/log/{log_id}")
+    def archive_log(log_id: int) -> dict:
+        """아카이브 실행 로그 1건 (steps JSON 파싱 — 폴백/인증서/인증 경로)."""
+        with db.connect() as conn:
+            row = db.get_archive_log(conn, log_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="해당 로그가 없습니다")
+        return _log_row(row)
+
     return app
 
 
@@ -356,3 +486,21 @@ def _group_by_status(conn: sqlite3.Connection, table: str) -> dict:
 def _wal_size(db_path) -> int:
     wal = db_path.with_name(db_path.name + "-wal")
     return wal.stat().st_size if wal.is_file() else 0
+
+
+def _stale_cutoff_iso() -> str:
+    """스테일 클레임 회수 기준 시각 — 코어 process_next 진입부와 같은 cutoff."""
+    return (datetime.now(timezone.utc)
+            - timedelta(seconds=config.CRAWL_STALE_CLAIM_SECONDS)).isoformat()
+
+
+def _log_row(row) -> dict:
+    """archive_logs 행을 dict 로 — steps 가 JSON 문자열이면 파싱해 펼친다."""
+    d = dict(row)
+    steps = d.get("steps")
+    if isinstance(steps, str):
+        try:
+            d["steps"] = json.loads(steps)
+        except (ValueError, TypeError):
+            pass
+    return d
