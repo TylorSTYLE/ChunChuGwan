@@ -362,6 +362,45 @@ def test_capture_without_rules_keeps_content(site_url, tmp_path):
     assert "광고 위젯 문구" in result.content_html
 
 
+def test_capture_caps_inline_resource_count(tmp_path, monkeypatch):
+    """인라인 자원 수가 상한을 넘으면 초과분은 원본 URL 을 유지한다.
+
+    회귀: unicode-range 웹폰트처럼 url() 참조가 수천 개인 페이지가 모든 자원을
+    인라인하면 page.html 이 수십 MB 로 부풀고 메모리 폭증·hang 을 일으켰다.
+    예산(RESOURCE_INLINE_MAX_COUNT)으로 묶고, 캡처는 정상 완료해야 한다.
+    """
+    monkeypatch.setattr(capture.config, "RESOURCE_INLINE_MAX_COUNT", 3)
+    site = tmp_path / "many"
+    site.mkdir()
+    for i in range(10):
+        Image.new("RGB", (4, 4), (i * 20, 0, 0)).save(site / f"img{i}.png")
+    imgs = "".join(f'<img src="img{i}.png">' for i in range(10))
+    (site / "index.html").write_text(
+        f'<!doctype html><html><head><meta charset="utf-8"><title>t</title>'
+        f"</head><body>{imgs}</body></html>",
+        encoding="utf-8",
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(_QuietHandler, directory=str(site))
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        out = tmp_path / "out"
+        out.mkdir()
+        capture.capture(f"http://127.0.0.1:{server.server_address[1]}/index.html", out)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    page_html = (out / "page.html").read_text(encoding="utf-8")
+    inlined = page_html.count("data:image/")
+    remaining = page_html.count('src="img')
+    assert inlined <= 3                 # 예산만큼만 인라인
+    assert remaining >= 7               # 초과분은 원본 src 유지
+    assert (out / "screenshot.png").is_file()
+
+
 @pytest.fixture
 def cross_origin_url(tmp_path):
     """다른 포트(=다른 origin)의 자원을 참조하는 페이지.

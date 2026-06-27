@@ -183,9 +183,14 @@ def test_inline_fallback_reuses_previous_capture(archive_env, monkeypatch):
             self.applied: list[dict] = []
 
         def evaluate(self, js, arg=None):
-            if "inlined" in js:  # _INLINE_JS
+            if "__wccgInlineDone" in js:    # _INLINE_LAUNCH_JS — 작업 시작(즉시 반환)
+                return None
+            if "__wccgInlineResult" in js:  # 결과 읽기
                 return {"failed": [{"kind": "img", "url": IMG_URL}], "inlined": []}
             self.applied += arg  # _APPLY_INLINE_JS
+            return None
+
+        def wait_for_function(self, js, timeout=None):
             return None
 
         def content(self):
@@ -208,9 +213,14 @@ def test_inline_fallback_miss_keeps_original_url(archive_env, monkeypatch):
         url = "https://example.com/a"
 
         def evaluate(self, js, arg=None):
-            if "inlined" in js:
+            if "__wccgInlineDone" in js:    # _INLINE_LAUNCH_JS — 작업 시작(즉시 반환)
+                return None
+            if "__wccgInlineResult" in js:  # 결과 읽기
                 return {"failed": [{"kind": "img", "url": IMG_URL}], "inlined": []}
             raise AssertionError("치환할 것이 없어야 한다")
+
+        def wait_for_function(self, js, timeout=None):
+            return None
 
         def content(self):
             return "<html></html>"
