@@ -570,6 +570,7 @@ def _archive_url(
             http_status=result.http_status,
             title=result.title,
             documents=doc_manifest or None,
+            incomplete=result.incomplete,
         )
         snap_dir = storage.finalize_snapshot(
             tmp_dir, domain, slug, meta, normalized, taken_at
@@ -592,6 +593,7 @@ def _archive_url(
                 links_rewritten=1,    # 앵커는 캡처가 /goto·/crawl/{id}/goto 로 재작성 완료
                 bytes=storage.snapshot_dir_bytes(snap_dir),
                 title=result.title,
+                incomplete=1 if result.incomplete else 0,
                 authenticated=1 if credential is not None else 0,
                 authenticated_by=authenticated_by if credential is not None else None,
             )

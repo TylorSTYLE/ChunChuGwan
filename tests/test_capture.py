@@ -600,6 +600,32 @@ def test_capture_proceeds_when_subresource_hangs(tmp_path, monkeypatch):
     assert "/hang.png" in page_html
 
 
+def test_capture_marks_incomplete_when_screenshot_fails(site_url, tmp_path, monkeypatch):
+    """스크린샷이 실패(타임아웃)해도 HTML·자원은 저장하고 incomplete 로 격하한다.
+
+    회귀: 스크린샷 한 장 때문에 캡처 전체가 CaptureError 로 무산돼 재시도를
+    모두 소진하던 동작을 막는다 (스크린샷 수집 실패 = 불완전 표식, 전체 보존).
+    """
+    import importlib
+
+    from chunchugwan import browser_engine
+    _, sync_playwright, PlaywrightError, _ = browser_engine.get_engine()
+    sync_api = importlib.import_module(sync_playwright.__module__)  # 활성 엔진 모듈
+
+    def boom(self, *args, **kwargs):
+        raise PlaywrightError("Page.screenshot: Timeout 30000ms exceeded.")
+
+    monkeypatch.setattr(sync_api.Page, "screenshot", boom)
+    out = tmp_path / "out"
+    out.mkdir()
+    result = capture.capture(site_url, out)
+
+    assert result.incomplete is True
+    assert not (out / "screenshot.png").exists()   # 부분 파일도 남기지 않는다
+    assert (out / "page.html").is_file()           # HTML 은 정상 저장
+    assert "본문 내용입니다." in result.raw_html
+
+
 def test_capture_completes_despite_busy_network(tmp_path, monkeypatch):
     """networkidle 에 영영 도달하지 않는 페이지(주기적 폴링)도 load 후 상한 대기로 완료한다.
 
