@@ -86,7 +86,8 @@
 
   <nav>
     <button data-tab="connect" data-i18n="tab_connect" class="active"></button>
-    <button data-tab="archive" data-i18n="tab_archive"></button>
+    <button data-tab="browser" data-i18n="nav_browser"></button>
+    <button data-tab="server" data-i18n="nav_server"></button>
     <button data-tab="history" data-i18n="tab_history"></button>
   </nav>
 
@@ -115,39 +116,52 @@
     <div class="note" id="connect-result" style="display:none"></div>
   </section>
 
-  <!-- 아카이브 -->
-  <section class="tab" id="tab-archive">
-    <h3 data-i18n="tab_archive"></h3>
-    <p class="muted" data-i18n="archive_intro"></p>
+  <!-- 아카이브 (이 브라우저) — 서버 무요청, 지금 보고 있는 화면을 그대로 캡처 -->
+  <section class="tab" id="tab-browser">
+    <h3 data-i18n="tab_browser"></h3>
+    <p class="muted" data-i18n="browser_intro"></p>
 
-    <!-- 페이지 메모 (선택) — 캡처/아카이브 성공 후 이 URL 의 페이지 메모로 등록된다. -->
-    <label class="memo-label" data-i18n="memo_label" for="capture-memo"></label>
-    <textarea id="capture-memo" rows="2" data-i18n-ph="memo_ph"></textarea>
+    <!-- 페이지 메모 (선택) — 캡처 성공 후 이 URL 의 페이지 메모로 등록된다. -->
+    <label class="memo-label" data-i18n="memo_label" for="memo-browser"></label>
+    <textarea id="memo-browser" rows="2" data-i18n-ph="memo_ph"></textarea>
 
-    <!-- 브라우저 캡처 (서버 무요청 — 지금 보고 있는 화면을 그대로) -->
     <button class="btn primary" id="capture-browser" data-i18n="capture_btn"></button>
     <p class="muted" data-i18n="capture_hint"></p>
     <div class="note warn" id="capture-notice" data-i18n="capture_notice"></div>
+
+    <label class="consent"><input type="checkbox" id="force-browser"><span data-i18n="archive_force"></span></label>
+    <label class="consent"><input type="checkbox" id="protect-browser"><span data-i18n="archive_protect_share"></span></label>
+
     <!-- 사설 호스트 네트워크 태그 (서버가 태그를 요구하면 노출) -->
-    <div id="tag-picker" style="display:none">
+    <div id="tag-picker-browser" style="display:none">
       <p class="muted" data-i18n="tag_pick_hint"></p>
       <label data-i18n="tag_pick_label"></label>
-      <select id="tag-select"></select>
+      <select id="tag-select-browser"></select>
       <label data-i18n="tag_new_label"></label>
       <div class="row">
-        <input type="text" id="tag-new" placeholder="사무실">
-        <button class="btn" id="tag-add" data-i18n="tag_add"></button>
+        <input type="text" id="tag-new-browser" placeholder="사무실">
+        <button class="btn" id="tag-add-browser" data-i18n="tag_add"></button>
       </div>
     </div>
 
-    <hr style="border:0;border-top:1px solid var(--border);margin:12px 0">
-    <p class="muted" data-i18n="archive_server_intro"></p>
+    <div class="note" id="browser-result" style="display:none"></div>
+  </section>
+
+  <!-- 아카이브 (서버) — URL 만 보내고 서버가 대신 캡처 -->
+  <section class="tab" id="tab-server">
+    <h3 data-i18n="tab_server"></h3>
+    <p class="muted" data-i18n="server_intro"></p>
+
+    <!-- 페이지 메모 (선택) — 아카이브 성공 후 이 URL 의 페이지 메모로 등록된다. -->
+    <label class="memo-label" data-i18n="memo_label" for="memo-server"></label>
+    <textarea id="memo-server" rows="2" data-i18n-ph="memo_ph"></textarea>
+
     <div class="row">
-      <button class="btn" id="archive-page" data-i18n="archive_page_btn"></button>
+      <button class="btn primary" id="archive-page" data-i18n="archive_page_btn"></button>
       <button class="btn" id="archive-site" data-i18n="archive_site_btn"></button>
     </div>
-    <label class="consent"><input type="checkbox" id="force"><span data-i18n="archive_force"></span></label>
-    <label class="consent"><input type="checkbox" id="protect-share"><span data-i18n="archive_protect_share"></span></label>
+    <label class="consent"><input type="checkbox" id="force-server"><span data-i18n="archive_force"></span></label>
+    <label class="consent"><input type="checkbox" id="protect-server"><span data-i18n="archive_protect_share"></span></label>
     <label class="consent"><input type="checkbox" id="with-login"><span data-i18n="archive_with_login"></span></label>
     <div id="login-info" style="display:none">
       <p class="muted" id="login-cookie-count"></p>
@@ -165,7 +179,20 @@
       <label data-i18n="archive_delay"></label>
       <input type="number" id="delay" min="0" placeholder="5">
     </details>
-    <div class="note" id="archive-result" style="display:none"></div>
+
+    <!-- 사설 호스트 네트워크 태그 (서버가 태그를 요구하면 노출) -->
+    <div id="tag-picker-server" style="display:none">
+      <p class="muted" data-i18n="tag_pick_hint"></p>
+      <label data-i18n="tag_pick_label"></label>
+      <select id="tag-select-server"></select>
+      <label data-i18n="tag_new_label"></label>
+      <div class="row">
+        <input type="text" id="tag-new-server" placeholder="사무실">
+        <button class="btn" id="tag-add-server" data-i18n="tag_add"></button>
+      </div>
+    </div>
+
+    <div class="note" id="server-result" style="display:none"></div>
   </section>
 
   <!-- 히스토리 -->

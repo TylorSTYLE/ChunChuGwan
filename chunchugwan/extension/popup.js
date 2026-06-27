@@ -55,8 +55,9 @@ function applyI18n() {
 
 // 페이지 메모(선택) — 캡처/아카이브 성공 후 이 URL 의 페이지 메모로 등록한다.
 // 캡처 메커니즘과 독립이라 성공 결과 메시지에 등록 여부만 덧붙인다.
-async function maybeSaveMemo() {
-  const box = $("#capture-memo");
+// 브라우저·서버 탭에 메모 입력칸이 각각 있어 사용한 탭의 칸(boxSel)을 받는다.
+async function maybeSaveMemo(boxSel) {
+  const box = $(boxSel);
   const memo = (box?.value || "").trim();
   if (!memo) return "";
   const res = await send("addNote", { url: currentUrl, content: memo });
@@ -219,11 +220,11 @@ function initArchive() {
   if (kind === "loopback") {
     $("#archive-page").disabled = true;
     $("#archive-site").disabled = true;
-    showNote("#archive-result", msg("err_loopback"), "warn");
+    showNote("#server-result", msg("err_loopback"), "warn");
   } else if (kind === "private") {
     // 사설 호스트 — 캡처 전에 태그를 고르게 해 2회 캡처(422 후 재캡처)를 피한다.
     showTagPicker();
-    showNote("#archive-result", msg("tag_pick_hint"), "warn");
+    showNote("#server-result", msg("tag_pick_hint"), "warn");
   }
 
   initLoginOption();
@@ -235,25 +236,25 @@ function initArchive() {
   $("#archive-page").addEventListener("click", async () => {
     const auth = wantsAuth();
     if (auth && !(await ensureHostPermission(currentUrl))) {
-      showNote("#archive-result", msg("err_permission"), "err");
+      showNote("#server-result", msg("err_permission"), "err");
       return;
     }
     const res = await send(auth ? "archivePageAuth" : "archivePage",
-      { url: currentUrl, force: $("#force").checked, tabId: currentTabId,
-        network_tag: selectedNetworkTag, protect: !$("#protect-share").checked });
+      { url: currentUrl, force: $("#force-server").checked, tabId: currentTabId,
+        network_tag: selectedNetworkTag, protect: !$("#protect-server").checked });
     if (res.ok && res.data) {
       const base = res.data.queued ? msg("msg_archived", res.data.url) : msg("msg_already");
       const hint = res.data.queued && $("#notify-toggle").checked
         ? " " + msg("archive_notify_hint") : "";
-      const memoSuffix = await maybeSaveMemo();
-      showNote("#archive-result", base + (auth ? authSuffix(res) : "") + hint + memoSuffix, "");
-    } else showNote("#archive-result", msg(apiError(res)), "err");
+      const memoSuffix = await maybeSaveMemo("#memo-server");
+      showNote("#server-result", base + (auth ? authSuffix(res) : "") + hint + memoSuffix, "");
+    } else showNote("#server-result", msg(apiError(res)), "err");
   });
 
   $("#archive-site").addEventListener("click", async () => {
     const auth = wantsAuth();
     if (auth && !(await ensureHostPermission(currentUrl))) {
-      showNote("#archive-result", msg("err_permission"), "err");
+      showNote("#server-result", msg("err_permission"), "err");
       return;
     }
     const res = await send(auth ? "archiveSiteAuth" : "archiveSite", {
@@ -265,9 +266,9 @@ function initArchive() {
       const base = res.data.merged ? msg("msg_crawl_merged", String(res.data.crawl_id))
                                    : msg("msg_crawl_started", String(res.data.crawl_id));
       const hint = $("#notify-toggle").checked ? " " + msg("archive_notify_hint") : "";
-      const memoSuffix = await maybeSaveMemo();
-      showNote("#archive-result", base + (auth ? authSuffix(res) : "") + hint + memoSuffix, "");
-    } else showNote("#archive-result", msg(apiError(res)), "err");
+      const memoSuffix = await maybeSaveMemo("#memo-server");
+      showNote("#server-result", base + (auth ? authSuffix(res) : "") + hint + memoSuffix, "");
+    } else showNote("#server-result", msg(apiError(res)), "err");
   });
 }
 
@@ -298,7 +299,7 @@ function initLoginOption() {
     if (!cb.checked) { info.style.display = "none"; return; }
     if (!(await ensureHostPermission(currentUrl))) {
       cb.checked = false;
-      showNote("#archive-result", msg("err_permission"), "err");
+      showNote("#server-result", msg("err_permission"), "err");
       return;
     }
     const det = await send("detectAuth", { url: currentUrl, tabId: currentTabId });
@@ -336,77 +337,106 @@ function captureError(res) {
 
 async function runBrowserCapture(networkTag) {
   if (!(await ensureAllUrls())) {
-    showNote("#archive-result", msg("err_permission_all"), "err");
+    showNote("#browser-result", msg("err_permission_all"), "err");
     return;
   }
   const btn = $("#capture-browser");
   btn.disabled = true;
-  showNote("#archive-result", msg("capture_running"), "");
+  showNote("#browser-result", msg("capture_running"), "");
   try {
     const res = await send("captureBrowser", {
       url: currentUrl, tabId: currentTabId,
-      force: $("#force").checked, network_tag: networkTag || null,
-      protect: !$("#protect-share").checked,
+      force: $("#force-browser").checked, network_tag: networkTag || null,
+      protect: !$("#protect-browser").checked,
     });
     if (res.ok && res.data) {
-      $("#tag-picker").style.display = "none";
+      $("#tag-picker-browser").style.display = "none";
       const inc = res.data.incomplete ? " · " + msg("capture_incomplete") : "";
-      const memoSuffix = await maybeSaveMemo();
-      showNote("#archive-result", msg("msg_captured", [msg("status_" + res.data.status)]) + inc + memoSuffix, "");
+      const memoSuffix = await maybeSaveMemo("#memo-browser");
+      showNote("#browser-result", msg("msg_captured", [msg("status_" + res.data.status)]) + inc + memoSuffix, "");
     } else if (res.needs_network_tag) {
       await showTagPicker();
-      showNote("#archive-result", msg("capture_needs_tag", [res.host || ""]), "warn");
+      showNote("#browser-result", msg("capture_needs_tag", [res.host || ""]), "warn");
     } else {
-      showNote("#archive-result", msg(captureError(res)), "err");
+      showNote("#browser-result", msg(captureError(res)), "err");
     }
   } finally {
     btn.disabled = false;
   }
 }
 
-// 사설 호스트 — 등록된 네트워크 태그 목록을 채워 사전 선택하게 한다 (선택값은
-// selectedNetworkTag 에 보관되고, 캡처/아카이브 버튼이 읽는다 — 2회 캡처 방지).
+// 네트워크 태그 picker 는 브라우저·서버 탭에 각각 있다(같은 selectedNetworkTag 공유).
+const TAG_PICKERS = ["browser", "server"];
+
+// 두 탭의 select 를 현재 선택값으로 맞춘다.
+function syncTagSelects() {
+  for (const s of TAG_PICKERS) {
+    const sel = $("#tag-select-" + s);
+    if (sel) sel.value = selectedNetworkTag || "";
+  }
+}
+
+// 사설 호스트 — 등록된 네트워크 태그 목록을 두 탭 picker 에 모두 채워 사전 선택하게
+// 한다 (선택값은 selectedNetworkTag 에 보관되고, 캡처/아카이브 버튼이 읽는다 — 2회 캡처 방지).
 async function showTagPicker() {
   const res = await send("listNetworkTags", {});
-  const sel = $("#tag-select");
-  sel.innerHTML = "";
-  const none = document.createElement("option");
-  none.value = "";
-  none.textContent = msg("tag_none_option");
-  sel.appendChild(none);
   const tags = (res && res.data && res.data.tags) || [];
-  for (const t of tags) {
-    const o = document.createElement("option");
-    o.value = String(t.id);
-    o.textContent = t.name;
-    sel.appendChild(o);
+  for (const s of TAG_PICKERS) {
+    const sel = $("#tag-select-" + s);
+    if (!sel) continue;
+    sel.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = msg("tag_none_option");
+    sel.appendChild(none);
+    for (const t of tags) {
+      const o = document.createElement("option");
+      o.value = String(t.id);
+      o.textContent = t.name;
+      sel.appendChild(o);
+    }
+    sel.value = selectedNetworkTag || "";
+    $("#tag-picker-" + s).style.display = "block";
   }
-  sel.value = selectedNetworkTag || "";
-  $("#tag-picker").style.display = "block";
+}
+
+// 두 탭 picker 의 선택/추가 이벤트를 한 번에 묶는다.
+function initTagPickers() {
+  for (const s of TAG_PICKERS) {
+    const sel = $("#tag-select-" + s);
+    if (sel) sel.addEventListener("change", (e) => {
+      selectedNetworkTag = e.target.value || null;
+      syncTagSelects(); // 다른 탭 picker 와 동기화
+    });
+    const addBtn = $("#tag-add-" + s);
+    if (addBtn) addBtn.addEventListener("click", async () => {
+      const input = $("#tag-new-" + s);
+      const name = input.value.trim();
+      if (!name) return;
+      const res = await send("createNetworkTag", { name });
+      if (res.ok && res.data) {
+        input.value = "";
+        selectedNetworkTag = String(res.data.id); // 새로 만든 태그 자동 선택
+        await showTagPicker();
+      } else showNote("#" + s + "-result", msg(res.status === 403 ? "err_tag_perm" : "err_generic"), "err");
+    });
+  }
 }
 
 function initBrowserCapture() {
   const btn = $("#capture-browser");
-  if (!capturablePopup(currentUrl) || hostKind(currentUrl) === "loopback") {
+  const kind = hostKind(currentUrl);
+  if (!capturablePopup(currentUrl) || kind === "loopback") {
     btn.disabled = true;
-    if (!capturablePopup(currentUrl)) showNote("#archive-result", msg("err_unsupported_page"), "warn");
+    if (kind === "loopback") showNote("#browser-result", msg("err_loopback"), "warn");
+    else showNote("#browser-result", msg("err_unsupported_page"), "warn");
   } else {
+    if (kind === "private") {
+      // 사설 호스트 — picker 는 initArchive 의 showTagPicker 가 두 탭에 모두 채운다.
+      showNote("#browser-result", msg("tag_pick_hint"), "warn");
+    }
     btn.addEventListener("click", () => runBrowserCapture(selectedNetworkTag));
   }
-  // 사전 선택 — 선택값만 보관하고 캡처/아카이브 버튼이 읽는다.
-  $("#tag-select").addEventListener("change", (e) => {
-    selectedNetworkTag = e.target.value || null;
-  });
-  $("#tag-add").addEventListener("click", async () => {
-    const name = $("#tag-new").value.trim();
-    if (!name) return;
-    const res = await send("createNetworkTag", { name });
-    if (res.ok && res.data) {
-      $("#tag-new").value = "";
-      selectedNetworkTag = String(res.data.id); // 새로 만든 태그 자동 선택
-      await showTagPicker();
-    } else showNote("#archive-result", msg(res.status === 403 ? "err_tag_perm" : "err_generic"), "err");
-  });
 }
 
 // ---- 히스토리 ----
@@ -479,7 +509,7 @@ function initBackgroundListener() {
     if (!m) return;
     if (m.type === "capture_progress") {
       const label = msg("cap_phase_" + m.phase) + (m.total ? ` (${m.done}/${m.total})` : "");
-      showNote("#archive-result", label, "");
+      showNote("#browser-result", label, ""); // 진행률은 브라우저 캡처 전용
     } else if (m.type === "auth_lost") {
       refreshStatus();
       showNote("#connect-result", msg("msg_auth_lost"), "err");
@@ -487,11 +517,11 @@ function initBackgroundListener() {
   });
 }
 
-// 연결 시 마지막으로 보던 탭 복원 (connect 는 미연결 때 강제됐던 값이라 archive 로 치환).
+// 연결 시 마지막으로 보던 탭 복원 (connect 는 미연결 때 강제됐던 값이라 browser 로 치환).
 async function restoreLastTab() {
   const c = await chrome.storage.local.get("last_tab");
   const name = c.last_tab;
-  activateTab(name === "archive" || name === "history" ? name : "archive");
+  activateTab(["browser", "server", "history"].includes(name) ? name : "browser");
 }
 
 // ---- 부팅 ----
@@ -507,6 +537,7 @@ async function main() {
   const st = await refreshStatus();
   initArchive();
   initBrowserCapture();
+  initTagPickers();
   initNotifyToggle();
   initStatusBadgeToggle();
   initBackgroundListener();
