@@ -263,3 +263,29 @@ def test_archive_url_writes_job_id_to_log_on_failure(archive_env):
             "SELECT job_id, status FROM archive_logs ORDER BY id DESC"
         ).fetchone()
     assert row is not None and row["status"] == "error" and row["job_id"] == 777
+
+
+# ---- 클러스터 보호 후처리 (outcome.page_id) ----
+
+def test_process_next_applies_protect_with_outcome_page_id(archive_env):
+    """protect 가 실린 작업은 캡처 후 outcome.page_id 로 보호 메타를 적용한다.
+
+    회귀: ArchiveOutcome 에 page_id 가 없어 process_next 가 AttributeError 로
+    터지면 finish_archive_job 이 롤백돼 작업이 영구 재처리됐다(federation 3b).
+    """
+    with db.connect() as conn:
+        page_id = db.get_page(conn, URL)["id"]
+        db.enqueue_archive_job(conn, URL, source="web", protect=True)
+
+    def fake(url, force=False, source="web", **kw):
+        return ArchiveOutcome(
+            status="new", url=URL, content_hash="0" * 64, snapshot_dir=None,
+            taken_at=None, last_taken_at=None, http_status=200, title="t",
+            page_id=page_id, snapshot_id=1,
+        )
+
+    step = archive_worker.process_next(archive_fn=fake)
+    assert step is not None and step.status == "new"
+    with db.connect() as conn:
+        assert db.list_active_archive_jobs(conn) == []   # 완료 작업 삭제(롤백 없음)
+        assert db.resolve_page_cluster_protected(conn, page_id) is True
