@@ -67,6 +67,17 @@ PAGE_LOAD_TIMEOUT_MS = 30_000
 NETWORK_IDLE_TIMEOUT_MS = 5_000
 RESOURCE_FETCH_TIMEOUT_MS = 5_000   # 자원(이미지·CSS·폰트) 1개 인라인 fetch 타임아웃
 RESOURCE_FETCH_CONCURRENCY = 6      # 자원 인라인 fetch 동시 실행 수
+# 자원 인라인 전체(브라우저 fetch 루프) 데드라인. 자원별 AbortSignal.timeout 만으로는
+# headful 실제 Chrome 에서 일부 fetch 가 끝내 안 끊겨 page.evaluate 가 무한 대기할 수
+# 있어(page.evaluate 는 set_default_timeout 무시) 전체 상한을 둔다. JS 가 이 시각에
+# 부분결과로 resolve 하고, Python 은 wait_for_function 으로 한 번 더 강제(백스톱)한다.
+INLINE_OVERALL_TIMEOUT_MS = 60_000
+# 한 스냅샷에서 인라인 실패 후 재시도(context.request)·과거캡처 폴백으로 받을 자원
+# 개수 상한. 같은 @font-face url() 이 CSS 에 수백~수천 번 반복되는 페이지는 failed
+# 목록이 폭발해, 중복 제거 후에도 남는 고유 자원이 많으면 거대 페이로드를
+# page.evaluate(_APPLY_INLINE_JS)로 넘기다 메모리 폭증·hang 을 일으킨다. 상한 초과분은
+# 원본 URL 을 유지한다 (뷰어는 그 자원만 라이브로 못 받을 뿐 본문은 정상).
+RESOURCE_INLINE_MAX_COUNT = 300
 HTTPS_PROBE_TIMEOUT_SECONDS = 10  # http URL 등록 시 https 지원 확인(승격 프로브) 타임아웃
 # 인증서 수집 결과의 (host, port) TTL 캐시 — 크롤이 같은 호스트를 페이지마다
 # 핸드셰이크하지 않게 한다 (certs.py)
