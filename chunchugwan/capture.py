@@ -363,6 +363,9 @@ class CaptureResult:
     # 인라인된 자원의 sha256 → 원본 URL — CAS 추출 후 snapshot_resources 의
     # url 컬럼을 채우는 근거 (sha 를 못 구한 자원은 빠진다)
     resource_urls: dict[str, str] = field(default_factory=dict)
+    # 일부 산출물(스크린샷 등) 수집이 실패한 불완전 캡처 표식 — HTML·자원은
+    # 수집됐으므로 스냅샷은 저장하되 snapshots.incomplete=1 로 남긴다.
+    incomplete: bool = False
 
 
 # 앵커 절대 URL 목록 → {원본 href: 재작성 href}. 비거나 None 이면 재작성 없음.
@@ -812,7 +815,16 @@ def _capture_in_browser(
         if link_rewriter is not None:
             _rewrite_links(page, link_rewriter, page_links)
 
-        page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
+        incomplete = False
+        try:
+            page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
+        except PlaywrightError as e:
+            # 무거운 full-page DOM 은 기본 타임아웃(30s) 안에 래스터화를 못
+            # 끝내기도 한다. HTML·자원은 이미 수집했으므로 스크린샷 한 장
+            # 때문에 캡처 전체를 버리지 않고, 불완전 표식만 남겨 진행한다.
+            logger.warning("스크린샷 실패, 불완전 스냅샷으로 진행: %s — %s", url, e)
+            (out_dir / "screenshot.png").unlink(missing_ok=True)  # 부분 파일 제거
+            incomplete = True
         if mobile_screenshot:
             # 데스크탑 캡처가 끝난 뒤, 같은 브라우저에 안드로이드 크롬 모바일
             # 컨텍스트를 새로 띄워 같은 URL 을 한 번 더 열고 스크린샷을 찍는다
@@ -833,6 +845,7 @@ def _capture_in_browser(
             document_links=document_links,
             page_links=page_links,
             resource_urls=resource_urls,
+            incomplete=incomplete,
         )
     finally:
         context.close()
