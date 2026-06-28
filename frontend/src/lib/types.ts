@@ -227,6 +227,11 @@ export interface PageTimeline {
 	network_tag: Record<string, unknown> | null;
 	schedule: (Record<string, unknown> & { label: string }) | null;
 	snapshots: TimelineSnap[];
+	total: number;
+	total_pages: number;
+	page_num: number;
+	limit: number;
+	limits: number[];
 	checks: Record<string, unknown>[];
 	notes: Note[];
 	can_archive: boolean;

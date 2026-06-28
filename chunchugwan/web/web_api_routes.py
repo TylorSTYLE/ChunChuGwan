@@ -332,9 +332,16 @@ def sites(
 def page_timeline(
     request: Request,
     page_id: int,
+    page_num: int = Query(1, alias="page"),
+    limit: int = _LIST_PAGE_SIZE_DEFAULT,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """타임라인 — 한 페이지의 스냅샷 이력. app.timeline 의 JSON 판."""
+    """타임라인 — 한 페이지의 스냅샷 이력. app.timeline 의 JSON 판.
+
+    스냅샷은 최신 순(idx 내림차순)으로 limit/page 페이징한다. idx(=history
+    번호)는 오래된 스냅샷이 #1(신규)인 전체 기준 고정값이라 페이지가 바뀌어도
+    번호·뱃지가 유지된다(diff --from/--to 번호와도 일치).
+    """
     from fastapi import HTTPException
 
     with db.connect() as conn:
@@ -366,8 +373,20 @@ def page_timeline(
     snaps = visible
     log_by_snap = {row["snapshot_id"]: row for row in snap_logs}
 
+    limit = _page_size(limit, _LIST_PAGE_SIZE_DEFAULT)
+    total = len(snaps)
+    total_pages = max(1, -(-total // limit))
+    page_num = max(1, min(page_num, total_pages))
+
+    # idx(=history 번호)는 enumerate 로 전체 기준 고정(가장 오래된=1=신규)하고,
+    # 표시·페이징은 최신 순(idx 내림차순)으로 한다. steps/log 파싱은 현재
+    # 페이지 항목에만 수행한다.
+    numbered = list(enumerate(snaps, 1))
+    numbered.reverse()
+    window = numbered[(page_num - 1) * limit : (page_num - 1) * limit + limit]
+
     items = []
-    for i, s in enumerate(snaps, 1):
+    for i, s in window:
         badge = "new" if i == 1 else _BADGES[s["changed"]]
         # 용량은 DB 비정규화 값(snapshots.bytes)을 쓴다 — 스냅샷마다 디렉토리를
         # 훑으면(snapshot_files) S3 모드에서 파일별 HEAD 가 쌓여 타임라인이
@@ -403,6 +422,11 @@ def page_timeline(
             else None
         ),
         "snapshots": items,
+        "total": total,
+        "total_pages": total_pages,
+        "page_num": page_num,
+        "limit": limit,
+        "limits": list(_PAGE_SIZES),
         "checks": [dict(c) for c in checks],
         "notes": [dict(n) for n in notes],
         "can_archive": permissions.can_archive(user),
