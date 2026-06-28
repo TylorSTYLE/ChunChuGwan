@@ -154,17 +154,81 @@ def test_sites_list(tmp_db):
 # ---- pages/{id} (타임라인) ----
 
 
+def seed_n_snapshots(n):
+    """n개의 스냅샷을 가진 페이지 → page_id (페이지네이션 검증용)."""
+    domain, slug = "example.com", storage.url_to_slug(URL)
+    with db.connect() as conn:
+        page_id = db.get_or_create_page(conn, URL, domain, slug)
+        for i in range(n):
+            text = f"내용 {i}"
+            dn = f"2026-06-{i + 1:02d}T00-00-00"
+            d = storage.page_dir(domain, slug) / dn
+            d.mkdir(parents=True)
+            (d / "content.md").write_text(text, encoding="utf-8")
+            db.insert_snapshot(
+                conn, page_id, taken_at=f"2026-06-{i + 1:02d}T00:00:00+00:00",
+                dir_name=dn, content_hash=storage.content_sha256(text),
+                final_url=URL, http_status=200, changed=1,
+            )
+        db.backfill_snapshot_bytes(conn)
+    return page_id
+
+
 def test_page_timeline(tmp_db):
     page_id = seed_page()
     _, token = make_user(role="archiver")
     body = client_for(token).get(f"/api/web/pages/{page_id}").json()
     assert body["page"]["url"] == URL
     assert len(body["snapshots"]) == 2
-    assert body["snapshots"][0]["badge"] == "new"  # 최신(1번)은 new
-    assert body["snapshots"][1]["badge"] in ("changed", "same")
+    # 최신 순 정렬 — 첫 행이 최신(idx=2), 마지막 행이 최초(idx=1, new)
+    assert body["snapshots"][0]["idx"] == 2
+    assert body["snapshots"][0]["badge"] in ("changed", "same")
+    assert body["snapshots"][1]["idx"] == 1
+    assert body["snapshots"][1]["badge"] == "new"  # 최초 스냅샷(#1)이 신규
+    assert body["total"] == 2
+    assert body["total_pages"] == 1
+    assert body["page_num"] == 1
+    assert body["limit"] == 25
+    assert body["limits"] == [10, 25, 50, 100]
     assert len(body["checks"]) == 1
     assert body["can_archive"] is True
     assert body["can_delete"] is False  # archiver 는 삭제 권한 없음
+
+
+def test_page_timeline_pagination(tmp_db):
+    """최신 순 페이징 — idx(history 번호)는 전체 기준으로 페이지가 바뀌어도 유지."""
+    page_id = seed_n_snapshots(11)
+    _, token = make_user(role="archiver")
+    c = client_for(token)
+    body = c.get(f"/api/web/pages/{page_id}?limit=10&page=1").json()
+    assert body["total"] == 11
+    assert body["total_pages"] == 2
+    assert body["page_num"] == 1
+    assert body["limit"] == 10
+    assert len(body["snapshots"]) == 10
+    assert body["snapshots"][0]["idx"] == 11   # 1페이지 첫 행 = 최신
+    assert body["snapshots"][-1]["idx"] == 2
+    body2 = c.get(f"/api/web/pages/{page_id}?limit=10&page=2").json()
+    assert body2["page_num"] == 2
+    assert len(body2["snapshots"]) == 1        # 2페이지 = 나머지 1개
+    assert body2["snapshots"][0]["idx"] == 1
+    assert body2["snapshots"][0]["badge"] == "new"
+
+
+def test_page_timeline_limit_clamped(tmp_db):
+    """허용 집합(10·25·50·100) 밖 limit 은 기본값(25)으로 clamp."""
+    page_id = seed_page()
+    _, token = make_user(role="archiver")
+    body = client_for(token).get(f"/api/web/pages/{page_id}?limit=999").json()
+    assert body["limit"] == 25
+
+
+def test_page_timeline_page_overflow_clamped(tmp_db):
+    """범위 밖 page 는 마지막(유효) 페이지로 clamp."""
+    page_id = seed_page()
+    _, token = make_user(role="archiver")
+    body = client_for(token).get(f"/api/web/pages/{page_id}?page=99").json()
+    assert body["page_num"] == 1
 
 
 def test_page_timeline_404(tmp_db):
