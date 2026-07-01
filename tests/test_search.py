@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from chunchugwan import config, db, deletion, doctext, documents, searchindex, storage
+from chunchugwan import auth, config, db, deletion, doctext, documents, searchindex, storage
 
 
 @pytest.fixture
@@ -137,6 +137,65 @@ def test_latest_only(archive):
                    taken_at="2026-06-02T00:00:00+00:00")
     assert searchindex.search("키워드포함").total == 2
     assert searchindex.search("키워드포함", latest_only=True).total == 1
+
+
+# ---- 인증(로그인 캡처) 스냅샷 가시성 (H2) ----
+
+
+def _make_auth_snapshot(url: str, content: str, owner_id: int,
+                        taken_at: str = "2026-06-03T00:00:00+00:00") -> int:
+    """authenticated=1 스냅샷을 만들고 색인 — 검색 가시성 테스트용."""
+    domain = storage.normalize_url(url).split("/")[2]
+    slug = storage.url_to_slug(storage.normalize_url(url))
+    norm = storage.normalize_url(url)
+    dir_name = taken_at.replace(":", "-").replace("+00-00", "")[:19]
+    snap_dir = storage.page_dir(domain, slug) / dir_name
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (snap_dir / "content.md").write_text(content, encoding="utf-8")
+    with db.connect() as conn:
+        page_id = db.get_or_create_page(conn, norm, domain, slug)
+        sid = db.insert_snapshot(
+            conn, page_id, taken_at=taken_at, dir_name=dir_name,
+            content_hash=hashlib.sha256(content.encode()).hexdigest(),
+            final_url=norm, http_status=200, changed=1,
+            authenticated=1, authenticated_by=owner_id,
+        )
+        searchindex.index_snapshot(conn, sid)
+    return sid
+
+
+def _two_users() -> tuple[int, int]:
+    """owner, other 두 사용자 id (authenticated_by FK 용)."""
+    with db.connect() as conn:
+        owner = db.create_user(conn, "owner@t.co", auth.hash_password("pw12345678"),
+                               role="archiver")
+        other = db.create_user(conn, "other@t.co", auth.hash_password("pw12345678"),
+                               role="archiver")
+    return owner, other
+
+
+def test_search_hides_authenticated_from_non_owner(archive):
+    """인증 스냅샷 본문은 소유자/관리자만 검색된다 — 스니펫 누출 차단(H2)."""
+    owner, other = _two_users()
+    _make_snapshot("https://a.com/pub", "공개유일단어 본문")           # authenticated=0
+    _make_auth_snapshot("https://a.com/sec", "비밀유일단어 본문", owner_id=owner)
+    # viewer=None(신뢰/CLI): 전부 검색
+    assert searchindex.search("비밀유일단어").total == 1
+    # 비소유자: 인증분 제외
+    assert searchindex.search("비밀유일단어", viewer=(other, False)).total == 0
+    assert searchindex.search("공개유일단어", viewer=(other, False)).total == 1
+    # 소유자·관리자: 포함
+    assert searchindex.search("비밀유일단어", viewer=(owner, False)).total == 1
+    assert searchindex.search("비밀유일단어", viewer=(other, True)).total == 1
+
+
+def test_search_like_fallback_hides_authenticated(archive):
+    """1~2글자 LIKE 폴백 경로도 viewer 필터를 적용한다."""
+    owner, other = _two_users()
+    _make_auth_snapshot("https://a.com/sec", "AB 비밀", owner_id=owner)
+    assert searchindex.search("AB").total == 1                         # viewer=None
+    assert searchindex.search("AB", viewer=(other, False)).total == 0  # 비소유자
+    assert searchindex.search("AB", viewer=(owner, False)).total == 1  # 소유자
 
 
 # ---- 삭제 동기화 ----

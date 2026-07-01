@@ -341,12 +341,16 @@ def search(
     *,
     domain: str | None = None,
     latest_only: bool = False,
+    viewer: "tuple[int | None, bool] | None" = None,
     limit: int = 20,
     offset: int = 0,
 ) -> SearchResults:
     """전문 검색. 한국어 부분문자열(trigram) + 1~2글자 LIKE 폴백.
 
     domain 으로 도메인 한정, latest_only 면 URL 당 최신 스냅샷 1건만.
+    viewer=(viewer_id, view_authenticated_all) 를 주면 인증(로그인 캡처)
+    스냅샷은 소유자/관리자에게만 노출한다 — 타임라인·뷰어와 같은 가시성으로
+    스니펫 본문 누출을 막는다. None=전체(CLI·신뢰 호출).
     """
     terms = _query_terms(query)
     mode, payload = _build_query(terms)
@@ -358,10 +362,11 @@ def search(
         if mode == "fts":
             rows = db.search_snapshots_fts(
                 conn, payload, domain=domain, latest_only=latest_only,
-                limit=limit, offset=offset,
+                viewer=viewer, limit=limit, offset=offset,
             )
             total = db.count_search_snapshots_fts(
-                conn, payload, domain=domain, latest_only=latest_only
+                conn, payload, domain=domain, latest_only=latest_only,
+                viewer=viewer,
             )
             # 스니펫은 DB(FTS5 snippet())가 매치 주변만 잘라 준다 — 본문 전문을
             # Python 으로 가져오지 않는다.
@@ -369,10 +374,11 @@ def search(
         else:
             rows = db.search_snapshots_like(
                 conn, payload, domain=domain, latest_only=latest_only,
-                limit=limit, offset=offset,
+                viewer=viewer, limit=limit, offset=offset,
             )
             total = db.count_search_snapshots_like(
-                conn, payload, domain=domain, latest_only=latest_only
+                conn, payload, domain=domain, latest_only=latest_only,
+                viewer=viewer,
             )
             # LIKE 폴백은 MATCH 가 없어 snippet() 을 못 써 content 에서 직접 만든다.
             hits = [_hit(r, terms, _make_snippet(r["content"] or "", terms)) for r in rows]

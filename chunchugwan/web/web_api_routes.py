@@ -188,11 +188,14 @@ def dashboard(
 ) -> dict:
     """시스템 현황(첫 화면) — app.dashboard 의 JSON 판. 동일 db·storage 호출."""
     starts = _period_starts(datetime.now(timezone.utc))
+    # 인증(로그인 캡처) 스냅샷은 소유자/관리자에게만 — 집계·최근 목록 모두 가린다
+    # (list_sites_overview 와 같은 기준, 메타데이터 누출 차단).
+    viewer = _snapshot_viewer(request)
     with db.connect() as conn:
         total_pages = db.count_pages(conn)
         total_sites = db.count_sites(conn)
-        snap_dirs = db.list_snapshot_dirs(conn)
-        recent_snaps = db.list_recent_snapshots(conn, limit=10)
+        snap_dirs = db.list_snapshot_dirs(conn, viewer=viewer)
+        recent_snaps = db.list_recent_snapshots(conn, limit=10, viewer=viewer)
         recent_logs = db.list_archive_logs(conn, limit=10)
 
     total_bytes = sum(storage.archive_disk_usage().values())
@@ -265,15 +268,15 @@ def sites(
     request: Request,
     q: str | None = None,
     page: int = 1,
-    per_page: int = _LIST_PAGE_SIZE_DEFAULT,
+    limit: int = _LIST_PAGE_SIZE_DEFAULT,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
     """아카이브 목록(사이트 단위) — app.index 의 JSON 판. 진행 중 사이트를 위로.
 
     q 로 site_key 부분 일치 필터(현재 페이지가 아닌 전체 사이트 대상),
-    per_page/page 로 페이징한다.
+    limit/page 로 페이징한다 (프론트 PageSize·딥링크가 보내는 쿼리명과 일치 — H3).
     """
-    per_page = _page_size(per_page, _LIST_PAGE_SIZE_DEFAULT)
+    per_page = _page_size(limit, _LIST_PAGE_SIZE_DEFAULT)
     q = q.strip() if q else None
     viewer = _snapshot_viewer(request)
     with db.connect() as conn:
@@ -284,7 +287,9 @@ def sites(
             conn, viewer=viewer, q=q,
             limit=per_page, offset=(page - 1) * per_page,
         )
-        snap_dirs = db.list_snapshot_dirs(conn)
+        # 제목·용량 집계도 viewer 로 가린다 — 스냅샷 수는 이미 list_sites_overview 가
+        # 필터하는데 title/bytes 만 무필터면 남의 인증 스냅샷 제목이 샌다(H2).
+        snap_dirs = db.list_snapshot_dirs(conn, viewer=viewer)
         tag_rows = db.list_site_network_tags(conn)
 
     site_tags: dict[int, list[dict]] = {}
@@ -499,7 +504,8 @@ def _failed_items(site_id: int, failed_logs, failed_crawl_pages) -> list[dict]:
 
 
 def _site_pages_block(
-    conn: sqlite3.Connection, site_id: int, page: int, per_page: int
+    conn: sqlite3.Connection, site_id: int, page: int, per_page: int,
+    viewer: "tuple[int | None, bool] | None" = None,
 ) -> tuple[dict, list, dict[int, int], sqlite3.Row]:
     """사이트 페이지 목록 슬라이스(바이트 포함) + 페이저를 만든다.
 
@@ -507,6 +513,7 @@ def _site_pages_block(
     규칙(per_page 허용집합·clamp·바이트 합산)이 어긋나지 않게 단일 출처로 둔다.
     반환: ({"pages": [...], "pager": {...}}, snap_dirs, page_bytes, totals)
     (snap_dirs·page_bytes·totals 는 site_detail 의 나머지 필드 계산에 재사용)
+    viewer 로 인증 스냅샷 용량·제목 집계를 가린다(H2).
     """
     per_page = _page_size(per_page, _SITE_PAGE_SIZE_DEFAULT)
     totals = db.site_page_totals(conn, site_id)
@@ -515,7 +522,7 @@ def _site_pages_block(
     pages = db.list_site_pages(
         conn, site_id, limit=per_page, offset=(page - 1) * per_page
     )
-    snap_dirs = db.list_site_snapshot_dirs(conn, site_id)
+    snap_dirs = db.list_site_snapshot_dirs(conn, site_id, viewer=viewer)
     page_bytes: dict[int, int] = {}
     for row in snap_dirs:
         page_bytes[row["page_id"]] = page_bytes.get(row["page_id"], 0) + row["bytes"]
@@ -588,14 +595,15 @@ def _site_lists_block(
     crawls_per_page: int,
     failed_page: int,
     failed_per_page: int,
+    viewer: "tuple[int | None, bool] | None" = None,
 ) -> tuple[dict, list, dict[int, int], sqlite3.Row]:
     """사이트 상세의 3개 목록(페이지·회차·실패)을 한 번에 만든다 — site_detail·린 엔드포인트 공유.
 
     반환: ({pages,pager,crawls,crawls_pager,failed_items,failed_pager}, snap_dirs, page_bytes, totals)
-    (뒤 3개는 site_detail 의 통계·용량 계산에 재사용)
+    (뒤 3개는 site_detail 의 통계·용량 계산에 재사용). viewer 로 인증 스냅샷 집계 가림.
     """
     pages_block, snap_dirs, page_bytes, totals = _site_pages_block(
-        conn, site_id, page, per_page
+        conn, site_id, page, per_page, viewer=viewer
     )
     block = {
         **pages_block,
@@ -629,6 +637,7 @@ def site_detail(
             page=page, per_page=per_page,
             crawls_page=crawls_page, crawls_per_page=crawls_per_page,
             failed_page=failed_page, failed_per_page=failed_per_page,
+            viewer=_snapshot_viewer(request),
         )
         schedules = db.list_site_schedules(conn, site_id)
         crawl_schedules = db.list_site_crawl_schedules(conn, site_id)
@@ -696,6 +705,7 @@ def site_detail(
 
 @router.get("/sites/{site_id}/lists")
 def site_lists(
+    request: Request,
     site_id: int,
     page: int = 1,
     per_page: int = _SITE_PAGE_SIZE_DEFAULT,
@@ -719,6 +729,7 @@ def site_lists(
             page=page, per_page=per_page,
             crawls_page=crawls_page, crawls_per_page=crawls_per_page,
             failed_page=failed_page, failed_per_page=failed_per_page,
+            viewer=_snapshot_viewer(request),
         )
     return block
 
@@ -858,16 +869,18 @@ def search(
     available = searchindex.available()
     results = None
     total_pages = 1
+    # 인증(로그인 캡처) 스냅샷은 소유자/관리자에게만 — 타임라인·뷰어와 같은 가시성
+    viewer = _snapshot_viewer(request)
     if available and query:
         r = searchindex.search(
-            query, domain=domain_filter, latest_only=latest_only,
+            query, domain=domain_filter, latest_only=latest_only, viewer=viewer,
             limit=_SEARCH_PER_PAGE, offset=(page - 1) * _SEARCH_PER_PAGE,
         )
         total_pages = max(1, -(-r.total // _SEARCH_PER_PAGE))
         if page > total_pages and r.total:
             page = total_pages
             r = searchindex.search(
-                query, domain=domain_filter, latest_only=latest_only,
+                query, domain=domain_filter, latest_only=latest_only, viewer=viewer,
                 limit=_SEARCH_PER_PAGE, offset=(page - 1) * _SEARCH_PER_PAGE,
             )
         results = {
@@ -903,10 +916,12 @@ def documents_list(
 ) -> dict:
     """문서 파일 통합 목록(sha256 그룹) — app.documents_view 의 JSON 판."""
     offset = (page - 1) * _DOCUMENTS_PER_PAGE
+    # 인증(로그인 캡처) 스냅샷이 참조한 문서는 소유자/관리자에게만 (H2)
+    viewer = _snapshot_viewer(request)
     with db.connect() as conn:
         totals = db.document_totals(conn)
         groups = db.list_document_groups(
-            conn, limit=_DOCUMENTS_PER_PAGE + 1, offset=offset
+            conn, limit=_DOCUMENTS_PER_PAGE + 1, offset=offset, viewer=viewer
         )
     has_next = len(groups) > _DOCUMENTS_PER_PAGE
     return {
@@ -1466,12 +1481,14 @@ def _trash_entry_public(entry: sqlite3.Row, retention_days: int) -> dict:
 def trash_list(
     request: Request,
     page: int = 1,
-    per_page: int = _LIST_PAGE_SIZE_DEFAULT,
+    limit: int = _LIST_PAGE_SIZE_DEFAULT,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
-    """휴지통 항목 목록(페이징) + 현재 설정(보관 기간·기능 on/off) — 휴지통 관리 권한."""
+    """휴지통 항목 목록(페이징) + 현재 설정(보관 기간·기능 on/off) — 휴지통 관리 권한.
+
+    limit/page 로 페이징한다 (프론트 PageSize·딥링크가 보내는 쿼리명과 일치 — H3)."""
     _require_manage_trash(user)
-    per_page = _page_size(per_page, _LIST_PAGE_SIZE_DEFAULT)
+    per_page = _page_size(limit, _LIST_PAGE_SIZE_DEFAULT)
     with db.connect() as conn:
         retention_days = db.trash_retention_days(conn)
         total = db.count_trash_entries(conn)
@@ -1595,8 +1612,17 @@ def site_export(
     _require_archive(user)
     with db.connect() as conn:
         site = db.get_site(conn, site_id)
-    if site is None:
-        raise HTTPException(404, "사이트 없음")
+        if site is None:
+            raise HTTPException(404, "사이트 없음")
+        # tar 는 스냅샷을 필터하지 않으므로, 요청자가 볼 수 없는 인증(로그인 캡처)
+        # 스냅샷이 섞인 사이트는 내보내기를 통째로 막는다(H2 — 열람 가드 우회 차단).
+        hidden = db.count_site_authenticated_hidden(
+            conn, site_id, _snapshot_viewer(request)
+        )
+    if hidden:
+        raise HTTPException(
+            403, i18n.t(request, "다른 사용자의 로그인 캡처 스냅샷이 포함된 "
+                        "사이트는 내보낼 수 없습니다."))
     audit.log(request, "사이트 아카이브 내보내기: %s", site["site_key"])
     return tar_download(
         lambda dest: backup_mod.export_archive(dest, site_id=site_id), "export"
@@ -1645,15 +1671,16 @@ def _require_manage_users(user: sqlite3.Row | None) -> None:
 def system_users(
     request: Request,
     page: int = 1,
-    per_page: int = _LIST_PAGE_SIZE_DEFAULT,
+    limit: int = _LIST_PAGE_SIZE_DEFAULT,
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
     """사용자 목록(페이징) + 권한·초대 — system_routes.users_view 의 JSON 판.
 
     초대(invites)는 보통 적어 전체를 내려준다 — 페이징은 사용자 목록에만 적용한다.
+    limit/page 로 페이징한다 (프론트 PageSize·딥링크가 보내는 쿼리명과 일치 — H3).
     """
     _require_manage_users(user)
-    per_page = _page_size(per_page, _LIST_PAGE_SIZE_DEFAULT)
+    per_page = _page_size(limit, _LIST_PAGE_SIZE_DEFAULT)
     with db.connect() as conn:
         # 만료 후 TTL 만큼은 목록에 남겨 재생성 버튼으로 새 링크를 발급할 수 있게 하고,
         # 그보다 오래된 만료 초대만 기회적으로 정리한다.

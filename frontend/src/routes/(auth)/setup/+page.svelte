@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { base } from '$app/paths';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
@@ -209,30 +208,42 @@
 		}, 1500);
 	}
 
-	// 진행 중인 이전/복구가 있으면 상태를 폴링한다.
-	onMount(() => {
-		let migrateTimer: ReturnType<typeof setInterval> | null = null;
-		if (migrateActive) {
-			migrateTimer = setInterval(async () => {
-				try {
-					const s = await api<MigrationStatus>('/auth/setup/migrate/status', {
-						redirectOn401: false
-					});
-					if (s.status === 'done') {
-						if (migrateTimer) clearInterval(migrateTimer);
-						await goto(`${base}/login`, { invalidateAll: true });
-					} else if (s.status === 'partial' || s.status === 'error') {
-						if (migrateTimer) clearInterval(migrateTimer);
-						await invalidateAll();
-					}
-				} catch {
-					/* 일시 오류 — 다음 폴링에서 회복 */
-				}
-			}, 1500);
+	// 이전(마이그레이션) 진행 폴링 (pollRecover 미러) — done 이면 로그인으로.
+	let migrateTimer: ReturnType<typeof setInterval> | null = null;
+	function clearMigrateTimer() {
+		if (migrateTimer) {
+			clearInterval(migrateTimer);
+			migrateTimer = null;
 		}
+	}
+	function pollMigrate() {
+		if (migrateTimer) return;
+		migrateTimer = setInterval(async () => {
+			try {
+				const s = await api<MigrationStatus>('/auth/setup/migrate/status', {
+					redirectOn401: false
+				});
+				if (s.status === 'done') {
+					clearMigrateTimer();
+					await goto(`${base}/login`, { invalidateAll: true });
+				} else if (s.status === 'partial' || s.status === 'error') {
+					clearMigrateTimer();
+					await invalidateAll();
+				}
+			} catch {
+				/* 일시 오류 — 다음 폴링에서 회복 */
+			}
+		}, 1500);
+	}
+
+	// 진행 중인 이전/복구가 있으면 상태를 폴링한다. onMount(1회) 대신 migrateActive·
+	// recActive 에 반응하는 $effect 로 둔다 — [이전 시작] 직후 invalidateAll 로
+	// migrateActive 가 참이 되면(onMount 는 이미 지나갔음) 폴링이 새로 걸린다.
+	$effect(() => {
+		if (migrateActive) pollMigrate();
 		if (recActive) pollRecover();
 		return () => {
-			if (migrateTimer) clearInterval(migrateTimer);
+			clearMigrateTimer();
 			clearRecTimer();
 		};
 	});

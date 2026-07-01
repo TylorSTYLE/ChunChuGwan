@@ -48,6 +48,14 @@ def _viewer_login(c):
     assert r.status_code == 200
 
 
+def _pending_login(c):
+    with db.connect() as conn:
+        db.create_user(conn, "p@test.co", auth.hash_password("userpass123"), role="pending")
+    r = c.post("/api/web/auth/login",
+               json={"email": "p@test.co", "password": "userpass123"}, headers=POST)
+    assert r.status_code == 200  # pending 도 active 세션은 발급된다
+
+
 # ---- 미인증 차단 (V1) ----
 
 
@@ -68,6 +76,23 @@ def test_crawl_status_requires_auth(tmp_db):
 def test_extension_redirects_require_auth(tmp_db):
     cid = _crawl_id()
     c = client()
+    assert c.get(f"/extension/crawl/{cid}", follow_redirects=False).status_code == 401
+    assert c.get("/extension/page/1", follow_redirects=False).status_code == 401
+
+
+# ---- 승인 대기(pending) 계정 차단 (H1 — _require_viewer 는 view 권한 요구) ----
+
+
+def test_pending_blocked_from_resource_routes(tmp_db):
+    """pending 은 active 세션이 있어도 아카이브 자원(_require_viewer)에 접근 못 한다.
+
+    auth_gate 의 pending 403 은 /api/ 에만 걸리므로, 루트 자원 라우트(확장 딥링크·
+    스냅샷 파일·문서·diff)는 _require_viewer 가 직접 막아야 한다.
+    """
+    cid = _crawl_id()
+    c = client()
+    _pending_login(c)
+    # 비-/api 자원 라우트 — pending 은 302 리다이렉트(정상 뷰어)가 아니라 401
     assert c.get(f"/extension/crawl/{cid}", follow_redirects=False).status_code == 401
     assert c.get("/extension/page/1", follow_redirects=False).status_code == 401
 

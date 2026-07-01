@@ -1091,7 +1091,15 @@
 	</label>
 	<label>{t('아카이브 가져오기')}
 		<input type="file" accept=".ccg.export" disabled={busy}
-			onchange={(e) => uploadFile(e, '/system/import', '', { mode: importMode })} />
+			onchange={(e) =>
+				uploadFile(
+					e,
+					'/system/import',
+					importMode === 'overwrite'
+						? t('덮어쓰기 모드로 가져오면 겹치는 아카이브가 현재 데이터를 덮어씁니다. 진행하시겠습니까?')
+						: t('선택한 파일의 아카이브를 가져옵니다. 진행하시겠습니까?'),
+					{ mode: importMode }
+				)} />
 	</label>
 </fieldset>
 
