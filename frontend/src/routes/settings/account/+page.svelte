@@ -284,7 +284,12 @@
 			{:else}
 				<Input type="text" bind:value={withdrawConfirm} placeholder={t('확인을 위해 이메일 입력')} />
 			{/if}
-			<Button variant="destructive" onclick={withdraw} disabled={act.busy}>{t('탈퇴')}</Button>
+			<Button
+				variant="destructive"
+				onclick={withdraw}
+				disabled={act.busy || (d.has_password ? !withdrawPw : !withdrawConfirm)}
+				>{t('탈퇴')}</Button
+			>
 		</div>
 	</section>
 {/if}

@@ -986,7 +986,16 @@
 			<li>
 				<span class="mono">{tag.name}</span>
 				<span class="muted mono">{tag.id}</span>
-				<Button variant="outline" size="sm" class="ml-auto" disabled={busy} onclick={() => save(`/system/network-tags/${tag.id}/delete`)}>{t('삭제')}</Button>
+				<Button
+					variant="outline"
+					size="sm"
+					class="ml-auto"
+					disabled={busy}
+					onclick={() => {
+						if (confirm(t("로컬 네트워크 태그 '{name}' 을 삭제할까요?").replace('{name}', tag.name)))
+							save(`/system/network-tags/${tag.id}/delete`);
+					}}>{t('삭제')}</Button
+				>
 			</li>
 		{/each}
 	</ul>
@@ -1130,7 +1139,16 @@
 			<Button variant="outline" size="sm" disabled={busy} onclick={() => migrationAction('disable')}>{t('이전 모드 끄기')}</Button>
 		</div>
 	{:else}
-		<Button variant="outline" size="sm" class="self-start" disabled={busy} onclick={() => migrationAction('enable')}>{t('이전 모드 켜기')}</Button>
+		<Button
+			variant="outline"
+			size="sm"
+			class="self-start"
+			disabled={busy}
+			onclick={() => {
+				if (confirm(t('이전 모드를 켜면 아카이빙·스케줄·크롤이 모두 중단됩니다. 진행할까요?')))
+					migrationAction('enable');
+			}}>{t('이전 모드 켜기')}</Button
+		>
 	{/if}
 </fieldset>
 
@@ -1157,7 +1175,9 @@
 		max-width: 560px;
 	}
 	.desc.warn {
-		color: var(--warn, #b4690e);
+		/* --warn 은 app.css 에 없어 늘 hex 폴백이 적용되고 다크모드 대응이 안 됐다.
+		   정의된 시맨틱 토큰 --changed(amber, 다크 변형 있음)로 교체. */
+		color: var(--changed);
 	}
 	/* 저장 용량 미터 차트 */
 	.meter-box {

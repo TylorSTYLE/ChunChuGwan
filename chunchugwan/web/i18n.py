@@ -191,6 +191,13 @@ _EN: dict[str, str] = {
     "다음": "Next",
     "첫 페이지로": "To first page",
     "검색어": "Search term",
+    "해당하는 페이지가 없습니다.": "No matching pages.",
+    "로컬 네트워크 태그 '{name}' 을 삭제할까요?":
+        "Delete local network tag '{name}'?",
+    "이전 모드를 켜면 아카이빙·스케줄·크롤이 모두 중단됩니다. 진행할까요?":
+        "Turning on migration mode stops all archiving, schedules, and crawls. Continue?",
+    "진행 중인 사이트 아카이브(크롤)를 취소할까요? 남은 페이지는 처리되지 않습니다.":
+        "Cancel the running site archive (crawl)? Remaining pages will not be processed.",
     "이전 스냅샷 스크린샷": "Previous snapshot screenshot",
     "최신 스냅샷 스크린샷": "Latest snapshot screenshot",
     "픽셀 차이 비교 이미지": "Pixel difference image",
