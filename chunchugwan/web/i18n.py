@@ -1918,6 +1918,8 @@ _EN.update({
         "Authentication is disabled, so there is no personal account",
     "인증이 필요합니다": "Authentication required",
     "잘못된 범위": "Invalid range",
+    "크롤 옵션(최대 페이지·깊이·지연)은 숫자여야 합니다":
+        "Crawl options (max pages, depth, delay) must be numbers",
     "전체 백업은 S3 모드에서 비활성화됩니다 — S3 DB백업·내보내기를 사용하세요.":
         "Full backup is disabled in S3 mode — use S3 DB backup or export.",
     "전체 복원은 S3 모드에서 비활성화됩니다 — S3 DB백업 복원·가져오기를 사용하세요.":
