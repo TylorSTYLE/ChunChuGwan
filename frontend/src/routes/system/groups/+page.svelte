@@ -38,15 +38,19 @@
 		overrides = { ...overrides, [g.name]: { ...current(g), label } };
 	}
 	const saveGroup = (g: SystemGroup) =>
-		act.run(() =>
-			api(`/system/groups/${g.name}`, {
+		act.run(async () => {
+			await api(`/system/groups/${g.name}`, {
 				method: 'POST',
 				body: JSON.stringify({
 					label: current(g).label,
 					permissions: [...current(g).perms]
 				})
-			})
-		);
+			});
+			// 저장 성공 후 로컬 오버레이를 비운다 — 안 그러면 invalidateAll 로 갱신된
+			// 서버 상태(다른 관리자의 변경·서버측 정규화)가 stale 오버레이에 계속 가린다.
+			const { [g.name]: _removed, ...rest } = overrides;
+			overrides = rest;
+		});
 	const deleteGroup = (g: SystemGroup) => {
 		if (!confirm(t('이 권한 그룹을 삭제할까요?'))) return;
 		return act.run(() => api(`/system/groups/${g.name}/delete`, { method: 'POST' }));

@@ -161,7 +161,13 @@
 		}
 	});
 
+	// 폼 필드는 선언 시 placeholder 라 서버값으로 초기화가 필요하지만, 매 data 변경마다
+	// 재동기화하면 background 폴링(재색인·링크교정 완료)의 invalidateAll 이 입력 중이던
+	// 미저장 편집을 되돌린다. 최초 1회만 동기화한다(account 의 untrack 초기화와 같은 취지).
+	let syncedFromServer = false;
 	$effect(() => {
+		if (syncedFromServer) return;
+		syncedFromServer = true;
 		signupEnabled = s.signup_enabled;
 		signupRole = s.signup_default_role;
 		evEnabled = s.email_verification_enabled;
@@ -351,7 +357,7 @@
 			reindexDone = s.done;
 			reindexTotal = s.total;
 			if (s.running) {
-				setTimeout(pollReindex, 1000);
+				reindexTimer = setTimeout(pollReindex, 1000);
 			} else {
 				reindexRunning = false;
 				notice = s.error ? `${t('재색인 실패')}: ${s.error}` : t('재색인을 완료했습니다.');
@@ -390,7 +396,7 @@
 			linkRepairTotal = s.total;
 			linkRepairPending = s.pending;
 			if (s.running) {
-				setTimeout(pollLinkRepair, 1000);
+				linkRepairTimer = setTimeout(pollLinkRepair, 1000);
 			} else {
 				linkRepairRunning = false;
 				notice = s.error
@@ -436,8 +442,10 @@
 		}
 	}
 
-	// 재색인 폴링(pollReindex) 미러 — 진행 중이면 setTimeout 으로 재폴링.
+	// 폴링 타이머 id — 화면을 떠날 때 정리해 고아 setTimeout 이 계속 API 를 치지 않게 한다.
 	let storageTimer: ReturnType<typeof setTimeout> | null = null;
+	let reindexTimer: ReturnType<typeof setTimeout> | null = null;
+	let linkRepairTimer: ReturnType<typeof setTimeout> | null = null;
 	async function pollStorage() {
 		storagePolling = true;
 		try {
@@ -632,9 +640,11 @@
 		loadRecovery();
 		loadDiskUsage(); // 저장 용량 미터(분리된 비싼 스캔) — 양 모드 모두
 		if (isS3) loadUsage();
-		// 화면을 떠나면 폴링 루프를 정리한다(고아 setTimeout 누적 방지).
+		// 화면을 떠나면 폴링 루프를 모두 정리한다(고아 setTimeout 누적·화면 밖 invalidateAll 방지).
 		return () => {
 			if (storageTimer) clearTimeout(storageTimer);
+			if (reindexTimer) clearTimeout(reindexTimer);
+			if (linkRepairTimer) clearTimeout(linkRepairTimer);
 			storagePolling = false;
 		};
 	});
@@ -667,7 +677,11 @@
 </script>
 
 <h2>{t('시스템 설정')}</h2>
-<AlertBox {error} {notice} />
+<!-- 설정 페이지가 길어(1200줄+) 하단 섹션에서 저장해도 결과 알림이 보이도록 sticky.
+     AlertBox 는 내용이 없으면 아무것도 렌더하지 않아 빈 공간이 생기지 않는다. -->
+<div class="sticky top-2 z-20">
+	<AlertBox {error} {notice} />
+</div>
 
 <!-- ── 시스템 상태 ── -->
 <h3 class="group">{t('시스템 상태')}</h3>

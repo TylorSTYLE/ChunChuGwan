@@ -141,7 +141,9 @@
 						</div>
 					</td>
 					<td data-label={t('역할')}>
-						{#if u.is_founder}
+						{#if u.is_founder || u.id === d.me_id}
+							<!-- 최초 관리자·본인 행은 역할 편집 불가(읽기 전용) — 셀렉트 오조작으로
+							     자기 역할을 강등해 관리 접근을 잃는 실수를 막는다(서버 last-admin 락과 이중). -->
 							<span class="badge">{d.role_labels[u.role] ?? u.role}</span>
 						{:else}
 							<select value={u.role} disabled={act.busy} onchange={(e) => setRole(u, e.currentTarget.value)}>

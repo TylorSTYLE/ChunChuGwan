@@ -38,6 +38,10 @@
 		let last = '';
 		const timer = setInterval(async () => {
 			if (typeof document !== 'undefined' && document.hidden) return;
+			// 페이저/필터 요청(list.go)이 진행 중이면 invalidateAll 을 건너뛴다 — load 재실행이
+			// go() 와 경쟁해 URL(최신 params)과 표시 데이터가 어긋나는 것을 막는다. last 를
+			// 갱신하지 않으므로 go() 가 끝난 뒤 다음 틱에서 변화를 정상 반영한다.
+			if (list.busy) return;
 			try {
 				const a = await api<Active>('/active');
 				const key = JSON.stringify([a.active, (a.needs_human ?? []).map((j) => j.url)]);
