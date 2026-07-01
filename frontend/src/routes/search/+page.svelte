@@ -49,8 +49,8 @@
 <AlertBox error={listError} />
 
 <form onsubmit={submit} class="toolbar">
-	<Input type="text" class="search-q" bind:value={q} placeholder={t('아카이브 본문·문서에서 검색…')} />
-	<Input type="text" class="search-domain" bind:value={domain} placeholder={t('도메인')} />
+	<Input type="text" class="search-q" bind:value={q} placeholder={t('아카이브 본문·문서에서 검색…')} aria-label={t('검색어')} />
+	<Input type="text" class="search-domain" bind:value={domain} placeholder={t('도메인')} aria-label={t('도메인')} />
 	<label class="muted"><input type="checkbox" bind:checked={latest} /> {t('최신만')}</label>
 	<Button type="submit">{t('검색')}</Button>
 </form>

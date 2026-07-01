@@ -190,7 +190,7 @@
 		bind:this={img}
 		id="shot"
 		src={shotSrc}
-		alt="live"
+		alt={t('라이브 챌린지 화면')}
 		width={VW}
 		height={VH}
 		onmousedown={onMouseDown}

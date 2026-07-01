@@ -186,13 +186,15 @@
 
 <h3>{t('초대')}</h3>
 {#if !d.mail_enabled}<p class="muted">{t('SMTP 미설정 — 초대 링크를 직접 전달합니다.')}</p>{/if}
-<Toolbar>
-	<Input type="email" bind:value={inviteEmail} placeholder={t('이메일')} />
-	<select bind:value={inviteRole}>
-		{#each d.invitable_roles as r}<option value={r}>{d.role_labels[r] ?? r}</option>{/each}
-	</select>
-	<Button onclick={invite} disabled={act.busy}>{t('초대')}</Button>
-</Toolbar>
+<form onsubmit={(e) => { e.preventDefault(); invite(); }}>
+	<Toolbar>
+		<Input type="email" bind:value={inviteEmail} placeholder={t('이메일')} aria-label={t('이메일')} />
+		<select bind:value={inviteRole} aria-label={t('역할')}>
+			{#each d.invitable_roles as r}<option value={r}>{d.role_labels[r] ?? r}</option>{/each}
+		</select>
+		<Button type="submit" disabled={act.busy}>{t('초대')}</Button>
+	</Toolbar>
+</form>
 {#if inviteLink}
 	<div class="notice link-out">
 		{#if inviteLinkEmail}<strong>{inviteLinkEmail}</strong> · {/if}<span class="mono">{inviteLink}</span>
