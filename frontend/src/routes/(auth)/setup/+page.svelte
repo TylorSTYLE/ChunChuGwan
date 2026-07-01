@@ -273,10 +273,14 @@
 {#snippet restoreForm()}
 	<h3>{t('백업 파일에서 복원')}</h3>
 	<p class="muted sm">
-		{t('전체 백업(tar.gz)을 올려 그 시점 상태로 복원합니다. 복원 후에는 백업의 계정으로 로그인합니다.')}
+		{t('전체 백업 파일(.ccg.backup)을 올려 그 시점 상태로 복원합니다. 복원 후에는 백업의 계정으로 로그인합니다.')}
 	</p>
 	<form onsubmit={restore}>
-		<input type="file" accept=".tar.gz,.tgz,application/gzip" bind:files={restoreFiles} required />
+		<input
+			type="file"
+			accept=".ccg.backup,.tar.gz,.tgz,application/gzip"
+			bind:files={restoreFiles}
+			required />
 		<Button type="submit" disabled={busy || !restoreFiles?.length} class="mt-1 w-full">
 			{t('복원')}
 		</Button>

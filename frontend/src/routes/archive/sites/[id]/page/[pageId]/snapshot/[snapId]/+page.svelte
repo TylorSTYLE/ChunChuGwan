@@ -8,6 +8,7 @@
 	import { createAction } from '$lib/action.svelte';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import type { SnapshotMeta, Me } from '$lib/types';
 
 	let { data }: { data: { meta: SnapshotMeta; me: Me | null } } = $props();
@@ -75,6 +76,15 @@
 </script>
 
 <h2>{m.title || t('스냅샷')}</h2>
+
+{#if m.snap.origin === 'extension' || m.snap.incomplete}
+	<div class="mb-3 flex gap-2">
+		{#if m.snap.origin === 'extension'}<Badge variant="same">{t('브라우저 캡처')}</Badge>{/if}
+		{#if m.snap.incomplete}<Badge variant="changed" title={t('일부 자원·프레임·스크린샷 수집이 실패한 불완전 캡처입니다.')}
+				>{t('불완전')}</Badge
+			>{/if}
+	</div>
+{/if}
 
 <table style="max-width:760px">
 	<tbody>

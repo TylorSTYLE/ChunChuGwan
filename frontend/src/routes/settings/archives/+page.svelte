@@ -8,9 +8,11 @@
 	import Toolbar from '$lib/components/Toolbar.svelte';
 	import Pager from '$lib/components/Pager.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import AlertBox from '$lib/components/AlertBox.svelte';
 
 	let { data }: { data: { data: MyArchivesData } } = $props();
 
+	let listError = $state('');
 	const ROUTE = '/settings/archives';
 	const FILTER_DEF = { limit: 25, page: 1 };
 	const list = createList({
@@ -18,7 +20,8 @@
 		api: '/settings/archives',
 		route: ROUTE,
 		params: (d) => ({ status: d.status, limit: d.limit, page: d.page_num }),
-		defaults: FILTER_DEF
+		defaults: FILTER_DEF,
+		onError: (m) => (listError = m)
 	});
 	const d = $derived(list.data);
 
@@ -40,6 +43,7 @@
 </script>
 
 <h2>{t('내 아카이브')}</h2>
+<AlertBox error={listError} />
 <p class="muted hint">{t('내가 대시보드·확장에서 직접 요청한 단발 아카이빙 이력입니다.')}</p>
 
 <Toolbar>
