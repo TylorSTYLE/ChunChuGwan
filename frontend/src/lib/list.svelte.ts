@@ -39,11 +39,16 @@ export function createList<T>(opts: {
 	let view = $state(opts.source());
 	let params = $state(opts.params(view));
 	let busy = $state(false);
+	// go() 요청 시퀀스 — 늦게 도착한 이전 응답이 최신 view/URL 을 덮어쓰지 않게 한다.
+	let seq = 0;
 
-	// load 결과가 바뀌면(최초 진입·액션 후 invalidateAll) 목록을 다시 seed 한다.
+	// load 결과가 바뀌면(최초 진입·액션 후 invalidateAll) 목록과 파라미터를 다시 seed 한다.
 	// go() 는 view 만 직접 교체하고 source()=data 는 건드리지 않으므로 이 효과가 덮어쓰지 않는다.
+	// params 도 함께 리시드해야 무필터로 재진입한 뒤 페이저를 눌러도 옛 필터가 되살아나지 않는다.
 	$effect(() => {
-		view = opts.source();
+		const next = opts.source();
+		view = next;
+		params = opts.params(next);
 	});
 
 	/** 파라미터를 patch 로 갱신하고 목록만 다시 받아 교체 + URL 동기화. */
@@ -52,14 +57,18 @@ export function createList<T>(opts: {
 		const qs = queryString(params, opts.defaults);
 		const apiBase = typeof opts.api === 'function' ? opts.api() : opts.api;
 		const routeBase = typeof opts.route === 'function' ? opts.route() : opts.route;
+		const mySeq = ++seq;
 		busy = true;
 		try {
-			view = await api<T>(`${apiBase}${qs}`);
+			const result = await api<T>(`${apiBase}${qs}`);
+			if (mySeq !== seq) return; // 더 최신 go() 가 시작됨 — 이 응답은 버린다(stale)
+			view = result;
 			replaceState(filterUrl(routeBase, params, opts.defaults), {});
 		} catch (err) {
+			if (mySeq !== seq) return; // stale 오류도 무시(최신 요청이 화면을 관리)
 			opts.onError?.(err instanceof ApiError ? err.message : String(err));
 		} finally {
-			busy = false;
+			if (mySeq === seq) busy = false; // 최신 요청만 busy 해제(이전 요청은 관여 안 함)
 		}
 	}
 
