@@ -106,8 +106,13 @@ meta.json documents 목록 검증, `/document/{sha256}/{name}` — snapshot_docu
 - 다국어(ko/en): `web/i18n.py` 가 정본 카탈로그(한국어 원문이 메시지 키, gettext msgid
   방식 — 언어별 "원문 → 번역" dict). SPA 는 `frontend/src/lib/i18n.ts` 의 `t('…')` 로
   쓰고, 로케일 카탈로그는 `/api/web/i18n/{locale}` 로 받아 `setCatalog` 주입한다(ko 는
-  패스스루). 백엔드 라우트 메시지는 `i18n.t(request, "…")`. **새 SPA 문자열 추가 시
-  `web/i18n.py` 의 en 카탈로그도 채울 것** — `.svelte`/`.ts` 의 `t('…')` 리터럴 키
+  패스스루). 백엔드 오류 메시지(`HTTPException` detail)는 `app.py` 의 경계 예외
+  핸들러(`_translate_http_exception`)가 요청 로케일로 **자동 번역**한다 — 라우트는
+  한국어 원문을 그대로 raise 해도 되고(카탈로그에 있으면 번역, 없으면 원문 통과),
+  로케일은 미들웨어가 적재한 `request.state.locale`(로그인 사용자는 저장 로케일,
+  그 외 Accept-Language)을 쓴다. 명시 번역이 필요하면 여전히 `i18n.t(request, "…")`
+  로 감싸도 된다(경계에서 재번역돼도 무해). **새 SPA 문자열·라우트 오류 메시지 추가
+  시 `web/i18n.py` 의 en 카탈로그도 채울 것** — `.svelte`/`.ts` 의 `t('…')` 리터럴 키
   누락은 `tests/test_i18n.py` 가 검사한다(en `CATALOGS` 대조). CLI 는 한국어 유지.
 - diff 뷰: 텍스트 side-by-side + 스크린샷 비교(슬라이더 또는 토글). 단, 비교
   대상 중 하나라도 확장(브라우저) 캡처(`origin=extension`)면 스크린샷 비교를

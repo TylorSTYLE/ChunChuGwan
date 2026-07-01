@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { pagePath, snapPath } from '$lib/urls';
-	import { onMount } from 'svelte';
+	import { untrack } from 'svelte';
 	import { base } from '$app/paths';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
@@ -75,12 +75,17 @@
 	}
 
 	// 진행 중이면 5초마다 상태를 폴링해 변화가 있으면 다시 불러온다.
-	onMount(() => {
+	// onMount(1회) 대신 c.id·c.status 에 반응하는 $effect 로 둔다 — 같은 라우트에서
+	// 다른 크롤로 이동하거나(컴포넌트 재사용) 재실행으로 새 running 크롤로 goto 해도
+	// 폴링이 새로 걸리고, 완료(status≠running)되면 effect 가 재실행되며 interval 을
+	// 정리해 5초마다 무한 invalidateAll 하던 문제도 없앤다.
+	$effect(() => {
+		const crawlId = c.id;
 		if (c.status !== 'running') return;
-		let last = JSON.stringify(counts);
+		let last = untrack(() => JSON.stringify(counts));
 		const timer = setInterval(async () => {
 			try {
-				const s = await api<{ status: string; counts: typeof counts }>(`/crawls/${c.id}/status`);
+				const s = await api<{ status: string; counts: typeof counts }>(`/crawls/${crawlId}/status`);
 				if (s.status !== 'running' || JSON.stringify(s.counts) !== last) {
 					last = JSON.stringify(s.counts);
 					await invalidateAll();

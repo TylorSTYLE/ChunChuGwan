@@ -172,6 +172,24 @@ def test_site_detail_can_flags_by_role(tmp_db):
 # ---- 페이징 ----
 
 
+def test_error_detail_translated_by_locale(tmp_db):
+    """경계 예외 핸들러가 HTTPException detail 을 요청 로케일로 번역한다 (H9).
+
+    라우트가 한국어 detail 을 그대로 raise 해도 en 사용자는 영어로 받는다 —
+    미들웨어가 적재한 request.state.locale 이 핸들러까지 전파되는지도 함께 검증.
+    """
+    uid, token = make_user()
+    c = client_for(token)
+    # 기본(ko) 로케일: 원문 유지
+    r_ko = c.get("/api/web/sites/999999")
+    assert r_ko.status_code == 404 and r_ko.json()["detail"] == "사이트 없음"
+    # 저장 로케일 en: 카탈로그 번역
+    with db.connect() as conn:
+        db.set_user_locale(conn, uid, "en")
+    r_en = c.get("/api/web/sites/999999")
+    assert r_en.status_code == 404 and r_en.json()["detail"] == "Site not found"
+
+
 def test_site_detail_pagination(tmp_db):
     site_id = seed_site(n_pages=5)
     _, token = make_user()
@@ -248,10 +266,11 @@ def test_sites_filter_applies_to_whole_list(tmp_db):
     assert body["total"] == 32 and body["limit"] == 25 and body["total_pages"] == 2
     assert len(body["items"]) == 25 and body["limits"] == [10, 25, 50, 100]
     # q=shop → 전체에서 30개 매칭(현재 페이지에 안 보이던 것 포함), 2페이지로 분할
-    p1 = c.get("/api/web/sites?q=shop&per_page=25&page=1").json()
+    # (목록 페이지 크기 쿼리명은 limit — 프론트·딥링크와 일치, H3)
+    p1 = c.get("/api/web/sites?q=shop&limit=25&page=1").json()
     assert p1["q"] == "shop" and p1["total"] == 30 and p1["total_pages"] == 2
     assert len(p1["items"]) == 25 and all("shop" in it["site_key"] for it in p1["items"])
-    p2 = c.get("/api/web/sites?q=shop&per_page=25&page=2").json()
+    p2 = c.get("/api/web/sites?q=shop&limit=25&page=2").json()
     assert len(p2["items"]) == 5 and all("shop" in it["site_key"] for it in p2["items"])
     assert {it["site_key"] for it in p1["items"]}.isdisjoint(
         {it["site_key"] for it in p2["items"]}
@@ -264,11 +283,11 @@ def test_sites_pagination_clamp_and_bad_per_page(tmp_db):
     _seed_named_sites([f"s{i:02d}.example" for i in range(12)])
     _, token = make_user()
     c = client_for(token)
-    assert c.get("/api/web/sites?per_page=10&page=1").json()["total_pages"] == 2
-    # 허용 밖 per_page → 기본 25
-    assert c.get("/api/web/sites?per_page=999").json()["limit"] == 25
+    assert c.get("/api/web/sites?limit=10&page=1").json()["total_pages"] == 2
+    # 허용 밖 limit → 기본 25
+    assert c.get("/api/web/sites?limit=999").json()["limit"] == 25
     # 범위 초과 page → 마지막으로 클램프
-    clamped = c.get("/api/web/sites?per_page=10&page=99").json()
+    clamped = c.get("/api/web/sites?limit=10&page=99").json()
     assert clamped["page_num"] == clamped["total_pages"] == 2
 
 

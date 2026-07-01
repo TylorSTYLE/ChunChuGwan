@@ -2122,6 +2122,21 @@ def _visible_snapshot_filter(
     return cond, {"sv_admin": 1 if is_admin else 0, "sv_uid": viewer_id}
 
 
+def _visible_snapshot_filter_pos(
+    viewer: "tuple[int | None, bool] | None", alias: str = "s"
+) -> tuple[str, list[object]]:
+    """_visible_snapshot_filter 의 positional(?) 판 — ? 파라미터 쿼리(검색)용.
+
+    SQLite 는 한 문장에서 named(:x)·positional(?) 파라미터를 섞을 수 없어,
+    ? 로 조립되는 검색 쿼리에는 이 변형을 쓴다. 조건절과 순서대로 끼울 파라미터.
+    """
+    if viewer is None:
+        return "", []
+    viewer_id, is_admin = viewer
+    cond = f" AND ({alias}.authenticated = 0 OR ? OR {alias}.authenticated_by = ?)"
+    return cond, [1 if is_admin else 0, viewer_id]
+
+
 def list_pages(
     conn: sqlite3.Connection,
     *,
@@ -2191,30 +2206,45 @@ def count_pages(conn: sqlite3.Connection) -> int:
     ).fetchone()["c"]
 
 
-def list_snapshot_dirs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def list_snapshot_dirs(
+    conn: sqlite3.Connection,
+    viewer: "tuple[int | None, bool] | None" = None,
+) -> list[sqlite3.Row]:
     """모든 스냅샷의 시각·위치·용량·제목 (id, taken_at, site_id, domain, slug,
     dir_name, bytes, title).
 
     현황 대시보드의 기간별 집계와 아카이브 목록의 사이트별 용량 합산·제목
     표시에 쓴다 (bytes·title 비정규화로 파일시스템·meta.json 접근 없음).
+
+    viewer 를 주면 인증(로그인 캡처) 스냅샷은 소유자/관리자 것만 포함한다 —
+    제목·용량 집계로 남의 인증 스냅샷 메타가 새지 않게(list_pages 와 같은 기준).
     """
+    vcond, vparams = _visible_snapshot_filter_pos(viewer)
     return conn.execute(
-        """
+        f"""
         SELECT s.id, s.taken_at, p.site_id, p.domain, p.slug, s.dir_name,
                s.bytes, s.title
         FROM snapshots s JOIN pages p ON p.id = s.page_id
-        WHERE p.trash_id IS NULL
-        """
+        WHERE p.trash_id IS NULL{vcond}
+        """,
+        vparams,
     ).fetchall()
 
 
-def list_recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
+def list_recent_snapshots(
+    conn: sqlite3.Connection,
+    limit: int = 10,
+    viewer: "tuple[int | None, bool] | None" = None,
+) -> list[sqlite3.Row]:
     """최근 스냅샷 목록 (최신 순) + 페이지 정보 + 해당 페이지 첫 스냅샷 여부.
 
     사설 대역 페이지 구분용으로 로컬 네트워크 태그 이름·설명도 붙인다.
+    viewer 를 주면 인증(로그인 캡처) 스냅샷은 소유자/관리자 것만 — 현황 화면의
+    '최근 스냅샷'에 남의 인증 캡처 URL·제목이 새지 않게(_may_view_authenticated 와 동일).
     """
+    vcond, vparams = _visible_snapshot_filter_pos(viewer)
     return conn.execute(
-        """
+        f"""
         SELECT s.*, p.url AS page_url, p.domain, p.slug, p.network_tag_id,
                p.site_id,
                nt.name AS network_tag_name,
@@ -2228,10 +2258,10 @@ def list_recent_snapshots(conn: sqlite3.Connection, limit: int = 10) -> list[sql
         FROM snapshots s
         JOIN pages p ON p.id = s.page_id
         LEFT JOIN network_tags nt ON nt.id = p.network_tag_id
-        WHERE p.trash_id IS NULL
+        WHERE p.trash_id IS NULL{vcond}
         ORDER BY s.taken_at DESC, s.id DESC LIMIT ?
         """,
-        (limit,),
+        [*vparams, limit],
     ).fetchall()
 
 
@@ -2584,14 +2614,22 @@ def search_snapshots_fts(
     *,
     domain: str | None = None,
     latest_only: bool = False,
+    viewer: "tuple[int | None, bool] | None" = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[sqlite3.Row]:
-    """FTS MATCH 검색 (bm25 랭킹 순). match 는 searchindex 가 조립한 안전한 질의."""
+    """FTS MATCH 검색 (bm25 랭킹 순). match 는 searchindex 가 조립한 안전한 질의.
+
+    viewer 를 주면 인증(로그인 캡처) 스냅샷은 소유자/관리자에게만 노출한다
+    (타임라인·뷰어의 _may_view_authenticated 와 동일한 가시성 — 스니펫 누출 차단).
+    """
     # 휴지통 페이지의 스냅샷은 검색에서 제외(소프트 삭제는 FTS 행을 남기므로 이 필터가
     # 유일한 숨김 — 영구삭제 때 db.delete_page 가 FTS 행도 지운다).
     sql = _SEARCH_SELECT_FTS + " WHERE snapshot_fts MATCH ? AND p.trash_id IS NULL"
     params: list[object] = [match]
+    vcond, vparams = _visible_snapshot_filter_pos(viewer)
+    sql += vcond
+    params += vparams
     if domain:
         sql += " AND p.domain = ?"
         params.append(domain)
@@ -2608,8 +2646,9 @@ def count_search_snapshots_fts(
     *,
     domain: str | None = None,
     latest_only: bool = False,
+    viewer: "tuple[int | None, bool] | None" = None,
 ) -> int:
-    """FTS MATCH 결과 총 건수 (페이징용)."""
+    """FTS MATCH 결과 총 건수 (페이징용). viewer 로 인증 스냅샷 가시성 필터."""
     sql = (
         "SELECT COUNT(*) AS c FROM snapshot_fts "
         "JOIN snapshots s ON s.id = snapshot_fts.rowid "
@@ -2617,6 +2656,9 @@ def count_search_snapshots_fts(
         "WHERE snapshot_fts MATCH ? AND p.trash_id IS NULL"
     )
     params: list[object] = [match]
+    vcond, vparams = _visible_snapshot_filter_pos(viewer)
+    sql += vcond
+    params += vparams
     if domain:
         sql += " AND p.domain = ?"
         params.append(domain)
@@ -2646,12 +2688,18 @@ def search_snapshots_like(
     *,
     domain: str | None = None,
     latest_only: bool = False,
+    viewer: "tuple[int | None, bool] | None" = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[sqlite3.Row]:
-    """LIKE 부분일치 검색 (최신순) — trigram 이 못 잡는 1~2글자 쿼리 폴백."""
+    """LIKE 부분일치 검색 (최신순) — trigram 이 못 잡는 1~2글자 쿼리 폴백.
+
+    viewer 로 인증 스냅샷 가시성 필터(FTS 판과 동일)."""
     clause, params = _like_where(patterns)
     sql = _SEARCH_SELECT_LIKE + " WHERE " + clause + " AND p.trash_id IS NULL"
+    vcond, vparams = _visible_snapshot_filter_pos(viewer)
+    sql += vcond
+    params += vparams
     if domain:
         sql += " AND p.domain = ?"
         params.append(domain)
@@ -2668,8 +2716,9 @@ def count_search_snapshots_like(
     *,
     domain: str | None = None,
     latest_only: bool = False,
+    viewer: "tuple[int | None, bool] | None" = None,
 ) -> int:
-    """LIKE 폴백 결과 총 건수 (페이징용)."""
+    """LIKE 폴백 결과 총 건수 (페이징용). viewer 로 인증 스냅샷 가시성 필터."""
     clause, params = _like_where(patterns)
     sql = (
         "SELECT COUNT(*) AS c FROM snapshot_fts "
@@ -2677,6 +2726,9 @@ def count_search_snapshots_like(
         "JOIN pages p ON p.id = s.page_id WHERE " + clause
         + " AND p.trash_id IS NULL"
     )
+    vcond, vparams = _visible_snapshot_filter_pos(viewer)
+    sql += vcond
+    params += vparams
     if domain:
         sql += " AND p.domain = ?"
         params.append(domain)
@@ -2778,14 +2830,18 @@ def list_document_refs_by_shas(
 
 
 def list_document_groups(
-    conn: sqlite3.Connection, limit: int = 100, offset: int = 0
+    conn: sqlite3.Connection, limit: int = 100, offset: int = 0,
+    viewer: "tuple[int | None, bool] | None" = None,
 ) -> list[sqlite3.Row]:
     """문서 목록 화면용 — 같은 내용(sha256)을 한 행으로 묶은 목록.
 
     그룹별 참조 스냅샷/페이지 수와 최근 저장 시각을 집계하고, 표시용
-    파일명·출처는 가장 최근 참조 행의 값을 쓴다 (최근 저장 순)."""
+    파일명·출처는 가장 최근 참조 행의 값을 쓴다 (최근 저장 순).
+    viewer 를 주면 인증(로그인 캡처) 스냅샷이 참조한 문서는 소유자/관리자에게만 —
+    남의 로그인 캡처에서 수집된 문서 파일명·URL 이 새지 않게(H2)."""
+    vcond, vparams = _visible_snapshot_filter_pos(viewer, alias="s2")
     return conn.execute(
-        """
+        f"""
         SELECT g.sha256, g.snapshot_count, g.page_count, g.first_seen, g.last_seen,
                d.file, d.url, d.bytes, d.content_type, d.snapshot_id,
                s.page_id, p.url AS page_url, p.site_id, st.site_key
@@ -2796,7 +2852,7 @@ def list_document_groups(
                    MIN(s2.taken_at) AS first_seen, MAX(s2.taken_at) AS last_seen
             FROM snapshot_documents d2 JOIN snapshots s2 ON s2.id = d2.snapshot_id
             JOIN pages p2 ON p2.id = s2.page_id
-            WHERE p2.trash_id IS NULL
+            WHERE p2.trash_id IS NULL{vcond}
             GROUP BY d2.sha256
         ) g
         JOIN snapshot_documents d ON d.id = g.doc_id
@@ -2806,7 +2862,7 @@ def list_document_groups(
         ORDER BY g.last_seen DESC, g.sha256
         LIMIT ? OFFSET ?
         """,
-        (limit, offset),
+        [*vparams, limit, offset],
     ).fetchall()
 
 
@@ -3768,22 +3824,52 @@ def site_page_totals(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row:
 
 
 def list_site_snapshot_dirs(
-    conn: sqlite3.Connection, site_id: int
+    conn: sqlite3.Connection,
+    site_id: int,
+    viewer: "tuple[int | None, bool] | None" = None,
 ) -> list[sqlite3.Row]:
     """사이트 소속 스냅샷의 시각·위치·용량·제목 (page_id, taken_at, domain, slug,
     dir_name, bytes, title).
 
     사이트 상세가 페이지별·사이트 전체 저장 용량 합산과 현재 제목 표시에 쓴다
     (bytes·title 비정규화로 파일시스템·meta.json 접근 없음).
+    viewer 를 주면 인증(로그인 캡처) 스냅샷은 소유자/관리자 것만 — 제목·용량으로
+    남의 인증 스냅샷 메타가 새지 않게(list_snapshot_dirs 와 같은 기준).
     """
+    vcond, vparams = _visible_snapshot_filter_pos(viewer)
     return conn.execute(
-        """
+        f"""
         SELECT s.page_id, s.taken_at, p.domain, p.slug, s.dir_name, s.bytes, s.title
         FROM snapshots s JOIN pages p ON p.id = s.page_id
-        WHERE p.site_id = ? AND p.trash_id IS NULL
+        WHERE p.site_id = ? AND p.trash_id IS NULL{vcond}
         """,
-        (site_id,),
+        [site_id, *vparams],
     ).fetchall()
+
+
+def count_site_authenticated_hidden(
+    conn: sqlite3.Connection,
+    site_id: int,
+    viewer: "tuple[int | None, bool] | None",
+) -> int:
+    """사이트에서 요청자가 볼 수 없는 인증(로그인 캡처) 스냅샷 수.
+
+    사이트 내보내기(export) 가드용 — tar 는 스냅샷을 필터하지 않으므로, 남의
+    인증 캡처가 섞인 사이트는 내보내기를 통째로 막는다(H2). viewer=None(신뢰)·
+    관리자(view_authenticated_all)면 0. authenticated_by=NULL 은 관리자 전용이라
+    비관리자에게는 숨김으로 센다.
+    """
+    if viewer is None:
+        return 0
+    viewer_id, is_admin = viewer
+    if is_admin:
+        return 0
+    return conn.execute(
+        "SELECT COUNT(*) AS c FROM snapshots s JOIN pages p ON p.id = s.page_id "
+        "WHERE p.site_id = ? AND p.trash_id IS NULL AND s.authenticated = 1 "
+        "AND (s.authenticated_by IS NULL OR s.authenticated_by != ?)",
+        (site_id, viewer_id),
+    ).fetchone()["c"]
 
 
 def list_site_failed_logs(

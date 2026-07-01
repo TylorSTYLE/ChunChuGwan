@@ -65,7 +65,16 @@ export async function api<T = unknown>(
 		...init
 	});
 	if (res.status === 401) {
-		throw new ApiError(401, '인증이 필요합니다');
+		// 401 도 서버 detail 을 보존한다 — 로그인 오답·TOTP 오답·계정 재확인 실패 등
+		// 구체적 사유(서버가 로케일에 맞춰 내려줌)를 하드코딩 문구로 덮지 않는다.
+		// 라우팅은 여전히 하지 않고 던지기만 한다(인증 라우팅은 루트 레이아웃 권위).
+		let detail = res.statusText;
+		try {
+			detail = errorDetail(await res.json(), res.statusText);
+		} catch {
+			/* JSON 아님 — statusText 유지 */
+		}
+		throw new ApiError(401, detail);
 	}
 	if (!res.ok) {
 		let detail = res.statusText;
@@ -76,7 +85,11 @@ export async function api<T = unknown>(
 		}
 		throw new ApiError(res.status, detail);
 	}
-	return res.json() as Promise<T>;
+	// 204/빈 본문(예: DELETE)은 res.json() 이 예외를 던지므로 undefined 로 돌려준다 —
+	// 성공인데 파싱 오류로 오인해 invalidateAll 이 안 도는 문제를 막는다.
+	if (res.status === 204) return undefined as T;
+	const text = await res.text();
+	return (text ? JSON.parse(text) : undefined) as T;
 }
 
 /** POST 로 파일(tar.gz)을 받아 브라우저 다운로드를 트리거한다 — 백업·내보내기용.

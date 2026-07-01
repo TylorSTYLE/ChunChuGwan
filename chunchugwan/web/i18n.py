@@ -1741,6 +1741,12 @@ _EN.update({
     "백업·복원": "Backup & restore",
     "백업 복원": "Restore from backup",
     "정말 복원하시겠습니까? 현재 데이터가 백업 시점으로 교체됩니다.": "Restore now? Current data will be replaced with the backup.",
+    "선택한 파일의 아카이브를 가져옵니다. 진행하시겠습니까?":
+        "Import archives from the selected file. Continue?",
+    "다른 사용자의 로그인 캡처 스냅샷이 포함된 사이트는 내보낼 수 없습니다.":
+        "Cannot export a site that contains other users' authenticated snapshots.",
+    "덮어쓰기 모드로 가져오면 겹치는 아카이브가 현재 데이터를 덮어씁니다. 진행하시겠습니까?":
+        "In overwrite mode, matching archives will replace your current data. Continue?",
     "가져오기 모드": "Import mode",
     "덮어쓰기": "Overwrite",
     "데이터 이전·재색인은 이어서 추가됩니다.": "Data migration and reindex are coming next.",
@@ -1870,6 +1876,74 @@ _EN.update({
     "문제가 발생했습니다": "Something went wrong",
     "요청한 페이지를 표시할 수 없습니다.": "The requested page could not be displayed.",
     "비교할 수 없습니다.": "Comparison is not available.",
+    # 라우트 오류 메시지(HTTPException detail) — 경계 예외 핸들러가 로케일로 번역한다(H9).
+    # SPA 가 err.message 를 그대로 표시하므로 en 사용자에게 한국어가 새지 않게 채운다.
+    "DB 백업에 실패했습니다.": "DB backup failed.",
+    "S3 모드에서만 사용량 스캔을 쓸 수 있습니다.": "Usage scan is available only in S3 mode.",
+    "SSO 전용 계정은 2단계 인증을 설정할 수 없습니다.":
+        "SSO-only accounts cannot set up two-factor authentication.",
+    "SSO 전용 계정은 패스키를 등록할 수 없습니다.":
+        "SSO-only accounts cannot register passkeys.",
+    "WCCG_SECRET_KEY 가 설정되지 않아 API 키를 저장할 수 없습니다.":
+        "API keys cannot be stored because WCCG_SECRET_KEY is not set.",
+    "content.md 없음": "No content.md",
+    "가입 초기 권한으로 쓸 수 없는 역할": "Role not allowed as a signup default",
+    "권한 그룹 없음": "Permission group not found",
+    "권한을 하나 이상 선택하세요": "Select at least one permission",
+    "기본 권한 그룹은 삭제할 수 없습니다": "Built-in permission groups cannot be deleted",
+    "두 태그가 같은 사설 네트워크(같은 IP·포트)를 가리킬 때만 병합할 수 있습니다.":
+        "Tags can be merged only when they point to the same private network (same IP and port).",
+    "메모 내용이 비어 있습니다": "Note content is empty",
+    "메모 등록 권한이 없습니다": "You do not have permission to add notes",
+    "메모 삭제 권한이 없습니다": "You do not have permission to delete notes",
+    "메모 없음": "Note not found",
+    "메모가 너무 깁니다": "Note is too long",
+    "복구 이력이 없습니다.": "No recovery history.",
+    "본인 계정은 여기서 삭제할 수 없습니다": "You cannot delete your own account here",
+    "부여할 수 없는 역할": "Role cannot be assigned",
+    "비교하려면 스냅샷이 2개 이상 필요합니다":
+        "At least two snapshots are required to compare",
+    "사용량 스캔에 실패했습니다.": "Usage scan failed.",
+    "사용자 관리 권한을 가진 마지막 계정입니다":
+        "This is the last account with user-management permission",
+    "사용자 관리 권한을 가진 활성 계정이 모두 사라집니다":
+        "This would remove the last active account with user-management permission",
+    "알 수 없는 만료 선택": "Unknown expiration option",
+    "이미 2단계 인증이 설정되어 있습니다.":
+        "Two-factor authentication is already set up.",
+    "이미 가입된 이메일입니다": "This email is already registered",
+    "이전(마이그레이션) 모드입니다 — 아카이빙할 수 없습니다":
+        "Migration mode is on — archiving is unavailable",
+    "인증이 비활성화되어 개인 계정이 없습니다":
+        "Authentication is disabled, so there is no personal account",
+    "인증이 필요합니다": "Authentication required",
+    "잘못된 범위": "Invalid range",
+    "전체 백업은 S3 모드에서 비활성화됩니다 — S3 DB백업·내보내기를 사용하세요.":
+        "Full backup is disabled in S3 mode — use S3 DB backup or export.",
+    "전체 복원은 S3 모드에서 비활성화됩니다 — S3 DB백업 복원·가져오기를 사용하세요.":
+        "Full restore is disabled in S3 mode — use S3 DB backup restore or import.",
+    "지원하지 않는 로케일입니다": "Unsupported locale",
+    "지원하지 않는 언어입니다": "Unsupported language",
+    "지원하지 않는 타임존입니다": "Unsupported time zone",
+    "초대할 수 없는 역할": "Role cannot be invited",
+    "최초 관리자는 삭제할 수 없습니다": "The initial administrator cannot be deleted",
+    "최초 관리자의 권한은 변경할 수 없습니다":
+        "The initial administrator's role cannot be changed",
+    "코드가 올바르지 않습니다. QR 을 다시 스캔 후 시도하세요.":
+        "Invalid code. Rescan the QR code and try again.",
+    "탈퇴한 계정의 권한은 변경할 수 없습니다":
+        "A withdrawn account's role cannot be changed",
+    "피어 없음": "Peer not found",
+    "확인 이메일이 일치하지 않습니다": "The confirmation email does not match",
+    "휴지통 관리 권한이 없습니다": "You do not have permission to manage the trash",
+    "휴지통 항목 없음": "Trash entry not found",
+    "S3 DB 백업 복원에 실패했습니다.": "S3 DB backup restore failed.",
+    "가입을 완료할 수 없습니다. 다른 이메일을 쓰거나 로그인하세요.":
+        "Could not complete sign-up. Use a different email or log in.",
+    "인증 대상이 없습니다": "Nothing to verify",
+    "초대가 유효하지 않거나 만료되었습니다.":
+        "The invitation is invalid or has expired.",
+    "최초 설정 토큰이 올바르지 않습니다.": "The setup token is incorrect.",
 })
 
 CATALOGS: dict[str, dict[str, str]] = {"en": _EN}

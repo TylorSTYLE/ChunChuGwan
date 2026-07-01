@@ -34,6 +34,7 @@ from fastapi import (
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
+    JSONResponse,
     PlainTextResponse,
     RedirectResponse,
     Response,
@@ -227,6 +228,22 @@ async def auth_gate(request: Request, call_next):
             "script-src 'self' 'unsafe-inline'; img-src 'self' data:",
         )
     return response
+
+
+@app.exception_handler(HTTPException)
+async def _translate_http_exception(request: Request, exc: HTTPException) -> Response:
+    """HTTPException 의 문자열 detail 을 요청 로케일로 번역해 응답한다 (원칙: 백엔드
+    라우트 메시지는 i18n). 라우트마다 i18n.t 로 감싸지 않아도 경계에서 한 번에
+    번역되고, 카탈로그에 없는 원문은 그대로 통과한다(graceful). 이미 t() 로 번역된
+    영어 detail 은 카탈로그 매칭이 없어 그대로 유지된다. 422 검증 오류는 detail 이
+    리스트라 번역하지 않고 FastAPI 기본 형태를 유지한다."""
+    detail = exc.detail
+    if isinstance(detail, str):
+        detail = t(request, detail)
+    return JSONResponse(
+        {"detail": detail}, status_code=exc.status_code, headers=exc.headers
+    )
+
 
 # 스냅샷 파일 서빙 화이트리스트 — 논리 이름 → (실제 후보 파일, 미디어 타입).
 # 앞선 후보부터 존재하는 파일을 서빙한다 (.gz 후보는 Content-Encoding: gzip).
@@ -1147,12 +1164,16 @@ def _require_viewer(request: Request) -> None:
     하지 않는다. 따라서 아카이브 콘텐츠를 직접 서빙하는 자원 라우트는 여기서
     로그인(또는 확장 토큰)을 직접 강제한다 — `/resource/` CAS 만 예외(원칙 5,
     샌드박스 하위 요청엔 쿠키가 안 붙어 콘텐츠 주소 + 화이트리스트로만 서빙).
-    인증 off(loopback)면 단일 사용자 로컬 도구라 전부 허용한다."""
+    인증 off(loopback)면 단일 사용자 로컬 도구라 전부 허용한다.
+
+    로그인만으로는 부족하다 — 승인 대기(pending)·차단(blocked) 등 열람 권한이
+    없는 상태 계정은 걸러낸다(view 권한 실효 판정). auth_gate 의 pending 403 은
+    `/api/` 에만 걸리므로 루트 자원 라우트는 여기서 직접 막지 않으면 새어 나간다."""
     if not config.AUTH_ENABLED:
         return
-    if request.state.user is not None:
-        return
     if getattr(request.state, "api_key", None) is not None:
+        return
+    if permissions.has_permission(request.state.user, "view"):
         return
     raise HTTPException(401, t(request, "로그인이 필요합니다"))
 
