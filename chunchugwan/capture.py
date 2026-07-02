@@ -20,7 +20,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Protocol, Sequence
 from urllib.parse import quote, urldefrag, urljoin, urlsplit
 
 from . import (
@@ -436,6 +436,17 @@ def generic_link_rewriter() -> LinkRewriter:
 ResourceFallback = Callable[[str], "tuple[str, bytes] | None"]
 
 
+class ChallengeSolver(Protocol):
+    """비상호작용으로 못 푼 챌린지를 대신 통과시키는 세션의 공용 인터페이스.
+
+    AIChallengeSession(ai_challenge.py)·LiveChallengeSession(live_challenge.py)
+    둘 다 이 구조를 구현한다 — 두 모듈이 capture 를 임포트하므로(순환 임포트
+    방지) capture 쪽은 구체 클래스 대신 이 구조적 타입만 참조한다.
+    """
+
+    def solve(self, page, reason: str) -> tuple[str, str | None]: ...
+
+
 # 채널(real Chrome 등) 기동이 한 번 실패하면(예: arm64 에 google-chrome
 # 미설치) 이후로는 번들 chromium 으로 폴백을 유지한다 — 매 캡처마다 실패-재시도
 # 비용을 한 번만 치르게 한다.
@@ -640,8 +651,8 @@ def capture(
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
-    live_session: "object | None" = None,
-    ai_session: "object | None" = None,
+    live_session: "ChallengeSolver | None" = None,
+    ai_session: "ChallengeSolver | None" = None,
     mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """URL을 렌더링해 raw.html / page.html / screenshot.png 를 out_dir에 저장.
@@ -689,8 +700,8 @@ def _capture_once(
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
-    live_session: "object | None" = None,
-    ai_session: "object | None" = None,
+    live_session: "ChallengeSolver | None" = None,
+    ai_session: "ChallengeSolver | None" = None,
     mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """캡처 1회 시도 — 폴백 판단은 capture() 가 한다."""
@@ -730,8 +741,8 @@ def _capture_in_browser(
     resource_fallback: ResourceFallback | None = None,
     insecure_tls: bool = False,
     credential: CaptureCredential | None = None,
-    live_session: "object | None" = None,
-    ai_session: "object | None" = None,
+    live_session: "ChallengeSolver | None" = None,
+    ai_session: "ChallengeSolver | None" = None,
     mobile_screenshot: bool = False,
 ) -> CaptureResult:
     """브라우저 하나 안에서 캡처 — 컨텍스트를 만들고 끝나면 닫는다.
@@ -1216,6 +1227,7 @@ def _apply_resource_fallback(
         if result is None:
             still_failed.append(item)
             continue
+        assert url is not None  # result 가 not None ⇒ 위 조건식에서 url 이 truthy 였음
         content_type, body = result
         replacements.append(_replacement_for(item, url, content_type, body))
         resource_urls[hashlib.sha256(body).hexdigest()] = url

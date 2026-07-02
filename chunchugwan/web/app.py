@@ -25,6 +25,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import ModuleType
 from urllib.parse import quote, urlsplit
 
 from fastapi import (
@@ -48,14 +49,15 @@ from . import (
     api_routes, audit, auth_routes, cluster_routes, i18n,
     migration_routes, permissions, web_api_routes, web_auth_routes,
 )
+from pydantic import BaseModel
+from .i18n import t
 # 디버그 서버는 릴리스 빌드에서 이미지에서 제거된다(Dockerfile ARG INCLUDE_DEBUG) —
 # 파일이 없으면 graceful no-op. develop 이미지에만 포함된다.
+debug_server: ModuleType | None
 try:
     from . import debug_server
 except ImportError:
     debug_server = None
-from pydantic import BaseModel
-from .i18n import t
 
 logger = logging.getLogger(__name__)
 
@@ -1307,6 +1309,10 @@ def api_live_view(request: Request, job_id: int) -> dict:
     with db.connect() as conn:
         owned = db.claim_live_session(conn, job_id, request.state.user["id"])
         job = db.get_archive_job(conn, job_id)
+        if job is None:
+            # 클레임 시도 사이에 작업이 끝나거나 취소돼 큐에서 사라진 경우
+            # (완료/최종실패 행은 삭제됨) — _live_job_or_404 와 같은 404 로 취급.
+            raise HTTPException(404, t(request, "사람 확인이 필요한 작업이 아닙니다"))
     audit.log(request, "라이브 챌린지 처리 시작: %s", job["url"])
     return {
         "id": job_id, "url": job["url"], "owned": owned,

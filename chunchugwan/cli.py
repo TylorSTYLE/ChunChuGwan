@@ -295,6 +295,10 @@ def delete(
                 abort=True,
             )
         result = deletion.delete_page(page["id"], hard=hard)
+        if result is None:
+            raise click.ClickException(
+                "페이지를 찾을 수 없습니다 — 삭제 중 이미 제거되었을 수 있습니다."
+            )
         if result.trashed:
             click.echo(
                 f"휴지통으로 이동: {result.url} (스냅샷 {result.snapshots_deleted}개)"
@@ -339,6 +343,10 @@ def _delete_site(url: str, *, hard: bool, yes: bool) -> None:
             abort=True,
         )
     result = deletion.delete_site(site["id"], hard=hard)
+    if result is None:
+        raise click.ClickException(
+            "사이트를 찾을 수 없습니다 — 삭제 중 이미 제거되었을 수 있습니다."
+        )
     head = "휴지통으로 이동" if result.trashed else "영구 삭제됨"
     click.echo(
         f"{head}: {result.site_key} (페이지 {result.pages_deleted}개, "
@@ -398,6 +406,10 @@ def trash_restore(target: str) -> None:
     with db.connect() as conn:
         entry = _resolve_trash_entry(conn, target)
     restored = deletion.restore(entry["id"])
+    if restored is None:
+        raise click.ClickException(
+            "휴지통 항목을 찾을 수 없습니다 — 복원 중 이미 처리되었을 수 있습니다."
+        )
     click.echo(f"복원됨: {restored['label']} ({restored['kind']})")
 
 
@@ -441,6 +453,7 @@ def trash_purge(
             deletion.purge(tid)
         click.echo(f"{len(ids)}개 항목을 영구 삭제했습니다.")
         return
+    assert target is not None  # 위 sum(...)==1 검사로 이 분기에선 target 만 truthy
     with db.connect() as conn:
         entry = _resolve_trash_entry(conn, target)
     if not yes:

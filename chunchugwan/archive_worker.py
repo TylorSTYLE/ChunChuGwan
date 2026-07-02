@@ -18,7 +18,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Any, Callable
 
 from . import (
     ai_challenge, capture, config, crawler, db, live_challenge, pipeline, scheduler,
@@ -173,7 +173,9 @@ def process_next(
         try:
             # browser_session·network_tag_id·credential_id 는 있을 때만 넘긴다 —
             # archive_fn 주입(테스트)이 이 인자를 몰라도 동작하게.
-            extra = {"browser_session": browser_session} if browser_session else {}
+            extra: dict[str, Any] = (
+                {"browser_session": browser_session} if browser_session else {}
+            )
             # 작업 id 를 로그까지 잇는다 — 확장이 결과(완료/실패)를 되찾는 상관 키.
             extra["job_id"] = item["id"]
             if item["network_tag_id"]:
