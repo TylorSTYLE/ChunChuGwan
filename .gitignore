@@ -25,3 +25,9 @@ chunchugwan/web/frontend_dist/
 # PyCharm 로컬 전용 워크스페이스 설정 (절대 경로·개인 설정 포함)
 .idea/workspace.xml
 .idea/.name
+
+# 개인 로컬 권한 오버라이드 (부트스트랩 표준 §5.3)
+.claude/settings.local.json
+# 부록 A(GHA 비용 감사) 일회성 태스크 산출물 — 리포에 커밋하지 않음
+gha-cost-audit.md
+gha-settings-checklist.md
