@@ -360,6 +360,7 @@ def search(
         if not db.search_index_available(conn):
             return SearchResults([], 0, "unavailable")
         if mode == "fts":
+            assert isinstance(payload, str)  # _build_query: mode="fts" 면 항상 str
             rows = db.search_snapshots_fts(
                 conn, payload, domain=domain, latest_only=latest_only,
                 viewer=viewer, limit=limit, offset=offset,
@@ -372,6 +373,7 @@ def search(
             # Python 으로 가져오지 않는다.
             hits = [_hit(r, terms, r["snippet"]) for r in rows]
         else:
+            assert isinstance(payload, list)  # _build_query: mode="like" 면 항상 list[str]
             rows = db.search_snapshots_like(
                 conn, payload, domain=domain, latest_only=latest_only,
                 viewer=viewer, limit=limit, offset=offset,

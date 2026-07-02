@@ -60,7 +60,14 @@ def _safe_key(value: object) -> str | None:
 
 
 def _clamp_int(value: object, lo: int, hi: int, default: int = 0) -> int:
-    """임의 값을 정수화 + [lo, hi] 클램프 (변환 실패면 default)."""
+    """임의 값을 정수화 + [lo, hi] 클램프 (변환 실패면 default).
+
+    value 는 LLM 응답 JSON 을 json.loads 로 디코딩한 dict 의 값이라 실제로는
+    None/bool/int/float/str/list/dict 중 하나만 온다 — int() 가 받는 세 타입
+    (int/float/str) 이 아니면 변환 시도 없이 바로 default(TypeError 경로와 동일 결과).
+    """
+    if not isinstance(value, (int, float, str)):
+        return default
     try:
         n = int(value)
     except (TypeError, ValueError):

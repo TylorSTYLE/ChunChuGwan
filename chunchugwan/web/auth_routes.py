@@ -343,7 +343,9 @@ def oidc_callback(
 
     with db.connect() as conn:
         user_id = _link_oidc_user(request, conn, claims)
-        role = db.get_user_by_id(conn, user_id)["role"]
+        user_row = db.get_user_by_id(conn, user_id)
+        assert user_row is not None  # identities/users FK 보장 — 갓 조회/생성한 user_id
+        role = user_row["role"]
         if role == "blocked":
             raise HTTPException(403, t(request, "차단된 계정입니다. 관리자에게 문의하세요."))
         if role == "withdrawn":

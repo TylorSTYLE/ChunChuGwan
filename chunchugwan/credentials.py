@@ -302,8 +302,10 @@ def storage_state_from_har(raw: str | bytes, *, site_host: str | None = None) ->
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
-        response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+        request_raw = entry.get("request")
+        request: dict = request_raw if isinstance(request_raw, dict) else {}
+        response_raw = entry.get("response")
+        response: dict = response_raw if isinstance(response_raw, dict) else {}
         host = urlsplit(request.get("url", "") if isinstance(request.get("url"), str) else "").hostname or ""
         # 요청 쿠키(브라우저가 보낸 현재 상태) → 응답 쿠키(서버가 갱신/설정) 순으로
         # 적용해 응답이 우선한다. 배열이 비었으면 Cookie 헤더로 폴백.

@@ -317,6 +317,7 @@ def login(request: Request, body: LoginReq) -> JSONResponse:
             ok = False
         if not ok:
             raise HTTPException(401, "이메일 또는 패스워드가 올바르지 않습니다.")
+        assert user is not None  # ok=True 는 위 "user is not None and ..." 분기에서만 나옴
         if user["role"] == "blocked":
             raise HTTPException(403, "차단된 계정입니다. 관리자에게 문의하세요.")
         if user["role"] == "withdrawn":
@@ -348,6 +349,7 @@ def login_totp_status(request: Request) -> dict:
         raise HTTPException(401, "패스워드 인증이 필요합니다")
     with db.connect() as conn:
         user = db.get_user_by_id(conn, sess["user_id"])
+        assert user is not None  # sessions.user_id FK 보장 — 세션이 있으면 사용자도 있다
         return {
             "has_totp": user["totp_secret"] is not None,
             "has_passkey": db.count_passkeys(conn, user["id"]) > 0,
@@ -366,6 +368,7 @@ def login_totp(request: Request, body: CodeReq) -> JSONResponse:
     ])
     with db.connect() as conn:
         user = db.get_user_by_id(conn, sess["user_id"])
+        assert user is not None  # sessions.user_id FK 보장 — 세션이 있으면 사용자도 있다
         totp_window = user["totp_secret"] is not None and auth.verify_totp(
             user["totp_secret"], body.code, user["totp_last_used_at"]
         )
@@ -459,6 +462,7 @@ def signup(request: Request, body: LoginReq) -> JSONResponse:
                 role=db.signup_default_role(conn),
             )
             user = db.get_user_by_id(conn, uid)
+            assert user is not None  # create_user 직후라 None 불가
             return _active_or_verify(conn, user)  # 항상 email_verify 분기
         # 메일 미사용 — 완전 일반화 불가. 중복은 중립 메시지로 거부(차선).
         if existing:
@@ -469,6 +473,7 @@ def signup(request: Request, body: LoginReq) -> JSONResponse:
             role=db.signup_default_role(conn),
         )
         user = db.get_user_by_id(conn, uid)
+        assert user is not None  # create_user 직후라 None 불가
         return _active_or_verify(conn, user)
 
 
@@ -513,6 +518,7 @@ def invite_accept(token: str, body: InviteAcceptReq) -> JSONResponse:
             token_session = auth.issue_session(conn, user_id)
     if err is not None:
         raise HTTPException(400, err)
+    assert token_session is not None  # err is None ⇒ 위 elif 분기에서 발급됨
     resp = JSONResponse({"status": "active"})
     set_session_cookie(resp, token_session)
     return resp
