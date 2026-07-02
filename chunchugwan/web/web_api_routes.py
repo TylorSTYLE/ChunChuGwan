@@ -187,6 +187,7 @@ def dashboard(
     request: Request, user: sqlite3.Row | None = Depends(require_session)
 ) -> dict:
     """시스템 현황(첫 화면) — app.dashboard 의 JSON 판. 동일 db·storage 호출."""
+    _require_view(user)
     starts = _period_starts(datetime.now(timezone.utc))
     # 인증(로그인 캡처) 스냅샷은 소유자/관리자에게만 — 집계·최근 목록 모두 가린다
     # (list_sites_overview 와 같은 기준, 메타데이터 누출 차단).
@@ -276,6 +277,7 @@ def sites(
     q 로 site_key 부분 일치 필터(현재 페이지가 아닌 전체 사이트 대상),
     limit/page 로 페이징한다 (프론트 PageSize·딥링크가 보내는 쿼리명과 일치 — H3).
     """
+    _require_view(user)
     per_page = _page_size(limit, _LIST_PAGE_SIZE_DEFAULT)
     q = q.strip() if q else None
     viewer = _snapshot_viewer(request)
@@ -349,6 +351,7 @@ def page_timeline(
     """
     from fastapi import HTTPException
 
+    _require_view(user)
     with db.connect() as conn:
         page = db.get_page_by_id(conn, page_id)
         if page is None:
@@ -454,6 +457,7 @@ def snapshot(
 
     SPA 는 page_html_url 을 <iframe sandbox> src 로만 쓴다.
     """
+    _require_view(user)
     snap = _load_snapshot(request, snapshot_id)
     audit.log(
         request, "아카이브 열람: %s (스냅샷 #%d)", snap["page_url"], snapshot_id,
@@ -629,6 +633,7 @@ def site_detail(
     """사이트 상세 — 페이지·회차·실패 목록(각각 페이징) + 스케줄/문서/네트워크 태그/인증서. app.site_view 의 JSON 판."""
     from fastapi import HTTPException
 
+    _require_view(user)
     with db.connect() as conn:
         site = db.get_site(conn, site_id)
         if site is None:
@@ -720,8 +725,9 @@ def site_lists(
 
     site_detail 의 통계·인증서·스케줄·문서 등을 생략하고 pages/crawls/failed_items 와
     각 pager 만 내려준다 (한 목록을 넘겨도 SPA 가 누적 파라미터로 셋 다 함께 갱신).
-    가드는 site_detail 과 동일하게 세션만 요구한다.
+    가드는 site_detail 과 동일하게 view 권한을 요구한다.
     """
+    _require_view(user)
     with db.connect() as conn:
         if db.get_site(conn, site_id) is None:
             raise HTTPException(404, "사이트 없음")
@@ -808,6 +814,7 @@ def diff(
     """
     from fastapi import HTTPException
 
+    _require_view(user)
     page, snaps, from_idx, to_idx, old_snap, new_snap = _resolve_diff_pair(
         request, page_id, from_idx, to_idx
     )
@@ -916,6 +923,7 @@ def documents_list(
     user: sqlite3.Row | None = Depends(require_session),
 ) -> dict:
     """문서 파일 통합 목록(sha256 그룹) — app.documents_view 의 JSON 판."""
+    _require_view(user)
     offset = (page - 1) * _DOCUMENTS_PER_PAGE
     # 인증(로그인 캡처) 스냅샷이 참조한 문서는 소유자/관리자에게만 (H2)
     viewer = _snapshot_viewer(request)
@@ -939,6 +947,7 @@ def schedules(
     request: Request, user: sqlite3.Row | None = Depends(require_session)
 ) -> dict:
     """자동 재아카이빙 목록(페이지·사이트) — app.schedules_view 의 JSON 판."""
+    _require_view(user)
     with db.connect() as conn:
         rows = db.list_schedules(conn)
         crawl_rows = db.list_crawl_schedules(conn)
@@ -1049,6 +1058,14 @@ def logs(
 # app.py 의 검증 헬퍼(_queue_archive·_network_gate·_interval_from_form·
 # _requester_id)는 지연 import 로 재사용한다 — app 이 이 모듈을 모듈 레벨에서
 # import 하므로 함수 안에서 역참조해 순환을 피한다.
+
+
+def _require_view(user: sqlite3.Row | None) -> None:
+    """아카이브 열람 가드 — 세분 권한 view. 읽기 GET(목록·타임라인·스냅샷·diff·
+    현황·문서·스케줄)이 검색(can_search=view)과 같은 하한을 갖도록 일관화한다.
+    인증 off(loopback)면 has_permission 이 전부 허용한다."""
+    if not permissions.has_permission(user, "view"):
+        raise HTTPException(403, "열람 권한이 없습니다")
 
 
 def _require_archive(user: sqlite3.Row | None) -> None:

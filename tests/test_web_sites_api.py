@@ -92,6 +92,21 @@ def test_site_detail_requires_session(tmp_db):
     assert client_for().get(f"/api/web/sites/{site_id}").status_code == 401
 
 
+def test_read_gets_require_view_permission(tmp_db):
+    """읽기 GET 은 view 권한을 요구한다(검색과 일관) — view 뺀 계정은 403, 있으면 200."""
+    seed_site()
+    uid, token = make_user("noview@test.co", role="viewer")
+    with db.connect() as conn:
+        db.set_permission_overrides(conn, uid, {"view": False})  # view 제거
+    c = client_for(token)
+    for path in ("/api/web/dashboard", "/api/web/sites",
+                 "/api/web/documents", "/api/web/schedules"):
+        assert c.get(path).status_code == 403, path
+    # view 를 가진 일반 viewer 는 정상 열람
+    _, tok_ok = make_user("hasview@test.co", role="viewer")
+    assert client_for(tok_ok).get("/api/web/sites").status_code == 200
+
+
 # ---- 목록 ----
 
 
