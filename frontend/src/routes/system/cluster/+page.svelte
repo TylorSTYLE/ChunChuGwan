@@ -204,7 +204,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each d.peers as p}
+				{#each d.peers as p (p.id)}
 					<tr>
 						<td data-label={t('피어')}>
 							<div>{p.display_name || t('(이름 없음)')}</div>

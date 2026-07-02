@@ -18,10 +18,9 @@ export default ts.config(
 				"error",
 				{ argsIgnorePattern: "^_", varsIgnorePattern: "^_", destructuredArrayIgnorePattern: "^_" }
 			],
-			// 부트스트랩 시점 기존 위반 다수(각 130건 이상, 대부분 기존 라우트 전반) 동결.
-			// 점진 해소 대상은 CLAUDE.md 마이그레이션 백로그 참조 — 새 코드는 두 규칙 모두 준수할 것.
-			"svelte/require-each-key": "warn",
-			"svelte/no-navigation-without-resolve": "warn"
+			// 모든 내비게이션은 $app/paths 의 resolve() 를 거치고, 모든 #each 는 key 를 가진다.
+			"svelte/require-each-key": "error",
+			"svelte/no-navigation-without-resolve": "error"
 		}
 	},
 	{

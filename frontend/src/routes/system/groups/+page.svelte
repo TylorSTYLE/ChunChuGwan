@@ -76,7 +76,7 @@
 <h2>{t('권한 그룹')}</h2>
 <AlertBox error={act.error} />
 
-{#each d.groups as g}
+{#each d.groups as g (g.name)}
 	{@const e = current(g)}
 	<fieldset class="group">
 		<legend>
@@ -91,7 +91,7 @@
 				</Field>
 			{/if}
 			<div class="perms">
-				{#each d.permissions_catalog as p}
+				{#each d.permissions_catalog as p (p)}
 					<label><input type="checkbox" checked={e.perms.has(p)} onchange={() => toggle(g, p)} /> {d.permission_labels[p] ?? p}</label>
 				{/each}
 			</div>
@@ -113,7 +113,7 @@
 			<Field label={t('표시 라벨')}><Input type="text" bind:value={newLabel} /></Field>
 		</div>
 		<div class="perms">
-			{#each d.permissions_catalog as p}
+			{#each d.permissions_catalog as p (p)}
 				<label><input type="checkbox" checked={newPerms.has(p)} onchange={() => toggleNew(p)} /> {d.permission_labels[p] ?? p}</label>
 			{/each}
 		</div>

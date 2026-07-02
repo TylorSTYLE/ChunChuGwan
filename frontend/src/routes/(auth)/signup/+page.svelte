@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { api, ApiError } from '$lib/api';
 	import { afterAuth } from '$lib/auth';
@@ -38,7 +38,7 @@
 		<!-- 가입 비활성 상태에서 URL 직접 진입 시 폼을 렌더하지 않는다(제출 시점 403 대신 즉시 안내). -->
 		<p class="muted">{t('회원 가입이 비활성화되어 있습니다.')}</p>
 		<div class="alt muted">
-			{t('이미 계정이 있나요?')} <a href="{base}/login">{t('로그인')}</a>
+			{t('이미 계정이 있나요?')} <a href={resolve('/login')}>{t('로그인')}</a>
 		</div>
 	{:else}
 		{#if error}<div class="error">{error}</div>{/if}
@@ -60,7 +60,7 @@
 			<Button type="submit" disabled={busy} class="mt-1 w-full">{t('가입')}</Button>
 		</form>
 		<div class="alt muted">
-			{t('이미 계정이 있나요?')} <a href="{base}/login">{t('로그인')}</a>
+			{t('이미 계정이 있나요?')} <a href={resolve('/login')}>{t('로그인')}</a>
 		</div>
 	{/if}
 </div>

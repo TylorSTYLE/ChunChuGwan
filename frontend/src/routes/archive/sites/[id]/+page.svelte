@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { pagePath } from '$lib/urls';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
+	import type { ResolvedPathname } from '$app/types';
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
@@ -123,7 +124,7 @@
 		action.error = '';
 		try {
 			await api(`/sites/${s.site.id}/delete`, { method: 'POST' });
-			goto(`${base}/archive/list`);
+			goto(resolve('/archive/list'));
 		} catch (err) {
 			action.error = err instanceof ApiError ? err.message : String(err);
 			action.busy = false;
@@ -173,7 +174,7 @@
 			<tr><th>URL</th><th>{t('스냅샷')}</th><th>{t('용량')}</th><th>{t('마지막')}</th></tr>
 		</thead>
 		<tbody>
-			{#each ld.pages as p}
+			{#each ld.pages as p (p.id)}
 				<tr>
 					<td class="url-cell" data-label="URL"><a href={pagePath(s.site.id, p.id)} title={p.url}>{p.url}</a></td>
 					<td class="num" data-label={t('스냅샷')}>{p.snapshot_count ?? '-'}</td>
@@ -212,9 +213,11 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each ld.crawls as c}
+				{#each ld.crawls as c (c.id)}
 					<tr>
-						<td class="mono" data-label={t('시작')}><a href="{base}/crawls/{c.id}">{ts(c.created_at)}</a></td>
+						<td class="mono" data-label={t('시작')}
+							><a href={resolve('/crawls/[id]', { id: String(c.id) })}>{ts(c.created_at)}</a></td
+						>
 						<td data-label={t('상태')}>
 							<Badge variant={STATUS_BADGE[c.status] ?? 'same'}>
 								{t(STATUS_LABEL[c.status] ?? c.status)}
@@ -240,10 +243,10 @@
 {#if s.schedules.length > 0 || s.crawl_schedules.length > 0}
 	<h3>{t('스케줄')}</h3>
 	<ul class="muted">
-		{#each s.schedules as sc}
+		{#each s.schedules as sc (sc.page_id)}
 			<li><a href={pagePath(s.site.id, sc.page_id)}>{t('페이지')} #{sc.page_id}</a> — {sc.label}</li>
 		{/each}
-		{#each s.crawl_schedules as cs}
+		{#each s.crawl_schedules as cs (cs.start_url)}
 			<li class="mono">{cs.start_url} — {cs.label}</li>
 		{/each}
 	</ul>
@@ -271,7 +274,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each ld.failed_items as f}
+				{#each ld.failed_items as f (`${f.kind}:${f.id}`)}
 					<tr>
 						<td class="mono" data-label={t('시간')}>{f.at ? ts(String(f.at)) : '-'}</td>
 						<td class="url-cell" data-label="URL">{f.url}</td>
@@ -301,7 +304,7 @@
 		)}
 	</p>
 	<ul class="certs">
-		{#each s.certificates as c}
+		{#each s.certificates as c (c.cert.id)}
 			{@const exp = expiry(String(c.cert.not_after))}
 			<li class="cert" class:is-current={c.is_current}>
 				<div class="cert-head">
@@ -321,7 +324,7 @@
 							{t('검증 안 됨')}
 						</Badge>
 					{/if}
-					<a href={c.pem_url} class="pem" download>PEM</a>
+					<a href={c.pem_url as ResolvedPathname} class="pem" download>PEM</a>
 				</div>
 				<dl class="cert-fields">
 					<dt>{t('주체')}</dt>
@@ -357,7 +360,9 @@
 
 {#if s.can_manage_credentials}
 	<p class="cred-link">
-		<a href="{base}/archive/sites/{s.site.id}/credentials">{t('로그인 자격증명 관리')}</a>
+		<a href={resolve('/archive/sites/[id]/credentials', { id: String(s.site.id) })}
+			>{t('로그인 자격증명 관리')}</a
+		>
 		<span class="muted">{t('— 이 사이트 캡처 시 사용할 로그인 정보')}</span>
 	</p>
 {/if}

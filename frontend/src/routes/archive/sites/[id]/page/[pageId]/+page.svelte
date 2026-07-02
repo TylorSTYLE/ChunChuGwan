@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { snapPath } from '$lib/urls';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
@@ -60,7 +60,7 @@
 		action.error = '';
 		try {
 			await api(`/pages/${tl.page.id}/delete`, { method: 'POST' });
-			goto(`${base}/archive/list`);
+			goto(resolve('/archive/list'));
 		} catch (err) {
 			action.error = err instanceof ApiError ? err.message : String(err);
 			action.busy = false;
@@ -83,8 +83,12 @@
 />
 
 <div class="toolbar">
-	{#if tl.site}<a href="{base}/archive/sites/{tl.site.id}">← {t('사이트 상세')}</a>{/if}
-	{#if tl.total >= 2}<a href="{base}/diff/{tl.page.id}">{t('최신 2개 비교')}</a>{/if}
+	{#if tl.site}<a href={resolve('/archive/sites/[id]', { id: String(tl.site.id) })}
+			>← {t('사이트 상세')}</a
+		>{/if}
+	{#if tl.total >= 2}<a href={resolve('/diff/[id]', { id: String(tl.page.id) })}
+			>{t('최신 2개 비교')}</a
+		>{/if}
 </div>
 
 {#if tl.can_archive}
@@ -99,7 +103,7 @@
 				<Button variant="outline" size="sm" onclick={removeSchedule} disabled={action.busy}>{t('스케줄 해제')}</Button>
 			{:else}
 				<select bind:value={interval}>
-					{#each INTERVALS as [v, label]}<option value={v}>{t(label)}</option>{/each}
+					{#each INTERVALS as [v, label] (v)}<option value={v}>{t(label)}</option>{/each}
 				</select>
 				<Button variant="outline" size="sm" onclick={setSchedule} disabled={action.busy}>{t('스케줄 등록')}</Button>
 			{/if}
@@ -124,7 +128,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each snaps as item}
+				{#each snaps as item (item.snap.id)}
 					<tr>
 						<td class="num" data-label="#">{item.idx}</td>
 						<td class="mono" data-label={t('시간')}>{ts(item.snap.taken_at)}</td>

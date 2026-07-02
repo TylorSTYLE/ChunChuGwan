@@ -2,7 +2,7 @@
 	/** 전역 에러 화면 — 로드 실패(4xx/5xx) 시 레이아웃 안에서 스타일된 안내를 보여준다.
 	 * SvelteKit 기본 평문("500 Internal Error") 대신 토큰 기반 카드로 렌더. */
 	import { page } from '$app/state';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { t } from '$lib/i18n';
 
 	const status = $derived(page.status);
@@ -13,7 +13,7 @@
 	<div class="code mono">{status}</div>
 	<h2>{t('문제가 발생했습니다')}</h2>
 	<p class="muted">{message || t('요청한 페이지를 표시할 수 없습니다.')}</p>
-	<a href="{base}/">← {t('현황')}</a>
+	<a href={resolve('/')}>← {t('현황')}</a>
 </div>
 
 <style>

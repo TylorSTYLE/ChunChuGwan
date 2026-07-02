@@ -21,5 +21,5 @@
 	value={String(value)}
 	onchange={(e) => onchange(Number(e.currentTarget.value))}
 >
-	{#each options as n}<option value={String(n)}>{n}</option>{/each}
+	{#each options as n (n)}<option value={String(n)}>{n}</option>{/each}
 </select>

@@ -96,7 +96,7 @@
 		<label class="opt"><input type="checkbox" bind:checked={canClusterSend} /> {t('클러스터 보내기')}</label>
 		<label class="opt"><input type="checkbox" bind:checked={canClusterReceive} /> {t('클러스터 받기')}</label>
 		<select bind:value={expiry}>
-			{#each EXPIRY as [v, label]}<option value={v}>{t(label)}</option>{/each}
+			{#each EXPIRY as [v, label] (v)}<option value={v}>{t(label)}</option>{/each}
 		</select>
 		{#if expiry === 'custom'}
 			<Input type="number" bind:value={customDays} min="1" max="3650" style="width:90px" />
@@ -112,7 +112,7 @@
 				<tr><th>{t('이름')}</th><th>{t('권한')}</th><th>{t('만료')}</th><th></th></tr>
 			</thead>
 			<tbody>
-				{#each d.keys as k}
+				{#each d.keys as k (k.id)}
 					<tr>
 						<td data-label={t('이름')}>{k.name}</td>
 						<td class="muted" data-label={t('권한')}>

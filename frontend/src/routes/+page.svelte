@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { pagePath, snapPath } from '$lib/urls';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
 	import type { Dashboard, RecentSnap, RecentLog } from '$lib/types';
@@ -53,7 +53,7 @@
 			</tr>
 		</thead>
 		<tbody>
-			{#each d.trend as row}
+			{#each d.trend as row (row.label)}
 				<tr>
 					<td>{t(row.label)}</td>
 					<td class="num">{row.count}</td>
@@ -75,7 +75,7 @@
 				<tr><th>{t('시간')}</th><th>{t('상태')}</th><th>URL</th><th>{t('용량')}</th><th></th></tr>
 			</thead>
 			<tbody>
-				{#each d.recent_snaps as s}
+				{#each d.recent_snaps as s (s.id)}
 					{@const b = snapBadge(s)}
 					<tr>
 						<td class="mono" data-label={t('시간')}>{ts(s.taken_at)}</td>
@@ -100,7 +100,7 @@
 				<tr><th>{t('시간')}</th><th>{t('상태')}</th><th>URL</th><th>{t('소요')}</th><th>{t('출처')}</th><th></th></tr>
 			</thead>
 			<tbody>
-				{#each d.recent_logs as log}
+				{#each d.recent_logs as log (log.id)}
 					{@const b = logBadge(log)}
 					<tr>
 						<td class="mono" data-label={t('시간')}>{ts(log.started_at)}</td>
@@ -120,7 +120,7 @@
 			</tbody>
 		</table>
 	</div>
-	<p class="more-link"><a href="{base}/log/archive">{t('전체 로그 →')}</a></p>
+	<p class="more-link"><a href={resolve('/log/archive')}>{t('전체 로그 →')}</a></p>
 {/if}
 
 <style>

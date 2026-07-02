@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
+	import type { ResolvedPathname } from '$app/types';
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { ModeWatcher, userPrefersMode, setMode } from 'mode-watcher';
@@ -58,22 +59,26 @@
 	const showSettings = $derived(!!me && (me.flags.can_manage_users || me.flags.can_manage_system));
 
 	// 헤더 네비 구조 — 데스크탑 드롭다운과 모바일 시트가 같은 데이터를 공유한다.
-	// 라벨은 t() 리터럴로 둬 i18n 정적 검사가 en 카탈로그를 강제하게 한다.
-	type NavItem = { href: string; label: string; badge?: number };
+	// 라벨은 t() 리터럴로 둬 i18n 정적 검사가 en 카탈로그를 강제하게 한다. href 는 여기서
+	// (리터럴 인자로) resolve() 해 이미 ResolvedPathname 으로 저장한다 — 템플릿에서
+	// resolve(it.href) 를 부르면 it.href 의 타입이 Pathname 합집합이라 어떤 특정 라우트
+	// 오버로드에도 매칭되지 않아(튜플 분배 한계) 타입 에러가 난다.
+	type NavItem = { href: ResolvedPathname; label: string; badge?: number };
 	type NavGroup = { label: string; badge: number; items: NavItem[] };
 	const menuGroups = $derived.by<NavGroup[]>(() => {
 		if (!me) return [];
 		const groups: NavGroup[] = [];
 
 		const arch: NavItem[] = [];
-		if (me.flags.can_archive) arch.push({ href: '/archive/new', label: t('새 아카이빙') });
-		arch.push({ href: '/archive/list', label: t('아카이브 사이트 목록') });
-		arch.push({ href: '/archive/documents', label: t('전체 문서(파일)') });
-		arch.push({ href: '/archive/schedules', label: t('스케줄') });
-		if (me.flags.can_manage_trash) arch.push({ href: '/archive/trash', label: t('휴지통') });
+		if (me.flags.can_archive) arch.push({ href: resolve('/archive/new'), label: t('새 아카이빙') });
+		arch.push({ href: resolve('/archive/list'), label: t('아카이브 사이트 목록') });
+		arch.push({ href: resolve('/archive/documents'), label: t('전체 문서(파일)') });
+		arch.push({ href: resolve('/archive/schedules'), label: t('스케줄') });
+		if (me.flags.can_manage_trash)
+			arch.push({ href: resolve('/archive/trash'), label: t('휴지통') });
 		if (me.flags.can_manage_system && me.needs_human_count > 0)
 			arch.push({
-				href: '/archive/needs-human',
+				href: resolve('/archive/needs-human'),
 				label: t('사람 확인'),
 				badge: me.needs_human_count
 			});
@@ -86,23 +91,26 @@
 		if (showLogs) {
 			const logs: NavItem[] = [];
 			if (me.flags.can_view_archive_logs)
-				logs.push({ href: '/log/archive', label: t('아카이브 로그') });
+				logs.push({ href: resolve('/log/archive'), label: t('아카이브 로그') });
 			if (me.flags.can_view_system_logs)
-				logs.push({ href: '/log/system', label: t('시스템 로그') });
-			if (me.flags.can_view_audit_logs) logs.push({ href: '/log/audit', label: t('감사 로그') });
+				logs.push({ href: resolve('/log/system'), label: t('시스템 로그') });
+			if (me.flags.can_view_audit_logs)
+				logs.push({ href: resolve('/log/audit'), label: t('감사 로그') });
 			groups.push({ label: t('로그'), badge: 0, items: logs });
 		}
 
 		if (showSettings) {
 			const sys: NavItem[] = [];
-			if (me.flags.can_manage_users) sys.push({ href: '/system/users', label: t('사용자 관리') });
-			if (me.flags.can_manage_system) sys.push({ href: '/system/groups', label: t('권한 그룹') });
 			if (me.flags.can_manage_users)
-				sys.push({ href: '/system/api-keys', label: t('API Key 관리') });
+				sys.push({ href: resolve('/system/users'), label: t('사용자 관리') });
 			if (me.flags.can_manage_system)
-				sys.push({ href: '/system/cluster', label: t('클러스터') });
+				sys.push({ href: resolve('/system/groups'), label: t('권한 그룹') });
+			if (me.flags.can_manage_users)
+				sys.push({ href: resolve('/system/api-keys'), label: t('API Key 관리') });
 			if (me.flags.can_manage_system)
-				sys.push({ href: '/system/general', label: t('시스템 설정') });
+				sys.push({ href: resolve('/system/cluster'), label: t('클러스터') });
+			if (me.flags.can_manage_system)
+				sys.push({ href: resolve('/system/general'), label: t('시스템 설정') });
 			groups.push({ label: t('설정'), badge: 0, items: sys });
 		}
 
@@ -134,7 +142,8 @@
 		e.preventDefault();
 		const term = q.trim();
 		navOpen = false;
-		goto(`${base}/search${term ? `?q=${encodeURIComponent(term)}` : ''}`);
+		const qs = term ? `?q=${encodeURIComponent(term)}` : '';
+		goto(`${resolve('/search')}${qs}` as ResolvedPathname);
 	}
 
 	// 로그아웃 — 숨은 POST 폼을 프로그래밍으로 제출한다(서버가 세션 종료 후 리다이렉트).
@@ -151,7 +160,7 @@
 		class="sticky top-0 z-30 flex flex-wrap items-center gap-x-3.5 gap-y-2 border-b bg-background/95 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80 max-[599px]:px-3"
 	>
 		<h1 class="m-0 text-[15px] font-semibold">
-			<a href="{base}/" class="text-foreground no-underline">{t('춘추관')}</a>
+			<a href={resolve('/')} class="text-foreground no-underline">{t('춘추관')}</a>
 		</h1>
 		<span class="text-xs text-muted-foreground max-[599px]:hidden">{t('개인 웹 아카이브')}</span>
 
@@ -162,7 +171,7 @@
 					{#snippet children(close)}
 						{#each g.items as it (it.href)}
 							<a
-								href="{base}{it.href}"
+								href={it.href}
 								onclick={close}
 								class={it.badge ? 'flex items-center justify-between gap-2' : ''}
 							>
@@ -219,7 +228,7 @@
 					</p>
 					<a
 						class={buttonVariants({ variant: 'outline', size: 'sm' })}
-						href="/extension/download"
+						href={"/extension/download" as ResolvedPathname}
 						onclick={() => (extOpen = false)}>{t('크롬 확장 내려받기')}</a
 					>
 					<details class="mt-3">
@@ -266,15 +275,15 @@
 						{me.user.display_name || me.user.email}
 					</DropdownMenu.Trigger>
 					<DropdownMenu.Content align="end" class="min-w-[160px]">
-						<DropdownMenu.Item onSelect={() => goto(`${base}/settings/account`)}>
+						<DropdownMenu.Item onSelect={() => goto(resolve('/settings/account'))}>
 							{t('계정')}
 						</DropdownMenu.Item>
 						{#if me.flags.can_use_api_keys}
-							<DropdownMenu.Item onSelect={() => goto(`${base}/settings/api-keys`)}>
+							<DropdownMenu.Item onSelect={() => goto(resolve('/settings/api-keys'))}>
 								{t('개인 API Key')}
 							</DropdownMenu.Item>
 						{/if}
-						<DropdownMenu.Item onSelect={() => goto(`${base}/settings/archives`)}>
+						<DropdownMenu.Item onSelect={() => goto(resolve('/settings/archives'))}>
 							{t('내 아카이브')}
 						</DropdownMenu.Item>
 						<DropdownMenu.Separator />
@@ -309,7 +318,7 @@
 								<div class="flex flex-col">
 									{#each g.items as it (it.href)}
 										<a
-											href="{base}{it.href}"
+											href={it.href}
 											onclick={() => (navOpen = false)}
 											class="flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm text-foreground no-underline hover:bg-muted"
 										>

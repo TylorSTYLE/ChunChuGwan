@@ -122,7 +122,7 @@
 			<tr><th>{t('이메일')}</th><th>{t('표시이름')}</th><th>{t('역할')}</th><th></th></tr>
 		</thead>
 		<tbody>
-			{#each d.users as u}
+			{#each d.users as u (u.id)}
 				<tr>
 					<td data-label={t('이메일')}>
 						{u.email}
@@ -147,7 +147,7 @@
 							<Badge variant="secondary">{d.role_labels[u.role] ?? u.role}</Badge>
 						{:else}
 							<select value={u.role} disabled={act.busy} onchange={(e) => setRole(u, e.currentTarget.value)}>
-								{#each d.roles as r}<option value={r}>{d.role_labels[r] ?? r}</option>{/each}
+								{#each d.roles as r (r)}<option value={r}>{d.role_labels[r] ?? r}</option>{/each}
 								{#if !d.roles.includes(u.role)}<option value={u.role}>{d.role_labels[u.role] ?? u.role}</option>{/if}
 							</select>
 						{/if}
@@ -190,7 +190,7 @@
 	<Toolbar>
 		<Input type="email" bind:value={inviteEmail} placeholder={t('이메일')} aria-label={t('이메일')} />
 		<select bind:value={inviteRole} aria-label={t('역할')}>
-			{#each d.invitable_roles as r}<option value={r}>{d.role_labels[r] ?? r}</option>{/each}
+			{#each d.invitable_roles as r (r)}<option value={r}>{d.role_labels[r] ?? r}</option>{/each}
 		</select>
 		<Button type="submit" disabled={act.busy}>{t('초대')}</Button>
 	</Toolbar>
@@ -206,7 +206,7 @@
 		<table>
 			<thead><tr><th>{t('이메일')}</th><th>{t('역할')}</th><th>{t('만료')}</th><th></th></tr></thead>
 			<tbody>
-				{#each d.invites as inv}
+				{#each d.invites as inv (inv.id)}
 					<tr>
 						<td data-label={t('이메일')}>{inv.email}</td>
 						<td data-label={t('역할')}>{d.role_labels[inv.role] ?? inv.role}</td>

@@ -61,11 +61,11 @@
 <Toolbar>
 	<select value={d.domain} onchange={(e) => applyFilter({ domain: e.currentTarget.value })}>
 		<option value="">{t('전체 도메인')}</option>
-		{#each d.domains as dom}<option value={dom}>{dom}</option>{/each}
+		{#each d.domains as dom (dom)}<option value={dom}>{dom}</option>{/each}
 	</select>
 	<select value={d.status} onchange={(e) => applyFilter({ status: e.currentTarget.value })}>
 		<option value="">{t('전체 상태')}</option>
-		{#each d.statuses as st}<option value={st}>{t(STATUS_LABEL[st] ?? st)}</option>{/each}
+		{#each d.statuses as st (st)}<option value={st}>{t(STATUS_LABEL[st] ?? st)}</option>{/each}
 	</select>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
@@ -88,7 +88,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each d.items as it}
+				{#each d.items as it (it.log.id)}
 					<tr>
 						<td class="mono" data-label={t('시간')}>{ts(it.log.started_at)}</td>
 						<td data-label={t('상태')}>

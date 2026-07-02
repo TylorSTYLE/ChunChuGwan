@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { api, ApiError } from '$lib/api';
 	import { afterAuth } from '$lib/auth';
@@ -37,7 +37,7 @@
 		<div class="error">
 			{t('유효하지 않거나 만료된 초대 링크입니다. 관리자에게 다시 초대를 요청하세요.')}
 		</div>
-		<div class="alt muted"><a href="{base}/login">{t('로그인으로')}</a></div>
+		<div class="alt muted"><a href={resolve('/login')}>{t('로그인으로')}</a></div>
 	{:else}
 		{#if error}<div class="error">{error}</div>{/if}
 		<form onsubmit={submit}>

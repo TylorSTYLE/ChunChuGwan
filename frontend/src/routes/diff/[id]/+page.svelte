@@ -29,7 +29,7 @@
 	<div class="diff-wrap">
 		<table class="diff">
 			<tbody>
-				{#each d.rows as [tag, left, right]}
+				{#each d.rows as [tag, left, right], i (i)}
 					{#if tag === 'skip'}
 						<tr class="d-skip"><td colspan="2">… {left} …</td></tr>
 					{:else}

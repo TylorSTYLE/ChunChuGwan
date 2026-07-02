@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
@@ -89,11 +89,11 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each d.items as s}
+				{#each d.items as s (s.site_key)}
 					<tr>
 						<td data-label={t('사이트')}>
 							{#if s.site_id}
-								<a href="{base}/archive/sites/{s.site_id}">{s.site_key}</a>
+								<a href={resolve('/archive/sites/[id]', { id: String(s.site_id) })}>{s.site_key}</a>
 							{:else}
 								<span>{s.site_key}</span>
 							{/if}

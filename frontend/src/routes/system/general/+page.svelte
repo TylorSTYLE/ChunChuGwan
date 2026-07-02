@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize } from '$lib/format';
@@ -830,7 +830,7 @@
 		{#if storage.status === 'partial' && storage.failed?.length}
 			<p class="desc warn">{t('실패한 파일')} ({storage.failed.length})</p>
 			<ul class="faillist mono">
-				{#each storage.failed.slice(0, 50) as f}
+				{#each storage.failed.slice(0, 50) as f (f.path)}
 					<li title={f.error}>{f.path}</li>
 				{/each}
 			</ul>
@@ -982,7 +982,7 @@
 	<p class="muted">{t('등록된 태그가 없습니다.')}</p>
 {:else}
 	<ul class="taglist">
-		{#each s.network_tags as tag}
+		{#each s.network_tags as tag (tag.id)}
 			<li>
 				<span class="mono">{tag.name}</span>
 				<span class="muted mono">{tag.id}</span>
@@ -1005,13 +1005,13 @@
 			<label>{t('원본')}
 				<select bind:value={mergeSource}>
 					<option value="">—</option>
-					{#each s.network_tags as tag}<option value={tag.id}>{tag.name}</option>{/each}
+					{#each s.network_tags as tag (tag.id)}<option value={tag.id}>{tag.name}</option>{/each}
 				</select>
 			</label>
 			<label>{t('대상')}
 				<select bind:value={mergeTarget}>
 					<option value="">—</option>
-					{#each s.network_tags as tag}<option value={tag.id}>{tag.name}</option>{/each}
+					{#each s.network_tags as tag (tag.id)}<option value={tag.id}>{tag.name}</option>{/each}
 				</select>
 			</label>
 			<Button variant="outline" size="sm" class="self-start" disabled={busy || !mergeSource || !mergeTarget} onclick={mergeTags}>{t('병합')}</Button>
@@ -1028,7 +1028,7 @@
 	<label class="ck"><input type="checkbox" bind:checked={signupEnabled} /> {t('회원 가입 허용')}</label>
 	<label>{t('가입 초기 권한')}
 		<select bind:value={signupRole}>
-			{#each s.signup_roles as r}<option value={r}>{s.role_labels[r] ?? r}</option>{/each}
+			{#each s.signup_roles as r (r)}<option value={r}>{s.role_labels[r] ?? r}</option>{/each}
 		</select>
 	</label>
 	{#if signupEnabled && signupRole !== 'pending'}
@@ -1068,7 +1068,7 @@
 	<label>{t('보내는 주소')} <Input type="text" class="flex-1 basis-[180px] min-w-0" bind:value={smtpFrom} /></label>
 	<label>TLS
 		<select bind:value={smtpTls}>
-			{#each s.smtp_tls_modes as m}<option value={m}>{m}</option>{/each}
+			{#each s.smtp_tls_modes as m (m)}<option value={m}>{m}</option>{/each}
 		</select>
 	</label>
 	<label>{t('비밀번호')}
@@ -1083,7 +1083,7 @@
 		<Button variant="outline" size="sm" disabled={busy || !s.smtp_config.enabled} onclick={testSmtp}>{t('테스트 메일 보내기')}</Button>
 	</div>
 </fieldset>
-<p class="desc"><a href="{base}/system/api-keys">{t('API 키 관리로 이동')}</a></p>
+<p class="desc"><a href={resolve('/system/api-keys')}>{t('API 키 관리로 이동')}</a></p>
 
 <!-- ── 위험 구역 ── -->
 <h3 class="group danger-title">{t('위험 구역')}</h3>

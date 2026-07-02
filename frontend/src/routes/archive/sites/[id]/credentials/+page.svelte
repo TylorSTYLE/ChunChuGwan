@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
 	import { api } from '$lib/api';
@@ -62,7 +62,9 @@
 </script>
 
 <p class="muted back">
-	<a href="{base}/archive/sites/{d.site.id}">← <span class="mono">{d.site.site_key}</span></a>
+	<a href={resolve('/archive/sites/[id]', { id: String(d.site.id) })}
+		>← <span class="mono">{d.site.site_key}</span></a
+	>
 </p>
 <h2>{t('로그인 자격증명')} <span class="mono muted">{d.site.site_key}</span></h2>
 <AlertBox error={act.error} notice={act.notice} />
@@ -87,7 +89,7 @@
 			</tr>
 		</thead>
 		<tbody>
-			{#each d.credentials as c}
+			{#each d.credentials as c (c.id)}
 				<tr>
 					<td data-label={t('이름')}>{c.label}</td>
 					<td data-label={t('종류')}>{t(c.kind_label)}</td>
@@ -118,7 +120,7 @@
 		</Field>
 		<Field label={t('종류')}>
 			<select bind:value={kind} disabled={!d.secret_key_configured}>
-				{#each d.kinds as k}<option value={k.value}>{t(k.label)}</option>{/each}
+				{#each d.kinds as k (k.value)}<option value={k.value}>{t(k.label)}</option>{/each}
 			</select>
 		</Field>
 

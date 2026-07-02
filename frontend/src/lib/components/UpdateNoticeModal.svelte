@@ -25,13 +25,13 @@
 			</Dialog.Title>
 		</Dialog.Header>
 		<ul class="list-disc pl-5 text-sm leading-7">
-			{#each note.items as item}
+			{#each note.items as item, i (i)}
 				<li>
 					{item.text}{#if item.url} <a
 							class="whitespace-nowrap font-mono text-xs text-muted-foreground hover:text-link hover:underline"
 							href={item.url}
 							target="_blank"
-							rel="noopener noreferrer"
+							rel="external noopener noreferrer"
 							title="PR #{item.pr}">#{item.pr}</a
 						>{/if}
 				</li>

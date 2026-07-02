@@ -179,7 +179,7 @@
 <FormSection title={t('언어')}>
 	<div class="form">
 		<select bind:value={locale}>
-			{#each d.locales as code}<option value={code}>{d.locale_names[code] ?? code}</option>{/each}
+			{#each d.locales as code (code)}<option value={code}>{d.locale_names[code] ?? code}</option>{/each}
 		</select>
 		<Button variant="outline" size="sm" onclick={saveLanguage} disabled={act.busy}>{t('저장')}</Button>
 	</div>
@@ -188,7 +188,7 @@
 <FormSection title={t('시간대')}>
 	<div class="form">
 		<select bind:value={timezone}>
-			{#each d.timezones as tz}<option value={tz}>{tz}</option>{/each}
+			{#each d.timezones as tz (tz)}<option value={tz}>{tz}</option>{/each}
 		</select>
 		<Button variant="outline" size="sm" onclick={saveTimezone} disabled={act.busy}>{t('저장')}</Button>
 	</div>
@@ -246,7 +246,7 @@
 						<tr><th>{t('이름')}</th><th>{t('등록')}</th><th>{t('마지막 사용')}</th><th></th></tr>
 					</thead>
 					<tbody>
-						{#each d.passkeys as pk}
+						{#each d.passkeys as pk (pk.id)}
 							<tr>
 								<td>{pk.name}</td>
 								<td class="mono muted">{ts(pk.created_at)}</td>
