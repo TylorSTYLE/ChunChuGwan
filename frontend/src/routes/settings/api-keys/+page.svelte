@@ -60,9 +60,9 @@
 		copyTimer = setTimeout(() => (copyState = ''), 2000);
 	}
 
-	function revoke(id: number) {
-		if (!confirm(t('이 키를 폐기할까요?'))) return;
-		return act.run(() => api(`/settings/api-keys/${id}/delete`, { method: 'POST' }));
+	function revoke(key: { id: number; name: string }) {
+		if (!confirm(t("API 키 '{name}' 을 폐기할까요?").replace('{name}', key.name))) return;
+		return act.run(() => api(`/settings/api-keys/${key.id}/delete`, { method: 'POST' }));
 	}
 </script>
 
@@ -119,7 +119,7 @@
 								.join(', ')}
 						</td>
 						<td class="mono" data-label={t('만료')}>{k.expires_at ? ts(k.expires_at) : t('영구')}</td>
-						<td><Button variant="destructive" onclick={() => revoke(k.id)} disabled={act.busy}>{t('폐기')}</Button></td>
+						<td><Button variant="destructive" onclick={() => revoke(k)} disabled={act.busy}>{t('폐기')}</Button></td>
 					</tr>
 				{/each}
 			</tbody>

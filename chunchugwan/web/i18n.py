@@ -191,6 +191,10 @@ _EN: dict[str, str] = {
     "다음": "Next",
     "첫 페이지로": "To first page",
     "검색어": "Search term",
+    "API 키 '{name}' 을 폐기할까요?": "Revoke API key '{name}'?",
+    "권한 그룹 '{label}' 을 삭제할까요?": "Delete permission group '{label}'?",
+    "'{label}' 을 영구 삭제할까요? 되돌릴 수 없습니다.":
+        "Permanently delete '{label}'? This cannot be undone.",
     "해당하는 페이지가 없습니다.": "No matching pages.",
     "로컬 네트워크 태그 '{name}' 을 삭제할까요?":
         "Delete local network tag '{name}'?",
@@ -1265,19 +1269,8 @@ _EN: dict[str, str] = {
     # 로컬 네트워크 태그 (사설 IP 아카이빙 게이트 — netcheck)
     "로컬 네트워크 태그": "Local network tag",
     "선택 안 함 (공개 주소)": "None (public address)",
-    "사설 IP 대역(로컬 네트워크) 주소는 태그를 선택해야 아카이빙할 수 있습니다. "
-    "루프백 주소는 아카이빙할 수 없습니다.":
-        "Addresses in private IP ranges (local networks) can only be archived "
-        "with a tag selected. Loopback addresses cannot be archived.",
     "등록된 로컬 네트워크 태그가 없습니다 — 시스템 화면에서 먼저 추가하세요.":
         "No local network tags are registered — add one on the System page first.",
-    "사설 IP 대역(로컬 네트워크)의 웹서버를 아카이빙할 때 어느 네트워크인지 "
-    "구분하는 태그입니다. 사설 대역 주소는 태그를 지정해야 아카이빙할 수 있고, "
-    "루프백 주소는 항상 아카이빙할 수 없습니다. ID(GUID)는 자동 발급됩니다.":
-        "Tags that identify which local network a web server on a private IP "
-        "range belongs to. Private-range addresses can only be archived with a "
-        "tag, and loopback addresses can never be archived. The ID (GUID) is "
-        "issued automatically.",
     "사용": "In use",
     "태그를 삭제할까요? 페이지·크롤이 사용 중이면 삭제되지 않습니다.":
         "Delete this tag? It cannot be deleted while pages or crawls use it.",
@@ -1306,17 +1299,6 @@ _EN: dict[str, str] = {
     "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.":
         "Deleted local network tag '{name}'.",
     # 로컬 네트워크 태그 병합 (같은 IP:포트의 중복 태그 정리)
-    "같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 "
-    "페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.":
-        "Merges two tags that point to the same private IP and port into one. "
-        "The source tag's pages and crawls move to the target tag, and the "
-        "source tag is deleted.",
-    "출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 "
-    "같은 IP·포트를 가리킬 때만 병합됩니다.":
-        "Merge the source tag into the target tag? The source tag is deleted, "
-        "and the merge only proceeds when both tags point to the same IP and port.",
-    "출처 태그(삭제됨)": "Source tag (deleted)",
-    "대상 태그(유지)": "Target tag (kept)",
     "병합": "Merge",
     "같은 태그끼리는 병합할 수 없습니다.": "A tag cannot be merged with itself.",
     "참조가 없는 태그는 병합할 수 없습니다 — 삭제를 사용하세요.":
@@ -1325,10 +1307,6 @@ _EN: dict[str, str] = {
     "병합할 수 있습니다.":
         "Tags can only be merged when they point to the same private network "
         "(same IP and port).",
-    "'{src}' 태그를 '{tgt}'(으)로 병합했습니다 "
-    "(페이지 {p}개·크롤 {c}개·스케줄 {s}개 이전).":
-        "Merged tag '{src}' into '{tgt}' "
-        "({p} page(s), {c} crawl(s), {s} schedule(s) moved).",
     # 사이트(서브도메인) 단위 아카이브 — 목록·사이트 상세
     "사이트 {n}개": "{n} site(s)",
     "사이트 필터…": "Filter sites…",
@@ -1931,6 +1909,7 @@ _EN.update({
         "Authentication is disabled, so there is no personal account",
     "인증이 필요합니다": "Authentication required",
     "잘못된 범위": "Invalid range",
+    "열람 권한이 없습니다": "You do not have permission to view archives",
     "크롤 옵션(최대 페이지·깊이·지연)은 숫자여야 합니다":
         "Crawl options (max pages, depth, delay) must be numbers",
     "전체 백업은 S3 모드에서 비활성화됩니다 — S3 DB백업·내보내기를 사용하세요.":
