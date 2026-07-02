@@ -1,0 +1,84 @@
+name: DCO
+
+# Developer Certificate of Origin(https://developercertificate.org/) sign-off 검사.
+# 서드파티 액션 없이 git 표준 도구(rev-list 범위, --no-merges, git log)만 쓴다
+# (리포의 공급망 주의 관행 — 액션 추가 시엔 SHA 고정). 범위·검증 로직은 잘 알려진
+# 참조 구현(dcoapp/app, tim-actions/dco, christophebedard/dco-check)의 관례를 인라인화:
+#   - base.sha..head.sha 범위 (base 브랜치는 보호돼 히스토리 재작성이 없으므로 PR 고유
+#     커밋만 정확히 담긴다)
+#   - --no-merges 로 병합 커밋 제외
+#   - Signed-off-by 이메일이 author 또는 committer 이메일과 (대소문자 무시) 일치해야 통과
+
+on:
+  pull_request:
+    branches: [develop, main]
+    # 기본 activity type(opened/synchronize/reopened). force-push 도 head 갱신이라
+    # synchronize 로 새 실행이 돌아 head.sha 가 최신화된다. paths-ignore 는 쓰지 않는다
+    # (필수 체크로 등록 시 경로 스킵이 미보고를 만들어 머지를 막는 회귀 — ci.yml 과 동일 원칙).
+
+# git fetch/log 만 필요 — PR API 호출 없음.
+permissions:
+  contents: read
+
+concurrency:
+  group: dco-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0   # PR 커밋 범위 계산용 (ci.yml changes 잡과 동일 패턴)
+
+      - name: DCO sign-off 검사
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          # fetch-depth:0 로도 base 오브젝트가 없는 예외(일부 fork PR)에 대비한 폴백.
+          git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null \
+            || git fetch --no-tags --quiet origin "$BASE_REF"
+
+          RANGE="${BASE_SHA}..${HEAD_SHA}"
+          echo "검사 범위: $RANGE (병합 커밋 제외)"
+
+          fail=0
+          # 병합 커밋을 뺀 PR 고유 커밋 목록 — rev-list 실패를 set -e 가 잡도록 먼저 대입한다
+          # (명령치환을 for 헤더에 직접 두면 실패해도 0건 순회로 조용히 통과할 수 있다).
+          commits="$(git rev-list --no-merges "$RANGE")"
+          # SHA 는 공백 없는 단일 토큰이라 워드분리 순회가 안전하다.
+          for sha in $commits; do
+            label="$(git log -1 --format='%h %an <%ae>' "$sha")"
+            author_email="$(git log -1 --format='%ae' "$sha")"
+            committer_email="$(git log -1 --format='%ce' "$sha")"
+            # 각 커밋 메시지의 Signed-off-by 트레일러에서 이메일만 추출 (대소문자 무시).
+            signoff_emails="$(git log -1 --format='%B' "$sha" \
+              | grep -iE '^Signed-off-by:[[:space:]].+<[^>]+>[[:space:]]*$' \
+              | grep -oE '<[^>]+>' | tr -d '<>' || true)"
+
+            if [ -z "$signoff_emails" ]; then
+              echo "✗ $label — Signed-off-by 없음"
+              fail=1
+              continue
+            fi
+            # dcoapp/app 동작: 서명 이메일이 author 또는 committer 와 일치해야 한다.
+            if ! grep -qixF "$author_email" <<< "$signoff_emails" \
+               && ! grep -qixF "$committer_email" <<< "$signoff_emails"; then
+              echo "✗ $label — 서명 이메일 불일치 (found: $(paste -sd, - <<< "$signoff_emails"))"
+              fail=1
+            fi
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::DCO 검사 실패 — Signed-off-by 가 없거나 이메일이 불일치하는 커밋이 있습니다."
+            echo "해결: 커밋 1개면 'git commit --amend -s', 여러 개면"
+            echo "      'git rebase --signoff ${BASE_SHA}' 후 'git push --force-with-lease'."
+            exit 1
+          fi
+          echo "DCO 검사 통과"

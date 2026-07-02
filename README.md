@@ -214,6 +214,12 @@ uv run pytest                            # 테스트 (네트워크 불필요, ~1
 PyCharm 실행/디버그 구성과 모듈 구성은 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md),
 아키텍처 원칙·DB 스키마·코딩 컨벤션은 [CLAUDE.md](CLAUDE.md) 참조.
 
+## 기여
+
+브랜치·PR 흐름(GitFlow), Conventional Commits, DCO 사인오프(`git commit -s`) 절차는
+[CONTRIBUTING.md](CONTRIBUTING.md) 참조. 모든 PR 커밋은 `Signed-off-by` 서명이 필요하며
+CI 가 검사한다.
+
 ## 라이선스
 
 [MIT License](LICENSE) © 2026 Tylor, Seo.
