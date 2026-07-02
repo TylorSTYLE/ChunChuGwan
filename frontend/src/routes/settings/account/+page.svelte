@@ -196,12 +196,12 @@
 
 <FormSection title={t('패스워드 변경')}>
 	{#if d.has_password}
-		<div class="form col">
+		<form class="form col" onsubmit={(e) => { e.preventDefault(); changePassword(); }}>
 			<Input type="password" bind:value={curPw} placeholder={t('현재 패스워드')} autocomplete="current-password" />
 			<Input type="password" bind:value={newPw} placeholder={t('새 패스워드')} autocomplete="new-password" />
 			<Input type="password" bind:value={newPw2} placeholder={t('새 패스워드 확인')} autocomplete="new-password" />
-			<Button onclick={changePassword} disabled={act.busy || !curPw || !newPw}>{t('변경')}</Button>
-		</div>
+			<Button type="submit" disabled={act.busy || !curPw || !newPw}>{t('변경')}</Button>
+		</form>
 	{:else}
 		<p class="muted">{t('SSO 전용 계정은 패스워드가 없습니다. IdP(Authentik)에서 관리하세요.')}</p>
 	{/if}
@@ -284,7 +284,12 @@
 			{:else}
 				<Input type="text" bind:value={withdrawConfirm} placeholder={t('확인을 위해 이메일 입력')} />
 			{/if}
-			<Button variant="destructive" onclick={withdraw} disabled={act.busy}>{t('탈퇴')}</Button>
+			<Button
+				variant="destructive"
+				onclick={withdraw}
+				disabled={act.busy || (d.has_password ? !withdrawPw : !withdrawConfirm)}
+				>{t('탈퇴')}</Button
+			>
 		</div>
 	</section>
 {/if}

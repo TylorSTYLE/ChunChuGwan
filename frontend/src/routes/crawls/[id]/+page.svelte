@@ -8,6 +8,7 @@
 	import { api, ApiError } from '$lib/api';
 	import type { CrawlDetail } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { createAction } from '$lib/action.svelte';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -50,7 +51,11 @@
 		return value ? (counts[value as keyof typeof counts] as number) : counts.total;
 	}
 
-	const cancel = () => action.run(() => api(`/crawls/${c.id}/cancel`, { method: 'POST' }), t('크롤을 취소했습니다.'));
+	const cancel = () => {
+		if (!confirm(t('진행 중인 사이트 아카이브(크롤)를 취소할까요? 남은 페이지는 처리되지 않습니다.')))
+			return;
+		return action.run(() => api(`/crawls/${c.id}/cancel`, { method: 'POST' }), t('크롤을 취소했습니다.'));
+	};
 	const retryAll = () =>
 		action.run(() => api(`/crawls/${c.id}/retry`, { method: 'POST' }), t('실패한 페이지를 다시 시도합니다.'));
 	const retryPage = (pageId: number) =>
@@ -175,6 +180,10 @@
 	{/each}
 </p>
 
+{#if d.pages.length === 0}
+	<!-- 상태 필터 결과가 0건일 때 헤더만 있는 빈 테이블 대신 안내를 보여준다(로딩 실패 오인 방지) -->
+	<EmptyState message={t('해당하는 페이지가 없습니다.')} />
+{:else}
 <div class="table-wrap cards">
 	<table>
 		<thead>
@@ -219,6 +228,7 @@
 		</tbody>
 	</table>
 </div>
+{/if}
 
 <style>
 	.toolbar h2 {

@@ -432,6 +432,10 @@ def extension_token(request: Request):
 @app.get("/extension/go")
 def extension_go(request: Request, url: str = ""):
     """확장: URL 로 아카이브 화면 열기 — 이미 있으면 타임라인, 없으면 새 아카이빙."""
+    # 로그인 필수 — DB 를 조회해 결과에 따라 다른 곳으로 리다이렉트하므로, 가드가 없으면
+    # 특정 URL 의 아카이브 존재 여부·page/site id 가 미인증 오라클로 샌다(다른 확장
+    # 라우트는 고정 경로로만 302 해 누출이 없다).
+    _require_viewer(request)
     try:
         norm = storage.normalize_url(url) if url.strip() else ""
     except ValueError:

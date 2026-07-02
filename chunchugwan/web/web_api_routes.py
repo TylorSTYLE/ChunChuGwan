@@ -369,24 +369,25 @@ def page_timeline(
             else []
         )
 
-    visible = [
-        s for s in snaps
+    # idx(=history 번호)는 **전체 이력 기준**으로 매긴다(가장 오래된=1=신규) — diff 의
+    # _resolve_diff_pair 가 무필터 전체 리스트로 인덱싱하므로, 번호를 여기서 전체 기준으로
+    # 고정해야 타임라인에서 만든 diff --from/--to 링크가 어긋나지 않는다. 번호를 매긴 뒤
+    # 가시성 필터를 적용하면 숨은 인증 스냅샷은 목록에서 빠지되 번호(자리)는 보존된다.
+    numbered_all = list(enumerate(snaps, 1))
+    numbered = [
+        (i, s) for i, s in numbered_all
         if not s["authenticated"] or _may_view_authenticated(request, s)
     ]
-    if len(visible) != len(snaps):
+    if len(numbered) != len(numbered_all):
         checks = []
-    snaps = visible
     log_by_snap = {row["snapshot_id"]: row for row in snap_logs}
 
     limit = _page_size(limit, _LIST_PAGE_SIZE_DEFAULT)
-    total = len(snaps)
+    total = len(numbered)
     total_pages = max(1, -(-total // limit))
     page_num = max(1, min(page_num, total_pages))
 
-    # idx(=history 번호)는 enumerate 로 전체 기준 고정(가장 오래된=1=신규)하고,
-    # 표시·페이징은 최신 순(idx 내림차순)으로 한다. steps/log 파싱은 현재
-    # 페이지 항목에만 수행한다.
-    numbered = list(enumerate(snaps, 1))
+    # 표시·페이징은 최신 순(idx 내림차순). steps/log 파싱은 현재 페이지 항목에만 수행한다.
     numbered.reverse()
     window = numbered[(page_num - 1) * limit : (page_num - 1) * limit + limit]
 
@@ -1191,11 +1192,15 @@ def archive_new(
         raise HTTPException(400, cred_error)
 
     if body.site:
-        options = {
-            "max_pages": int(body.crawl_max_pages) if body.crawl_max_pages else None,
-            "max_depth": int(body.crawl_max_depth) if body.crawl_max_depth else None,
-            "delay_seconds": int(body.crawl_delay) if body.crawl_delay else None,
-        }
+        # 숫자 변환은 try 안에서 — 비숫자 입력이 500(미처리 ValueError)이 아니라 400 이 되게
+        try:
+            options = {
+                "max_pages": int(body.crawl_max_pages) if body.crawl_max_pages else None,
+                "max_depth": int(body.crawl_max_depth) if body.crawl_max_depth else None,
+                "delay_seconds": int(body.crawl_delay) if body.crawl_delay else None,
+            }
+        except ValueError:
+            raise HTTPException(400, "크롤 옵션(최대 페이지·깊이·지연)은 숫자여야 합니다")
         try:
             crawl, merged = crawler.start_crawl(
                 body.url, **options, source="web",
@@ -1382,6 +1387,8 @@ def schedule_set(
         scheduler.set_schedule(page["url"], seconds, run_at=body.run_at or None)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    audit.log(request, "페이지 스케줄 설정: %s (%d초)", page["url"], seconds,
+              action="admin", target=page["url"])
     return {"ok": True, "interval_seconds": seconds}
 
 
@@ -1398,6 +1405,8 @@ def schedule_delete(
     if page is None:
         raise HTTPException(404, "페이지 없음")
     scheduler.remove_schedule(page["url"])
+    audit.log(request, "페이지 스케줄 해제: %s", page["url"],
+              action="admin", target=page["url"])
     return {"ok": True}
 
 
@@ -3395,6 +3404,8 @@ def system_recovery_toggle_snapshot(
     """단일 스냅샷의 authenticated 플래그 설정 (관리자 개별 검토·해제)."""
     _require_manage_system(user)
     with db.connect() as conn:
+        if db.get_snapshot(conn, snapshot_id, include_trashed=True) is None:
+            raise HTTPException(404, "스냅샷 없음")
         db.set_snapshot_authenticated(conn, snapshot_id, 1 if body.value else 0)
     audit.log(request, "스냅샷 authenticated 변경: #%d → %s", snapshot_id,
               "제한" if body.value else "공개", action="admin")
@@ -3830,15 +3841,19 @@ async def passkey_register(
     if not isinstance(credential, dict):
         raise HTTPException(400, "credential 누락")
     name = (str(body.get("name") or "").strip() or "패스키")[:64]
+    # challenge 소비를 검증과 분리된 별도 커밋 블록에서 먼저 확정한다 — 같은 conn 에서
+    # 하면 검증 실패로 4xx 를 던질 때 db.connect 가 롤백해 소비가 취소되고, 탈취 세션이
+    # 같은 challenge 로 위조 credential 을 무한 재시도할 수 있다(throttle F1 과 같은 이유).
     with db.connect() as conn:
         challenge = db.consume_session_challenge(
             conn, request.state.session["token_hash"]
         )
-        if challenge is None:
-            raise HTTPException(400, "진행 중인 등록이 없습니다 — 다시 시도하세요")
-        verified = auth.verify_passkey_registration(credential, challenge)
-        if verified is None:
-            raise HTTPException(400, "패스키 등록 검증에 실패했습니다")
+    if challenge is None:
+        raise HTTPException(400, "진행 중인 등록이 없습니다 — 다시 시도하세요")
+    verified = auth.verify_passkey_registration(credential, challenge)
+    if verified is None:
+        raise HTTPException(400, "패스키 등록 검증에 실패했습니다")
+    with db.connect() as conn:
         try:
             db.create_passkey(conn, user["id"], name=name, **verified)
         except sqlite3.IntegrityError:

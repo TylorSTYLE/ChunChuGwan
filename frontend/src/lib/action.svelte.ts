@@ -17,6 +17,9 @@ export function createAction() {
 	let notice = $state('');
 
 	async function run(fn: () => Promise<unknown>, ok = ''): Promise<void> {
+		// 재진입 가드 — disabled 가 DOM 에 반영되기 전 더블클릭/Enter+클릭 중복 이벤트로
+		// 같은 변경 API 가 2회 실행되는 것을 막는다.
+		if (busy) return;
 		busy = true;
 		error = '';
 		notice = '';

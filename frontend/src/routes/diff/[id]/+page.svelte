@@ -50,19 +50,19 @@
 		</p>
 	{:else}
 		<div class="toolbar">
-			<button class="tab" class:active={shotMode === 'side'} onclick={() => (shotMode = 'side')}>{t('나란히')}</button>
-			<button class="tab" class:active={shotMode === 'pixel'} onclick={() => (shotMode = 'pixel')}>{t('픽셀 차이')}</button>
+			<button class="tab" class:active={shotMode === 'side'} aria-pressed={shotMode === 'side'} onclick={() => (shotMode = 'side')}>{t('나란히')}</button>
+			<button class="tab" class:active={shotMode === 'pixel'} aria-pressed={shotMode === 'pixel'} onclick={() => (shotMode = 'pixel')}>{t('픽셀 차이')}</button>
 			{#if d.shot_ratio != null}
 				<span class="muted">{t('차이')}: {(d.shot_ratio * 100).toFixed(2)}%</span>
 			{/if}
 		</div>
 		{#if shotMode === 'side'}
 			<div class="shot-grid">
-				<img src={d.old_shot} alt="old" />
-				<img src={d.new_shot} alt="new" />
+				<img src={d.old_shot} alt={t('이전 스냅샷 스크린샷')} />
+				<img src={d.new_shot} alt={t('최신 스냅샷 스크린샷')} />
 			</div>
 		{:else}
-			<img src={d.shotdiff_url} alt="pixel diff" class="shot-diff" />
+			<img src={d.shotdiff_url} alt={t('픽셀 차이 비교 이미지')} class="shot-diff" />
 		{/if}
 	{/if}
 {:else}

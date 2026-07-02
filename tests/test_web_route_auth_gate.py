@@ -78,6 +78,10 @@ def test_extension_redirects_require_auth(tmp_db):
     c = client()
     assert c.get(f"/extension/crawl/{cid}", follow_redirects=False).status_code == 401
     assert c.get("/extension/page/1", follow_redirects=False).status_code == 401
+    # /extension/go 는 DB 를 조회해 결과별로 리다이렉트하므로 미인증 오라클 방지 가드 필요
+    assert c.get(
+        "/extension/go?url=https://example.com/x", follow_redirects=False
+    ).status_code == 401
 
 
 # ---- 승인 대기(pending) 계정 차단 (H1 — _require_viewer 는 view 권한 요구) ----

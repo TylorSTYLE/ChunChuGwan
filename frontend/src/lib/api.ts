@@ -50,9 +50,13 @@ export function errorDetail(body: unknown, fallback: string): string {
 export async function api<T = unknown>(
 	path: string,
 	// redirectOn401 은 과거 호환을 위해 받기만 하고 무시한다(인증 라우팅은 레이아웃 권위).
-	opts: RequestInit & { redirectOn401?: boolean } = {}
+	// timeoutMs 로 요청 타임아웃을 조정한다(0=끔). 기본은 JSON/GET 30s, FormData 업로드는
+	// 크고 느릴 수 있어 끈다 — 무응답 시 busy 가 영구 true 로 잠기던 문제를 막는다.
+	opts: RequestInit & { redirectOn401?: boolean; timeoutMs?: number } = {}
 ): Promise<T> {
-	const { redirectOn401: _ignored, ...init } = opts;
+	const { redirectOn401: _ignored, timeoutMs, signal: callerSignal, ...init } = opts;
+	const effTimeout = timeoutMs ?? (init.body instanceof FormData ? 0 : 30000);
+	const signal = callerSignal ?? (effTimeout > 0 ? AbortSignal.timeout(effTimeout) : undefined);
 	const res = await fetch(`/api/web${path}`, {
 		credentials: 'same-origin',
 		headers: {
@@ -62,6 +66,7 @@ export async function api<T = unknown>(
 			...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
 			...(init.headers ?? {})
 		},
+		signal,
 		...init
 	});
 	if (res.status === 401) {
@@ -115,7 +120,16 @@ export async function download(path: string): Promise<void> {
 	const blob = await res.blob();
 	const cd = res.headers.get('content-disposition') ?? '';
 	const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-	const name = m ? decodeURIComponent(m[1]) : 'download';
+	// decodeURIComponent 는 '%' 뒤에 2자리 16진수가 없으면 URIError 를 던진다 —
+	// 퍼센트 인코딩이 아닌 평문 파일명(예: "50% off.tar.gz")도 그대로 저장되게 폴백한다.
+	let name = 'download';
+	if (m) {
+		try {
+			name = decodeURIComponent(m[1]);
+		} catch {
+			name = m[1];
+		}
+	}
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = url;

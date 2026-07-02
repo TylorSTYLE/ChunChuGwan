@@ -69,7 +69,7 @@
 	</select>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
-	<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
+	<PageSize value={d.limit} options={d.limits} onchange={(n) => list.go({ limit: n, page: 1 })} />
 </Toolbar>
 
 {#if d.items.length === 0}

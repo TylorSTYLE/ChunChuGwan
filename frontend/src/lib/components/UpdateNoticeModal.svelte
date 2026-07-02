@@ -38,7 +38,14 @@
 			{/each}
 		</ul>
 		<Dialog.Footer>
-			<Button onclick={() => (open = false)}>{t('닫기')}</Button>
+			<!-- open=false 를 외부 대입하면 bits-ui 가 onOpenChange 를 부르지 않아 "봤음"
+			     기록(onclose)이 안 남고 모달이 매번 다시 뜬다 — onclose 를 직접 호출한다.
+			     (Esc·오버레이·X 경로에서 onOpenChange 가 또 불려도 기록은 멱등) -->
+			<Button
+				onclick={() => {
+					open = false;
+					onclose();
+				}}>{t('닫기')}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

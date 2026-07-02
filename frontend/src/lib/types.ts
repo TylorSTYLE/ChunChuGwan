@@ -209,6 +209,8 @@ export interface SnapshotRow {
 	http_status: number | null;
 	authenticated: number;
 	title: string | null;
+	origin?: string; // 'server'(기본) | 'extension'(브라우저 클라이언트 캡처)
+	incomplete?: number; // 1이면 일부 자원·프레임·스크린샷 수집 실패(불완전 캡처)
 	[key: string]: unknown;
 }
 

@@ -189,6 +189,19 @@ _EN: dict[str, str] = {
     "해시": "Hash",
     "이전": "Previous",
     "다음": "Next",
+    "첫 페이지로": "To first page",
+    "검색어": "Search term",
+    "해당하는 페이지가 없습니다.": "No matching pages.",
+    "로컬 네트워크 태그 '{name}' 을 삭제할까요?":
+        "Delete local network tag '{name}'?",
+    "이전 모드를 켜면 아카이빙·스케줄·크롤이 모두 중단됩니다. 진행할까요?":
+        "Turning on migration mode stops all archiving, schedules, and crawls. Continue?",
+    "진행 중인 사이트 아카이브(크롤)를 취소할까요? 남은 페이지는 처리되지 않습니다.":
+        "Cancel the running site archive (crawl)? Remaining pages will not be processed.",
+    "이전 스냅샷 스크린샷": "Previous snapshot screenshot",
+    "최신 스냅샷 스크린샷": "Latest snapshot screenshot",
+    "픽셀 차이 비교 이미지": "Pixel difference image",
+    "라이브 챌린지 화면": "Live challenge screen",
     "전체": "All",
     "필터": "Filter",
     "URL 필터…": "Filter by URL…",
@@ -1475,9 +1488,9 @@ _EN: dict[str, str] = {
     "무시하고 이전 종료": "Ignore and finish",
     "관리자 계정 생성": "Create admin account",
     "백업 파일에서 복원": "Restore from backup file",
-    "전체 백업(tar.gz)을 올려 그 시점 상태로 복원합니다. 복원 후에는 백업의 계정으로 로그인합니다.":
-        "Upload a full backup (tar.gz) to restore to that point. After restoring, log "
-        "in with the account from the backup.",
+    "전체 백업 파일(.ccg.backup)을 올려 그 시점 상태로 복원합니다. 복원 후에는 백업의 계정으로 로그인합니다.":
+        "Upload a full backup file (.ccg.backup) to restore to that point. After "
+        "restoring, log in with the account from the backup.",
     "다른 춘추관에서 이전": "Migrate from another ChunChuGwan",
     "이전(마이그레이션) 모드를 켠 다른 춘추관의 주소와 발급된 토큰을 입력하면 모든 데이터를 가져옵니다. 받는 쪽은 같은 WCCG_SECRET_KEY 를 써야 외부 사이트 자격증명을 복호화할 수 있습니다.":
         "Enter the address and issued token of another ChunChuGwan that has migration "
@@ -1918,6 +1931,8 @@ _EN.update({
         "Authentication is disabled, so there is no personal account",
     "인증이 필요합니다": "Authentication required",
     "잘못된 범위": "Invalid range",
+    "크롤 옵션(최대 페이지·깊이·지연)은 숫자여야 합니다":
+        "Crawl options (max pages, depth, delay) must be numbers",
     "전체 백업은 S3 모드에서 비활성화됩니다 — S3 DB백업·내보내기를 사용하세요.":
         "Full backup is disabled in S3 mode — use S3 DB backup or export.",
     "전체 복원은 S3 모드에서 비활성화됩니다 — S3 DB백업 복원·가져오기를 사용하세요.":

@@ -132,6 +132,10 @@
 							<Badge variant={item.badge as BadgeVariant}>
 								{item.badge === 'new' ? t('신규') : item.badge === 'changed' ? t('변경') : t('동일')}
 							</Badge>
+							{#if item.snap.origin === 'extension'}<Badge variant="same"
+									>{t('브라우저 캡처')}</Badge
+								>{/if}
+							{#if item.snap.incomplete}<Badge variant="changed">{t('불완전')}</Badge>{/if}
 						</td>
 						<td class="mono muted" data-label={t('해시')}>{String(item.snap.content_hash).slice(0, 12)}</td>
 						<td class="num mono" data-label={t('용량')}>{filesize(item.total_bytes)}</td>

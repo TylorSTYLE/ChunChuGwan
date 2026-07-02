@@ -6,11 +6,14 @@
 	import { createList } from '$lib/list.svelte';
 	import type { SearchData } from '$lib/types';
 	import Pager from '$lib/components/Pager.svelte';
+	import AlertBox from '$lib/components/AlertBox.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { search: SearchData } } = $props();
 
+	// in-place 페이징/검색 fetch 실패를 무음으로 삼키지 않고 표시한다.
+	let listError = $state('');
 	const ROUTE = '/search';
 	const FILTER_DEF = { page: 1 };
 	const list = createList({
@@ -18,7 +21,8 @@
 		api: '/search',
 		route: ROUTE,
 		params: (d) => ({ q: d.q, domain: d.domain, latest: d.latest ? '1' : '', page: d.page }),
-		defaults: FILTER_DEF
+		defaults: FILTER_DEF,
+		onError: (m) => (listError = m)
 	});
 	const s = $derived(list.data);
 
@@ -42,10 +46,11 @@
 </script>
 
 <h2>{t('검색')}</h2>
+<AlertBox error={listError} />
 
 <form onsubmit={submit} class="toolbar">
-	<Input type="text" class="search-q" bind:value={q} placeholder={t('아카이브 본문·문서에서 검색…')} />
-	<Input type="text" class="search-domain" bind:value={domain} placeholder={t('도메인')} />
+	<Input type="text" class="search-q" bind:value={q} placeholder={t('아카이브 본문·문서에서 검색…')} aria-label={t('검색어')} />
+	<Input type="text" class="search-domain" bind:value={domain} placeholder={t('도메인')} aria-label={t('도메인')} />
 	<label class="muted"><input type="checkbox" bind:checked={latest} /> {t('최신만')}</label>
 	<Button type="submit">{t('검색')}</Button>
 </form>
