@@ -130,8 +130,8 @@
 {/if}
 
 <style>
+	/* 크기는 전역 .hint(app.css) — 페이지 설명 문단의 마진만 여기서 */
 	.hint {
-		font-size: 12px;
 		margin: 0 0 12px;
 	}
 	.token {

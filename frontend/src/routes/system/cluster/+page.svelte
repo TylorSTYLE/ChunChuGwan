@@ -274,9 +274,7 @@
 		gap: 8px;
 		align-items: center;
 	}
-	.hint {
-		font-size: 12px;
-	}
+	/* .hint 크기는 전역(app.css) — div/span 이라 별도 마진 불필요 */
 	.dirs,
 	.dirtoggles {
 		display: flex;

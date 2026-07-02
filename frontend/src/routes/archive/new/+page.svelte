@@ -323,10 +323,13 @@
 		border: 1px solid var(--border);
 		border-radius: 6px;
 	}
-	.hint,
+	/* .hint 크기는 전역(app.css) — 여기선 마진만. net-hint·creds-note 는 별도 클래스라 크기 유지 */
 	.net-hint,
 	.creds-note {
 		font-size: 12px;
+		margin: 0;
+	}
+	.hint {
 		margin: 0;
 	}
 	.foot {
