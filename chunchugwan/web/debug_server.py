@@ -404,10 +404,10 @@ def build_app(source: str):
             page = db.get_page_aggregate(conn, url)
             if page is None:
                 raise HTTPException(status_code=404, detail="해당 URL 의 페이지가 없습니다")
-            page = dict(page)
-            snaps = [dict(s) for s in db.list_snapshots(conn, page["id"])][-10:]
-            log_rows = db.list_archive_logs(conn, page_id=page["id"], limit=10)
-        return {"page": page, "snapshots": snaps,
+            page_dict = dict(page)
+            snaps = [dict(s) for s in db.list_snapshots(conn, page_dict["id"])][-10:]
+            log_rows = db.list_archive_logs(conn, page_id=page_dict["id"], limit=10)
+        return {"page": page_dict, "snapshots": snaps,
                 "archive_logs": [_log_row(r) for r in log_rows]}
 
     @app.get("/debug/crawls")

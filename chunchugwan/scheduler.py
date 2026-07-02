@@ -124,7 +124,9 @@ def set_schedule(
             raise ValueError(f"아카이브에 없는 URL: {norm} — 먼저 아카이빙(add)하세요")
         next_run = _iso(next_run_after(_utcnow(), interval_seconds, run_at))
         db.upsert_schedule(conn, page["id"], interval_seconds, next_run, run_at)
-        return db.get_schedule(conn, page["id"])
+        schedule = db.get_schedule(conn, page["id"])
+        assert schedule is not None  # upsert 직후라 None 불가
+        return schedule
 
 
 def set_next_run(url: str, next_run: datetime) -> sqlite3.Row:
@@ -142,7 +144,9 @@ def set_next_run(url: str, next_run: datetime) -> sqlite3.Row:
             conn, page["id"], _iso(next_run.astimezone(timezone.utc))
         ):
             raise ValueError(f"등록된 스케줄이 없는 URL: {norm}")
-        return db.get_schedule(conn, page["id"])
+        schedule = db.get_schedule(conn, page["id"])
+        assert schedule is not None  # 직전 갱신 성공(True) 이후라 None 불가
+        return schedule
 
 
 def remove_schedule(url: str) -> bool:

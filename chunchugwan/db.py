@@ -1142,7 +1142,9 @@ def add_note(
         "author_label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
         (kind, target_id, content, author_user_id, author_label, _utcnow()),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def get_note(conn: sqlite3.Connection, note_id: int) -> sqlite3.Row | None:
@@ -1176,7 +1178,9 @@ def get_or_create_site(conn: sqlite3.Connection, site_key: str) -> int:
         "INSERT INTO sites (site_key, created_at) VALUES (?, ?)",
         (site_key, _utcnow()),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def get_site(conn: sqlite3.Connection, site_id: int) -> sqlite3.Row | None:
@@ -1525,7 +1529,9 @@ def get_or_create_page(
         """,
         (url, domain, slug, site_id, network_tag_id, credential_id, _utcnow()),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def set_page_client_captured(conn: sqlite3.Connection, page_id: int) -> None:
@@ -1565,7 +1571,9 @@ def insert_snapshot(conn: sqlite3.Connection, page_id: int, **fields) -> int:
         f"INSERT INTO snapshots ({', '.join(cols)}) VALUES ({placeholders})",
         (page_id, *fields.values()),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def update_snapshot_bytes(conn: sqlite3.Connection, snapshot_id: int, n: int) -> None:
@@ -1764,7 +1772,9 @@ def insert_archive_log(conn: sqlite3.Connection, **fields) -> int:
         f"INSERT INTO archive_logs ({', '.join(cols)}) VALUES ({placeholders})",
         tuple(fields.values()),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def get_archive_log(conn: sqlite3.Connection, log_id: int) -> sqlite3.Row | None:
@@ -1923,7 +1933,9 @@ def insert_system_log(
         " VALUES (?, ?, ?, ?, ?, ?)",
         (created_at, level, logger, source, message, traceback),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def _system_log_where(
@@ -2027,7 +2039,9 @@ def insert_audit_log(
         " VALUES (?, ?, ?, ?, ?, ?)",
         (created_at, actor, actor_user_id, action, target, message),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def _audit_log_where(
@@ -3071,7 +3085,9 @@ def insert_crawl(
          delay_seconds, source, requested_by, site_id, network_tag_id,
          credential_id, now, now),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def get_crawl(
@@ -4112,7 +4128,9 @@ def create_trash_entry(
         (kind, site_id, page_id, label, page_count, snapshot_count, bytes_total,
          deleted_by, _utcnow()),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def mark_page_trashed(conn: sqlite3.Connection, page_id: int, trash_id: int) -> None:
@@ -4800,7 +4818,9 @@ def create_user(
         "INSERT INTO users (email, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
         (email, password_hash, role, _utcnow()),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def count_users(conn: sqlite3.Connection) -> int:
@@ -5017,7 +5037,9 @@ def create_invite(
         """,
         (email, token_hash, role, invited_by, _utcnow(), _later(ttl_seconds)),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def get_invite_by_token(conn: sqlite3.Connection, token_hash: str) -> sqlite3.Row | None:
@@ -5153,7 +5175,9 @@ def create_network_tag(
         """,
         (tag_id, name, description, _utcnow()),
     )
-    return get_network_tag(conn, tag_id)
+    tag = get_network_tag(conn, tag_id)
+    assert tag is not None  # INSERT 직후라 None 불가
+    return tag
 
 
 def count_network_tag_refs(conn: sqlite3.Connection, tag_id: str) -> int:
@@ -5585,9 +5609,11 @@ def set_snapshot_authenticated(
 def email_verification_ttl_minutes(conn: sqlite3.Connection) -> int:
     """이메일 인증 코드 만료 시간(분) — 기본·오염·범위 밖이면 config 기본값으로 클램핑."""
     raw = get_setting(conn, EMAIL_VERIFICATION_TTL_MINUTES_KEY)
+    if raw is None:
+        return config.EMAIL_VERIFICATION_TTL_MINUTES_DEFAULT
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except ValueError:
         return config.EMAIL_VERIFICATION_TTL_MINUTES_DEFAULT
     return max(
         config.EMAIL_VERIFICATION_TTL_MINUTES_MIN,
@@ -5607,9 +5633,11 @@ def _clamped_int_setting(conn: sqlite3.Connection, key: str, default: int,
                          lo: int, hi: int) -> int:
     """정수 설정값을 [lo, hi] 로 클램핑 (없거나 오염이면 default)."""
     raw = get_setting(conn, key)
+    if raw is None:
+        return default
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except ValueError:
         return default
     return max(lo, min(hi, value))
 
@@ -5828,9 +5856,11 @@ EXT_CREDENTIAL_TTL_HOURS_KEY = "ext_credential_ttl_hours"
 def ext_credential_ttl_hours(conn: sqlite3.Connection) -> int:
     """확장 1회성 세션 자격증명의 만료 안전망 TTL(시간) — 기본·오염 시 config 기본값."""
     raw = get_setting(conn, EXT_CREDENTIAL_TTL_HOURS_KEY)
+    if raw is None:
+        return config.EXT_CREDENTIAL_TTL_HOURS_DEFAULT
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except ValueError:
         return config.EXT_CREDENTIAL_TTL_HOURS_DEFAULT
     return max(
         config.EXT_CREDENTIAL_TTL_HOURS_MIN,
@@ -5924,7 +5954,9 @@ def create_api_key(
          created_by, _utcnow(), expires_at, owner_user_id,
          int(can_cluster_send), int(can_cluster_receive)),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def get_api_key(conn: sqlite3.Connection, key_id: int) -> sqlite3.Row | None:
@@ -6045,7 +6077,9 @@ def create_cluster_peer(
         (peer_node_id, display_name, base_url, api_key_enc,
          int(send_enabled), int(receive_enabled), _utcnow()),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def get_cluster_peer(conn: sqlite3.Connection, peer_id: int) -> sqlite3.Row | None:
@@ -6266,7 +6300,9 @@ def create_site_credential(
         """,
         (site_id, label, kind, secret, created_by, now, now, expires_at),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def delete_ephemeral_credential(conn: sqlite3.Connection, cred_id: int) -> None:
@@ -6421,7 +6457,9 @@ def create_passkey(
         """,
         (user_id, credential_id, public_key, sign_count, name, _utcnow()),
     )
-    return cur.lastrowid
+    rowid = cur.lastrowid
+    assert rowid is not None  # INSERT 직후라 None 불가
+    return rowid
 
 
 def touch_passkey(conn: sqlite3.Connection, passkey_id: int, sign_count: int) -> None:
