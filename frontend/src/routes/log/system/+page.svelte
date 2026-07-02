@@ -45,11 +45,11 @@
 <Toolbar>
 	<select value={d.level} onchange={(e) => applyFilter({ level: e.currentTarget.value })}>
 		<option value="">{t('전체 레벨')}</option>
-		{#each d.levels as lv}<option value={lv}>{lv}</option>{/each}
+		{#each d.levels as lv (lv)}<option value={lv}>{lv}</option>{/each}
 	</select>
 	<select value={d.source} onchange={(e) => applyFilter({ source: e.currentTarget.value })}>
 		<option value="">{t('전체 출처')}</option>
-		{#each d.sources as sc}<option value={sc}>{sc}</option>{/each}
+		{#each d.sources as sc (sc)}<option value={sc}>{sc}</option>{/each}
 	</select>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
@@ -70,7 +70,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each d.logs as log}
+				{#each d.logs as log (log.id)}
 					<tr>
 						<td class="mono" data-label={t('시간')}>{ts(log.created_at)}</td>
 						<td data-label={t('레벨')}><Badge variant={LEVEL_BADGE[log.level] ?? 'same'}>{log.level}</Badge></td>

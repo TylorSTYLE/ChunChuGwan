@@ -11,7 +11,7 @@
 
 <Tabs.Root bind:value>
 	<Tabs.List>
-		{#each options as o}
+		{#each options as o (o.value)}
 			<Tabs.Trigger value={o.value}>{o.label}</Tabs.Trigger>
 		{/each}
 	</Tabs.List>

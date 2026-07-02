@@ -64,7 +64,7 @@
 {:else}
 	<div class="results">
 		<p class="muted count">{t('총')} {s.results.total}{t('건')}</p>
-		{#each s.results.hits as hit}
+		{#each s.results.hits as hit (hit.snapshot_id)}
 			<div class="hit">
 				<div class="mono hit-url">{hit.page_url}</div>
 				<a href={snapPath(hit.site_id, hit.page_id, hit.snapshot_id)} class="hit-title">{hit.title || hit.page_url}</a>

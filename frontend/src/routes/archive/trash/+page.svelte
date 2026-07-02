@@ -89,7 +89,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each d.entries as e}
+				{#each d.entries as e (e.id)}
 					<tr>
 						<td data-label={t('종류')}>
 							<Badge variant="secondary">{e.kind === 'site' ? t('사이트') : t('페이지')}</Badge>

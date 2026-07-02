@@ -1,6 +1,7 @@
 <script lang="ts" module>
 	import { cn, type WithElementRef } from "$lib/utils.js";
 	import type { HTMLAnchorAttributes, HTMLButtonAttributes } from "svelte/elements";
+	import type { ResolvedPathname } from "$app/types";
 	import { type VariantProps, tv } from "tailwind-variants";
 
 	export const buttonVariants = tv({
@@ -56,11 +57,14 @@
 </script>
 
 {#if href}
+	<!-- href 는 이 프리미티브의 임의 소비자가 넘기는 값 — 내부 라우트(resolve() 필요)와
+	     외부 URL 을 모두 받을 수 있어 정적으로 ResolvedPathname 만 강제할 수 없으므로,
+	     호출부가 이미 resolve() 로 만든 값이라는 전제 하에 타입만 좁혀 통과시킨다. -->
 	<a
 		bind:this={ref}
 		data-slot="button"
 		class={cn(buttonVariants({ variant, size }), className)}
-		href={disabled ? undefined : href}
+		href={(disabled ? undefined : href) as ResolvedPathname | undefined}
 		aria-disabled={disabled}
 		role={disabled ? "link" : undefined}
 		tabindex={disabled ? -1 : undefined}

@@ -154,6 +154,7 @@ export interface RecentSnap {
 }
 
 export interface RecentLog {
+	id: number;
 	started_at: string;
 	status: string;
 	url: string;
@@ -794,6 +795,7 @@ export interface PersonalApiKeysData {
 
 export interface MyArchiveItem {
 	log: Record<string, unknown> & {
+		id: number;
 		started_at: string;
 		status: string;
 		url: string;

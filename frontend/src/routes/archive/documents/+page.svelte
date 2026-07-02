@@ -5,6 +5,7 @@
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
 	import type { DocumentsData } from '$lib/types';
+	import type { ResolvedPathname } from '$app/types';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import StatGrid from '$lib/components/StatGrid.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
@@ -72,9 +73,14 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each d.groups as g}
+				{#each d.groups as g (g.sha256)}
 					<tr>
-						<td data-label={t('문서명')}><a href="/document/{String(g.sha256)}/{g.file}" download>{g.file}</a></td>
+						<td data-label={t('문서명')}>
+							<a
+								href={`/document/${String(g.sha256)}/${g.file}` as ResolvedPathname}
+								download>{g.file}</a
+							>
+						</td>
 						<td class="num mono" data-label={t('용량')}>{filesize(g.bytes)}</td>
 						<td class="url-cell" data-label={t('페이지')}><a href={pagePath(g.site_id, g.page_id)} title={g.page_url}>{g.page_url}</a></td>
 						<td class="num" data-label={t('참조')}>{g.snapshot_count}</td>

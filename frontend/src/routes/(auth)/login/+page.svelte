@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
+	import type { ResolvedPathname } from '$app/types';
 	import { t } from '$lib/i18n';
 	import { api, ApiError } from '$lib/api';
 	import { afterAuth } from '$lib/auth';
@@ -16,7 +17,11 @@
 	let busy = $state(false);
 
 	// OIDC 콜백이 SPA 현황(루트)으로 돌아오도록 next 를 base(=/) 로 넘긴다(백엔드 safe_next 허용).
-	const oidcHref = $derived(`/auth/oidc/login?next=${encodeURIComponent(`${base}/`)}`);
+	// /auth/oidc/login 자체는 SvelteKit 라우트가 아닌 백엔드 리다이렉트 엔드포인트라
+	// resolve() 대상이 될 수 없어 최종 문자열만 ResolvedPathname 으로 좁힌다.
+	const oidcHref = $derived(
+		`/auth/oidc/login?next=${encodeURIComponent(resolve('/'))}` as ResolvedPathname
+	);
 
 	async function submit(e: SubmitEvent) {
 		e.preventDefault();
@@ -55,7 +60,7 @@
 	{/if}
 	{#if cfg.signup_enabled}
 		<div class="alt muted">
-			{t('계정이 없나요?')} <a href="{base}/signup">{t('가입하기')}</a>
+			{t('계정이 없나요?')} <a href={resolve('/signup')}>{t('가입하기')}</a>
 		</div>
 	{/if}
 </div>

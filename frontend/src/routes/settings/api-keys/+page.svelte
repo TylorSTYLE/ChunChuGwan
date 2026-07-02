@@ -94,7 +94,7 @@
 		{#if d.can_view}<label class="opt"><input type="checkbox" bind:checked={canView} /> {t('보기')}</label>{/if}
 		{#if d.can_archive}<label class="opt"><input type="checkbox" bind:checked={canArchive} /> {t('아카이브')}</label>{/if}
 		<select bind:value={expiry} aria-label={t('만료')}>
-			{#each EXPIRY as [v, label]}<option value={v}>{t(label)}</option>{/each}
+			{#each EXPIRY as [v, label] (v)}<option value={v}>{t(label)}</option>{/each}
 		</select>
 		{#if expiry === 'custom'}
 			<Input type="number" bind:value={customDays} min="1" max="3650" style="width:90px" />
@@ -110,7 +110,7 @@
 				<tr><th>{t('이름')}</th><th>{t('권한')}</th><th>{t('만료')}</th><th></th></tr>
 			</thead>
 			<tbody>
-				{#each d.keys as k}
+				{#each d.keys as k (k.id)}
 					<tr>
 						<td data-label={t('이름')}>{k.name}</td>
 						<td class="muted" data-label={t('권한')}>

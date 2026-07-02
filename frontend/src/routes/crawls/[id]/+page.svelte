@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { pagePath, snapPath } from '$lib/urls';
 	import { untrack } from 'svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
+	import type { ResolvedPathname } from '$app/types';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
@@ -72,7 +73,8 @@
 			const r = await api<{ crawl_id: number; merged: boolean }>(`/sites/${c.site_id}/crawls/${c.id}/rerun`, {
 				method: 'POST'
 			});
-			await goto(`${base}/crawls/${r.crawl_id}${r.merged ? '?merged=1' : ''}`, { invalidateAll: true });
+			const dest = resolve('/crawls/[id]', { id: String(r.crawl_id) });
+			await goto(`${dest}${r.merged ? '?merged=1' : ''}` as ResolvedPathname, { invalidateAll: true });
 		} catch (err) {
 			action.error = err instanceof ApiError ? err.message : String(err);
 			action.busy = false;
@@ -117,7 +119,7 @@
 			<Button variant="outline" size="sm" onclick={rerun} disabled={action.busy}>{t('다시 아카이빙')}</Button>
 		{/if}
 	{/if}
-	<a href="{base}/archive/list">{t('목록으로')}</a>
+	<a href={resolve('/archive/list')}>{t('목록으로')}</a>
 </div>
 
 <AlertBox error={action.error} notice={action.notice} />
@@ -170,12 +172,15 @@
 <h3>{t('페이지')}</h3>
 <p class="muted filters">
 	{t('필터')}:
-	{#each FILTERS as [value, label], i}
+	{#each FILTERS as [value, label], i (value)}
 		{#if i > 0}·{/if}
 		{#if d.status_filter === value}
 			<strong>{t(label)} {filterCount(value)}</strong>
 		{:else}
-			<a href="{base}/crawls/{c.id}{value ? `?status=${value}` : ''}">{t(label)} {filterCount(value)}</a>
+			<a
+				href={`${resolve('/crawls/[id]', { id: String(c.id) })}${value ? `?status=${value}` : ''}` as ResolvedPathname}
+				>{t(label)} {filterCount(value)}</a
+			>
 		{/if}
 	{/each}
 </p>
@@ -193,7 +198,7 @@
 			</tr>
 		</thead>
 		<tbody>
-			{#each d.pages as p}
+			{#each d.pages as p (p.id)}
 				<tr>
 					<td class="url-cell mono" data-label="URL"><span title={p.url}>{p.url}</span></td>
 					<td class="num mono" data-label={t('깊이')}>{p.depth}</td>

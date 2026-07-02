@@ -9,7 +9,7 @@
 </script>
 
 <div class="flex flex-wrap gap-1.5" role="radiogroup">
-	{#each options as [v, label]}
+	{#each options as [v, label] (v)}
 		<button
 			type="button"
 			role="radio"

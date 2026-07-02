@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { pagePath } from '$lib/urls';
+	import type { ResolvedPathname } from '$app/types';
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
@@ -122,10 +123,14 @@
 			<tr><th>{t('문서명')}</th><th style="text-align:right">{t('용량')}</th></tr>
 		</thead>
 		<tbody>
-			{#each m.documents as d}
+			{#each m.documents as d (d.file)}
 				<tr>
 					<td>
-						<a href="/snapshot/{m.snap.id}/doc/{d.file}" download title={d.url}>{d.file}</a>
+						<a
+							href={`/snapshot/${m.snap.id}/doc/${d.file}` as ResolvedPathname}
+							download
+							title={d.url}>{d.file}</a
+						>
 					</td>
 					<td class="num mono">{filesize(d.bytes)}</td>
 				</tr>

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { api, ApiError } from '$lib/api';
@@ -172,7 +172,7 @@
 				})
 			});
 			// 단발은 목록으로, 사이트 전체는 사이트 목록으로 (크롤 진행 화면은 후속)
-			goto(`${base}/archive/list`);
+			goto(resolve('/archive/list'));
 			void r;
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
@@ -196,7 +196,7 @@
 			{#if tags.length > 0}
 				<select bind:value={networkTag}>
 					<option value="">{t('선택 안 함 (공개 주소)')}</option>
-					{#each tags as tag}
+					{#each tags as tag (tag.id)}
 						<option value={tag.id}>{tag.name}{tag.description ? ` — ${tag.description}` : ''}</option>
 					{/each}
 				</select>
@@ -205,7 +205,7 @@
 		<p class="muted net-hint">
 			{t('입력한 주소가 사설 IP 대역(로컬 네트워크)입니다 — 태그를 선택해야 아카이빙할 수 있습니다.')}
 			{#if tags.length === 0}
-				<a href="{base}/system/general"
+				<a href={resolve('/system/general')}
 					>{t('등록된 로컬 네트워크 태그가 없습니다 — 시스템 화면에서 먼저 추가하세요.')}</a
 				>
 			{/if}
@@ -246,7 +246,7 @@
 		{#if canManageCred}
 			<select bind:value={credExisting}>
 				<option value="">{t('연결 안 함')}</option>
-				{#each existingCreds as c}
+				{#each existingCreds as c (c.id)}
 					<option value={String(c.id)}>{c.label} ({c.kind_label})</option>
 				{/each}
 				<option value="__new__">{t('새 자격증명 추가…')}</option>
@@ -258,7 +258,7 @@
 					{/if}
 					<Field label={t('종류')}>
 						<select bind:value={credKind}>
-							{#each credKinds as k}<option value={k.value}>{k.label}</option>{/each}
+							{#each credKinds as k (k.value)}<option value={k.value}>{k.label}</option>{/each}
 						</select>
 					</Field>
 					<Field label={t('이름')}><Input type="text" bind:value={credLabel} maxlength={50} /></Field>

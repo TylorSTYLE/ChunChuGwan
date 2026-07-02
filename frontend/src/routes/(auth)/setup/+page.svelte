@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { api, ApiError } from '$lib/api';
@@ -77,7 +77,7 @@
 				headers: setupHeaders(),
 				redirectOn401: false
 			});
-			await goto(`${base}/login`, { invalidateAll: true });
+			await goto(resolve('/login'), { invalidateAll: true });
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
 			busy = false;
@@ -138,7 +138,7 @@
 				headers: setupHeaders(),
 				redirectOn401: false
 			});
-			await goto(`${base}/login`, { invalidateAll: true });
+			await goto(resolve('/login'), { invalidateAll: true });
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
 			busy = false;
@@ -224,7 +224,7 @@
 				});
 				if (s.status === 'done') {
 					clearMigrateTimer();
-					await goto(`${base}/login`, { invalidateAll: true });
+					await goto(resolve('/login'), { invalidateAll: true });
 				} else if (s.status === 'partial' || s.status === 'error') {
 					clearMigrateTimer();
 					await invalidateAll();
@@ -329,7 +329,7 @@
 					<details class="sm">
 						<summary>{t('실패한 파일 목록')}</summary>
 						<ul>
-							{#each m.failed as f}
+							{#each m.failed as f (f.path)}
 								<li class="mono">{f.path} <span class="muted">— {f.error}</span></li>
 							{/each}
 						</ul>

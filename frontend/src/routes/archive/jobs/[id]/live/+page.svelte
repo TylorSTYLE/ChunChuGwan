@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { api } from '$lib/api';
@@ -122,7 +122,7 @@
 		} catch {
 			/* 상태 폴링이 종료를 감지 */
 		}
-		await goto(`${base}/archive/needs-human`);
+		await goto(resolve('/archive/needs-human'));
 	}
 
 	onMount(() => {
@@ -151,14 +151,14 @@
 
 <div class="toolbar">
 	<h2>{t('사람 확인 처리')}</h2>
-	<a href="{base}/archive/needs-human">{t('목록')}</a>
+	<a href={resolve('/archive/needs-human')}>{t('목록')}</a>
 </div>
 <p class="muted url">{m.url}</p>
 
 {#if done}
 	<div class="done">
 		{t('처리되었습니다 — 캡처를 이어서 진행합니다. 잠시 후 결과는 로그에서 확인하세요.')}
-		<a href="{base}/archive/needs-human">{t('목록으로')}</a>
+		<a href={resolve('/archive/needs-human')}>{t('목록으로')}</a>
 	</div>
 {/if}
 

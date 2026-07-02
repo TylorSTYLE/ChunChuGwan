@@ -49,11 +49,11 @@
 <Toolbar>
 	<select value={d.action} onchange={(e) => applyFilter({ action: e.currentTarget.value })}>
 		<option value="">{t('모든 종류')}</option>
-		{#each d.actions as a}<option value={a}>{actionLabel(a)}</option>{/each}
+		{#each d.actions as a (a)}<option value={a}>{actionLabel(a)}</option>{/each}
 	</select>
 	<select value={d.actor} onchange={(e) => applyFilter({ actor: e.currentTarget.value })}>
 		<option value="">{t('모든 요청자')}</option>
-		{#each d.actors as a}<option value={a}>{a}</option>{/each}
+		{#each d.actors as a (a)}<option value={a}>{a}</option>{/each}
 	</select>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
@@ -75,7 +75,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each d.logs as log}
+				{#each d.logs as log (log.id)}
 					<tr>
 						<td class="mono col-time" data-label={t('시간')}>{ts(log.created_at)}</td>
 						<td data-label={t('종류')}><Badge variant={ACTION_BADGE[log.action] ?? 'same'}>{actionLabel(log.action)}</Badge></td>

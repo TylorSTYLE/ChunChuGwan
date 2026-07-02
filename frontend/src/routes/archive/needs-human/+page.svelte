@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
@@ -40,12 +40,12 @@
 				<tr><th>URL</th><th>{t('진입 시각')}</th><th></th></tr>
 			</thead>
 			<tbody>
-				{#each jobs as j}
+				{#each jobs as j (j.id)}
 					<tr>
 						<td class="url-cell"><span title={j.url}>{j.url}</span></td>
 						<td class="mono muted">{ts(j.needs_human_at)}</td>
 						<td>
-							<a href="{base}/archive/jobs/{j.id}/live">{t('처리')}</a>
+							<a href={resolve('/archive/jobs/[id]/live', { id: String(j.id) })}>{t('처리')}</a>
 							{#if j.held_by_other}<span class="muted">({t('처리 중')})</span>{/if}
 						</td>
 					</tr>

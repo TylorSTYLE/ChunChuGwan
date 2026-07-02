@@ -21,7 +21,7 @@
 				<tr><th>URL</th><th>{t('주기')}</th><th>{t('다음 실행')}</th></tr>
 			</thead>
 			<tbody>
-				{#each s.items as item}
+				{#each s.items as item (item.id)}
 					<tr>
 						<td class="url-cell" data-label="URL"><a href={pagePath(item.site_id, item.page_id)}>{item.url}</a></td>
 						<td data-label={t('주기')}>{item.label}</td>
@@ -41,7 +41,7 @@
 				<tr><th>{t('시작 URL')}</th><th>{t('주기')}</th><th>{t('다음 실행')}</th></tr>
 			</thead>
 			<tbody>
-				{#each s.crawl_items as item}
+				{#each s.crawl_items as item (item.id)}
 					<tr>
 						<td class="url-cell mono" data-label={t('시작 URL')}>{item.start_url}</td>
 						<td data-label={t('주기')}>{item.label}</td>

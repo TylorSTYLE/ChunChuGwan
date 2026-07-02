@@ -49,7 +49,7 @@
 <Toolbar>
 	<select value={d.status} onchange={(e) => list.go({ status: e.currentTarget.value, page: 1 })}>
 		<option value="">{t('전체 상태')}</option>
-		{#each d.statuses as s}<option value={s}>{t(STATUS_LABELS[s] ?? s)}</option>{/each}
+		{#each d.statuses as s (s)}<option value={s}>{t(STATUS_LABELS[s] ?? s)}</option>{/each}
 	</select>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
@@ -67,7 +67,7 @@
 				</tr>
 			</thead>
 			<tbody>
-				{#each d.items as { log }}
+				{#each d.items as { log } (log.id)}
 					<tr>
 						<td class="mono">{ts(log.started_at)}</td>
 						<td>{t(STATUS_LABELS[log.status] ?? log.status)}</td>
