@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { t } from '$lib/i18n';
 	import { api } from '$lib/api';
+	import { SvelteSet } from 'svelte/reactivity';
 	import type { SystemGroupsData, SystemGroup } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import Field from '$lib/components/Field.svelte';
@@ -16,20 +17,20 @@
 
 	// 그룹별 편집 오버레이 — 사용자가 건드린 그룹만 담는다(없으면 서버값 사용).
 	// 템플릿에서 상태를 변경하지 않도록 current() 는 순수 함수로 둔다.
-	let overrides = $state<Record<string, { perms: Set<string>; label: string }>>({});
+	let overrides = $state<Record<string, { perms: SvelteSet<string>; label: string }>>({});
 
-	function current(g: SystemGroup): { perms: Set<string>; label: string } {
-		return overrides[g.name] ?? { perms: new Set(g.permissions), label: g.label };
+	function current(g: SystemGroup): { perms: SvelteSet<string>; label: string } {
+		return overrides[g.name] ?? { perms: new SvelteSet(g.permissions), label: g.label };
 	}
 
 	// 커스텀 추가 폼
 	let newName = $state('');
 	let newLabel = $state('');
-	let newPerms = $state<Set<string>>(new Set());
+	let newPerms = new SvelteSet<string>();
 
 	function toggle(g: SystemGroup, p: string) {
 		const c = current(g);
-		const s = new Set(c.perms);
+		const s = new SvelteSet(c.perms);
 		if (s.has(p)) s.delete(p);
 		else s.add(p);
 		overrides = { ...overrides, [g.name]: { ...c, perms: s } };
@@ -56,10 +57,8 @@
 		return act.run(() => api(`/system/groups/${g.name}/delete`, { method: 'POST' }));
 	};
 	function toggleNew(p: string) {
-		const s = new Set(newPerms);
-		if (s.has(p)) s.delete(p);
-		else s.add(p);
-		newPerms = s;
+		if (newPerms.has(p)) newPerms.delete(p);
+		else newPerms.add(p);
 	}
 	const addGroup = () =>
 		act.run(() =>
@@ -69,7 +68,7 @@
 			}).then(() => {
 				newName = '';
 				newLabel = '';
-				newPerms = new Set();
+				newPerms.clear();
 			})
 		);
 </script>

@@ -27,7 +27,7 @@
 		<ul class="list-disc pl-5 text-sm leading-7">
 			{#each note.items as item}
 				<li>
-					{item.text}{#if item.url}{' '}<a
+					{item.text}{#if item.url} <a
 							class="whitespace-nowrap font-mono text-xs text-muted-foreground hover:text-link hover:underline"
 							href={item.url}
 							target="_blank"

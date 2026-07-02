@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import config, db, doctext, documents, storage
+from . import db, doctext, documents, storage
 
 logger = logging.getLogger(__name__)
 

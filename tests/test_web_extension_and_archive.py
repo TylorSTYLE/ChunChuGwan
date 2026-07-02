@@ -37,7 +37,6 @@ def _client(role="admin", email="boss@test.co"):
 
 def _seed_page(url="https://example.com/p"):
     with db.connect() as conn:
-        site_key = __import__("chunchugwan.storage", fromlist=["site_key"]).site_key(url)
         pid = db.get_or_create_page(conn, url, "example.com", "p-abcd1234")
         page = db.get_page_by_id(conn, pid)
         return pid, page["site_id"]

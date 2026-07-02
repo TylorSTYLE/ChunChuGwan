@@ -15,7 +15,6 @@
 			migration: MigrationStatus;
 			tokenRequired: boolean;
 			kase: string;
-			flags: { has_archive_data: boolean; s3_db_backup: boolean };
 			recovery: RecoveryStatus | null;
 		};
 	} = $props();

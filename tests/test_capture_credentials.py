@@ -7,7 +7,7 @@
 import pytest
 
 from chunchugwan import (
-    capture, config, crawler, credentials, crypto, db, documents, pipeline,
+    capture, config, crawler, credentials, db, documents, pipeline,
     storage,
 )
 

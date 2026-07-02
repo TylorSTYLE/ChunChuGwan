@@ -1,0 +1,6 @@
+# 오탐 — 테스트 픽스처의 더미 시크릿/자체 서명 키(실제 자격증명 아님, §8.7).
+# tests/test_web_invite_retry.py:42 — 초대 재시도 테스트용 더미 토큰 문자열.
+0ffd07d1f981775e53700b0ceeeb759ee023acda:tests/test_web_invite_retry.py:generic-api-key:42
+# tests/fixtures/selfsigned-key.pem — 자체 서명 https 캡처 테스트용 100년 유효
+# 테스트 전용 인증서 키(실제 서비스와 무관, 실브라우저 테스트 픽스처).
+56f66fc4c2d54d2851ea9e1920ae2e7745d8cdd2:tests/fixtures/selfsigned-key.pem:private-key:1

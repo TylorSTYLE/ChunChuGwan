@@ -1,5 +1,4 @@
 """대시보드 시스템 메뉴(백업/복원·내보내기/가져오기) 테스트."""
-import io
 
 import pytest
 from fastapi.testclient import TestClient

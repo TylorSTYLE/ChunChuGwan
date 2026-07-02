@@ -14,8 +14,6 @@
 """
 from __future__ import annotations
 
-import sqlite3
-
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel

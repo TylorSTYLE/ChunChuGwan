@@ -19,7 +19,6 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
 from .. import auth, config, db, mailer, oidc
-from . import i18n
 from .i18n import t
 
 # (지역명, [(IANA 이름, 표시 이름), ...]) — 계정 설정 선택기에 사용

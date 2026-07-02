@@ -10,4 +10,4 @@ updates:
       actions:
         patterns: ["*"]
     commit-message:
-      prefix: "ci"
+      prefix: "chore"   # PR 제목이 chore: 프리픽스로 생성됨(§2 Conventional Commits 규약 정합)
