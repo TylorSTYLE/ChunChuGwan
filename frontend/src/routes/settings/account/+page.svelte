@@ -320,8 +320,8 @@
 		align-items: stretch;
 		max-width: 320px;
 	}
+	/* 크기는 전역 .hint(app.css) — 폼(FormSection gap) 내부라 p 기본 마진만 제거 */
 	.hint {
-		font-size: 12px;
 		margin: 0;
 	}
 	.qr {
