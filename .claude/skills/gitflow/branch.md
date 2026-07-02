@@ -5,10 +5,10 @@
 ## 브랜치 유형 판단 기준
 | 유형 | 사용 시점 | 베이스 | 병합 대상 |
 |------|----------|--------|----------|
-| feature/[작업명] | 새 기능 개발 | develop | develop (사용자 병합) |
-| bugfix/[작업명] | develop 단계 버그 수정 | develop | develop (사용자 병합) |
-| chore/[작업명] | 기능·버그와 무관한 유지보수 (CI/CD·빌드·러너·캐싱·의존성 정리·문서 등) | develop | develop (사용자 병합) |
-| hotfix/[작업명] | main 운영 긴급 수정 | main | main PR + develop PR (사용자 병합) |
+| feature/[작업명] | 새 기능 개발 | develop | develop, squash (사용자 병합) |
+| bugfix/[작업명] | develop 단계 버그 수정 | develop | develop, squash (사용자 병합) |
+| chore/[작업명] | 기능·버그와 무관한 유지보수 (CI/CD·빌드·러너·캐싱·의존성 정리·문서 등) | develop | develop, squash (사용자 병합) |
+| hotfix/[작업명] | main 운영 긴급 수정 | main | main PR(squash) → 병합 후 main→develop back-merge PR(merge commit) |
 
 ## 신규 생성
 1. 작업 내용을 파악해 유형과 브랜치명 후보를 사용자에게 제시한다. **(확인 게이트)**

@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
 	import { api } from '$lib/api';

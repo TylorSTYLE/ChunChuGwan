@@ -25,7 +25,7 @@ import json
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit

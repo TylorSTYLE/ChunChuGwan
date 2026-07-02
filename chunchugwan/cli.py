@@ -6,6 +6,7 @@ import logging
 import tarfile
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
@@ -16,6 +17,9 @@ from . import config, db, linkrepair, searchindex, storage, system_log
 # (playwright)·extract(lxml)·PIL 을 전이로 끌어와 import 비용이 크다 — 해당 명령
 # 에서만 쓰므로 함수 안에서 지연 import 한다 (cron 으로 자주 도는 list/search/add/
 # history 등의 콜드 스타트를 줄인다).
+
+if TYPE_CHECKING:
+    from . import crawler
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
 

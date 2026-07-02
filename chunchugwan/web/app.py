@@ -23,7 +23,6 @@ from html import escape as html_escape
 import time
 import zipfile
 from contextlib import asynccontextmanager
-import zoneinfo
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -41,9 +40,9 @@ from fastapi.responses import (
 )
 
 from .. import (
-    __version__, archive_worker, auth, backup, cluster_sync, config, crawler,
-    credentials, crypto, db, deletion, differ, documents, live_challenge, netcheck,
-    resources, scheduler, searchindex, storage, system_log,
+    archive_worker, auth, cluster_sync, config, crawler,
+    credentials, crypto, db, differ, documents, live_challenge, netcheck,
+    resources, scheduler, storage, system_log,
 )
 from . import (
     api_routes, audit, auth_routes, cluster_routes, i18n,

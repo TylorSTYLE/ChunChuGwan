@@ -1,12 +1,11 @@
 """웹 UI 다국어(i18n) 테스트 — 로케일 결정, 번역 폴백, 언어 전환 라우트."""
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import config, db, storage
+from chunchugwan import config, db
 from chunchugwan.web import app as web_app
 from chunchugwan.web import i18n
 

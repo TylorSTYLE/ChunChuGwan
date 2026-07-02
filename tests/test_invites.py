@@ -1,12 +1,11 @@
 """이메일 초대 — DB 계층, 발급/취소(관리자 전용), 수락 가입 플로우, 메일 발송 테스트."""
 import re
-import smtplib
 from urllib.parse import unquote
 
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import auth, config, db, mailer
+from chunchugwan import auth, config, db
 from chunchugwan.web import app as web_app
 
 

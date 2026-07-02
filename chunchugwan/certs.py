@@ -97,7 +97,7 @@ def parse_certificate(der: bytes) -> dict:
     except x509.ExtensionNotFound:
         san = []
     try:
-        sig_alg = cert.signature_hash_algorithm.name
+        sig_alg = cert.signature_hash_algorithm.name if cert.signature_hash_algorithm else ""
     except Exception:
         sig_alg = ""  # Ed25519 등 해시 분리형 서명
     return {

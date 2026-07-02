@@ -1,16 +1,20 @@
-name: Docker
+name: Docker Image
+
+# deploy-guideline §1 태깅 정책의 실행 주체 — develop push → :develop 태그 / 릴리스 태그
+# push → :vX.Y.Z + :latest + :main 태그. compose 2파일이 이 태그를 소비한다.
+# develop→main 자동 PR 생성(구 promote 잡)은 GitFlow 스킬(release.md)로 이관됐다 —
+# 이 워크플로는 순수 이미지 빌드·검증·배포만 담당한다.
 
 on:
   push:
-    branches: [main, develop]
+    branches: [develop]
     tags: ["v*"]
-  workflow_dispatch:
 
 env:
   IMAGE: ghcr.io/tylorstyle/chunchugwan   # GHCR 은 소문자만 허용
 
 # 같은 ref 에 연속 push 시 멀티아치 빌드가 겹치지 않게 한다.
-# develop 는 최신만 의미가 있어 진행 중 빌드를 취소하지만, main·태그(릴리스)는
+# develop 는 최신만 의미가 있어 진행 중 빌드를 취소하지만, 태그(릴리스)는
 # 보존해 릴리스 이미지가 중간에 끊기지 않게 한다.
 concurrency:
   group: docker-${{ github.ref }}
@@ -21,10 +25,6 @@ jobs:
   # GitHub 호스티드 러너를 아키텍처별로 — amd64→ubuntu-latest·arm64→ubuntu-24.04-arm
   # (공개 리포라 arm64 호스티드 러너도 무료).
   build:
-    # 릴리스(release.yml)는 main 범프 커밋·develop FF 를 따로 push 하는데, 같은 트리를
-    # 가리키는 vX.Y.Z 태그 빌드가 :latest·:main·:develop 태그까지 모두 떠맡으므로
-    # (아래 meta 참조) 범프 커밋에 의한 브랜치 push 빌드는 중복이라 건너뛴다.
-    if: ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && startsWith(github.event.head_commit.message, '춘추관 v')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -83,14 +83,18 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # 플랫폼별 digest 를 하나의 멀티아치 매니페스트로 합쳐 태그 푸시
-  merge:
+  # 플랫폼별 digest 를 하나의 멀티아치 매니페스트로 합쳐 "임시" 태그로만 push한다.
+  # 스모크 통과 전까지 develop/latest/main/semver 등 가변 태그는 공개하지 않는다
+  # (표준 §8.6 "develop 태그 승격 스모크 게이트" — compose 소비자를 깨진 이미지로부터 보호).
+  merge-staging:
     runs-on: ubuntu-latest
     needs: build
     permissions:
       packages: write
       actions: read   # download-artifact 가 아티팩트 API 호출에 쓰는 스코프(예방적 명시)
     timeout-minutes: 10
+    outputs:
+      staging-tag: ${{ steps.tag.outputs.value }}
 
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
@@ -101,24 +105,6 @@ jobs:
 
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
 
-      - name: 태그 결정
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
-            type=sha
-            type=semver,pattern={{version}}
-            # 릴리스 태그 빌드가 브랜치 push 빌드를 대신하므로 :latest·:main 도 함께 찍는다
-            # (태그 커밋 = main HEAD = FF 된 develop 와 동일 트리). 단 :develop 은 제외 —
-            # 릴리스 빌드는 디버그 코드를 제거(INCLUDE_DEBUG 빈값)하므로 develop 이미지와
-            # 내용이 다르다. :develop 은 develop 브랜치 빌드(INCLUDE_DEBUG=1)에서만 갱신한다
-            # (릴리스 직후엔 직전 develop 빌드가 유지되고, 다음 develop 머지에 갱신된다).
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=main,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-
       - name: GHCR 로그인
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
@@ -126,21 +112,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 매니페스트 생성·푸시
+      - id: tag
+        run: echo "value=staging-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: 스테이징 태그로 매니페스트 push
         working-directory: /tmp/digests
         run: |
+          # shellcheck disable=SC2046  # 의도된 word splitting — digest 목록을 -t 인자로 전개
           docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            -t "$IMAGE:${{ steps.tag.outputs.value }}" \
             $(printf "$IMAGE@sha256:%s " *)
 
-      - name: 결과 확인
-        run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
-
-  # 방금 푸시한 브랜치 이미지를 실제로 돌려 기동을 확인 (develop·main 푸시만)
+  # 방금 push한 스테이징 태그를 실제로 돌려 기동을 확인한다. develop push·릴리스 태그
+  # push 양쪽 모두 게이트를 태운다(표준은 develop 만 요구하지만 :latest·:vX.Y.Z 로도
+  # 깨진 이미지가 올라가지 않도록 확장).
   smoke:
     runs-on: ubuntu-latest
-    needs: merge
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
+    needs: merge-staging
     permissions:
       packages: read
     timeout-minutes: 10
@@ -154,7 +142,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 이미지 태그 결정
-        run: echo "TAG=$IMAGE:${{ github.ref_name }}" >> "$GITHUB_ENV"
+        run: echo "TAG=$IMAGE:${{ needs.merge-staging.outputs.staging-tag }}" >> "$GITHUB_ENV"
 
       - name: CLI 스모크 (--version)
         run: docker run --rm "$TAG" --version
@@ -185,68 +173,43 @@ jobs:
           docker rm -f wccg-smoke >/dev/null 2>&1 || true
           [ "$ok" = "1" ] || { echo "::error::대시보드가 기동 응답하지 않음"; exit 1; }
 
-  # 스모크 통과한 develop 을 main 으로 올릴 릴리스 PR 을 만들고
-  # 변경 diff 로 release:* 라벨을 자동 부여 (사람이 검토 후 머지)
-  promote:
+  # 스모크 통과 후에만 가변 태그(develop/latest/main/semver)를 공개한다 — 이미 검증된
+  # 스테이징 digest 를 소스로 재태깅(재빌드 없음, 플랫폼별 레이어는 바이트 그대로 재사용).
+  publish-tags:
     runs-on: ubuntu-latest
-    needs: smoke
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    needs: [merge-staging, smoke]
     permissions:
-      contents: read
-      pull-requests: write
+      packages: write
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
+
+      - name: GHCR 로그인
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
-          fetch-depth: 0
-          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: bump 레벨 판정
-        id: bump
-        run: |
-          git fetch origin main develop --quiet
-          range="origin/main...origin/develop"
-          files=$(git diff --name-only $range)
-          if [ -z "$files" ]; then
-            echo "develop 가 main 과 동일 — 승격할 변경 없음"
-            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          # 1) 커밋 메시지에 호환 깨짐 신호가 있으면 major
-          if git log --format='%B' $range | grep -iE 'BREAKING|호환[[:space:]]*깨' >/dev/null; then
-            level=major
-          # 2) 코드(docs/tests/.md/.github 외)가 바뀌었으면 minor, 아니면 patch
-          #    grep -q 는 BSD/GNU 동작 차이가 있어 출력 캡처로 판정
-          elif [ -n "$(echo "$files" | grep -vE '^(docs/|tests/|\.github/)|\.md$' || true)" ]; then
-            level=minor
-          else
-            level=patch
-          fi
-          echo "변경 파일:"; echo "$files"
-          echo "판정 레벨: release:$level"
-          echo "level=$level" >> "$GITHUB_OUTPUT"
+      - name: 태그 결정
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=develop,enable=${{ github.ref == 'refs/heads/develop' }}
+            type=sha
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=main,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
-      - name: develop→main 릴리스 PR 생성·갱신 + 라벨
-        if: steps.bump.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          LEVEL: ${{ steps.bump.outputs.level }}
+      - name: 최종 태그 push (스테이징 digest 재태깅)
         run: |
-          num=$(gh pr list --base main --head develop --state open --json number --jq '.[0].number')
-          if [ -z "$num" ]; then
-            body=$(printf '%s\n' \
-              '도커 `:develop` 이미지 빌드·스모크 통과 후 자동 생성된 릴리스 PR.' \
-              '' \
-              '머지하면 `release.yml` 이 `release:*` 라벨로 다음 버전을 결정해 태그·Release 를 등록한다.' \
-              '판정 레벨이 맞지 않으면 라벨을 직접 바꾼 뒤 머지할 것 (호환 깨짐=major / 기능=minor / 버그·문서·리팩터=patch).')
-            gh pr create --base main --head develop \
-              --title "릴리스: develop → main" \
-              --body "$body"
-            num=$(gh pr list --base main --head develop --state open --json number --jq '.[0].number')
-          fi
-          # 기존 release:* 라벨 정리 후 판정 라벨만 부여
-          for l in release:major release:minor release:patch; do
-            [ "$l" = "release:$LEVEL" ] || gh pr edit "$num" --remove-label "$l" 2>/dev/null || true
-          done
-          gh pr edit "$num" --add-label "release:$LEVEL"
-          echo "PR #$num → release:$LEVEL"
+          # shellcheck disable=SC2046  # 의도된 word splitting — -t 태그 인자 목록으로 전개
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            "$IMAGE:${{ needs.merge-staging.outputs.staging-tag }}"
+
+      - name: 결과 확인
+        run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"

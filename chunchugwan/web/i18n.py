@@ -907,7 +907,6 @@ _EN: dict[str, str] = {
         "Set the environment variable before adding a peer.",
     "이 노드": "This node",
     "노드 식별자 (UUID)": "Node ID (UUID)",
-    "표시 이름": "Display name",
     "예: 집 NAS": "e.g. Home NAS",
     "표시 전용입니다 — 피어 식별·신뢰는 항상 UUID 로 합니다.":
         "Display only — peers are identified and trusted by UUID.",

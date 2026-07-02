@@ -3,7 +3,6 @@
 S3 경로는 moto. 로컬 모드 동작은 다른 테스트가 보장한다.
 """
 import gzip
-import io
 import json
 import tarfile
 
@@ -184,7 +183,6 @@ def test_export_s3_streams_and_cross_mode_import(env, monkeypatch, tmp_path):
         exp_bytes = exp_path.read_bytes()
 
     # cross-mode: 로컬 모드 새 인스턴스로 import
-    import shutil
     fresh = tmp_path / "fresh"
     monkeypatch.setattr(config, "ARCHIVE_ROOT", fresh)
     monkeypatch.setattr(config, "SITES_DIR", fresh / "sites")

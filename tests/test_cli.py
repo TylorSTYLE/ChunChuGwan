@@ -48,7 +48,7 @@ def test_list(archive_env):
 def test_history(archive_env):
     result = CliRunner().invoke(cli.main, ["history", archive_env])
     assert result.exit_code == 0
-    lines = [l for l in result.output.splitlines() if l.strip().startswith(("1 ", "2 "))]
+    lines = [line for line in result.output.splitlines() if line.strip().startswith(("1 ", "2 "))]
     assert len(lines) == 2
     assert "[신규]" in result.output and "[변경]" in result.output
 

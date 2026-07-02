@@ -3,10 +3,12 @@
 # ── SvelteKit SPA 빌드 — 정적 산출물(frontend/build)을 다음 스테이지가 동봉한다 ──
 FROM node:24-slim AS frontend
 WORKDIR /frontend
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# corepack 이 package.json 의 packageManager 필드로 고정된 pnpm 버전을 받아온다.
+RUN corepack enable
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY frontend/ ./
-RUN npm run build
+RUN pnpm run build
 
 FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
 

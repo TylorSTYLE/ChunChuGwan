@@ -1,23 +1,29 @@
 ---
 name: gitflow
 description: 이 프로젝트의 GitFlow 브랜치·PR·릴리즈 표준 절차. 작업 브랜치 생성/재개, develop 대상 PR 생성, develop→main 릴리즈 PR 생성에 사용한다. "브랜치 만들어줘/따줘", "PR 올려줘/만들어줘", "릴리즈 PR", "머지/배포 준비", feature·bugfix·chore·hotfix 작업, git 워크플로 관련 요청이면 명시적으로 언급하지 않아도 반드시 이 스킬을 사용하라. main/develop 직접 push 방지와 PR 기반 병합을 강제하는 안전 절차다.
-allowed-tools: Bash(git:*) Bash(gh:*) Read Edit
+allowed-tools: Bash(git:*), Bash(gh:*), Read, Edit
 ---
 # GitFlow 표준 절차
 작업 유형을 판별하고, 해당 절차 파일을 읽어 그대로 수행한다. 각 절차는 사용자 확인 게이트를 포함하며, 게이트에서 반드시 멈추고 명시적 승인을 받은 뒤 진행한다.
+
 ## 공통 전제 (불변)
 - **main**: 릴리즈 전용 — 직접 커밋/push 금지, PR 병합만. **develop**: 작업 베이스 — 직접 커밋/push 금지, PR 병합만.
-- 작업 브랜치: `feature/*` · `bugfix/*` · `chore/*` → 베이스·병합 **develop** / `hotfix/*` → 베이스 **main**, 병합 **main + develop**.
+- 작업 브랜치: `feature/*` · `bugfix/*` · `chore/*` → 베이스·병합 **develop** / `hotfix/*` → 베이스 **main**, 병합 **main**(이후 main→develop back-merge).
+- **병합 전략**: 작업 PR(feature/bugfix/chore/hotfix)=squash merge / 릴리즈 PR(develop→main)=merge commit(squash 금지 — 히스토리 발산 방지) / back-merge(main→develop)=merge commit.
+- **PR 제목 규약(Conventional Commits)**: `feat:` `fix:` `chore:` `hotfix:` `release: v[버전]`. squash 시 PR 제목이 커밋 메시지가 되므로 필수. 릴리즈 노트 분류와 버전 산출의 기준이다.
+- **버전 산출 규칙(SemVer 자동)**: 릴리즈 버전은 직전 태그 이후 커밋의 프리픽스로 산출한다 — BREAKING CHANGE 또는 타입 무관 `!` 표기(예: `feat!:`·`fix!:`)=major / `feat:`=minor / 그 외(`fix:`·`chore:`·`hotfix:`)=patch. 산출된 버전은 릴리즈 절차의 확인 게이트에서 사용자 승인으로 확정한다.
 - 브랜치 보호(main, develop 공통): PR 승인 0명, enforce_admins: true.
 - 명명: 소문자 + 하이픈. 예: `feature/user-auth`, `bugfix/login-crash`, `chore/gha-cost-cut`.
 - 금지: main/develop **브랜치에 대한 직접 커밋/push**, 이번 작업 범위 외 기존 코드 수정, 빌드/배포 실행, 이번 작업의 명시적 목적이 아닌 `.env`·설정·lock 파일 수정. (PR 병합 및 릴리즈 태그 push는 아래 위임 원칙에 따른 대행 시에만 예외적으로 허용되며, 이는 브랜치 직접 push에 해당하지 않는다.)
 - 공통 중단 조건: 작업 디렉터리 dirty / 리베이스 충돌 / 예상치 못한 오류 2회 연속 → 즉시 중단하고 보고.
+
 ## 위임 원칙 (공통)
 - **기본값**: 병합, 병합 후 브랜치 정리, 릴리즈 태그 부여는 사용자가 직접 수행한다.
 - **대행 조건**: 사용자가 해당 작업을 **명시적으로 위임**한 경우에 한해 대행할 수 있다. 위임이 없거나 범위가 불명확하면 대행하지 않고 사용자에게 넘긴다.
-- **대행 시 불변 규칙**: (a) 각 절차의 확인 게이트는 그대로 적용, (b) 병합은 squash merge 전략 준수, (c) 대행 여부·범위를 완료 요약에 명시.
+- **대행 시 불변 규칙**: (a) 각 절차의 확인 게이트는 그대로 적용, (b) 병합은 위 "병합 전략"을 준수(작업 PR=squash, 릴리즈 PR=merge commit), (c) 대행 여부·범위를 완료 요약에 명시.
 - **태그 대행 제약(릴리즈)**: 태그 부여 대행은 병합 대행을 함께 위임받은 경우로만 가능하다. "태그만" 단독 대행은 불가(병합 완료 시점을 대행 주체가 확정할 수 없어 잘못된 커밋에 태그가 붙을 위험).
 - 세부 대행 절차는 각 절차 파일(`pr.md`·`release.md`)을 따른다.
+
 ## 라우팅
 - **새 브랜치 생성 또는 기존 브랜치 재개** → 번들된 `branch.md`를 읽고 따른다.
 - **작업 브랜치 → 대상 브랜치 PR 생성** → 번들된 `pr.md`를 읽고 따른다.

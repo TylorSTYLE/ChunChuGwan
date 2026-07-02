@@ -147,7 +147,7 @@ def test_push_receive_creates_with_provenance_and_log(tmp_db):
         snap = db.find_snapshot_by_provenance(conn, "node-FOREIGN", "7")
         assert snap is not None and snap["origin_node_id"] == "node-FOREIGN"
         logs = db.list_archive_logs(conn, limit=10)
-        assert any(l["source"] == "cluster" and l["status"] == "new" for l in logs)
+        assert any(log["source"] == "cluster" and log["status"] == "new" for log in logs)
     # 중복 수신 — status duplicate, 새 로그 없음
     r2 = c.post("/api/cluster/snapshots", json=env, headers={**_hdr(_key(send=True)), **POST_HEADERS})
     assert r2.json()["status"] == "duplicate"
@@ -186,7 +186,7 @@ def test_pull_delta_imports_and_advances_cursor(tmp_db, monkeypatch):
     with db.connect() as conn:
         assert db.find_snapshot_by_provenance(conn, "peer-SRC", "42") is not None
         assert db.get_cluster_peer(conn, pid)["receive_cursor"] == 42
-        assert any(l["source"] == "cluster" for l in db.list_archive_logs(conn, limit=5))
+        assert any(log["source"] == "cluster" for log in db.list_archive_logs(conn, limit=5))
     # 재실행 — 커서 이후 신규 없음 → 중복 적재·로그 없음
     cluster_sync._pull_delta(pid, "https://x.test", "wccg_k", "peer-SRC")
     with db.connect() as conn:

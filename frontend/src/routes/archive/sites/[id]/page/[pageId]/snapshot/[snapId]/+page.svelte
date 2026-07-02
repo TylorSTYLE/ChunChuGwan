@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { pagePath } from '$lib/urls';
-	import { base } from '$app/paths';
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
