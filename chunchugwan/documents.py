@@ -202,9 +202,9 @@ def direct_filename(
         ext = cand.suffix.lower()
         if ext in config.DOCUMENT_EXTENSIONS:
             return _build_filename(cand.stem, ext, url)
-    ext = _TYPE_EXTENSIONS.get((content_type or "").lower())
-    if ext:
-        return _build_filename("document", ext, url)
+    type_ext = _TYPE_EXTENSIONS.get((content_type or "").lower())
+    if type_ext:
+        return _build_filename("document", type_ext, url)
     return None
 
 

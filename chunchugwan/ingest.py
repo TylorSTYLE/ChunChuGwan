@@ -199,11 +199,11 @@ def ingest_capture(
     with db.connect() as conn:
         existing = db.get_page(conn, norm)
         prev = db.last_snapshot(conn, existing["id"]) if existing else None
-        if prev and prev["content_hash"] == content_hash and not force:
+        if prev and existing is not None and prev["content_hash"] == content_hash and not force:
             db.insert_check(conn, existing["id"], content_hash)
         prev_hash = prev["content_hash"] if prev else None
         prev_id = prev["id"] if prev else None
-    if prev_hash == content_hash and not force:
+    if prev_hash == content_hash and not force and existing is not None:
         _write_log(
             status="unchanged", url=norm, domain=domain, page_id=existing["id"],
             snapshot_id=None, content_hash=content_hash, http_status=http_status,
@@ -331,11 +331,11 @@ def ingest_document(
     with db.connect() as conn:
         existing = db.get_page(conn, norm)
         prev = db.last_snapshot(conn, existing["id"]) if existing else None
-        if prev and prev["content_hash"] == content_hash and not force:
+        if prev and existing is not None and prev["content_hash"] == content_hash and not force:
             db.insert_check(conn, existing["id"], content_hash)
         prev_hash = prev["content_hash"] if prev else None
         prev_id = prev["id"] if prev else None
-    if prev_hash == content_hash and not force:
+    if prev_hash == content_hash and not force and existing is not None:
         _write_log(
             status="unchanged", url=norm, domain=domain, page_id=existing["id"],
             snapshot_id=None, content_hash=content_hash, http_status=http_status,

@@ -61,29 +61,18 @@ target-version = "py312"
 python_version = "3.12"
 ignore_missing_imports = true
 
-# 부트스트랩 시점 기존 위반(156건/21파일) 동결 — 점진 해소 대상은 CLAUDE.md
+# 부트스트랩 시점 기존 위반(118건/10파일) 동결 — 점진 해소 대상은 CLAUDE.md
 # 마이그레이션 백로그 참조. 새 코드·이 목록 밖 모듈은 mypy 를 그대로 적용한다.
 [[tool.mypy.overrides]]
 module = [
-    "chunchugwan.ai_challenge",
     "chunchugwan.archive_worker",
-    "chunchugwan.backup",
     "chunchugwan.capture",
     "chunchugwan.cli",
-    "chunchugwan.cluster",
-    "chunchugwan.cluster_sync",
-    "chunchugwan.crawler",
     "chunchugwan.credentials",
-    "chunchugwan.db",
-    "chunchugwan.documents",
-    "chunchugwan.ingest",
     "chunchugwan.pipeline",
-    "chunchugwan.scheduler",
     "chunchugwan.searchindex",
-    "chunchugwan.storage",
     "chunchugwan.web.app",
     "chunchugwan.web.auth_routes",
-    "chunchugwan.web.debug_server",
     "chunchugwan.web.web_api_routes",
     "chunchugwan.web.web_auth_routes",
 ]

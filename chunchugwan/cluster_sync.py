@@ -120,7 +120,9 @@ def _pull_delta(peer_id: int, base_url: str, api_key: str, peer_node_id: str) ->
     데까지만 올라 다음 사이클에 이어진다(부분 적재 없음). 피어가 바쁘면(429) 이번 사이클 중단.
     """
     with db.connect() as conn:
-        cursor = db.get_cluster_peer(conn, peer_id)["receive_cursor"]
+        peer_row = db.get_cluster_peer(conn, peer_id)
+        assert peer_row is not None  # reconcile_peer 가 직전에 존재를 확인한 피어
+        cursor = peer_row["receive_cursor"]
     try:
         items = cluster.pull_list(base_url, api_key, after=cursor,
                                   limit=config.CLUSTER_SYNC_BATCH_MAX)
@@ -154,7 +156,9 @@ def _push_delta(peer_id: int, base_url: str, api_key: str) -> None:
     협상→없는 블롭만 업로드→envelope 적재 요청→커서 전진. 429·오류는 이번 사이클 중단.
     """
     with db.connect() as conn:
-        cursor = db.get_cluster_peer(conn, peer_id)["send_cursor"]
+        peer_row = db.get_cluster_peer(conn, peer_id)
+        assert peer_row is not None  # reconcile_peer 가 직전에 존재를 확인한 피어
+        cursor = peer_row["send_cursor"]
         rows = db.list_shareable_snapshots_after(conn, cursor, config.CLUSTER_SYNC_BATCH_MAX)
     for r in rows:
         snap_id = r["id"]

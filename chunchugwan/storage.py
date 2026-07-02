@@ -296,7 +296,12 @@ def snapshot_dir_bytes(snapshot_dir: Path) -> int:
     snapshot_files 와 같은 기준(스냅샷 산출물 + files/ 문서)으로 합산한다 —
     snapshots.bytes 비정규화 값의 단일 계산 지점이다.
     """
-    return sum(f["bytes"] for f in snapshot_files(snapshot_dir))
+    total = 0
+    for f in snapshot_files(snapshot_dir):
+        n = f["bytes"]
+        assert isinstance(n, int)  # snapshot_files 가 "bytes" 는 항상 int 로 채운다
+        total += n
+    return total
 
 
 def dir_bytes(root: Path) -> int:

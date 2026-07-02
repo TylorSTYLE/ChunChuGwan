@@ -721,7 +721,9 @@ def import_archive(src: Path, mode: str = "merge") -> ImportResult:
                         (p["url"], p["domain"], p["slug"], site_id,
                          int(p.get("client_captured", 0)), p["created_at"] or _utcnow()),
                     )
-                    page_ids[p["url"]] = cur.lastrowid
+                    rowid = cur.lastrowid
+                    assert rowid is not None  # INSERT 직후라 None 불가
+                    page_ids[p["url"]] = rowid
                     page_paths[p["url"]] = (p["domain"], p["slug"])
                     result.pages_added += 1
                 else:

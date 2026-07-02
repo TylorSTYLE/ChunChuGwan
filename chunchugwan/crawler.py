@@ -304,7 +304,9 @@ def start_crawl(
             network_tag_id=network_tag_id, credential_id=credential_id,
         )
         db.insert_crawl_page(conn, crawl_id, norm, 0)
-        return db.get_crawl(conn, crawl_id), False
+        crawl = db.get_crawl(conn, crawl_id)
+        assert crawl is not None  # insert_crawl 직후라 None 불가
+        return crawl, False
 
 
 def _normalize_http(href: str) -> str | None:
@@ -540,7 +542,9 @@ def set_crawl_schedule(
             run_at_time=run_at, network_tag_id=network_tag_id,
             credential_id=credential_id,
         )
-        return db.get_crawl_schedule(conn, norm)
+        schedule = db.get_crawl_schedule(conn, norm)
+        assert schedule is not None  # upsert 직후라 None 불가
+        return schedule
 
 
 def set_crawl_schedule_next_run(schedule_id: int, next_run: datetime) -> sqlite3.Row:
@@ -556,7 +560,9 @@ def set_crawl_schedule_next_run(schedule_id: int, next_run: datetime) -> sqlite3
             conn, schedule_id, _iso(next_run.astimezone(timezone.utc))
         ):
             raise ValueError(f"등록된 크롤 스케줄이 없습니다: {schedule_id}")
-        return db.get_crawl_schedule_by_id(conn, schedule_id)
+        schedule = db.get_crawl_schedule_by_id(conn, schedule_id)
+        assert schedule is not None  # 직전 갱신 성공(True) 이후라 None 불가
+        return schedule
 
 
 def remove_crawl_schedule(url: str) -> bool:

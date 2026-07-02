@@ -343,6 +343,7 @@ def import_snapshot(
             (page["url"], page["domain"], page["slug"], site_id, db._utcnow()),
         )
         page_id = cur.lastrowid
+        assert page_id is not None  # INSERT 직후라 None 불가
         domain, slug = page["domain"], page["slug"]
     else:
         page_id = existing["id"]
