@@ -6,6 +6,28 @@
 > 윈도우·macOS 에서 GUI 앱으로 처음 구동한다면 아래
 > [Docker Desktop으로 설치 및 설정](#docker-desktop으로-설치-및-설정) 절부터 따라 하면 된다.
 
+## 배포 보안 모델 (§12)
+
+서버 배포에서 지켜야 하는 보안 설계다. 흩어진 근거를 여기 모으고, 릴리스 자동화 상세는
+[`.claude/rules/release-docker.md`](../.claude/rules/release-docker.md), 디버그 포트
+상세는 [DEVELOPMENT.md](DEVELOPMENT.md#디버그-진단-포트-wccg_debug) 를 참조한다.
+
+- **기본은 loopback, 외부 노출은 리버스 프록시로 (아키텍처 원칙 5).** 호스트 포트는
+  **127.0.0.1 에만** 바인딩한다. 외부에 열려면 포트 매핑을 여는 대신 앞단에 리버스
+  프록시(HTTPS 종료)를 두고 `WCCG_PUBLIC_URL` 을 설정한다.
+- **노출되면 인증은 항상 켜진다.** 컨테이너 대시보드는 내부적으로 0.0.0.0 바인딩이라
+  인증이 강제된다 — `WCCG_AUTH=off` 는 loopback 바인딩 전용이며 `cli.serve` 가 이를
+  강제한다(컨테이너의 0.0.0.0 바인딩에서는 끌 수 없다).
+- **컨테이너는 비루트(uid 1000)로 실행.** chromium 샌드박스가 활성 상태로 동작하고,
+  엔트리포인트가 `./archive` 소유자를 uid 1000 으로 보정한 뒤 비루트로 전환한다.
+- **시크릿은 환경변수로만 (아키텍처 원칙 6).** `WCCG_SECRET_KEY` 등 시크릿은 compose
+  `env_file`/환경변수로 주입하고 DB·저장소·`export` 에 넣지 않는다. 진단 응답조차
+  시크릿은 값이 아니라 설정 여부만 노출한다.
+- **릴리스 빌드는 디버그 코드를 물리적으로 제거.** 진단 포트(`web/debug_server.py`)는
+  런타임 토글(`WCCG_DEBUG`) 위에 한 겹 더 — 릴리스(`:latest`·`:main`·`:vX.Y.Z`) 이미지
+  빌드에서 파일 자체를 뺀다(Dockerfile `ARG INCLUDE_DEBUG`, CI 가 develop 빌드에만 주입).
+  릴리스 이미지에서는 `WCCG_DEBUG=on` 을 줘도 디버그 서버 코드가 존재하지 않는다.
+
 ## Docker Desktop으로 설치 및 설정
 
 > 윈도우·macOS 에서 **Docker Desktop**(GUI 앱)으로 GHCR 사전 빌드 이미지를 받아
