@@ -1,0 +1,28 @@
+# 핫리로드 오버레이 — 빠른 수정-검증 루프(개발용). **docker-compose.dev.yml 위에 얹어 쓴다.**
+#
+# dashboard(serve)를 소스 bind-mount + `serve --reload` 로 띄운다. 호스트의
+# chunchugwan/ 소스를 고치면 uvicorn 이 자동 재기동하므로, 재빌드/재배포 없이 코드
+# 변경이 즉시 반영된다. 캡처·파이프라인 코드를 고친 뒤 디버그 포트의
+# `POST /debug/capture` 로 트리거하면 리로드된(새) 코드가 in-process 로 돌아 결과를
+# 바로 확인할 수 있다 — 워커 큐를 거치지 않는 타이트 루프.
+#
+# 사용 (dev 독립 파일 + 핫리로드 오버레이):
+#   docker compose -f docker-compose.dev.yml -f docker-compose.reload.yml up -d dashboard
+# 디버그 포트(WCCG_DEBUG·8798/8799)는 docker-compose.dev.yml 이 이미 제공한다.
+#
+# 전제: 이 compose 파일이 있는 디렉토리(호스트)에 리포 소스가 체크아웃돼 있어야 한다.
+# 원격 서버라면 소스를 그 디렉토리로 동기화(rsync/syncthing 등)해야 편집이 반영된다.
+# 로컬 PC 에서 develop 이미지로 띄우면 그 자리에서 바로 동작한다.
+#
+# 주의:
+# - chunchugwan/ 만 마운트한다(/app 전체를 덮으면 이미지의 .venv 가 가려져 깨진다).
+# - 프론트엔드(SPA)는 이미지에 구워진 빌드 산출물을 쓴다 — 마운트한 호스트 소스에
+#   web/frontend_dist 가 없으면 SPA 루트(/)는 비고 디버그 포트만 동작한다.
+#   프론트 작업은 `cd frontend && npm run dev` 를 별도로 쓰는 것을 권장한다.
+# - 캡처를 dashboard 프로세스(/debug/capture)에서 직접 돌리므로 shm_size 를 준다.
+services:
+  dashboard:
+    command: serve --reload
+    volumes:
+      - ./chunchugwan:/app/chunchugwan   # 백엔드 소스 핫리로드 대상
+    shm_size: 1gb                    # /debug/capture 가 chromium 을 띄울 수 있게

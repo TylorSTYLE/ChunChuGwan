@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { pagePath, snapPath } from '$lib/urls';
-	import { onMount } from 'svelte';
+	import { untrack } from 'svelte';
 	import { base } from '$app/paths';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
@@ -8,6 +8,7 @@
 	import { api, ApiError } from '$lib/api';
 	import type { CrawlDetail } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { createAction } from '$lib/action.svelte';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -50,7 +51,11 @@
 		return value ? (counts[value as keyof typeof counts] as number) : counts.total;
 	}
 
-	const cancel = () => action.run(() => api(`/crawls/${c.id}/cancel`, { method: 'POST' }), t('크롤을 취소했습니다.'));
+	const cancel = () => {
+		if (!confirm(t('진행 중인 사이트 아카이브(크롤)를 취소할까요? 남은 페이지는 처리되지 않습니다.')))
+			return;
+		return action.run(() => api(`/crawls/${c.id}/cancel`, { method: 'POST' }), t('크롤을 취소했습니다.'));
+	};
 	const retryAll = () =>
 		action.run(() => api(`/crawls/${c.id}/retry`, { method: 'POST' }), t('실패한 페이지를 다시 시도합니다.'));
 	const retryPage = (pageId: number) =>
@@ -75,12 +80,17 @@
 	}
 
 	// 진행 중이면 5초마다 상태를 폴링해 변화가 있으면 다시 불러온다.
-	onMount(() => {
+	// onMount(1회) 대신 c.id·c.status 에 반응하는 $effect 로 둔다 — 같은 라우트에서
+	// 다른 크롤로 이동하거나(컴포넌트 재사용) 재실행으로 새 running 크롤로 goto 해도
+	// 폴링이 새로 걸리고, 완료(status≠running)되면 effect 가 재실행되며 interval 을
+	// 정리해 5초마다 무한 invalidateAll 하던 문제도 없앤다.
+	$effect(() => {
+		const crawlId = c.id;
 		if (c.status !== 'running') return;
-		let last = JSON.stringify(counts);
+		let last = untrack(() => JSON.stringify(counts));
 		const timer = setInterval(async () => {
 			try {
-				const s = await api<{ status: string; counts: typeof counts }>(`/crawls/${c.id}/status`);
+				const s = await api<{ status: string; counts: typeof counts }>(`/crawls/${crawlId}/status`);
 				if (s.status !== 'running' || JSON.stringify(s.counts) !== last) {
 					last = JSON.stringify(s.counts);
 					await invalidateAll();
@@ -170,6 +180,10 @@
 	{/each}
 </p>
 
+{#if d.pages.length === 0}
+	<!-- 상태 필터 결과가 0건일 때 헤더만 있는 빈 테이블 대신 안내를 보여준다(로딩 실패 오인 방지) -->
+	<EmptyState message={t('해당하는 페이지가 없습니다.')} />
+{:else}
 <div class="table-wrap cards">
 	<table>
 		<thead>
@@ -214,6 +228,7 @@
 		</tbody>
 	</table>
 </div>
+{/if}
 
 <style>
 	.toolbar h2 {

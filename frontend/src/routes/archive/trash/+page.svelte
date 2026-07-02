@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { base } from '$app/paths';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
 	import { api } from '$lib/api';
@@ -13,6 +12,7 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { createAction } from '$lib/action.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 
 	let { data }: { data: { trash: TrashData } } = $props();
 	const act = createAction();
@@ -39,7 +39,8 @@
 	}
 
 	function purge(e: TrashEntry) {
-		if (!confirm(t('이 항목을 영구 삭제할까요? 되돌릴 수 없습니다.'))) return;
+		if (!confirm(t("'{label}' 을 영구 삭제할까요? 되돌릴 수 없습니다.").replace('{label}', e.label)))
+			return;
 		return act.run(
 			() => api(`/trash/${e.id}/purge`, { method: 'POST' }),
 			t('영구 삭제했습니다.')
@@ -91,7 +92,7 @@
 				{#each d.entries as e}
 					<tr>
 						<td data-label={t('종류')}>
-							<span class="badge {e.kind}">{e.kind === 'site' ? t('사이트') : t('페이지')}</span>
+							<Badge variant="secondary">{e.kind === 'site' ? t('사이트') : t('페이지')}</Badge>
 						</td>
 						<td class="url-cell" data-label={t('대상')} title={e.label}>{e.label}</td>
 						<td class="num" data-label={t('스냅샷')}>
@@ -146,9 +147,5 @@
 		white-space: nowrap;
 		display: flex;
 		gap: 6px;
-	}
-	.badge.site {
-		background: var(--amber-bg);
-		color: var(--amber);
 	}
 </style>

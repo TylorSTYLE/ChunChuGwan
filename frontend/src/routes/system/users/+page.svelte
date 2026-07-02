@@ -113,7 +113,7 @@
 <Toolbar>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
-	<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
+	<PageSize value={d.limit} options={d.limits} onchange={(n) => list.go({ limit: n, page: 1 })} />
 </Toolbar>
 
 <div class="table-wrap wide cards">
@@ -141,8 +141,10 @@
 						</div>
 					</td>
 					<td data-label={t('역할')}>
-						{#if u.is_founder}
-							<span class="badge">{d.role_labels[u.role] ?? u.role}</span>
+						{#if u.is_founder || u.id === d.me_id}
+							<!-- 최초 관리자·본인 행은 역할 편집 불가(읽기 전용) — 셀렉트 오조작으로
+							     자기 역할을 강등해 관리 접근을 잃는 실수를 막는다(서버 last-admin 락과 이중). -->
+							<Badge variant="secondary">{d.role_labels[u.role] ?? u.role}</Badge>
 						{:else}
 							<select value={u.role} disabled={act.busy} onchange={(e) => setRole(u, e.currentTarget.value)}>
 								{#each d.roles as r}<option value={r}>{d.role_labels[r] ?? r}</option>{/each}
@@ -184,13 +186,15 @@
 
 <h3>{t('초대')}</h3>
 {#if !d.mail_enabled}<p class="muted">{t('SMTP 미설정 — 초대 링크를 직접 전달합니다.')}</p>{/if}
-<Toolbar>
-	<Input type="email" bind:value={inviteEmail} placeholder={t('이메일')} />
-	<select bind:value={inviteRole}>
-		{#each d.invitable_roles as r}<option value={r}>{d.role_labels[r] ?? r}</option>{/each}
-	</select>
-	<Button onclick={invite} disabled={act.busy}>{t('초대')}</Button>
-</Toolbar>
+<form onsubmit={(e) => { e.preventDefault(); invite(); }}>
+	<Toolbar>
+		<Input type="email" bind:value={inviteEmail} placeholder={t('이메일')} aria-label={t('이메일')} />
+		<select bind:value={inviteRole} aria-label={t('역할')}>
+			{#each d.invitable_roles as r}<option value={r}>{d.role_labels[r] ?? r}</option>{/each}
+		</select>
+		<Button type="submit" disabled={act.busy}>{t('초대')}</Button>
+	</Toolbar>
+</form>
 {#if inviteLink}
 	<div class="notice link-out">
 		{#if inviteLinkEmail}<strong>{inviteLinkEmail}</strong> · {/if}<span class="mono">{inviteLink}</span>

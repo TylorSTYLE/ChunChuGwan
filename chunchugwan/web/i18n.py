@@ -189,6 +189,23 @@ _EN: dict[str, str] = {
     "해시": "Hash",
     "이전": "Previous",
     "다음": "Next",
+    "첫 페이지로": "To first page",
+    "검색어": "Search term",
+    "API 키 '{name}' 을 폐기할까요?": "Revoke API key '{name}'?",
+    "권한 그룹 '{label}' 을 삭제할까요?": "Delete permission group '{label}'?",
+    "'{label}' 을 영구 삭제할까요? 되돌릴 수 없습니다.":
+        "Permanently delete '{label}'? This cannot be undone.",
+    "해당하는 페이지가 없습니다.": "No matching pages.",
+    "로컬 네트워크 태그 '{name}' 을 삭제할까요?":
+        "Delete local network tag '{name}'?",
+    "이전 모드를 켜면 아카이빙·스케줄·크롤이 모두 중단됩니다. 진행할까요?":
+        "Turning on migration mode stops all archiving, schedules, and crawls. Continue?",
+    "진행 중인 사이트 아카이브(크롤)를 취소할까요? 남은 페이지는 처리되지 않습니다.":
+        "Cancel the running site archive (crawl)? Remaining pages will not be processed.",
+    "이전 스냅샷 스크린샷": "Previous snapshot screenshot",
+    "최신 스냅샷 스크린샷": "Latest snapshot screenshot",
+    "픽셀 차이 비교 이미지": "Pixel difference image",
+    "라이브 챌린지 화면": "Live challenge screen",
     "전체": "All",
     "필터": "Filter",
     "URL 필터…": "Filter by URL…",
@@ -890,7 +907,6 @@ _EN: dict[str, str] = {
         "Set the environment variable before adding a peer.",
     "이 노드": "This node",
     "노드 식별자 (UUID)": "Node ID (UUID)",
-    "표시 이름": "Display name",
     "예: 집 NAS": "e.g. Home NAS",
     "표시 전용입니다 — 피어 식별·신뢰는 항상 UUID 로 합니다.":
         "Display only — peers are identified and trusted by UUID.",
@@ -1252,19 +1268,8 @@ _EN: dict[str, str] = {
     # 로컬 네트워크 태그 (사설 IP 아카이빙 게이트 — netcheck)
     "로컬 네트워크 태그": "Local network tag",
     "선택 안 함 (공개 주소)": "None (public address)",
-    "사설 IP 대역(로컬 네트워크) 주소는 태그를 선택해야 아카이빙할 수 있습니다. "
-    "루프백 주소는 아카이빙할 수 없습니다.":
-        "Addresses in private IP ranges (local networks) can only be archived "
-        "with a tag selected. Loopback addresses cannot be archived.",
     "등록된 로컬 네트워크 태그가 없습니다 — 시스템 화면에서 먼저 추가하세요.":
         "No local network tags are registered — add one on the System page first.",
-    "사설 IP 대역(로컬 네트워크)의 웹서버를 아카이빙할 때 어느 네트워크인지 "
-    "구분하는 태그입니다. 사설 대역 주소는 태그를 지정해야 아카이빙할 수 있고, "
-    "루프백 주소는 항상 아카이빙할 수 없습니다. ID(GUID)는 자동 발급됩니다.":
-        "Tags that identify which local network a web server on a private IP "
-        "range belongs to. Private-range addresses can only be archived with a "
-        "tag, and loopback addresses can never be archived. The ID (GUID) is "
-        "issued automatically.",
     "사용": "In use",
     "태그를 삭제할까요? 페이지·크롤이 사용 중이면 삭제되지 않습니다.":
         "Delete this tag? It cannot be deleted while pages or crawls use it.",
@@ -1293,17 +1298,6 @@ _EN: dict[str, str] = {
     "로컬 네트워크 태그 '{name}'을(를) 삭제했습니다.":
         "Deleted local network tag '{name}'.",
     # 로컬 네트워크 태그 병합 (같은 IP:포트의 중복 태그 정리)
-    "같은 사설 IP·포트를 가리키는 두 태그를 하나로 합칩니다. 출처 태그의 "
-    "페이지·크롤이 대상 태그로 옮겨지고 출처 태그는 삭제됩니다.":
-        "Merges two tags that point to the same private IP and port into one. "
-        "The source tag's pages and crawls move to the target tag, and the "
-        "source tag is deleted.",
-    "출처 태그를 대상 태그로 병합할까요? 출처 태그는 삭제되며, 두 태그가 "
-    "같은 IP·포트를 가리킬 때만 병합됩니다.":
-        "Merge the source tag into the target tag? The source tag is deleted, "
-        "and the merge only proceeds when both tags point to the same IP and port.",
-    "출처 태그(삭제됨)": "Source tag (deleted)",
-    "대상 태그(유지)": "Target tag (kept)",
     "병합": "Merge",
     "같은 태그끼리는 병합할 수 없습니다.": "A tag cannot be merged with itself.",
     "참조가 없는 태그는 병합할 수 없습니다 — 삭제를 사용하세요.":
@@ -1312,10 +1306,6 @@ _EN: dict[str, str] = {
     "병합할 수 있습니다.":
         "Tags can only be merged when they point to the same private network "
         "(same IP and port).",
-    "'{src}' 태그를 '{tgt}'(으)로 병합했습니다 "
-    "(페이지 {p}개·크롤 {c}개·스케줄 {s}개 이전).":
-        "Merged tag '{src}' into '{tgt}' "
-        "({p} page(s), {c} crawl(s), {s} schedule(s) moved).",
     # 사이트(서브도메인) 단위 아카이브 — 목록·사이트 상세
     "사이트 {n}개": "{n} site(s)",
     "사이트 필터…": "Filter sites…",
@@ -1475,9 +1465,9 @@ _EN: dict[str, str] = {
     "무시하고 이전 종료": "Ignore and finish",
     "관리자 계정 생성": "Create admin account",
     "백업 파일에서 복원": "Restore from backup file",
-    "전체 백업(tar.gz)을 올려 그 시점 상태로 복원합니다. 복원 후에는 백업의 계정으로 로그인합니다.":
-        "Upload a full backup (tar.gz) to restore to that point. After restoring, log "
-        "in with the account from the backup.",
+    "전체 백업 파일(.ccg.backup)을 올려 그 시점 상태로 복원합니다. 복원 후에는 백업의 계정으로 로그인합니다.":
+        "Upload a full backup file (.ccg.backup) to restore to that point. After "
+        "restoring, log in with the account from the backup.",
     "다른 춘추관에서 이전": "Migrate from another ChunChuGwan",
     "이전(마이그레이션) 모드를 켠 다른 춘추관의 주소와 발급된 토큰을 입력하면 모든 데이터를 가져옵니다. 받는 쪽은 같은 WCCG_SECRET_KEY 를 써야 외부 사이트 자격증명을 복호화할 수 있습니다.":
         "Enter the address and issued token of another ChunChuGwan that has migration "
@@ -1741,6 +1731,12 @@ _EN.update({
     "백업·복원": "Backup & restore",
     "백업 복원": "Restore from backup",
     "정말 복원하시겠습니까? 현재 데이터가 백업 시점으로 교체됩니다.": "Restore now? Current data will be replaced with the backup.",
+    "선택한 파일의 아카이브를 가져옵니다. 진행하시겠습니까?":
+        "Import archives from the selected file. Continue?",
+    "다른 사용자의 로그인 캡처 스냅샷이 포함된 사이트는 내보낼 수 없습니다.":
+        "Cannot export a site that contains other users' authenticated snapshots.",
+    "덮어쓰기 모드로 가져오면 겹치는 아카이브가 현재 데이터를 덮어씁니다. 진행하시겠습니까?":
+        "In overwrite mode, matching archives will replace your current data. Continue?",
     "가져오기 모드": "Import mode",
     "덮어쓰기": "Overwrite",
     "데이터 이전·재색인은 이어서 추가됩니다.": "Data migration and reindex are coming next.",
@@ -1870,6 +1866,77 @@ _EN.update({
     "문제가 발생했습니다": "Something went wrong",
     "요청한 페이지를 표시할 수 없습니다.": "The requested page could not be displayed.",
     "비교할 수 없습니다.": "Comparison is not available.",
+    # 라우트 오류 메시지(HTTPException detail) — 경계 예외 핸들러가 로케일로 번역한다(H9).
+    # SPA 가 err.message 를 그대로 표시하므로 en 사용자에게 한국어가 새지 않게 채운다.
+    "DB 백업에 실패했습니다.": "DB backup failed.",
+    "S3 모드에서만 사용량 스캔을 쓸 수 있습니다.": "Usage scan is available only in S3 mode.",
+    "SSO 전용 계정은 2단계 인증을 설정할 수 없습니다.":
+        "SSO-only accounts cannot set up two-factor authentication.",
+    "SSO 전용 계정은 패스키를 등록할 수 없습니다.":
+        "SSO-only accounts cannot register passkeys.",
+    "WCCG_SECRET_KEY 가 설정되지 않아 API 키를 저장할 수 없습니다.":
+        "API keys cannot be stored because WCCG_SECRET_KEY is not set.",
+    "content.md 없음": "No content.md",
+    "가입 초기 권한으로 쓸 수 없는 역할": "Role not allowed as a signup default",
+    "권한 그룹 없음": "Permission group not found",
+    "권한을 하나 이상 선택하세요": "Select at least one permission",
+    "기본 권한 그룹은 삭제할 수 없습니다": "Built-in permission groups cannot be deleted",
+    "두 태그가 같은 사설 네트워크(같은 IP·포트)를 가리킬 때만 병합할 수 있습니다.":
+        "Tags can be merged only when they point to the same private network (same IP and port).",
+    "메모 내용이 비어 있습니다": "Note content is empty",
+    "메모 등록 권한이 없습니다": "You do not have permission to add notes",
+    "메모 삭제 권한이 없습니다": "You do not have permission to delete notes",
+    "메모 없음": "Note not found",
+    "메모가 너무 깁니다": "Note is too long",
+    "복구 이력이 없습니다.": "No recovery history.",
+    "본인 계정은 여기서 삭제할 수 없습니다": "You cannot delete your own account here",
+    "부여할 수 없는 역할": "Role cannot be assigned",
+    "비교하려면 스냅샷이 2개 이상 필요합니다":
+        "At least two snapshots are required to compare",
+    "사용량 스캔에 실패했습니다.": "Usage scan failed.",
+    "사용자 관리 권한을 가진 마지막 계정입니다":
+        "This is the last account with user-management permission",
+    "사용자 관리 권한을 가진 활성 계정이 모두 사라집니다":
+        "This would remove the last active account with user-management permission",
+    "알 수 없는 만료 선택": "Unknown expiration option",
+    "이미 2단계 인증이 설정되어 있습니다.":
+        "Two-factor authentication is already set up.",
+    "이미 가입된 이메일입니다": "This email is already registered",
+    "이전(마이그레이션) 모드입니다 — 아카이빙할 수 없습니다":
+        "Migration mode is on — archiving is unavailable",
+    "인증이 비활성화되어 개인 계정이 없습니다":
+        "Authentication is disabled, so there is no personal account",
+    "인증이 필요합니다": "Authentication required",
+    "잘못된 범위": "Invalid range",
+    "열람 권한이 없습니다": "You do not have permission to view archives",
+    "크롤 옵션(최대 페이지·깊이·지연)은 숫자여야 합니다":
+        "Crawl options (max pages, depth, delay) must be numbers",
+    "전체 백업은 S3 모드에서 비활성화됩니다 — S3 DB백업·내보내기를 사용하세요.":
+        "Full backup is disabled in S3 mode — use S3 DB backup or export.",
+    "전체 복원은 S3 모드에서 비활성화됩니다 — S3 DB백업 복원·가져오기를 사용하세요.":
+        "Full restore is disabled in S3 mode — use S3 DB backup restore or import.",
+    "지원하지 않는 로케일입니다": "Unsupported locale",
+    "지원하지 않는 언어입니다": "Unsupported language",
+    "지원하지 않는 타임존입니다": "Unsupported time zone",
+    "초대할 수 없는 역할": "Role cannot be invited",
+    "최초 관리자는 삭제할 수 없습니다": "The initial administrator cannot be deleted",
+    "최초 관리자의 권한은 변경할 수 없습니다":
+        "The initial administrator's role cannot be changed",
+    "코드가 올바르지 않습니다. QR 을 다시 스캔 후 시도하세요.":
+        "Invalid code. Rescan the QR code and try again.",
+    "탈퇴한 계정의 권한은 변경할 수 없습니다":
+        "A withdrawn account's role cannot be changed",
+    "피어 없음": "Peer not found",
+    "확인 이메일이 일치하지 않습니다": "The confirmation email does not match",
+    "휴지통 관리 권한이 없습니다": "You do not have permission to manage the trash",
+    "휴지통 항목 없음": "Trash entry not found",
+    "S3 DB 백업 복원에 실패했습니다.": "S3 DB backup restore failed.",
+    "가입을 완료할 수 없습니다. 다른 이메일을 쓰거나 로그인하세요.":
+        "Could not complete sign-up. Use a different email or log in.",
+    "인증 대상이 없습니다": "Nothing to verify",
+    "초대가 유효하지 않거나 만료되었습니다.":
+        "The invitation is invalid or has expired.",
+    "최초 설정 토큰이 올바르지 않습니다.": "The setup token is incorrect.",
 })
 
 CATALOGS: dict[str, dict[str, str]] = {"en": _EN}

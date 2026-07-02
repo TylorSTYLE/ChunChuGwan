@@ -67,4 +67,4 @@ def test_download_serves_zip(client):
         assert manifest["action"]["default_icon"][size] == f"icons/icon{size}.png"
     assert zf.read("icons/icon16.png")[:8] == b"\x89PNG\r\n\x1a\n"  # 실제 PNG
     # _locales 가 유효 JSON
-    assert "tab_archive" in json.loads(zf.read("_locales/ko/messages.json"))
+    assert "tab_connect" in json.loads(zf.read("_locales/ko/messages.json"))

@@ -14,5 +14,7 @@
 		<span class="text-[13px]">{label}</span>
 		{#if description}<span class="text-xs text-muted-foreground">{description}</span>{/if}
 	</span>
-	<Switch bind:checked aria-label={label} />
+	<!-- label 이 비면 aria-label="" 로 무명 컨트롤이 되므로 undefined 로 떨어뜨린다
+	     (그 경우 호출부가 description 또는 외부 라벨로 이름을 줘야 한다). -->
+	<Switch bind:checked aria-label={label || undefined} />
 </div>

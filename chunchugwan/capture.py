@@ -43,9 +43,14 @@ logger = logging.getLogger(__name__)
 # crypto.subtle(보안 컨텍스트)로 계산하고, http 페이지처럼 없는 환경에서는
 # expose_function 으로 노출된 Python 바인딩(_sha256_of_base64)으로 폴백한다.
 _INLINE_JS = """
-async ({ timeoutMs, concurrency, baseUrl }) => {
+async ({ timeoutMs, concurrency, baseUrl, overallMs, maxCount }) => {
   const failed = [];
   const inlined = [];
+  // 인라인 총량 예산 — unicode-range 웹폰트는 @font-face 서브셋이 수천 개라
+  // 전부 인라인하면 page.html 이 수십 MB 로 부풀고 메모리를 폭증시킨다. 예산을
+  // 넘는 자원은 인라인하지 않고 원본 url() 을 유지한다(뷰어가 라이브로 받음).
+  let budget = (maxCount && maxCount > 0) ? maxCount : Infinity;
+  const takeBudget = () => (budget > 0 ? (budget--, true) : false);
   // 상대경로 해석 기준 — 링크 재작성이 <base> 를 떼기 전에 Python 이 떠 둔 값.
   // 없으면(직접 호출 등) 현재 baseURI 로 폴백.
   const base = baseUrl || document.baseURI;
@@ -96,6 +101,9 @@ async ({ timeoutMs, concurrency, baseUrl }) => {
     const repls = await Promise.all(matches.map(async (m) => {
       let abs = null;
       try { abs = new URL(m[2], baseUrl).href; } catch (e) {}
+      // 예산 초과분(웹폰트 서브셋 폭발)은 받지 않고 원본 url() 유지 — failed 에도
+      // 안 넣어 재시도 폭발을 막는다.
+      if (!takeBudget()) return m[0];
       try {
         if (!abs) throw new Error("URL 해석 실패");
         return "url(" + (await toDataUrl(abs)) + ")";
@@ -125,6 +133,7 @@ async ({ timeoutMs, concurrency, baseUrl }) => {
       if (!ref || ref.startsWith("data:") || ref.startsWith("#")) return m[0];
       let abs = null;
       try { abs = new URL(ref, baseUrl).href; } catch (e) {}
+      if (!takeBudget()) return m[0];
       try {
         if (!abs) throw new Error("URL 해석 실패");
         return "url(" + (await toDataUrl(abs)) + ")";
@@ -169,6 +178,7 @@ async ({ timeoutMs, concurrency, baseUrl }) => {
     const src = img.currentSrc || img.src;
     if (!src || src.startsWith("data:")) continue;
     tasks.push(async () => {
+      if (!takeBudget()) return;  // 예산 초과 — 원본 src 유지
       try {
         const dataUrl = await toDataUrl(src);
         img.removeAttribute("srcset");
@@ -190,12 +200,38 @@ async ({ timeoutMs, concurrency, baseUrl }) => {
   const worker = async () => {
     while (queue.length) await queue.shift()();
   };
-  await Promise.all(
+  const allDone = Promise.all(
     Array.from({ length: Math.min(concurrency, tasks.length) }, worker)
   );
-  return { failed, inlined };
+  // 전체 데드라인 — 자원별 AbortSignal.timeout 만으로는 headful 실제 Chrome 에서
+  // 일부 fetch 가 끝내 안 끊겨 Promise.all 이 영영 안 끝날 수 있다. overallMs 가
+  // 지나면 그때까지 인라인된 것만 들고 부분결과로 resolve 한다 (남은 자원은 원본
+  // URL 유지 — 끝나지 않은 task 는 DOM 을 안 건드린 채로 남는다).
+  let timedOut = false;
+  await Promise.race([
+    allDone,
+    new Promise((resolve) => setTimeout(() => { timedOut = true; resolve(); }, overallMs)),
+  ]);
+  return { failed, inlined, timedOut };
 }
 """
+
+# _INLINE_JS 를 띄우고 결과를 window 에 적재하는 런처 — page.evaluate 는
+# set_default_timeout 을 무시하고 반환 Promise 를 무한 대기하므로, 작업을 백그라운드로
+# 시작만 시키고(즉시 반환) Python 이 wait_for_function(타임아웃 적용됨)으로 완료를
+# 기다린다. JS 데드라인이 1차, wait_for_function 이 2차(백스톱) 강제 상한이다.
+_INLINE_LAUNCH_JS = """
+(args) => {
+  window.__wccgInlineDone = false;
+  window.__wccgInlineResult = null;
+  Promise.resolve((%s)(args))
+    .then((r) => { window.__wccgInlineResult = r; window.__wccgInlineDone = true; })
+    .catch((e) => {
+      window.__wccgInlineResult = { failed: [], inlined: [], error: String(e) };
+      window.__wccgInlineDone = true;
+    });
+}
+""" % _INLINE_JS
 
 # 폴백으로 받아온 자원을 DOM 에 반영. img 는 data URI 치환,
 # css 는 <style> 로 교체(url 은 Python 에서 절대화됨), font 는 인라인된
@@ -363,6 +399,9 @@ class CaptureResult:
     # 인라인된 자원의 sha256 → 원본 URL — CAS 추출 후 snapshot_resources 의
     # url 컬럼을 채우는 근거 (sha 를 못 구한 자원은 빠진다)
     resource_urls: dict[str, str] = field(default_factory=dict)
+    # 일부 산출물(스크린샷 등) 수집이 실패한 불완전 캡처 표식 — HTML·자원은
+    # 수집됐으므로 스냅샷은 저장하되 snapshots.incomplete=1 로 남긴다.
+    incomplete: bool = False
 
 
 # 앵커 절대 URL 목록 → {원본 href: 재작성 href}. 비거나 None 이면 재작성 없음.
@@ -812,7 +851,16 @@ def _capture_in_browser(
         if link_rewriter is not None:
             _rewrite_links(page, link_rewriter, page_links)
 
-        page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
+        incomplete = False
+        try:
+            page.screenshot(path=str(out_dir / "screenshot.png"), full_page=True)
+        except PlaywrightError as e:
+            # 무거운 full-page DOM 은 기본 타임아웃(30s) 안에 래스터화를 못
+            # 끝내기도 한다. HTML·자원은 이미 수집했으므로 스크린샷 한 장
+            # 때문에 캡처 전체를 버리지 않고, 불완전 표식만 남겨 진행한다.
+            logger.warning("스크린샷 실패, 불완전 스냅샷으로 진행: %s — %s", url, e)
+            (out_dir / "screenshot.png").unlink(missing_ok=True)  # 부분 파일 제거
+            incomplete = True
         if mobile_screenshot:
             # 데스크탑 캡처가 끝난 뒤, 같은 브라우저에 안드로이드 크롬 모바일
             # 컨텍스트를 새로 띄워 같은 URL 을 한 번 더 열고 스크린샷을 찍는다
@@ -833,6 +881,7 @@ def _capture_in_browser(
             document_links=document_links,
             page_links=page_links,
             resource_urls=resource_urls,
+            incomplete=incomplete,
         )
     finally:
         context.close()
@@ -1039,15 +1088,40 @@ def _inline_resources(
     """
     resource_urls: dict[str, str] = {}
     try:
-        result: dict = page.evaluate(_INLINE_JS, {
+        # 작업을 백그라운드로 시작만 시키고(즉시 반환) 완료를 wait_for_function 으로
+        # 기다린다 — page.evaluate 는 타임아웃을 무시해 무한 hang 위험이 있어서다.
+        # JS 전체 데드라인(overallMs)이 1차, 이 대기(+여유)가 2차 강제 상한.
+        page.evaluate(_INLINE_LAUNCH_JS, {
             "timeoutMs": config.RESOURCE_FETCH_TIMEOUT_MS,
             "concurrency": config.RESOURCE_FETCH_CONCURRENCY,
             "baseUrl": base_uri,
+            "overallMs": config.INLINE_OVERALL_TIMEOUT_MS,
+            "maxCount": config.RESOURCE_INLINE_MAX_COUNT,
         })
-        failed: list[dict] = result["failed"]
+        page.wait_for_function(
+            "() => window.__wccgInlineDone === true",
+            timeout=config.INLINE_OVERALL_TIMEOUT_MS + 15_000,
+        )
+        result: dict = page.evaluate("() => window.__wccgInlineResult") or {}
+        if result.get("timedOut"):
+            logger.warning("자원 인라인 전체 데드라인 초과 — 부분결과로 진행")
+        if result.get("error"):
+            logger.warning("자원 인라인 작업 오류: %s", result["error"])
+        failed: list[dict] = result.get("failed", [])
         resource_urls = {
-            i["sha256"]: i["url"] for i in result["inlined"] if i.get("sha256")
+            i["sha256"]: i["url"] for i in result.get("inlined", []) if i.get("sha256")
         }
+        # 같은 자원이 CSS 에 여러 번 나오면 failed 도 그만큼 중복된다(같은 url()
+        # 토큰 수백~수천 회) — 중복을 접고 개수를 제한해야 재시도·적용(_APPLY_INLINE_JS
+        # page.evaluate) 페이로드 폭발과 그로 인한 메모리 폭증·hang 을 막는다. 적용은
+        # 항목당 DOM 의 모든 매칭 노드를 갱신하므로 고유 항목 1개면 충분하다.
+        failed = _dedupe_failed(failed)
+        if len(failed) > config.RESOURCE_INLINE_MAX_COUNT:
+            logger.warning(
+                "인라인 실패 자원 %d개 — 상한 %d 초과분은 원본 URL 유지",
+                len(failed), config.RESOURCE_INLINE_MAX_COUNT,
+            )
+            failed = failed[:config.RESOURCE_INLINE_MAX_COUNT]
         if failed:
             failed = _retry_inline_via_context(page, failed, resource_urls)
         if failed and resource_fallback is not None:
@@ -1062,6 +1136,24 @@ def _inline_resources(
     except Exception as e:  # 인라인이 실패해도 캡처 자체는 유효
         logger.warning("자원 인라인 단계 실패, raw HTML로 대체: %s", e)
         return raw_html, resource_urls
+
+
+def _dedupe_failed(failed: list[dict]) -> list[dict]:
+    """인라인 실패 목록의 중복 제거 — 같은 (kind, url, raw)는 한 번만 둔다.
+
+    같은 @font-face url() 이 CSS 에 반복되면 failed 가 동일 항목으로 부풀어
+    재시도·적용 페이로드가 폭발한다. 적용(_APPLY_INLINE_JS)은 항목당 DOM 의
+    모든 매칭 노드를 갱신하므로 고유 항목만 남겨도 결과는 같다.
+    """
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for item in failed:
+        key = (item.get("kind"), item.get("url"), item.get("raw"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 
 def _retry_inline_via_context(

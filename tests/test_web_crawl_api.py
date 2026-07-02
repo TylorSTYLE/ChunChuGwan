@@ -6,7 +6,7 @@ SSR /crawls/{id} 와 같은 코어를 재사용하는 JSON 래퍼. 인증 off(lo
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import auth, config, crawler, db, storage
+from chunchugwan import auth, config, crawler, db
 from chunchugwan.web import app as web_app
 
 START = "https://example.com/docs/"

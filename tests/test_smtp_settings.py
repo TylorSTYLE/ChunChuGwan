@@ -1,5 +1,4 @@
 """시스템 메뉴 SMTP 설정 — 저장·암호화·환경변수 폴백·테스트 메일 발송."""
-import smtplib
 
 import pytest
 from fastapi.testclient import TestClient

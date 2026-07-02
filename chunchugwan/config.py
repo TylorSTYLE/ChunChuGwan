@@ -67,6 +67,17 @@ PAGE_LOAD_TIMEOUT_MS = 30_000
 NETWORK_IDLE_TIMEOUT_MS = 5_000
 RESOURCE_FETCH_TIMEOUT_MS = 5_000   # 자원(이미지·CSS·폰트) 1개 인라인 fetch 타임아웃
 RESOURCE_FETCH_CONCURRENCY = 6      # 자원 인라인 fetch 동시 실행 수
+# 자원 인라인 전체(브라우저 fetch 루프) 데드라인. 자원별 AbortSignal.timeout 만으로는
+# headful 실제 Chrome 에서 일부 fetch 가 끝내 안 끊겨 page.evaluate 가 무한 대기할 수
+# 있어(page.evaluate 는 set_default_timeout 무시) 전체 상한을 둔다. JS 가 이 시각에
+# 부분결과로 resolve 하고, Python 은 wait_for_function 으로 한 번 더 강제(백스톱)한다.
+INLINE_OVERALL_TIMEOUT_MS = 60_000
+# 한 스냅샷에서 인라인 실패 후 재시도(context.request)·과거캡처 폴백으로 받을 자원
+# 개수 상한. 같은 @font-face url() 이 CSS 에 수백~수천 번 반복되는 페이지는 failed
+# 목록이 폭발해, 중복 제거 후에도 남는 고유 자원이 많으면 거대 페이로드를
+# page.evaluate(_APPLY_INLINE_JS)로 넘기다 메모리 폭증·hang 을 일으킨다. 상한 초과분은
+# 원본 URL 을 유지한다 (뷰어는 그 자원만 라이브로 못 받을 뿐 본문은 정상).
+RESOURCE_INLINE_MAX_COUNT = 300
 HTTPS_PROBE_TIMEOUT_SECONDS = 10  # http URL 등록 시 https 지원 확인(승격 프로브) 타임아웃
 # 인증서 수집 결과의 (host, port) TTL 캐시 — 크롤이 같은 호스트를 페이지마다
 # 핸드셰이크하지 않게 한다 (certs.py)
@@ -286,6 +297,21 @@ EXT_CREDENTIAL_TTL_HOURS_MAX = 168
 # 기본 127.0.0.1 (localhost 전용). 컨테이너 등에서만 WCCG_HOST=0.0.0.0 으로 오버라이드.
 DASHBOARD_HOST = os.environ.get("WCCG_HOST", "127.0.0.1")
 DASHBOARD_PORT = 8765
+
+# ---- 디버그 진단 포트 (web/debug_server.py) ----
+# 별도 HTTP 포트로 내부 상태(큐·DB·로그·설정)를 노출하고 안전한 트리거(1회성
+# 캡처·스케줄 1회 실행)를 제공한다 — 개발/테스트 중 문제를 빠르게 진단하기 위함.
+# 기본 off — 켜져야만 serve/worker 가 이 포트를 연다. 릴리스 compose 는 이 토글을
+# 주지 않으므로(=off) 포트가 열리지 않는다('릴리스에선 동작 안 함').
+# 시크릿은 절대 노출하지 않고(원칙 6), 쓰기 트리거는 코어 모듈을 경유한다(원칙 1).
+DEBUG_ENABLED = os.environ.get("WCCG_DEBUG", "off") == "on"
+# 기본 127.0.0.1. 컨테이너에서 호스트(LAN)로 노출하려면 0.0.0.0 으로 바인딩하되
+# 같은 네트워크의 누구나 접근할 수 있으므로 develop/테스트 전용으로만 쓴다.
+DEBUG_HOST = os.environ.get("WCCG_DEBUG_HOST", "127.0.0.1")
+DEBUG_PORT = int(os.environ.get("WCCG_DEBUG_PORT", "8799"))
+# 선택적 하드닝 — 설정하면 디버그 요청에 X-Debug-Token 헤더를 요구한다(LAN 노출 시
+# 권장). 빈값이면 토큰 검사 없이 (네트워크 배치 + WCCG_DEBUG 토글)로만 보호한다.
+DEBUG_TOKEN = os.environ.get("WCCG_DEBUG_TOKEN", "").strip()
 
 # ---- 스케줄러 (주기적 재아카이빙) ----
 # 대시보드(serve) 프로세스 안에서 폴링 스레드로 동작한다.

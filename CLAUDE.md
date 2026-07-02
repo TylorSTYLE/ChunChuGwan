@@ -94,7 +94,7 @@ uv run wccg compact [--yes]              # 저장공간 최적화 — 압축 변
                                          #   + 자원 참조 백필 + 고아 공유 자원 정리 (멱등)
 uv run pytest                            # 테스트
 docker compose up -d dashboard           # 대시보드 + 워커 (:latest, 127.0.0.1:8765 — 개인 설정은 docker-compose.override.yml 에)
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d dashboard  # develop(테스트) 이미지로
+docker compose -f docker-compose.dev.yml up -d dashboard  # develop(테스트) 단독 파일 — 디버그 진단 포트 포함
 docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 ```
 
@@ -131,16 +131,61 @@ docker compose run --rm cli add <url>    # 컨테이너에서 스냅샷 생성
 - 네트워크 요청에는 타임아웃 필수 (페이지 로드 기본 30s)
 - 새 기능 = 해당 테스트 추가 (네트워크 의존 테스트·실행은 `.claude/rules/testing.md`)
 - 커밋은 기능 단위로 작게
-- **브랜치 흐름 = gitflow.** 작업 시작 시 반드시 `git fetch origin` 후 원격 최신
-  `origin/develop` 에서 분리한다(로컬 develop 캐시 사용 금지). 기능 PR 은 `develop`
-  을 베이스로 머지한다(main 직행 금지). develop 에 병합 후 CI 가 develop→main 릴리스
-  PR 을 자동 생성하면 **사람이 검토 후 merge 커밋으로 머지**한다(squash 금지 —
-  develop 가 main 의 조상으로 남아야 FF 동기화가 유지됨). CI 자동화·`release:*`
-  라벨·버전 결정 상세는
-  `.claude/rules/release-docker.md` 참조.
+- **브랜치 흐름 = gitflow.** main·develop 은 직접 커밋/push 금지 — PR 병합만, 병합은
+  사람이 수행. 작업은 항상 `git fetch origin` 후 원격 최신 `origin/develop` 에서 분리하고
+  (로컬 캐시 금지), 기능 PR 은 `develop` 베이스로 머지한다(main 직행 금지). develop→main
+  릴리스 PR 은 **merge 커밋으로 머지**(squash 금지 — develop 가 main 의 조상으로 남아야
+  FF 동기화 유지).
+  - 브랜치 생성/재개·develop 대상 PR·릴리스 PR 등 **절차는 gitflow 스킬**
+    (`.claude/skills/gitflow/`)로 수행한다. 버전 산출은 Conventional Commits
+    프리픽스 기반 SemVer 자동 산출(release.md) — CI 는 태그 push 이후만 담당한다.
+  - CI 자동화 상세는 `.claude/rules/release-docker.md` 참조.
+
+## 서브 에이전트 위임 규칙
+
+`.claude/agents/`에 필수 6종(deep-reasoner·default-worker·task-worker·
+code-reviewer·test-runner·docs-researcher) + 선택 3종 전부(security-auditor·
+ui-worker·db-analyst — 이 프로젝트는 인증/암호화 등 보안 민감 코드·SvelteKit
+대시보드·SQLite 코어 사용을 전부 가지고 있어 3종 모두 배치)가 있다.
+
+- 판단은 메인, 테스트 검증 구현은 default-worker, 도구 검증 작업은
+  task-worker, 대량 읽기 분석은 deep-reasoner, 외부 문서는 docs-researcher.
+- **리뷰 루프(필수)**: worker가 완료를 보고하면 메인은 code-reviewer를
+  실행한다. NEEDS_ATTENTION 이상이면 발견 항목을 worker에 재위임하고,
+  READY가 나올 때까지 반복한다(최대 3회, 초과 시 사용자에게 보고).
+- **PR 게이트(필수)**: PR 생성 전 code-reviewer와 test-runner를 병렬
+  실행한다. 보안 관련 변경(인증, 입력 처리, 비밀 관리)이 포함되면
+  security-auditor를 병렬에 추가한다(gitflow `pr.md` 6.5단계로 절차화됨).
+- **조사 우선(필수)**: 의존성 추가·업그레이드, 익숙하지 않은 API 사용 전에
+  docs-researcher를 먼저 실행한다.
+
+**완료 선언 전 체크리스트** — 빌드·테스트 실행 결과 확인(위 "명령어" 사용) →
+diff 전체 검토(의도하지 않은 변경 포함 여부) → 변경 파일이 허용 목록·작업
+범위 내인지 확인. 검증은 3계층으로 구성되며 서로를 대체하지 않는다:
+① worker 자체의 완료 조건(에이전트 출력 계약 — 테스트/도구/시각 검증) →
+② 메인의 위 체크리스트 확인 → ③ code-reviewer 리뷰 루프(READY 판정까지).
+
+파일 편집 직후 `scripts/lint-changed.sh`가 PostToolUse 훅으로 자동 실행돼
+변경 파일의 스택에 맞는 린터(Python=ruff, TS/Svelte=eslint)를 돌린다
+(`.claude/settings.json`). db-analyst는 `.claude/hooks/deny-db-writes.sh`
+(PreToolUse)로 쓰기 SQL 실행이 기계적으로 차단된다.
 
 ## 구현 로드맵
 
 M1~M8, A1~A15 전 마일스톤 완료 — 상세 내역은 `docs/ROADMAP.md` 참조.
 새 마일스톤은 진행 중인 항목만 여기에 두고, 완료되면 ROADMAP.md 로 내린다.
 각 마일스톤 완료 시: 테스트 통과 확인 → 체크박스 갱신 → 커밋.
+
+## 부트스트랩 표준 마이그레이션 백로그
+
+프로젝트 부트스트랩 표준 v1.4 기준 적용됨(§0·§1·§2·§3·§8·§13 — 브랜치 보호·
+병합 전략·GitFlow 스킬·공통 CI·서브 에이전트 표준). 아래 미적용 항목은
+"예외"가 아니라 부채다 — 백로그가 남아 있는 동안에도 신규 코드는 표준을
+따른다(예: mypy·eslint 신규 위반 0건 유지). 릴리스 시점마다 잔여 항목을 점검한다.
+
+| 항목 | 등급 | 현재 상태 | 목표 |
+|---|---|---|---|
+| §9~§12 설계 가이드라인(인증·API·UI·서버 배포) docs/ 반영 | A | 미적용 — 코드는 이미 유사 원칙을 따르나 정본 가이드라인 문서 없음 | 별도 세션에서 갭 검토 후 docs/*.md 작성 |
+| §14 라이선스·기여 정책(CONTRIBUTING.md·DCO CI) | A | LICENSE(MIT) 만 존재 — public 리포라 표준상 CONTRIBUTING·DCO 필요 | 별도 세션에서 결정 |
+| mypy 기존 위반 21개 파일 baseline 동결 | B | pyproject.toml `[[tool.mypy.overrides]] ignore_errors=true` 로 CI 통과만 유지(156건) | 파일별 점진 해소 후 override 목록에서 제거 |
+| eslint `svelte/require-each-key`(64건)·`svelte/no-navigation-without-resolve`(68건) | B | 기존 라우트 다수 위반 — `warn` 다운그레이드로 CI 통과만 유지 | 라우트별 점진 해소 후 두 규칙을 `error` 로 복귀 |

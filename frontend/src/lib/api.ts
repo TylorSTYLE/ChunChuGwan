@@ -50,9 +50,13 @@ export function errorDetail(body: unknown, fallback: string): string {
 export async function api<T = unknown>(
 	path: string,
 	// redirectOn401 은 과거 호환을 위해 받기만 하고 무시한다(인증 라우팅은 레이아웃 권위).
-	opts: RequestInit & { redirectOn401?: boolean } = {}
+	// timeoutMs 로 요청 타임아웃을 조정한다(0=끔). 기본은 JSON/GET 30s, FormData 업로드는
+	// 크고 느릴 수 있어 끈다 — 무응답 시 busy 가 영구 true 로 잠기던 문제를 막는다.
+	opts: RequestInit & { redirectOn401?: boolean; timeoutMs?: number } = {}
 ): Promise<T> {
-	const { redirectOn401: _ignored, ...init } = opts;
+	const { redirectOn401: _ignored, timeoutMs, signal: callerSignal, ...init } = opts;
+	const effTimeout = timeoutMs ?? (init.body instanceof FormData ? 0 : 30000);
+	const signal = callerSignal ?? (effTimeout > 0 ? AbortSignal.timeout(effTimeout) : undefined);
 	const res = await fetch(`/api/web${path}`, {
 		credentials: 'same-origin',
 		headers: {
@@ -62,10 +66,20 @@ export async function api<T = unknown>(
 			...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
 			...(init.headers ?? {})
 		},
+		signal,
 		...init
 	});
 	if (res.status === 401) {
-		throw new ApiError(401, '인증이 필요합니다');
+		// 401 도 서버 detail 을 보존한다 — 로그인 오답·TOTP 오답·계정 재확인 실패 등
+		// 구체적 사유(서버가 로케일에 맞춰 내려줌)를 하드코딩 문구로 덮지 않는다.
+		// 라우팅은 여전히 하지 않고 던지기만 한다(인증 라우팅은 루트 레이아웃 권위).
+		let detail = res.statusText;
+		try {
+			detail = errorDetail(await res.json(), res.statusText);
+		} catch {
+			/* JSON 아님 — statusText 유지 */
+		}
+		throw new ApiError(401, detail);
 	}
 	if (!res.ok) {
 		let detail = res.statusText;
@@ -76,7 +90,11 @@ export async function api<T = unknown>(
 		}
 		throw new ApiError(res.status, detail);
 	}
-	return res.json() as Promise<T>;
+	// 204/빈 본문(예: DELETE)은 res.json() 이 예외를 던지므로 undefined 로 돌려준다 —
+	// 성공인데 파싱 오류로 오인해 invalidateAll 이 안 도는 문제를 막는다.
+	if (res.status === 204) return undefined as T;
+	const text = await res.text();
+	return (text ? JSON.parse(text) : undefined) as T;
 }
 
 /** POST 로 파일(tar.gz)을 받아 브라우저 다운로드를 트리거한다 — 백업·내보내기용.
@@ -102,7 +120,16 @@ export async function download(path: string): Promise<void> {
 	const blob = await res.blob();
 	const cd = res.headers.get('content-disposition') ?? '';
 	const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-	const name = m ? decodeURIComponent(m[1]) : 'download';
+	// decodeURIComponent 는 '%' 뒤에 2자리 16진수가 없으면 URIError 를 던진다 —
+	// 퍼센트 인코딩이 아닌 평문 파일명(예: "50% off.tar.gz")도 그대로 저장되게 폴백한다.
+	let name = 'download';
+	if (m) {
+		try {
+			name = decodeURIComponent(m[1]);
+		} catch {
+			name = m[1];
+		}
+	}
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');
 	a.href = url;

@@ -64,13 +64,17 @@
 	async function loadCreds() {
 		const u = url.trim();
 		if (!canManageCred || u === credLoadedFor) return;
-		credLoadedFor = u;
 		try {
 			const r = await api<{
 				credentials: Cred[];
 				kinds: { value: string; label: string }[];
 				secret_key_configured: boolean;
 			}>(`/archive/credentials?url=${encodeURIComponent(u)}`);
+			// 응답이 늦게 도착하는 사이 URL 이 바뀌었으면 이 결과는 버린다(다른 도메인의
+			// 자격증명이 남는 것을 방지). credLoadedFor 는 성공 시에만 설정해 실패한 URL 은
+			// 재조회(blur)가 막히지 않게 한다.
+			if (u !== url.trim()) return;
+			credLoadedFor = u;
 			existingCreds = r.credentials;
 			credKinds = r.kinds;
 			secretKeyConfigured = r.secret_key_configured;
@@ -319,10 +323,13 @@
 		border: 1px solid var(--border);
 		border-radius: 6px;
 	}
-	.hint,
+	/* .hint 크기는 전역(app.css) — 여기선 마진만. net-hint·creds-note 는 별도 클래스라 크기 유지 */
 	.net-hint,
 	.creds-note {
 		font-size: 12px;
+		margin: 0;
+	}
+	.hint {
 		margin: 0;
 	}
 	.foot {

@@ -61,7 +61,7 @@
 			<rect fill="currentColor" x="14" y="34" width="36" height="6" rx="1.5" />
 			<rect fill="currentColor" x="14" y="43" width="36" height="6" rx="1.5" />
 			<rect fill="currentColor" x="14" y="52" width="26" height="6" rx="1.5" />
-			<rect fill="var(--seal, #c2410c)" x="44" y="52" width="6" height="6" rx="1" />
+			<rect fill="var(--seal)" x="44" y="52" width="6" height="6" rx="1" />
 		</svg>
 		<div class="auth-title">{t('춘추관')}</div>
 		<div class="auth-tagline">{t('개인 웹 아카이브')}</div>

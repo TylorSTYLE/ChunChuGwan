@@ -14,6 +14,9 @@ export const prerender = false;
 let catalogLocale = '';
 
 async function applyCatalog(loc: string): Promise<void> {
+	// <html lang> 을 현재 로케일로 맞춘다(app.html 은 ko 고정) — 스크린리더 발음·
+	// 브라우저 번역 판정이 올바른 언어 기준으로 동작하게 한다. ssr=false 라 document 존재.
+	if (typeof document !== 'undefined') document.documentElement.lang = loc;
 	if (loc === catalogLocale) return;
 	try {
 		setCatalog(loc === 'ko' ? {} : await api<Record<string, string>>(`/i18n/${loc}`));

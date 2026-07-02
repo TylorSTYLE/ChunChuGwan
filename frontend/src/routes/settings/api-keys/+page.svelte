@@ -60,9 +60,9 @@
 		copyTimer = setTimeout(() => (copyState = ''), 2000);
 	}
 
-	function revoke(id: number) {
-		if (!confirm(t('이 키를 폐기할까요?'))) return;
-		return act.run(() => api(`/settings/api-keys/${id}/delete`, { method: 'POST' }));
+	function revoke(key: { id: number; name: string }) {
+		if (!confirm(t("API 키 '{name}' 을 폐기할까요?").replace('{name}', key.name))) return;
+		return act.run(() => api(`/settings/api-keys/${key.id}/delete`, { method: 'POST' }));
 	}
 </script>
 
@@ -89,18 +89,18 @@
 {/if}
 
 <FormSection title={t('새 키 발급')}>
-	<div class="form">
-		<Input type="text" bind:value={name} placeholder={t('키 이름')} class="flex-1 basis-[180px] min-w-0" />
+	<form class="form" onsubmit={(e) => { e.preventDefault(); create(); }}>
+		<Input type="text" bind:value={name} placeholder={t('키 이름')} aria-label={t('키 이름')} class="flex-1 basis-[180px] min-w-0" />
 		{#if d.can_view}<label class="opt"><input type="checkbox" bind:checked={canView} /> {t('보기')}</label>{/if}
 		{#if d.can_archive}<label class="opt"><input type="checkbox" bind:checked={canArchive} /> {t('아카이브')}</label>{/if}
-		<select bind:value={expiry}>
+		<select bind:value={expiry} aria-label={t('만료')}>
 			{#each EXPIRY as [v, label]}<option value={v}>{t(label)}</option>{/each}
 		</select>
 		{#if expiry === 'custom'}
 			<Input type="number" bind:value={customDays} min="1" max="3650" style="width:90px" />
 		{/if}
-		<Button onclick={create} disabled={act.busy || !name.trim()}>{t('발급')}</Button>
-	</div>
+		<Button type="submit" disabled={act.busy || !name.trim()}>{t('발급')}</Button>
+	</form>
 </FormSection>
 
 {#if d.keys.length > 0}
@@ -119,7 +119,7 @@
 								.join(', ')}
 						</td>
 						<td class="mono" data-label={t('만료')}>{k.expires_at ? ts(k.expires_at) : t('영구')}</td>
-						<td><Button variant="destructive" onclick={() => revoke(k.id)} disabled={act.busy}>{t('폐기')}</Button></td>
+						<td><Button variant="destructive" onclick={() => revoke(k)} disabled={act.busy}>{t('폐기')}</Button></td>
 					</tr>
 				{/each}
 			</tbody>
@@ -130,8 +130,8 @@
 {/if}
 
 <style>
+	/* 크기는 전역 .hint(app.css) — 페이지 설명 문단의 마진만 여기서 */
 	.hint {
-		font-size: 12px;
 		margin: 0 0 12px;
 	}
 	.token {

@@ -29,7 +29,12 @@
 	let peerSend = $state(false);
 	let peerReceive = $state(false);
 
+	// 최초 1회만 서버값으로 초기화한다 — 매 data 변경마다 재동기화하면 피어 토글 등의
+	// invalidateAll 이 입력 중이던 노드 이름·조정 주기 편집을 되돌린다(general 과 같은 취지).
+	let syncedFromServer = false;
 	$effect(() => {
+		if (syncedFromServer) return;
+		syncedFromServer = true;
 		displayName = d.node.display_name;
 		syncInterval = d.sync_interval_seconds;
 		protectDefault = d.protect_default;
@@ -211,6 +216,7 @@
 									<input
 										type="checkbox"
 										checked={p.send_enabled}
+										disabled={act.busy}
 										onchange={(e) => toggleDir(p.id, e.currentTarget.checked, p.receive_enabled)}
 									/>
 									{t('보내기')}
@@ -219,6 +225,7 @@
 									<input
 										type="checkbox"
 										checked={p.receive_enabled}
+										disabled={act.busy}
 										onchange={(e) => toggleDir(p.id, p.send_enabled, e.currentTarget.checked)}
 									/>
 									{t('받기')}
@@ -267,9 +274,7 @@
 		gap: 8px;
 		align-items: center;
 	}
-	.hint {
-		font-size: 12px;
-	}
+	/* .hint 크기는 전역(app.css) — div/span 이라 별도 마진 불필요 */
 	.dirs,
 	.dirtoggles {
 		display: flex;

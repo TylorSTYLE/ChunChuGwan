@@ -173,8 +173,8 @@
 		font-size: 12px;
 		margin: 0 0 4px;
 	}
+	/* 크기는 전역 .hint(app.css) — 긴 설명이라 폭만 제한(마진은 기존대로 p 기본값 유지) */
 	.hint {
-		font-size: 12px;
 		max-width: 720px;
 	}
 	.cred-form {

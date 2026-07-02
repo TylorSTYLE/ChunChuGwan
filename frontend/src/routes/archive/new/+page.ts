@@ -9,7 +9,7 @@ export const load: PageLoad = async ({ parent }) => {
 	const { me } = await parent();
 	const canManageCred = !!me?.flags.can_manage_credentials;
 	// 로컬 네트워크 태그(사설 IP 선택용) + 사이트 아카이브 기본값·상한. 권한·오류 시 빈 값.
-	let networkTags: Tag[] = [];
+	let networkTags: Tag[];
 	let crawlDefaults: CrawlDefaults | null = null;
 	let crawlLimits: CrawlLimits | null = null;
 	try {

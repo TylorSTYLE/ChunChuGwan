@@ -6,6 +6,7 @@ import logging
 import tarfile
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
@@ -16,6 +17,9 @@ from . import config, db, linkrepair, searchindex, storage, system_log
 # (playwright)·extract(lxml)·PIL 을 전이로 끌어와 import 비용이 크다 — 해당 명령
 # 에서만 쓰므로 함수 안에서 지연 import 한다 (cron 으로 자주 도는 list/search/add/
 # history 등의 콜드 스타트를 줄인다).
+
+if TYPE_CHECKING:
+    from . import crawler
 
 _STATUS_LABELS = {"new": "신규", "changed": "변경", "forced_same": "동일(강제 저장)"}
 
@@ -1226,7 +1230,12 @@ def _is_loopback(host: str) -> bool:
 @main.command()
 @click.option("--port", default=None, type=int)
 @click.option("--host", default=None, help="바인딩 주소 (기본 127.0.0.1, 외부 노출 시 인증 필수)")
-def serve(port: int | None, host: str | None) -> None:
+@click.option(
+    "--reload", is_flag=True,
+    help="소스 변경 시 자동 재기동 (개발용 — 소스 bind-mount 와 함께 쓴다. "
+         "docker-compose.reload.yml 참조)",
+)
+def serve(port: int | None, host: str | None, reload: bool) -> None:
     """대시보드 실행 (기본 loopback 전용)."""
     import uvicorn
 
@@ -1261,6 +1270,7 @@ def serve(port: int | None, host: str | None) -> None:
         "chunchugwan.web.app:app",
         host=bind_host,
         port=port or config.DASHBOARD_PORT,
+        reload=reload,
     )
 
 

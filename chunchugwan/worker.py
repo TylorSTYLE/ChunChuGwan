@@ -50,6 +50,14 @@ class JobRegistry:
 
 def run(stop: threading.Event, *, crawl_workers: int = 1) -> None:
     """stop 이 설정될 때까지 스케줄러 1개 + 크롤 스레드 crawl_workers개 운영."""
+    # 디버그 진단 포트 (WCCG_DEBUG=on 일 때만 — 별도 포트). 캡처·큐 스레드가 이
+    # 프로세스에서 도므로 진행 상태/멈춤을 여기서 들여다볼 수 있다. 릴리스 빌드엔
+    # debug_server 가 제거돼 ImportError → graceful no-op.
+    try:
+        from .web import debug_server
+        debug_server.maybe_start("worker")
+    except ImportError:
+        pass
     registry = JobRegistry()
     threads = [
         threading.Thread(

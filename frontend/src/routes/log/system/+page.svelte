@@ -8,10 +8,12 @@
 	import Pager from '$lib/components/Pager.svelte';
 	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import AlertBox from '$lib/components/AlertBox.svelte';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 
 	let { data }: { data: { logs: SystemLogsData } } = $props();
 
+	let listError = $state('');
 	const ROUTE = '/log/system';
 	const FILTER_DEF = { limit: 25, page: 1 };
 	const list = createList({
@@ -19,7 +21,8 @@
 		api: '/system/logs',
 		route: ROUTE,
 		params: (d) => ({ level: d.level, source: d.source, limit: d.limit, page: d.page_num }),
-		defaults: FILTER_DEF
+		defaults: FILTER_DEF,
+		onError: (m) => (listError = m)
 	});
 	const d = $derived(list.data);
 
@@ -37,6 +40,7 @@
 </script>
 
 <h2>{t('시스템 로그')}</h2>
+<AlertBox error={listError} />
 
 <Toolbar>
 	<select value={d.level} onchange={(e) => applyFilter({ level: e.currentTarget.value })}>
@@ -49,7 +53,7 @@
 	</select>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
-	<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
+	<PageSize value={d.limit} options={d.limits} onchange={(n) => list.go({ limit: n, page: 1 })} />
 </Toolbar>
 
 {#if d.logs.length === 0}

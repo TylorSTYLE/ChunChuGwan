@@ -1,20 +1,11 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-    # 문서/마크다운만 바뀐 커밋은 Python·Playwright·SPA 빌드를 돌릴 이유가 없다.
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-      - ".gitignore"
-      - "LICENSE"
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-      - ".gitignore"
-      - "LICENSE"
+    branches: [develop, main]
+    # paths-ignore 사용 금지 — 필수 체크(ci-ok)로 등록된 워크플로가 경로 필터로
+    # 스킵되면 체크가 미보고 상태로 남아 머지가 막힌다. 문서 전용 변경 스킵은
+    # 아래 changes 잡 + ci-ok 집계 패턴으로 처리한다.
 
 # CI 는 읽기만 필요하다 — PR(신뢰 불가 코드)이 쓰기 토큰과 함께 돌지 않게 최소권한 고정.
 permissions:
@@ -25,36 +16,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  frontend:
-    # draft PR 동안은 무거운 잡을 돌리지 않는다 (push 는 항상 실행).
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+  changes:
+    # 변경 경로 감지 — 서드파티 액션 없음
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
+    timeout-minutes: 5
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-
-      - name: Node 설치
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          fetch-depth: 0   # base 비교용 (changes 잡 한정)
 
-      - name: 의존성 설치
-        run: npm ci
-        working-directory: frontend
+      - id: filter
+        run: |
+          git fetch --no-tags --quiet origin "${{ github.base_ref }}"
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "--- changed ---"; echo "$CHANGED"
+          GLOBAL='^\.github/workflows/'   # 전역 경로 — 전 모듈 재실행
+          m() { echo "$CHANGED" | grep -qE "$1" && echo true || echo false; }
+          {
+            echo "backend=$(m "^chunchugwan/|^tests/|^pyproject\.toml$|^uv\.lock$|^liccheck\.ini$|$GLOBAL")"
+            echo "frontend=$(m "^frontend/|$GLOBAL")"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: 타입체크 (svelte-check)
-        run: npm run check
-        working-directory: frontend
-
-      - name: 빌드
-        run: npm run build
-        working-directory: frontend
-
-  test:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -72,24 +60,46 @@ jobs:
       - name: 의존성 설치
         run: uv sync --locked
 
+      - name: ruff
+        run: uv run ruff check .
+
+      - name: mypy
+        # 기존 위반 21개 파일은 pyproject.toml [[tool.mypy.overrides]] 로 동결.
+        # 점진 해소 대상은 CLAUDE.md 마이그레이션 백로그 참조.
+        run: uv run mypy chunchugwan
+
+      - name: 라이선스 정책 검사 (pip-licenses)
+        # 표준 §8.4 경로2 는 liccheck 를 예시로 들지만, liccheck 는 legacy pkg_resources/
+        # pip._internal 내부 API 에 의존해 최신 환경에서 깨지고, 그마저 동작해도 SPDX
+        # 표기(예: Apache-2.0)를 옛 PyPI classifier 표기로 매칭 못 해 대부분을 unknown
+        # 처리한다(실측 확인). SPDX 를 정상 인식하는 pip-licenses 로 동일한 거부목록
+        # 게이트를 구성한다 — 허용 목록은 §8.4 금지 표(GPL/AGPL/SSPL) 그대로.
+        run: |
+          uv run --with pip-licenses pip-licenses --fail-on="GPL-1.0;GPL-2.0;GPL-3.0;GPL-2.0-only;GPL-2.0-or-later;GPL-3.0-only;GPL-3.0-or-later;AGPL-3.0;AGPL-3.0-only;AGPL-3.0-or-later;SSPL-1.0;GNU General Public License v2 (GPLv2);GNU General Public License v3 (GPLv3);GNU General Public License v2 or later (GPLv2+);GNU General Public License v3 or later (GPLv3+);GNU Affero General Public License v3;GNU Affero General Public License v3 or later (AGPLv3+)"
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
+        with:
+          version: 10
+
       - name: Node 설치 (대시보드 SPA 빌드용)
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: 대시보드 SPA 빌드
         # C2 컷오버로 FastAPI 가 SPA 정적 산출물을 루트(/)로 서빙한다 — 통합 테스트가
         # SPA 셸 라우트(예: GET /·/login)를 200 으로 받으려면 frontend/build 가 필요하다.
+        # backend 잡은 프론트 변경 여부와 무관하게 항상 이 빌드를 수행한다.
         run: |
-          npm ci
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm run build
         working-directory: frontend
 
       - name: Playwright 브라우저 캐시
         id: playwright-cache
-        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8  # v6.0.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
@@ -107,3 +117,64 @@ jobs:
 
       - name: 테스트
         run: uv run pytest -v
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271  # v6.0.9
+        with:
+          version: 10
+
+      - name: Node 설치
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: 의존성 설치
+        run: pnpm install --frozen-lockfile
+
+      - name: 타입체크 (svelte-check)
+        run: pnpm run check
+
+      - name: lint (eslint)
+        run: pnpm run lint
+
+      - name: 빌드
+        run: pnpm run build
+
+  gitleaks:
+    # 1차 방어는 리포 secret scanning push protection. 이 잡은 패턴 커버리지를
+    # 보완하는 병행 계층.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0   # 전체 히스토리 스캔
+
+      - name: gitleaks 스캔 (버전 고정 바이너리)
+        run: |
+          curl -sSfLO "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf "gitleaks_8.30.1_linux_x64.tar.gz" gitleaks
+          ./gitleaks git --redact --no-banner .
+
+  ci-ok:                         # required check 는 이 잡만 등록
+    needs: [changes, backend, frontend, gitleaks]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "false" ]]

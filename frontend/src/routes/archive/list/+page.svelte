@@ -12,11 +12,13 @@
 	import Pager from '$lib/components/Pager.svelte';
 	import PageSize from '$lib/components/PageSize.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import AlertBox from '$lib/components/AlertBox.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 
 	let { data }: { data: { sites: SitesData } } = $props();
 
+	let listError = $state('');
 	const ROUTE = '/archive/list';
 	const FILTER_DEF = { limit: 25, page: 1 };
 	// 필터(q)·페이지는 서버에서 전체 사이트 대상으로 적용한다 — 현재 페이지 클라이언트 필터가 아님.
@@ -25,7 +27,8 @@
 		api: '/sites',
 		route: ROUTE,
 		params: (d) => ({ q: d.q, limit: d.limit, page: d.page_num }),
-		defaults: FILTER_DEF
+		defaults: FILTER_DEF,
+		onError: (m) => (listError = m)
 	});
 	const d = $derived(list.data);
 
@@ -38,6 +41,10 @@
 		let last = '';
 		const timer = setInterval(async () => {
 			if (typeof document !== 'undefined' && document.hidden) return;
+			// 페이저/필터 요청(list.go)이 진행 중이면 invalidateAll 을 건너뛴다 — load 재실행이
+			// go() 와 경쟁해 URL(최신 params)과 표시 데이터가 어긋나는 것을 막는다. last 를
+			// 갱신하지 않으므로 go() 가 끝난 뒤 다음 틱에서 변화를 정상 반영한다.
+			if (list.busy) return;
 			try {
 				const a = await api<Active>('/active');
 				const key = JSON.stringify([a.active, (a.needs_human ?? []).map((j) => j.url)]);
@@ -52,6 +59,7 @@
 </script>
 
 <h2>{t('아카이브 사이트 목록')}</h2>
+<AlertBox error={listError} />
 
 <Toolbar>
 	<Input
@@ -62,7 +70,7 @@
 	/>
 	<span class="spacer"></span>
 	<span class="muted">{t('총')} {d.total}{t('건')}</span>
-	<PageSize value={d.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
+	<PageSize value={d.limit} options={d.limits} onchange={(n) => list.go({ limit: n, page: 1 })} />
 </Toolbar>
 
 {#if d.items.length === 0}
@@ -89,7 +97,7 @@
 							{:else}
 								<span>{s.site_key}</span>
 							{/if}
-							{#if s.crawling}<Badge variant="new">{t('아카이빙 중')}</Badge>{/if}
+							{#if s.crawling}<Badge variant="running">{t('아카이빙 중')}</Badge>{/if}
 							{#if s.title}<div class="muted">{s.title}</div>{/if}
 						</td>
 						<td class="num" data-label={t('페이지')}>{s.page_count}</td>

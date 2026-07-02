@@ -37,6 +37,9 @@ class ArchiveOutcome:
     http_status: int | None
     title: str | None
     documents: int = 0         # 함께 저장된 문서 파일 수
+    # 이 실행이 확인·생성한 페이지 id — 워커가 캡처 후 클러스터 보호 메타를
+    # 적용한다(archive_worker.process_next). 페이지가 없는 경우는 없다.
+    page_id: int | None = None
     # 이 실행으로 확인된 스냅샷 id — 새로 만든 스냅샷 또는 (unchanged 시)
     # 내용이 같았던 직전 스냅샷. 크롤러가 크롤 세트에 기록한다.
     snapshot_id: int | None = None
@@ -507,6 +510,7 @@ def _archive_url(
                     snapshot_dir=None, taken_at=None,
                     last_taken_at=prev["taken_at"],
                     http_status=result.http_status, title=result.title,
+                    page_id=existing["id"],
                     snapshot_id=prev["id"], page_links=result.page_links,
                 )
             # 락을 놓은 채 느린 작업을 하므로, 이후 필요한 직전 스냅샷 정보는
@@ -566,6 +570,7 @@ def _archive_url(
             http_status=result.http_status,
             title=result.title,
             documents=doc_manifest or None,
+            incomplete=result.incomplete,
         )
         snap_dir = storage.finalize_snapshot(
             tmp_dir, domain, slug, meta, normalized, taken_at
@@ -588,6 +593,7 @@ def _archive_url(
                 links_rewritten=1,    # 앵커는 캡처가 /goto·/crawl/{id}/goto 로 재작성 완료
                 bytes=storage.snapshot_dir_bytes(snap_dir),
                 title=result.title,
+                incomplete=1 if result.incomplete else 0,
                 authenticated=1 if credential is not None else 0,
                 authenticated_by=authenticated_by if credential is not None else None,
             )
@@ -626,6 +632,7 @@ def _archive_url(
             last_taken_at=prev_taken_at,
             http_status=result.http_status, title=result.title,
             documents=len(doc_manifest),
+            page_id=page_id,
             snapshot_id=snapshot_id, page_links=result.page_links,
         )
     finally:
@@ -809,6 +816,7 @@ def _archive_document_url(
                 snapshot_dir=None, taken_at=None,
                 last_taken_at=prev["taken_at"],
                 http_status=dl.http_status, title=str(entry["file"]),
+                page_id=existing["id"],
                 snapshot_id=prev["id"],
             )
         prev_hash = prev["content_hash"] if prev else None
@@ -878,5 +886,5 @@ def _archive_document_url(
         snapshot_dir=snap_dir, taken_at=meta.taken_at,
         last_taken_at=prev_taken_at,
         http_status=dl.http_status, title=str(entry["file"]),
-        documents=1, snapshot_id=snapshot_id,
+        documents=1, page_id=page_id, snapshot_id=snapshot_id,
     )

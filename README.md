@@ -149,8 +149,8 @@ run`)가 소비해 실행한다 — `crawl add`/`crawl run` 과 같은 모델이
 docker compose up -d dashboard         # 대시보드 + 워커 (http://127.0.0.1:8765)
 docker compose run --rm cli add <url>  # 스냅샷 생성
 docker compose down                    # 대시보드 중지
-# develop(테스트) 이미지로 띄우려면:
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d dashboard
+# develop(테스트) 이미지로 띄우려면 (별개 독립 파일 단독 — 디버그 진단 포트 포함):
+docker compose -f docker-compose.dev.yml up -d dashboard
 ```
 
 포트는 호스트의 127.0.0.1 에만 바인딩되고, 컨테이너 대시보드는 인증이 항상

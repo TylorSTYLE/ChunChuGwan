@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from chunchugwan import archive_worker, config, crawler, db, documents, storage
+from chunchugwan import archive_worker, config, db, documents, storage
 from chunchugwan.web import app as web_app
 
 GUIDE_BODY = b"%PDF-1.4 cas fixture"

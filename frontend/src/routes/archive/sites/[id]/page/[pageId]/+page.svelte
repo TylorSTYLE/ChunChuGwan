@@ -5,18 +5,34 @@
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
 	import { api, ApiError } from '$lib/api';
+	import { filterUrl } from '$lib/filters';
+	import { createList } from '$lib/list.svelte';
 	import type { PageTimeline } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import Notes from '$lib/components/Notes.svelte';
+	import Pager from '$lib/components/Pager.svelte';
+	import PageSize from '$lib/components/PageSize.svelte';
 	import { createAction } from '$lib/action.svelte';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 
 	let { data }: { data: { tl: PageTimeline } } = $props();
-	const tl = $derived(data.tl);
-	const snaps = $derived(tl.snapshots);
 	const action = createAction();
+
+	const FILTER_DEF = { limit: 25, page: 1 };
+	const routeBase = () => `/archive/sites/${data.tl.site?.id}/page/${data.tl.page.id}`;
+	const list = createList({
+		source: () => data.tl,
+		api: () => `/pages/${data.tl.page.id}`,
+		route: routeBase,
+		params: (d) => ({ limit: d.limit, page: d.page_num }),
+		defaults: FILTER_DEF,
+		onError: (m) => (action.error = m)
+	});
+	const tl = $derived(list.data);
+	const snaps = $derived(tl.snapshots);
+	const pageUrl = (n: number) => filterUrl(routeBase(), { limit: tl.limit, page: n }, FILTER_DEF);
 
 	let force = $state(false);
 	let interval = $state('86400');
@@ -68,7 +84,7 @@
 
 <div class="toolbar">
 	{#if tl.site}<a href="{base}/archive/sites/{tl.site.id}">← {t('사이트 상세')}</a>{/if}
-	{#if snaps.length >= 2}<a href="{base}/diff/{tl.page.id}">{t('최신 2개 비교')}</a>{/if}
+	{#if tl.total >= 2}<a href="{base}/diff/{tl.page.id}">{t('최신 2개 비교')}</a>{/if}
 </div>
 
 {#if tl.can_archive}
@@ -91,8 +107,13 @@
 	</div>
 {/if}
 
-<h3>{t('스냅샷 이력')} ({snaps.length})</h3>
-{#if snaps.length === 0}
+<div class="hist-head">
+	<h3>{t('스냅샷 이력')} ({tl.total})</h3>
+	{#if tl.total > 0}
+		<PageSize value={tl.limit} onchange={(n) => list.go({ limit: n, page: 1 })} />
+	{/if}
+</div>
+{#if tl.total === 0}
 	<EmptyState message={t('아직 스냅샷이 없습니다.')} />
 {:else}
 	<div class="table-wrap cards">
@@ -111,6 +132,10 @@
 							<Badge variant={item.badge as BadgeVariant}>
 								{item.badge === 'new' ? t('신규') : item.badge === 'changed' ? t('변경') : t('동일')}
 							</Badge>
+							{#if item.snap.origin === 'extension'}<Badge variant="same"
+									>{t('브라우저 캡처')}</Badge
+								>{/if}
+							{#if item.snap.incomplete}<Badge variant="changed">{t('불완전')}</Badge>{/if}
 						</td>
 						<td class="mono muted" data-label={t('해시')}>{String(item.snap.content_hash).slice(0, 12)}</td>
 						<td class="num mono" data-label={t('용량')}>{filesize(item.total_bytes)}</td>
@@ -120,6 +145,13 @@
 			</tbody>
 		</table>
 	</div>
+	<Pager
+		page={tl.page_num}
+		totalPages={tl.total_pages}
+		href={pageUrl}
+		onpage={(n) => list.go({ page: n })}
+		busy={list.busy}
+	/>
 {/if}
 
 {#if tl.can_delete}
@@ -132,6 +164,13 @@
 <style>
 	.page-url {
 		overflow-wrap: anywhere;
+	}
+	.hist-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 12px;
+		flex-wrap: wrap;
 	}
 	.actions {
 		display: flex;

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from chunchugwan import archive_worker, auth, config, db, system_log
+from chunchugwan import archive_worker, auth, config, db
 from chunchugwan.web import app as web_app
 
 _AUDIT_LOGGER = "chunchugwan.web.audit"

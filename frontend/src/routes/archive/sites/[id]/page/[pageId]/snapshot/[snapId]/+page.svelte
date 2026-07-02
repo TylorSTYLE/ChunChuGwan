@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { pagePath } from '$lib/urls';
-	import { base } from '$app/paths';
 	import { invalidateAll } from '$app/navigation';
 	import { t } from '$lib/i18n';
 	import { filesize, ts } from '$lib/format';
@@ -8,6 +7,7 @@
 	import { createAction } from '$lib/action.svelte';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import type { SnapshotMeta, Me } from '$lib/types';
 
 	let { data }: { data: { meta: SnapshotMeta; me: Me | null } } = $props();
@@ -76,6 +76,15 @@
 
 <h2>{m.title || t('스냅샷')}</h2>
 
+{#if m.snap.origin === 'extension' || m.snap.incomplete}
+	<div class="mb-3 flex gap-2">
+		{#if m.snap.origin === 'extension'}<Badge variant="same">{t('브라우저 캡처')}</Badge>{/if}
+		{#if m.snap.incomplete}<Badge variant="changed" title={t('일부 자원·프레임·스크린샷 수집이 실패한 불완전 캡처입니다.')}
+				>{t('불완전')}</Badge
+			>{/if}
+	</div>
+{/if}
+
 <table style="max-width:760px">
 	<tbody>
 		<tr><th>{t('캡처 시각')}</th><td class="mono">{ts(m.snap.taken_at)}</td></tr>
@@ -127,20 +136,20 @@
 
 <div class="toolbar">
 	<a href={pagePath(m.snap.site_id, m.snap.page_id)}>← {t('타임라인')}</a>
-	<button class="tab" class:active={tab === 'render'} onclick={() => (tab = 'render')}
+	<button class="tab" class:active={tab === 'render'} aria-pressed={tab === 'render'} onclick={() => (tab = 'render')}
 		>{t('렌더링')}</button
 	>
 	{#if m.has_screenshot}
-		<button class="tab" class:active={tab === 'shot'} onclick={() => (tab = 'shot')}
+		<button class="tab" class:active={tab === 'shot'} aria-pressed={tab === 'shot'} onclick={() => (tab = 'shot')}
 			>{t('데스크탑 스크린샷')}</button
 		>
 	{/if}
 	{#if m.has_mobile_screenshot}
-		<button class="tab" class:active={tab === 'shot-mobile'} onclick={() => (tab = 'shot-mobile')}
+		<button class="tab" class:active={tab === 'shot-mobile'} aria-pressed={tab === 'shot-mobile'} onclick={() => (tab = 'shot-mobile')}
 			>{t('모바일 스크린샷')}</button
 		>
 	{/if}
-	<button class="tab" class:active={tab === 'text'} onclick={() => { tab = 'text'; loadText(); }}>{t('텍스트')}</button>
+	<button class="tab" class:active={tab === 'text'} aria-pressed={tab === 'text'} onclick={() => { tab = 'text'; loadText(); }}>{t('텍스트')}</button>
 </div>
 
 <!-- 보안(원칙 5): 허용 sandbox 토큰은 allow-top-navigation-by-user-activation 하나.

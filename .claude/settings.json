@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": ["Bash(git:*)", "Bash(gh:*)", "Bash(uv:*)", "Bash(pnpm:*)"],
+    "deny": ["Read(.env)", "Read(.env.*)"]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "./scripts/lint-changed.sh" }
+        ]
+      }
+    ]
+  }
+}

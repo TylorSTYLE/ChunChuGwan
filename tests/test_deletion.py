@@ -1,7 +1,6 @@
 """아카이브 삭제 — DB 정합성(changed 재계산·로그 보존), 파일/캐시 정리,
 문서 CAS GC, 라우트 가드."""
 import hashlib
-import json
 
 import pytest
 from fastapi.testclient import TestClient

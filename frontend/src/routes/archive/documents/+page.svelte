@@ -8,9 +8,11 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import StatGrid from '$lib/components/StatGrid.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
+	import AlertBox from '$lib/components/AlertBox.svelte';
 
 	let { data }: { data: { docs: DocumentsData } } = $props();
 
+	let listError = $state('');
 	const ROUTE = '/archive/documents';
 	const FILTER_DEF = { page: 1 };
 	const list = createList({
@@ -18,7 +20,8 @@
 		api: '/documents',
 		route: ROUTE,
 		params: (d) => ({ page: d.page }),
-		defaults: FILTER_DEF
+		defaults: FILTER_DEF,
+		onError: (m) => (listError = m)
 	});
 	const d = $derived(list.data);
 
@@ -34,6 +37,7 @@
 </script>
 
 <h2>{t('전체 문서(파일)')}</h2>
+<AlertBox error={listError} />
 
 {#if d.legacy_pending}
 	<div class="warn">
@@ -49,6 +53,12 @@
 
 {#if d.groups.length === 0}
 	<EmptyState message={t('문서가 없습니다.')} />
+	{#if d.page > 1}
+		<!-- 범위 초과 page 딥링크(빈 결과)에서 되돌아갈 수단 — 서버 클램프가 없어 필요 -->
+		<nav class="pager">
+			<a href={pageUrl(1)} onclick={(e) => nav(e, 1)}>← {t('첫 페이지로')}</a>
+		</nav>
+	{/if}
 {:else}
 	<div class="table-wrap wide cards">
 		<table>
