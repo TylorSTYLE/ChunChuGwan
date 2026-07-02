@@ -186,6 +186,5 @@ M1~M8, A1~A15 전 마일스톤 완료 — 상세 내역은 `docs/ROADMAP.md` 참
 | 항목 | 등급 | 현재 상태 | 목표 |
 |---|---|---|---|
 | §9~§12 설계 가이드라인(인증·API·UI·서버 배포) docs/ 반영 | A | 미적용 — 코드는 이미 유사 원칙을 따르나 정본 가이드라인 문서 없음 | 별도 세션에서 갭 검토 후 docs/*.md 작성 |
-| §14 라이선스·기여 정책(CONTRIBUTING.md·DCO CI) | A | LICENSE(MIT) 만 존재 — public 리포라 표준상 CONTRIBUTING·DCO 필요 | 별도 세션에서 결정 |
 | mypy 기존 위반 21개 파일 baseline 동결 | B | pyproject.toml `[[tool.mypy.overrides]] ignore_errors=true` 로 CI 통과만 유지(156건) | 파일별 점진 해소 후 override 목록에서 제거 |
 | eslint `svelte/require-each-key`(64건)·`svelte/no-navigation-without-resolve`(68건) | B | 기존 라우트 다수 위반 — `warn` 다운그레이드로 CI 통과만 유지 | 라우트별 점진 해소 후 두 규칙을 `error` 로 복귀 |
