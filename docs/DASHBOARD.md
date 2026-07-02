@@ -1,7 +1,8 @@
 # 대시보드 화면 구성 (참조)
 
-화면 24개의 라우트·권한·세부 동작 레퍼런스. UI 스타일·i18n 규칙 등
-작업 시 지켜야 하는 원칙은 CLAUDE.md "대시보드 디자인 방향" 절 참조.
+화면 24개의 라우트·권한·세부 동작 레퍼런스. UI 스타일·렌더링 보안·i18n 등
+작업 시 지켜야 하는 설계 원칙은 아래 [설계 원칙 (§11)](#설계-원칙-11) 절과
+정본인 [`.claude/rules/dashboard.md`](../.claude/rules/dashboard.md) 를 따른다.
 
 > **C2 컷오버 이후**: 대시보드는 **SvelteKit SPA**(`frontend/`)다. 아래 화면 라우트
 > 경로는 SvelteKit 클라이언트 라우트다. 로그·아카이브 화면은 `/log/*`·`/archive/*`
@@ -11,6 +12,28 @@
 > 렌더하며, 데이터는 `/api/web/*` JSON API 가 내려준다. SPA 화면 컴포넌트는
 > `frontend/src/routes/`, 백엔드 데이터 엔드포인트는 `web_api_routes`·`web_auth_routes`.
 > 아키텍처 상세는 `.claude/rules/dashboard.md` 참조.
+
+## 설계 원칙 (§11)
+
+대시보드 UI 의 정본 설계 규칙은 [`.claude/rules/dashboard.md`](../.claude/rules/dashboard.md)
+에 있다. 아래는 `web/**`·`frontend/**`·`differ.py` 를 만질 때 지켜야 하는 요약이다.
+
+- **렌더링·서빙 보안 (아키텍처 원칙 5).** 대시보드는 기본 loopback(127.0.0.1)
+  바인딩이고 외부 노출 시 인증이 필수다. 아카이빙된 HTML 은 항상 `<iframe sandbox>`
+  안에서만 렌더하며 스크립트를 실행하지 않는다 — `allow-scripts`·`allow-same-origin`
+  은 절대 넣지 않고, 허용하는 유일한 토큰은 사용자 클릭 네비게이션용
+  `allow-top-navigation-by-user-activation` 이다. `/resource/`(공유 자원 CAS)만
+  유일한 인증 예외로, sha256 콘텐츠 주소 이름 + 미디어 타입 화이트리스트 + CSP
+  sandbox 로만 서빙한다. 문서 파일은 인증 걸린 라우트에서 첨부 다운로드로만 내려준다.
+- **색은 시맨틱 토큰만, 컴포넌트는 재사용.** Tailwind v4 + shadcn-svelte 기반으로,
+  `app.css` 의 시맨틱 토큰만 쓰고 직접 hex 는 금지한다(다크모드는 mode-watcher 가
+  토큰을 치환). UI 는 `frontend/src/lib/components/ui` 프리미티브와 공통 래퍼를 우선
+  재사용하고 일회성 스타일만 Tailwind 유틸로 쓴다.
+- **다국어는 카탈로그 정본.** 문자열은 `web/i18n.py` 카탈로그(한국어 원문=키)를
+  정본으로 하고, 새 SPA 문자열·라우트 오류 메시지를 추가하면 en 카탈로그도 채운다
+  (`tests/test_i18n.py` 가 누락을 검사). CLI 는 한국어를 유지한다.
+- **diff 뷰.** 텍스트 side-by-side + 스크린샷 비교를 제공하되, 비교 대상 중 하나라도
+  확장(브라우저) 캡처면 스크린샷 비교를 숨기고 렌더 환경 차이를 경고한다.
 
 **헤더(`frontend/src/routes/+layout.svelte`)** 는 모든 화면 상단에 공통으로 뜬다 —
 로고(현황 링크) 옆에 권한별 메뉴 드롭다운 3개(**"아카이브"**: 새 아카이빙·아카이브 사이트

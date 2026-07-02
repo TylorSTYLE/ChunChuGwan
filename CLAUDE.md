@@ -178,14 +178,13 @@ M1~M8, A1~A15 전 마일스톤 완료 — 상세 내역은 `docs/ROADMAP.md` 참
 
 ## 부트스트랩 표준 마이그레이션 백로그
 
-프로젝트 부트스트랩 표준 v1.4 기준 적용됨(§0·§1·§2·§3·§8·§13 — 브랜치 보호·
-병합 전략·GitFlow 스킬·공통 CI·서브 에이전트 표준). 아래 미적용 항목은
+프로젝트 부트스트랩 표준 v1.4 기준 적용됨(§0·§1·§2·§3·§8·§9~§12·§13 — 브랜치 보호·
+병합 전략·GitFlow 스킬·공통 CI·설계 가이드라인·서브 에이전트 표준). 아래 미적용 항목은
 "예외"가 아니라 부채다 — 백로그가 남아 있는 동안에도 신규 코드는 표준을
 따른다(예: mypy·eslint 신규 위반 0건 유지). 릴리스 시점마다 잔여 항목을 점검한다.
 
 | 항목 | 등급 | 현재 상태 | 목표 |
 |---|---|---|---|
-| §9~§12 설계 가이드라인(인증·API·UI·서버 배포) docs/ 반영 | A | 미적용 — 코드는 이미 유사 원칙을 따르나 정본 가이드라인 문서 없음 | 별도 세션에서 갭 검토 후 docs/*.md 작성 |
 | §14 라이선스·기여 정책(CONTRIBUTING.md·DCO CI) | A | LICENSE(MIT) 만 존재 — public 리포라 표준상 CONTRIBUTING·DCO 필요 | 별도 세션에서 결정 |
 | mypy 기존 위반 21개 파일 baseline 동결 | B | pyproject.toml `[[tool.mypy.overrides]] ignore_errors=true` 로 CI 통과만 유지(156건) | 파일별 점진 해소 후 override 목록에서 제거 |
 | eslint `svelte/require-each-key`(64건)·`svelte/no-navigation-without-resolve`(68건) | B | 기존 라우트 다수 위반 — `warn` 다운그레이드로 CI 통과만 유지 | 라우트별 점진 해소 후 두 규칙을 `error` 로 복귀 |
