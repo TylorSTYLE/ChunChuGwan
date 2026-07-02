@@ -52,7 +52,7 @@
 			overrides = rest;
 		});
 	const deleteGroup = (g: SystemGroup) => {
-		if (!confirm(t('이 권한 그룹을 삭제할까요?'))) return;
+		if (!confirm(t("권한 그룹 '{label}' 을 삭제할까요?").replace('{label}', g.label))) return;
 		return act.run(() => api(`/system/groups/${g.name}/delete`, { method: 'POST' }));
 	};
 	function toggleNew(p: string) {

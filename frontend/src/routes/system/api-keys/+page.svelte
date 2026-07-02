@@ -2,6 +2,7 @@
 	import { t } from '$lib/i18n';
 	import { ts } from '$lib/format';
 	import { api } from '$lib/api';
+	import { copyText } from '$lib/clipboard';
 	import type { SystemApiKeysData } from '$lib/types';
 	import AlertBox from '$lib/components/AlertBox.svelte';
 	import FormSection from '$lib/components/FormSection.svelte';
@@ -15,6 +16,15 @@
 
 	const act = createAction();
 	let newToken = $state('');
+	// 1회 표시되는 새 키 복사 — 개인 API Key 화면과 동일 패턴(공통 clipboard 헬퍼).
+	let copyState = $state('');
+	let copyTimer: ReturnType<typeof setTimeout>;
+	async function copyToken() {
+		const ok = await copyText(newToken);
+		copyState = ok ? 'ok' : 'fail';
+		clearTimeout(copyTimer);
+		copyTimer = setTimeout(() => (copyState = ''), 2000);
+	}
 
 	let name = $state('');
 	let canView = $state(true);
@@ -53,9 +63,9 @@
 		});
 	}
 
-	function revoke(id: number) {
-		if (!confirm(t('이 키를 폐기할까요?'))) return;
-		return act.run(() => api(`/system/api-keys/${id}/delete`, { method: 'POST' }));
+	function revoke(key: { id: number; name: string }) {
+		if (!confirm(t("API 키 '{name}' 을 폐기할까요?").replace('{name}', key.name))) return;
+		return act.run(() => api(`/system/api-keys/${key.id}/delete`, { method: 'POST' }));
 	}
 </script>
 
@@ -64,7 +74,17 @@
 {#if newToken}
 	<div class="notice">
 		{t('아래 키를 지금 복사하세요. 다시 표시되지 않습니다.')}
-		<div class="mono token">{newToken}</div>
+		<div class="mt-1.5 flex items-start gap-2">
+			<span class="mono token flex-1 min-w-0">{newToken}</span>
+			<Button
+				variant={copyState === 'ok' ? 'default' : copyState === 'fail' ? 'destructive' : 'outline'}
+				size="sm"
+				class="shrink-0"
+				onclick={copyToken}
+			>
+				{copyState === 'ok' ? t('복사됨') : copyState === 'fail' ? t('복사 실패') : t('복사')}
+			</Button>
+		</div>
 	</div>
 {/if}
 
@@ -106,7 +126,7 @@
 								.join(', ')}
 						</td>
 						<td class="mono" data-label={t('만료')}>{k.expires_at ? ts(k.expires_at) : t('영구')}</td>
-						<td><Button variant="destructive" onclick={() => revoke(k.id)} disabled={act.busy}>{t('폐기')}</Button></td>
+						<td><Button variant="destructive" onclick={() => revoke(k)} disabled={act.busy}>{t('폐기')}</Button></td>
 					</tr>
 				{/each}
 			</tbody>
